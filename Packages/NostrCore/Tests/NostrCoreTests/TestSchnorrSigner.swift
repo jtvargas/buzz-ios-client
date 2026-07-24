@@ -1,28 +1,30 @@
 import Foundation
 @testable import NostrCore
-import P256K
 
-/// Test-only BIP-340 Schnorr signing over P256K, used to mint signed fixtures.
+/// Test-only convenience for minting signed fixtures.
 ///
-/// The production layer in this step verifies signatures but ships no signing
-/// path, so the ability to create a signed event lives here in the test target.
+/// This is a thin shim over the production signing path: it holds a `PrivateKey`
+/// and forwards to `PrivateKey.signature(for:)` and `NostrEvent.signed(...)`, so
+/// the fixtures exercised by the step-1 suites now run through exactly the code
+/// this step ships rather than a duplicated signing routine. Failures trap
+/// because a fixture that cannot be signed is a test-authoring bug.
 enum TestSchnorrSigner {
-    /// A generated or imported secp256k1 identity for signing test events.
+    /// A secp256k1 identity for signing test events.
     struct Identity {
-        let privateKey: P256K.Schnorr.PrivateKey
+        let privateKey: PrivateKey
 
         var publicKeyXOnly: Data {
-            Data(privateKey.xonly.bytes)
+            privateKey.publicKey.rawRepresentation
         }
 
         var publicKeyHex: String {
-            publicKeyXOnly.hexString
+            privateKey.publicKey.hex
         }
     }
 
     /// A random identity from the system CSPRNG.
     static func makeIdentity() -> Identity {
-        guard let key = try? P256K.Schnorr.PrivateKey() else {
+        guard let key = try? PrivateKey() else {
             fatalError("secp256k1 key generation failed")
         }
         return Identity(privateKey: key)
@@ -30,9 +32,7 @@ enum TestSchnorrSigner {
 
     /// An identity from a fixed 32-byte secret, for deterministic fixtures.
     static func makeIdentity(secretHex: String) -> Identity {
-        guard let secret = Data(hexString: secretHex),
-              let key = try? P256K.Schnorr.PrivateKey(dataRepresentation: secret)
-        else {
+        guard let key = try? PrivateKey(hex: secretHex) else {
             fatalError("invalid test secret key: \(secretHex)")
         }
         return Identity(privateKey: key)
@@ -40,22 +40,10 @@ enum TestSchnorrSigner {
 
     /// Signs a 32-byte message with fresh BIP-340 auxiliary randomness.
     static func sign(message: Data, with identity: Identity) -> Data {
-        precondition(message.count == 32, "Schnorr message must be 32 bytes")
-        var messageBytes = Array(message)
-        var auxiliary = [UInt8](repeating: 0, count: 32)
-        _ = SecRandomCopyBytes(kSecRandomDefault, 32, &auxiliary)
-        do {
-            let signature = try auxiliary.withUnsafeMutableBytes { buffer in
-                try identity.privateKey.signature(
-                    message: &messageBytes,
-                    auxiliaryRand: buffer.baseAddress,
-                    strict: true
-                )
-            }
-            return signature.dataRepresentation
-        } catch {
-            fatalError("Schnorr signing failed: \(error)")
+        guard let signature = try? identity.privateKey.signature(for: message) else {
+            fatalError("Schnorr signing failed for a valid identity")
         }
+        return signature
     }
 
     /// Builds a fully signed event carrying a valid id and signature.
@@ -66,23 +54,15 @@ enum TestSchnorrSigner {
         createdAt: Int64 = 1_700_000_000,
         with identity: Identity
     ) -> NostrEvent {
-        let pubkey = identity.publicKeyHex
-        let idBytes = NostrEvent.computeID(
-            pubkey: pubkey,
-            createdAt: createdAt,
+        guard let event = try? NostrEvent.signed(
             kind: kind,
-            tags: tags,
-            content: content
-        )
-        let signature = sign(message: idBytes, with: identity)
-        return NostrEvent(
-            id: idBytes.hexString,
-            pubkey: pubkey,
-            createdAt: createdAt,
-            kind: kind,
-            tags: tags,
             content: content,
-            sig: signature.hexString
-        )
+            tags: tags,
+            createdAt: Date(timeIntervalSince1970: TimeInterval(createdAt)),
+            with: identity.privateKey
+        ) else {
+            fatalError("failed to sign fixture event")
+        }
+        return event
     }
 }
