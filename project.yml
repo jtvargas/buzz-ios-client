@@ -1,0 +1,30 @@
+name: BuzzClient
+options:
+  bundleIdPrefix: com.example
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+configFiles:
+  Debug: Config/Shared.xcconfig
+  Release: Config/Shared.xcconfig
+packages:
+  NostrCore:
+    path: Packages/NostrCore
+  BuzzKit:
+    path: Packages/BuzzKit
+targets:
+  BuzzClient:
+    type: application
+    platform: iOS
+    sources:
+      - App/Sources
+    dependencies:
+      - package: NostrCore
+      - package: BuzzKit
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        CURRENT_PROJECT_VERSION: 1
+        MARKETING_VERSION: 0.1.0
+        SWIFT_STRICT_CONCURRENCY: complete
