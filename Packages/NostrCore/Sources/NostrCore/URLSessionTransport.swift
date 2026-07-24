@@ -25,6 +25,9 @@ public actor URLSessionTransport: RelayTransport {
     private let openTimeout: Duration
     private var task: URLSessionWebSocketTask?
     private var lastActivity: ContinuousClock.Instant?
+    /// A frame the open probe consumed before any read loop existed, replayed
+    /// by the next ``receive()`` so nothing is dropped or reordered.
+    private var stashedFrame: URLSessionWebSocketTask.Message?
 
     /// - Parameters:
     ///   - session: the session to open tasks on; injectable for tests.
@@ -95,10 +98,15 @@ public actor URLSessionTransport: RelayTransport {
         guard let task else { throw TransportError.connectionClosed }
 
         let message: URLSessionWebSocketTask.Message
-        do {
-            message = try await task.receive()
-        } catch {
-            throw TransportError.receiveFailed(String(describing: error))
+        if let stashed = stashedFrame {
+            stashedFrame = nil
+            message = stashed
+        } else {
+            do {
+                message = try await task.receive()
+            } catch {
+                throw TransportError.receiveFailed(String(describing: error))
+            }
         }
         markActivity()
 
@@ -117,9 +125,27 @@ public actor URLSessionTransport: RelayTransport {
         }
     }
 
+    /// The watchdog's liveness round-trip. Relies on the owner's read loop
+    /// keeping a `receive()` pending — `URLSession` only pumps inbound frames,
+    /// pongs included, while one is — which is always true post-connect. The
+    /// connect-time probe cannot rely on that and uses ``probeOpen()`` instead.
     public func ping() async throws {
-        guard task != nil else { throw TransportError.connectionClosed }
-        try await probeOpen()
+        guard let task else { throw TransportError.connectionClosed }
+        let once = ResumeOnce()
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                task.sendPing { error in
+                    guard once.claim() else { return }
+                    if let error {
+                        continuation.resume(throwing: error)
+                    } else {
+                        continuation.resume()
+                    }
+                }
+            }
+        } onCancel: {
+            Task { await self.cancelActiveTask() }
+        }
         markActivity()
     }
 
@@ -140,16 +166,35 @@ public actor URLSessionTransport: RelayTransport {
 
     /// Sends a ping and suspends until the pong — or an error — comes back.
     ///
-    /// `URLSessionWebSocketTask.sendPing` fires its handler exactly once, on the
-    /// pong or on failure. Wrapping it in a cancellation handler makes the
-    /// suspension respond to `Task` cancellation: cancelling the socket forces
-    /// the pending handler to fire with an error, which is how the open-timeout
-    /// race unblocks the probe when the deadline wins.
+    /// Proves the socket is genuinely open, bounded by the caller's deadline.
+    ///
+    /// Two hard-won facts about `URLSessionWebSocketTask` shape this (both
+    /// observed against a live TLS relay):
+    ///
+    /// 1. Inbound frames — pongs included — are only pumped while a `receive`
+    ///    is pending. A ping sent with no reader never completes, so the probe
+    ///    arms its own receive. Against a relay that talks first (Buzz sends
+    ///    its AUTH challenge on connect) the first frame doubles as the open
+    ///    proof and is stashed for the read loop; a silent relay is proven by
+    ///    the pong the pending receive pumps.
+    /// 2. A socket torn down mid-ping can fire the ping handler more than once
+    ///    (send failure, then connection abort). Every resume path goes
+    ///    through a once-guard, so whichever loses the race is a no-op.
+    ///
+    /// The cancellation handler keeps the suspension responsive to `Task`
+    /// cancellation: cancelling the socket forces the pending handlers to fire
+    /// with errors, which is how the open-timeout race unblocks the probe when
+    /// the deadline wins.
     private func probeOpen() async throws {
         guard let task else { throw TransportError.connectionClosed }
+        let once = ResumeOnce()
         try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                task.receive { result in
+                    Task { await self.settleProbeReceive(result, once: once, continuation: continuation) }
+                }
                 task.sendPing { error in
+                    guard once.claim() else { return }
                     if let error {
                         continuation.resume(throwing: error)
                     } else {
@@ -159,6 +204,25 @@ public actor URLSessionTransport: RelayTransport {
             }
         } onCancel: {
             Task { await self.cancelActiveTask() }
+        }
+    }
+
+    /// Settles the probe from its armed receive: a frame proves the socket
+    /// open and is stashed — before resuming, so the first ``receive()`` call
+    /// can never miss it. A receive error settles the probe as failed only if
+    /// the ping has not already settled it; otherwise it belongs to the read
+    /// path and resurfaces on the next ``receive()``.
+    private func settleProbeReceive(
+        _ result: Result<URLSessionWebSocketTask.Message, any Error>,
+        once: ResumeOnce,
+        continuation: CheckedContinuation<Void, Error>
+    ) {
+        switch result {
+        case let .success(message):
+            stashedFrame = message
+            if once.claim() { continuation.resume() }
+        case let .failure(error):
+            if once.claim() { continuation.resume(throwing: error) }
         }
     }
 
@@ -181,4 +245,20 @@ public actor URLSessionTransport: RelayTransport {
 
     /// The open-timeout sentinel, private so it never leaks past ``connect(url:)``.
     private struct ConnectTimeout: Error {}
+}
+
+/// Claims the right to resume a continuation exactly once across racing
+/// completion paths. Lock-based because the claimants run on arbitrary
+/// URLSession queues, outside any actor.
+private final class ResumeOnce: @unchecked Sendable {
+    private let lock = NSLock()
+    private var resumed = false
+
+    func claim() -> Bool {
+        lock.withLock {
+            if resumed { return false }
+            resumed = true
+            return true
+        }
+    }
 }
