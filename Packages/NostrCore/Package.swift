@@ -22,6 +22,10 @@ let package = Package(
             dependencies: [
                 "NostrCore",
                 .product(name: "P256K", package: "swift-secp256k1"),
+            ],
+            resources: [
+                .copy("nip44.vectors.json"),
+                .copy("bip340-test-vectors.csv"),
             ]
         ),
     ]
