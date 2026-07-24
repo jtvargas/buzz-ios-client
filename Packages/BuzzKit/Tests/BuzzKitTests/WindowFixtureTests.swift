@@ -14,14 +14,14 @@ import Testing
 /// member identity; the `39005`/`39006` overlays and the `9005` tombstone by a
 /// synthetic relay identity). It is *not* the Buzz Pi's relay identity.
 ///
-/// A real capture was attempted against the Pi (`https://homelab.tail4bc643.ts.net/query`)
-/// with a throwaway NIP-98 key: the request round-tripped — HTTP `200`, auth
-/// accepted, the window wire format understood — but returned an empty array `[]`,
-/// because a throwaway key is a member of no channel and NIP-CW §Access Scoping
-/// yields no rows and no overlays for an inaccessible channel. So the *request*
-/// path is confirmed against the live relay; only the *populated* response body is
-/// synthesized. Capturing a populated window (member credentials on a real channel)
-/// remains an open item, tracked for the step-7 live integration suite.
+/// A real *populated* capture now exists alongside this synthetic one:
+/// `Fixtures/window-head-response-pi.json`, taken by the step-7 live integration suite
+/// against the Pi on a self-provisioned channel with a member key (see
+/// `WindowPiFixtureTests`). It confirmed the Pi serves the NIP-CW window fast path with
+/// a relay-signed `kind:39006` bounds overlay bound `<channel>:head`. This synthetic
+/// fixture is retained because it exercises the fuller aux/summary partitioning (a
+/// reaction, an edit, an author deletion, a relay tombstone, and a thread summary) that
+/// the throwaway-channel capture had no occasion to produce.
 @Suite("Window fixture parse")
 struct WindowFixtureTests {
     private let channel = "2f8a1c4e-6b3d-4a9f-8e21-0c5d7b9a1e34"
