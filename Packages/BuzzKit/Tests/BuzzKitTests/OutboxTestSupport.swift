@@ -4,8 +4,10 @@ import GRDB
 import NostrCore
 
 /// A clock a test can wind forward, so age-based decisions (the stale-timestamp
-/// re-sign) are exercised without touching the wall clock.
-final class MutableClock: @unchecked Sendable {
+/// re-sign) are exercised without touching the wall clock. `Date`-valued, unlike
+/// the presence suite's monotonic `MutableClock` — the store's clock stamps
+/// `created_at`, which is wall-clock by nature.
+final class MutableDateClock: @unchecked Sendable {
     private let lock = NSLock()
     private var current: Date
 
@@ -29,13 +31,13 @@ struct OutboxHarness {
     let database: TempDatabase
     let signer: InMemorySigner
     let pubkey: String
-    let clock: MutableClock
+    let clock: MutableDateClock
 
     init(start: TimeInterval = 1_700_000_000) throws {
         let key = try PrivateKey()
         signer = InMemorySigner(key)
         pubkey = key.publicKey.hex
-        clock = MutableClock(Date(timeIntervalSince1970: start))
+        clock = MutableDateClock(Date(timeIntervalSince1970: start))
         database = TempDatabase()
         store = try BuzzEventStore(path: database.path, projector: NullProjector(), clock: clock.reader)
     }
