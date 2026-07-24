@@ -12,12 +12,15 @@ struct TransportErrorTests {
         #expect(TransportError.connectFailed("refused") == .connectFailed("refused"))
         #expect(TransportError.sendFailed("broken pipe") == .sendFailed("broken pipe"))
         #expect(TransportError.receiveFailed("reset") == .receiveFailed("reset"))
+        #expect(TransportError.requestFailed("offline") == .requestFailed("offline"))
     }
 
     @Test("Cases with different payloads are not equal")
     func payloadSensitivity() {
         #expect(TransportError.connectFailed("a") != .connectFailed("b"))
         #expect(TransportError.sendFailed("a") != .receiveFailed("a"))
+        #expect(TransportError.requestFailed("a") != .requestFailed("b"))
+        #expect(TransportError.requestFailed("a") != .sendFailed("a"))
         #expect(TransportError.connectTimeout != .connectionClosed)
     }
 
@@ -30,6 +33,7 @@ struct TransportErrorTests {
             .sendFailed("broken pipe"),
             .receiveFailed("reset"),
             .unsupportedFrame,
+            .requestFailed("offline"),
         ]
     )
     func descriptions(error: TransportError) {
@@ -46,6 +50,7 @@ struct TransportErrorTests {
             .sendFailed("x"),
             .receiveFailed("x"),
             .unsupportedFrame,
+            .requestFailed("x"),
         ]
         let descriptions = Set(all.compactMap(\.errorDescription))
         #expect(descriptions.count == all.count)

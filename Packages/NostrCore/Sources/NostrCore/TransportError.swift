@@ -1,6 +1,6 @@
 import Foundation
 
-/// Why a ``RelayTransport`` operation could not complete.
+/// Why a ``RelayTransport`` or ``HTTPTransport`` operation could not complete.
 ///
 /// The transport deals only in connection mechanics, so its failures form a
 /// small closed set the consumer can switch on to drive reconnect and retry:
@@ -9,10 +9,16 @@ import Foundation
 /// `CLOSED`) are *not* here — those are a fully connected relay's verdict and
 /// belong to ``OKReason``; this type is strictly about the pipe.
 ///
+/// The HTTP seam (``HTTPTransport``) shares this vocabulary: its round-trip
+/// contributes ``requestFailed(_:)`` for an exchange that never produced an HTTP
+/// response. A non-2xx status is *not* a failure there — it is handed back to the
+/// caller as data — so it has no case here.
+///
 /// The failure detail on ``connectFailed(_:)`` / ``sendFailed(_:)`` /
-/// ``receiveFailed(_:)`` is the underlying error rendered to a string rather
-/// than the error itself, so the type stays `Equatable` and `Sendable` and can
-/// cross actor boundaries and be asserted against directly in tests.
+/// ``receiveFailed(_:)`` / ``requestFailed(_:)`` is the underlying error rendered
+/// to a string rather than the error itself, so the type stays `Equatable` and
+/// `Sendable` and can cross actor boundaries and be asserted against directly in
+/// tests.
 public enum TransportError: Error, Equatable, Sendable {
     /// The socket neither opened nor failed within the connect deadline — a
     /// black-holed TCP connect or a handshake that never completed. Distinct
@@ -30,6 +36,11 @@ public enum TransportError: Error, Equatable, Sendable {
     case receiveFailed(String)
     /// The peer delivered a frame in a form this transport does not model.
     case unsupportedFrame
+    /// An HTTP round-trip (``HTTPTransport/post(body:to:headers:)``) never yielded
+    /// an HTTP response — a network failure, a cancelled request, or a response
+    /// that did not speak HTTP. A non-2xx status is *not* here: it is a completed
+    /// exchange the caller interprets, not a transport failure.
+    case requestFailed(String)
 }
 
 extension TransportError: LocalizedError {
@@ -47,6 +58,8 @@ extension TransportError: LocalizedError {
             "Receiving a frame failed: \(reason)"
         case .unsupportedFrame:
             "The peer sent a frame of an unsupported kind."
+        case let .requestFailed(reason):
+            "The HTTP request did not complete: \(reason)"
         }
     }
 }
