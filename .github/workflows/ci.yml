@@ -32,9 +32,14 @@ jobs:
 
   app:
     name: App build (iOS Simulator)
-    runs-on: macos-latest
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
+      - name: Select Xcode 26
+        run: |
+          ls -d /Applications/Xcode*.app
+          sudo xcode-select -s "$(ls -d /Applications/Xcode_26*.app | sort -V | tail -1)"
+          xcodebuild -version
       - name: Install XcodeGen
         run: which xcodegen || brew install xcodegen
       - name: Generate project
@@ -42,7 +47,7 @@ jobs:
       - name: Build
         run: >
           xcodebuild build
-          -project BuzzClient.xcodeproj
-          -scheme BuzzClient
+          -project Hive.xcodeproj
+          -scheme Hive
           -destination 'generic/platform=iOS Simulator'
           CODE_SIGNING_ALLOWED=NO

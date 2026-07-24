@@ -5,15 +5,16 @@ import SwiftUI
 struct ContentView: View {
     var body: some View {
         VStack(spacing: 8) {
-            Image(systemName: "antenna.radiowaves.left.and.right")
+            Image(systemName: "hexagon.fill")
                 .font(.largeTitle)
-            Text("buzz-ios-client")
+            Text("Hive")
                 .font(.headline)
-            Text("core \(NostrCore.version)")
+            Text("buzz client · core \(NostrCore.version)")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
-        .padding()
+        .padding(24)
+        .glassEffect(in: .rect(cornerRadius: 20))
     }
 }
 

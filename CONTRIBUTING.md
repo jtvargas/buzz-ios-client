@@ -5,10 +5,10 @@ Thanks for your interest! This project aims to be a contributor-friendly, fully 
 ## Setup
 
 ```sh
-./Scripts/bootstrap.sh   # installs XcodeGen if needed, generates BuzzClient.xcodeproj
+./Scripts/bootstrap.sh   # installs XcodeGen if needed, generates Hive.xcodeproj
 ```
 
-Requires Xcode 16+ (Swift 6). The `.xcodeproj` is generated from `project.yml` and gitignored — edit `project.yml`, never the project file.
+Requires Xcode 26+ for the app target (iOS 26 / Liquid Glass); the packages alone build with Xcode 16+. The `.xcodeproj` is generated from `project.yml` and gitignored — edit `project.yml`, never the project file.
 
 Simulator builds need no signing. For device builds, copy `Config/Local.xcconfig.example` to `Config/Local.xcconfig` (gitignored) and set your `DEVELOPMENT_TEAM`. Never commit team IDs or personal bundle identifiers.
 

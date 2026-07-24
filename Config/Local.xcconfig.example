@@ -1,4 +1,4 @@
 // Copy this file to Config/Local.xcconfig (gitignored) for device builds.
 // Simulator builds work without it — CI never signs.
 DEVELOPMENT_TEAM = YOUR_TEAM_ID
-PRODUCT_BUNDLE_IDENTIFIER = com.yourdomain.buzzclient
+PRODUCT_BUNDLE_IDENTIFIER = com.yourdomain.hive

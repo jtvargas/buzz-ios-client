@@ -1,8 +1,8 @@
-name: BuzzClient
+name: Hive
 options:
   bundleIdPrefix: com.example
   deploymentTarget:
-    iOS: "17.0"
+    iOS: "26.0"
   createIntermediateGroups: true
 configFiles:
   Debug: Config/Shared.xcconfig
@@ -13,7 +13,7 @@ packages:
   BuzzKit:
     path: Packages/BuzzKit
 targets:
-  BuzzClient:
+  Hive:
     type: application
     platform: iOS
     sources:
@@ -25,6 +25,7 @@ targets:
       base:
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_CFBundleDisplayName: Hive
         CURRENT_PROJECT_VERSION: 1
         MARKETING_VERSION: 0.1.0
         SWIFT_STRICT_CONCURRENCY: complete

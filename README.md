@@ -1,12 +1,14 @@
-# buzz-ios-client
+# Hive — buzz client
 
-A 100% Swift/SwiftUI native iOS client for [Buzz](https://github.com/block/buzz) — the Nostr-based messaging platform for human–agent collaboration.
+**Hive** is a 100% Swift/SwiftUI native iOS client for [Buzz](https://github.com/block/buzz) — the Nostr-based messaging platform for human–agent collaboration.
 
 > **Status:** early foundations (Phase 0). Not yet usable. The first public milestone is feature parity with the upstream Buzz mobile app **v0.4.11** — tracked in [PARITY.md](PARITY.md).
 
 ## Why
 
-Buzz ships an excellent Flutter mobile app. This project builds a fully native iOS client with a Slack-iOS-style UX, aiming for the things native does best: tight scrolling/animation performance, share extensions, widgets, App Intents, Live Activities, and first-class APNs push.
+Buzz ships an excellent Flutter mobile app. Hive is a fully native iOS client with a Slack-iOS-style UX built on the iOS 26 design language (Liquid Glass, native-first system components), aiming for the things native does best: tight scrolling/animation performance, share extensions, widgets, App Intents, Live Activities, and first-class APNs push.
+
+Hive is not affiliated with Block, Inc. The Buzz name and bee mark are upstream's; Apache-2.0 withholds trademark rights.
 
 ## Product model
 
@@ -27,7 +29,9 @@ App target plus two local SPM packages, modular from day one:
 |-------|----------|
 | `NostrCore` | Keys (secp256k1 → Keychain), event model/codec, signing, relay WebSocket actor (reconnect/backoff/heartbeat), NIP-42 auth, subscription manager (REQ/EOSE/CLOSED) |
 | `BuzzKit` | Buzz domain layer: kinds & tags per Buzz's NIP extensions, channels/threads/reactions/profiles models, **SyncEngine** + **Outbox**, GRDB (SQLite) persistence |
-| App | SwiftUI, iOS 17+ (Observation), Swift 6 strict concurrency, MVVM with feature folders |
+| App | SwiftUI, iOS 26+ (Liquid Glass, Observation), Swift 6 strict concurrency, MVVM with feature folders |
+
+Packages keep an iOS 17 / macOS 14 floor (no UI code); the app targets iOS 26 — see [ADR-0002](docs/adr/0002-minimum-ios-version.md).
 
 ### Sync reliability (client-owned)
 
@@ -44,15 +48,16 @@ The Buzz relay has no negentropy/NIP-77 sync, so reliability is built client-sid
 - Upstream third-party client guide: `NOSTR.md` in [block/buzz](https://github.com/block/buzz)
 - Buzz NIP extensions: `docs/nips/` in block/buzz (AA, AE, AM, AO, AP, CW, DV, ER, GS, IA, OA, PL, RS, WP)
 - Base protocol: NIP-01, NIP-29 (groups), NIP-42 (auth)
+- [jedbridges/comb](https://github.com/jedbridges/comb) (MIT) — an independent native iOS Buzz client; Hive borrows ideas and, where it fits, adapts code from it with attribution
 
 Architecture decisions are recorded in `docs/adr/`.
 
 ## Building
 
-Requires Xcode 16+ / iOS 17 SDK.
+Requires Xcode 26+ (iOS 26 SDK) for the app; packages alone build with Xcode 16+.
 
 ```sh
-./Scripts/bootstrap.sh   # generates BuzzClient.xcodeproj from project.yml (XcodeGen)
+./Scripts/bootstrap.sh   # generates Hive.xcodeproj from project.yml (XcodeGen)
 make test                # package tests (native macOS, fast)
 make build               # app build for iOS Simulator, no signing
 ```

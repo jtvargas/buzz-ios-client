@@ -11,7 +11,7 @@ test:
 	swift test --package-path Packages/BuzzKit
 
 build: generate
-	xcodebuild build -project BuzzClient.xcodeproj -scheme BuzzClient \
+	xcodebuild build -project Hive.xcodeproj -scheme Hive \
 		-destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO
 
 format:
