@@ -37,6 +37,14 @@ public actor BuzzEventStore {
     /// exercised without shipping a second build.
     let projectionVersion: Int
 
+    /// The store's notion of "now", injected so the outbox's age-based decisions
+    /// stay deterministic. The stale-timestamp re-sign (below) turns on the local
+    /// age of a queued send, and the relay's ±15-minute ingest gate makes that age
+    /// a correctness boundary, not a heuristic — so it must be a value a test can
+    /// control rather than a wall-clock read buried in the logic. Defaults to the
+    /// wall clock in production.
+    let clock: @Sendable () -> Date
+
     // MARK: - Lifecycle
 
     /// Opens (or creates) the store at `path` with the production projector.
@@ -46,6 +54,7 @@ public actor BuzzEventStore {
         reader = pool
         projector = NullProjector()
         projectionVersion = Schema.projectionVersion
+        clock = { Date() }
         try Self.prepare(pool, projector: projector, projectionVersion: projectionVersion)
     }
 
@@ -53,12 +62,18 @@ public actor BuzzEventStore {
     ///
     /// The seam tests and the rebuild tests drive the store through here. Kept
     /// internal so the public surface stays `init(path:)`.
-    init(path: String, projector: any EventProjecting, projectionVersion: Int = Schema.projectionVersion) throws {
+    init(
+        path: String,
+        projector: any EventProjecting,
+        projectionVersion: Int = Schema.projectionVersion,
+        clock: @escaping @Sendable () -> Date = { Date() }
+    ) throws {
         let pool = try Self.makePool(path: path)
         writer = pool
         reader = pool
         self.projector = projector
         self.projectionVersion = projectionVersion
+        self.clock = clock
         try Self.prepare(pool, projector: projector, projectionVersion: projectionVersion)
     }
 
