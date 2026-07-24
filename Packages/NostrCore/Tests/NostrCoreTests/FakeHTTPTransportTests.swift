@@ -1,5 +1,6 @@
 import Foundation
 @testable import NostrCore
+import NostrCoreTestSupport
 import Testing
 
 @Suite("FakeHTTPTransport scripted-transport contract")

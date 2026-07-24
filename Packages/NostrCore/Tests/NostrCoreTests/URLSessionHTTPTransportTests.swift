@@ -73,8 +73,8 @@ struct URLSessionHTTPTransportTests {
 /// The response body is JSON `{"method": <verb>, "echo": <X-Echo>}`, which lets a
 /// test assert the verb URLSession sent and that caller headers were forwarded.
 final class StubURLProtocol: URLProtocol {
-    override class func canInit(with request: URLRequest) -> Bool { true }
-    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override static func canInit(with request: URLRequest) -> Bool { true }
+    override static func canonicalRequest(for request: URLRequest) -> URLRequest { request }
 
     override func startLoading() {
         guard let client else { return }
