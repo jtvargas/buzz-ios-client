@@ -28,8 +28,9 @@ public actor BuzzEventStore {
     /// `ValueObservation` and run queries against it; it can never write.
     public nonisolated let reader: any DatabaseReader
 
-    /// The projection seam. Step 1 wires ``NullProjector``; step 2 swaps in the
-    /// real projector without this actor changing.
+    /// The projection seam. Production wires ``BuzzProjector``; tests inject a
+    /// ``NullProjector`` or a recording double to drive the store and the rebuild
+    /// path without depending on a real projector's rows.
     let projector: any EventProjecting
 
     /// The projection version this store enforces. Defaults to the schema constant
@@ -52,7 +53,7 @@ public actor BuzzEventStore {
         let pool = try Self.makePool(path: path)
         writer = pool
         reader = pool
-        projector = NullProjector()
+        projector = BuzzProjector()
         projectionVersion = Schema.projectionVersion
         clock = { Date() }
         try Self.prepare(pool, projector: projector, projectionVersion: projectionVersion)

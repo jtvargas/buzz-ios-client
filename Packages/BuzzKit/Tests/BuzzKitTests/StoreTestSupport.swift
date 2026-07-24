@@ -1,4 +1,5 @@
 @testable import BuzzKit
+import CryptoKit
 import Foundation
 import GRDB
 import NostrCore
@@ -43,6 +44,19 @@ struct Fixture {
     ) throws -> NostrEvent {
         try event(.channelMessage, content, tags: [["h", channel]], at: seconds)
     }
+
+    /// An owner-signed NIP-OA `auth` tag by which this fixture, acting as the
+    /// owner, authorizes `agentPubkey`.
+    ///
+    /// The owner signs `SHA-256` of `nostr:agent-auth:<agentPubkey>:<conditions>`,
+    /// following the NIP-OA preimage construction, so a message an agent publishes
+    /// carrying this tag exposes this fixture as its verified owner.
+    func authTag(authorizing agentPubkey: String, conditions: String = "") throws -> [String] {
+        let preimage = Data(("nostr:agent-auth:" + agentPubkey + ":" + conditions).utf8)
+        let digest = Data(SHA256.hash(data: preimage))
+        let signature = try key.signature(for: digest)
+        return ["auth", pubkey, conditions, signature.hexString]
+    }
 }
 
 /// A unique on-disk database for one test, opened as the real WAL `DatabasePool`
@@ -60,8 +74,12 @@ struct TempDatabase {
             .path
     }
 
+    /// Opens the store with the production ``BuzzProjector`` by default, so the
+    /// projection and timeline tests exercise exactly the shipping projector.
+    /// Tests that only care about the log or the rebuild seam pass a
+    /// ``NullProjector`` or a recording double instead.
     func open(
-        projector: any EventProjecting = NullProjector(),
+        projector: any EventProjecting = BuzzProjector(),
         projectionVersion: Int = Schema.projectionVersion
     ) throws -> BuzzEventStore {
         try BuzzEventStore(path: path, projector: projector, projectionVersion: projectionVersion)
@@ -127,6 +145,56 @@ extension BuzzEventStore {
     func executeForTest(_ sql: String) async throws {
         try await writer.write { db in
             try db.execute(sql: sql)
+        }
+    }
+
+    /// Inserts a denormalized pending-send row directly, standing in for the Outbox
+    /// component that lands in step 4, so the timeline's outbox UNION can be
+    /// exercised now. The columns mirror what an enqueue will write.
+    func enqueueForTest(
+        _ event: NostrEvent,
+        channel: String,
+        state: String = "pending",
+        lastError: String? = nil,
+        rootID: String? = nil,
+        parentID: String? = nil
+    ) async throws {
+        let payloadData = try JSONEncoder().encode(event)
+        let tagsData = try JSONEncoder().encode(event.tags)
+        // JSONEncoder always emits UTF-8, so the fallbacks are unreachable; the
+        // failable initializer keeps this honest rather than force-decoding.
+        let payload = String(bytes: payloadData, encoding: .utf8) ?? "{}"
+        let tagsJSON = String(bytes: tagsData, encoding: .utf8) ?? "[]"
+        try await writer.write { db in
+            try db.execute(
+                sql: """
+                INSERT INTO outbox
+                    (event_id, channel_id, pubkey, content, created_at,
+                     payload, state, attempts, last_error, root_id, parent_id, tags)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)
+                """,
+                arguments: [
+                    event.id, channel, event.pubkey, event.content, event.createdAt,
+                    payload, state, lastError, rootID, parentID, tagsJSON,
+                ]
+            )
+        }
+    }
+
+    /// A deterministic dump of every projection table's contents.
+    ///
+    /// Row descriptions are sorted, so the comparison is over contents rather than
+    /// insertion order — which differs between live ingest and an ordered replay.
+    /// This is what a rebuild-agreement test asserts equal before and after a
+    /// version bump.
+    nonisolated func projectionSnapshot() async throws -> [String: [String]] {
+        try await reader.read { db in
+            var snapshot: [String: [String]] = [:]
+            for table in Schema.projectionTables {
+                let rows = try Row.fetchAll(db, sql: "SELECT * FROM \(table)")
+                snapshot[table] = rows.map(\.description).sorted()
+            }
+            return snapshot
         }
     }
 }
