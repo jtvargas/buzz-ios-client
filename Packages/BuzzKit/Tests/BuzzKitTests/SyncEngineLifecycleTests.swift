@@ -98,6 +98,10 @@ struct SyncEngineLifecycleTests {
     /// A `.degraded` window result withdraws the fast path for the session and falls
     /// back to assembling history over the standard WebSocket filter — no window
     /// retry, threads reassembled client-side by the projector.
+    ///
+    /// The channel lands `.fallbackSynced`, not `.synced`: the fallback is a single
+    /// limit-bounded page over a possibly-open gap, so the watermark must hold (the
+    /// P2-3 contiguity fix).
     @Test("A degraded window falls back to the standard WebSocket filter")
     func degradationFallback() async throws {
         let socket = ScriptedRelay()
@@ -127,12 +131,16 @@ struct SyncEngineLifecycleTests {
         await socket.enqueue(EngineFrames.event(historySub, history2))
         await socket.enqueue(EngineFrames.eose(historySub))
 
-        await waitUntil { await harness.engine.channelSyncState("room") == .synced }
+        await waitUntil { await harness.engine.channelSyncState("room") == .fallbackSynced }
 
         #expect(try await harness.store.event(id: history1.id) != nil)
         #expect(try await harness.store.event(id: history2.id) != nil)
         // The single failed window attempt was not retried; the fast path is gone.
         #expect(await harness.http.requests.count == 1)
+        // The watermark held at its seed — the fallback never advanced it over the
+        // unclosed gap below the recovered head.
+        #expect(try await harness.store.channelWatermark("room")
+            == WindowCursor(createdAt: 1_700_000_000, id: "seed"))
 
         await harness.engine.stop()
     }

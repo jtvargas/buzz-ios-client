@@ -328,6 +328,12 @@ extension BuzzEventStore {
 
     /// A message signed and queued but not yet acknowledged by the relay. It
     /// carries no reply tally: nothing can have replied to it yet.
+    ///
+    /// A pending row is excluded the moment its event lands in the log — the two
+    /// share an id, so once the log holds it (a relay echo that beat the OK, or the
+    /// relaunch reconcile that stored it before the drain confirmed — the T3
+    /// recovery state) the event branch renders it as `.sent` and this branch must
+    /// not render a second, `.pending` copy of the same message.
     private static func outboxBranch(where predicate: String) -> String {
         """
         SELECT o.event_id  AS id,
@@ -347,7 +353,8 @@ extension BuzzEventStore {
                o.last_error AS last_error
         FROM outbox o
         LEFT JOIN profile p ON p.pubkey = o.pubkey
-        WHERE \(predicate)
+        WHERE NOT EXISTS (SELECT 1 FROM event WHERE event.id = o.event_id)
+          AND (\(predicate))
         """
     }
 

@@ -57,6 +57,19 @@ public extension BuzzEventStore {
     /// they may sit above an open gap. The advance is computed from the admitted
     /// kind-9 events scoped to the channel (the same order space the window rows
     /// occupy), so a reaction or an out-of-band kind never moves it.
+    ///
+    /// - Note: Known limitation. This live advance trusts each message's
+    ///   author-controlled `created_at`. A future-skewed message can therefore push
+    ///   a synced channel's watermark ahead of true time, so a later reconcile —
+    ///   which pages down only until it reaches the stored watermark — may skip
+    ///   honestly-timestamped events created inside that skew window. The exposure is
+    ///   bounded, not unbounded: the relay's ingest gate rejects any event whose
+    ///   `created_at` is more than ±15 minutes from server time
+    ///   (`buzz-relay .../ingest.rs`), so the largest possible early advance is that
+    ///   window. Closing it fully would require stamping the watermark from a
+    ///   relay-attested time rather than the event's own; recorded here rather than
+    ///   fixed because the ±15-minute bound keeps it within the live overlap the
+    ///   reconcile already re-fetches.
     @discardableResult
     func ingest(
         batch: [NostrEvent],

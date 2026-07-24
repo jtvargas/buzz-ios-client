@@ -63,6 +63,15 @@ public actor SyncEngine {
         case reconciling
         /// The offline gap is closed; live flushes now advance the watermark.
         case synced
+        /// The window fast path degraded, so the head was assembled from the
+        /// standard WebSocket filter instead. It renders to a UI like ``synced`` —
+        /// the newest history is on screen — but it is deliberately *excluded* from
+        /// ``syncedChannels()``: that fallback is a single limit-bounded page with no
+        /// `since`, so a gap below it may still be open, and a live flush must not
+        /// advance the watermark past it (it would claim a contiguity the log does
+        /// not have). A later `.ready` that reconciles through the window path — or a
+        /// fresh session — closes the gap and promotes the channel to ``synced``.
+        case fallbackSynced
     }
 
     // MARK: - Injected collaborators
@@ -300,8 +309,10 @@ public actor SyncEngine {
         }
     }
 
-    /// The channels currently caught up, whose live flushes may advance the
-    /// watermark (rule 4).
+    /// The channels whose live flushes may advance the watermark (rule 4): only
+    /// those in ``ChannelSync/synced``, whose gap the window reconcile proved
+    /// closed. ``ChannelSync/fallbackSynced`` is intentionally absent — its head was
+    /// assembled over a possibly-open gap, so its watermark must hold.
     func syncedChannels() -> Set<String> {
         Set(channelStates.compactMap { $0.value == .synced ? $0.key : nil })
     }

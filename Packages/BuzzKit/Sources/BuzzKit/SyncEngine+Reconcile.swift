@@ -84,6 +84,11 @@ extension SyncEngine {
     /// `.invalidPage` discards that page and leaves the channel unsynced; a
     /// `.degraded` result withdraws the fast path for the session and falls back to
     /// the standard WebSocket filter.
+    ///
+    /// Every step re-checks `isCurrent(generation)`: a reconnect that supersedes this
+    /// socket abandons the reconcile, and abandoning writes nothing — the new
+    /// generation already reset channel state and owns it, so a late write from here
+    /// could only clobber it.
     func reconcile(_ channel: String, generation: Int) async {
         guard isCurrent(generation) else { return }
         setChannelState(channel, .reconciling)
@@ -108,7 +113,11 @@ extension SyncEngine {
                 return
             }
         }
-        setChannelState(channel, .unsynced)
+        // The loop exits here only because `isCurrent` went false — a reconnect
+        // superseded this reconcile mid-page. Abandoning means writing nothing: the
+        // fresh `.ready` that superseded it already reset every channel, and a late
+        // `.unsynced` here would clobber whatever state the new generation has since
+        // set (e.g. a `.synced` it has already reached).
     }
 
     /// The outcome of one reconcile page: page again from a new cursor, or stop
@@ -132,18 +141,24 @@ extension SyncEngine {
             channelID: channel, cursor: cursor, kinds: [.channelMessage], limit: config.windowPageLimit
         )
         guard let result = try? await windowClient.fetch(filter) else {
-            // The request could not be *formed* (signer/encoder). Leave the channel
-            // unsynced; a later `.ready` retries.
-            setChannelState(channel, .unsynced)
+            // The request could not be *formed* (signer/encoder). If this generation
+            // is still current, leave the channel unsynced so a later `.ready`
+            // retries; if a reconnect superseded it during the fetch, abandon without
+            // a write — a stale task must never touch state the new socket now owns.
+            if isCurrent(generation) { setChannelState(channel, .unsynced) }
             return .stop
         }
-        guard isCurrent(generation) else { setChannelState(channel, .unsynced); return .stop }
+        // Superseded during the fetch: abandon, writing nothing (see below).
+        guard isCurrent(generation) else { return .stop }
 
         switch result {
         case let .page(page):
             let decision = pageDecision(page, watermark: watermark, headNewest: &headNewest)
             _ = try? await store.commitWindowPage(page, channel: channel, advanceWatermarkTo: decision.advanceTo)
-            guard isCurrent(generation) else { setChannelState(channel, .unsynced); return .stop }
+            // Superseded during the commit: abandon, writing nothing. The page itself
+            // is already durably committed by its own transaction; only the channel
+            // *state* is abandoned, and the new generation owns that now.
+            guard isCurrent(generation) else { return .stop }
             guard let next = decision.next else {
                 setChannelState(channel, .synced)
                 return .stop
@@ -197,15 +212,24 @@ extension SyncEngine {
     /// Assembles a channel's history from the standard WebSocket filter when the
     /// window path has degraded: the clean NIP-01 projection of the window request
     /// (kinds + `#h` + limit), run one-shot and ingested. Threads reassemble
-    /// client-side through the normal projector; the watermark is left to the live
-    /// phase.
+    /// client-side through the normal projector.
+    ///
+    /// This is a single limit-bounded page with no `since`, so it recovers the head
+    /// of the channel but proves nothing about the gap below it. The channel is
+    /// therefore marked ``ChannelSync/fallbackSynced``, **not** ``ChannelSync/synced``:
+    /// it renders as caught up, but it is excluded from ``syncedChannels()`` so a
+    /// live flush never advances the watermark over an unclosed gap (rule 2's
+    /// contiguity contract). The watermark stays where it was until a later `.ready`
+    /// reconciles this channel through the window path and closes the gap honestly.
     func fallbackAssemble(_ channel: String, generation: Int) async {
         let filter = WindowFilter(channelID: channel, kinds: [.channelMessage], limit: config.windowPageLimit)
             .baseFilter
         let events = (try? await subscriptions.query([filter])) ?? []
-        guard isCurrent(generation) else { setChannelState(channel, .unsynced); return }
+        // Superseded during the query: abandon, writing nothing — the new generation
+        // owns this channel's state now.
+        guard isCurrent(generation) else { return }
         _ = try? await store.ingest(batch: events, phase: .backfill)
-        setChannelState(channel, .synced)
+        setChannelState(channel, .fallbackSynced)
     }
 
     // MARK: - Thread open

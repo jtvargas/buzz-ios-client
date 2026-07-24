@@ -28,7 +28,14 @@ enum Schema {
     /// deletion/edit/rich-content/thread-summary rows, the owner-attestation index,
     /// and the staleness columns those need — so the version moves to 2. A later
     /// authority or parsing fix is another bump and a replay, never a resync.
-    static let projectionVersion = 2
+    ///
+    /// Version 3 corrects two projection defects that the rebuild path repairs for
+    /// existing stores without a resync: the `deletion` table's primary key becomes
+    /// composite `(event_id, target_id)` so a multi-target kind-5 tombstones every
+    /// target rather than only its first, and `channel_member` gains a
+    /// `source_event_id` column so a same-`created_at` roster tie resolves by event
+    /// id identically in live ingest and an ordered replay.
+    static let projectionVersion = 3
 
     /// The `meta` key under which the applied projection version is recorded.
     static let projectionVersionKey = "projection_version"
@@ -173,14 +180,16 @@ enum Schema {
         // so the projector replaces rather than merges it. A roster is addressable
         // state a relay can resend older after a reconnect, and this projection
         // collapses to one roster per channel, so every row carries the source
-        // event's `created_at`: the projector reads it back to reject a stale
-        // resend and to make the replace order-independent under a version rebuild.
+        // event's `created_at` *and* its id: the projector reads both back to reject
+        // a stale resend and to break a same-second tie by event id, so the replace
+        // lands the same roster under live ingest and under an ordered rebuild.
         try db.execute(sql: """
         CREATE TABLE channel_member (
             channel_id        TEXT NOT NULL,
             pubkey            TEXT NOT NULL,
             role              TEXT,
             source_created_at INTEGER NOT NULL,
+            source_event_id   TEXT NOT NULL,
             PRIMARY KEY (channel_id, pubkey)
         )
         """)
@@ -237,13 +246,19 @@ enum Schema {
         // a read-time decision that needs the target's author (and, for an
         // agent-authored target, its verified NIP-OA owner). `kind` distinguishes a
         // NIP-29 relay tombstone (9005) from an author deletion (5).
+        //
+        // The key is composite `(event_id, target_id)`: one kind-5 can name several
+        // `e` targets, and each must get its own row. Keyed on `event_id` alone, the
+        // projector's `ON CONFLICT DO NOTHING` kept only the first target and dropped
+        // the rest, so a multi-target deletion tombstoned just one message.
         try db.execute(sql: """
         CREATE TABLE deletion (
-            event_id   TEXT PRIMARY KEY NOT NULL,
+            event_id   TEXT NOT NULL,
             target_id  TEXT NOT NULL,
             deleted_by TEXT NOT NULL,
             kind       INTEGER NOT NULL DEFAULT 5,
-            created_at INTEGER NOT NULL
+            created_at INTEGER NOT NULL,
+            PRIMARY KEY (event_id, target_id)
         )
         """)
         try db.execute(sql: "CREATE INDEX deletion_target ON deletion(target_id)")
