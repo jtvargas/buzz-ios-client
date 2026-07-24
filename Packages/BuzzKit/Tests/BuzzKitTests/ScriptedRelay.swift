@@ -22,6 +22,7 @@ actor ScriptedRelay: RelayTransport {
     private(set) var isClosed = false
 
     private var connectFailure: TransportError?
+    private var pingFailure: TransportError?
     private var pending: [Delivery] = []
     private var waiter: CheckedContinuation<String, Error>?
     private var lastActivity: ContinuousClock.Instant?
@@ -60,6 +61,7 @@ actor ScriptedRelay: RelayTransport {
     }
 
     func ping() async throws {
+        if let pingFailure { throw pingFailure }
         if isClosed { throw TransportError.connectionClosed }
         markActivity()
     }
@@ -89,6 +91,10 @@ actor ScriptedRelay: RelayTransport {
     func enqueueFailure(_ error: TransportError) { deliver(.failure(error)) }
 
     func failConnect(with error: TransportError) { connectFailure = error }
+
+    /// Arms ``ping()`` to throw, standing in for a peer that has silently gone away
+    /// — the frozen-then-dead socket a foreground liveness probe must catch.
+    func failPings(with error: TransportError) { pingFailure = error }
 
     /// Suspends until the client has sent at least `index + 1` frames, returning the
     /// frame at `index`.

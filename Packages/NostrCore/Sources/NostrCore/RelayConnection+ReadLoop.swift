@@ -51,7 +51,11 @@ extension RelayConnection {
 
     // MARK: - Connection loss
 
-    func handleConnectionLost(generation: Int) async {
+    /// `immediateReconnect` skips the backoff schedule and reconnects at once. The
+    /// foreground liveness probe passes it: a resume that proves a frozen socket
+    /// dead wants recovery now — the user is watching the screen — not on a backoff
+    /// the watchdog paths still honour.
+    func handleConnectionLost(generation: Int, immediateReconnect: Bool = false) async {
         guard generation == currentGeneration else { return }
         if authTerminated || isStopping { return }
         if case .stopped = state { return }
@@ -76,7 +80,13 @@ extension RelayConnection {
         }
         connectionEstablishedAt = nil
 
-        reconnectTask = Task { [weak self] in await self?.runReconnectLoop() }
+        reconnectTask = Task { [weak self] in
+            if immediateReconnect {
+                await self?.reconnectImmediately()
+            } else {
+                await self?.runReconnectLoop()
+            }
+        }
     }
 
     func failInFlight(with error: RelayConnectionError) {
@@ -144,6 +154,44 @@ extension RelayConnection {
             group.cancelAll()
             return first
         }
+    }
+
+    // MARK: - Foreground liveness probe
+
+    /// Arms a bounded liveness probe for a foregrounded `.ready` socket.
+    ///
+    /// # Why foreground must probe, not trust `.ready`
+    ///
+    /// iOS freezes the process the instant it is backgrounded, so the grace timer
+    /// (``background()``) never runs while frozen and a quick return finds the
+    /// state still `.ready` from before. But a frozen process cannot service its
+    /// socket, and the OS — or an idle proxy in front of the relay (this relay is
+    /// reached through a `tailscale serve` TLS terminator that reaps idle TCP) — can
+    /// drop the connection silently. `URLSession` keeps reporting the task connected
+    /// until the next read or write fails, so the parked read loop learns nothing
+    /// and the idle watchdog would not notice for a full ``RelayConnectionConfig/idleTimeout``.
+    /// The resume therefore proves liveness with a bounded ping instead of assuming
+    /// it; a failed probe is a dead socket, torn down and reconnected at once so the
+    /// fresh `.ready` drives the sync engine's catch-up reconcile.
+    func armForegroundProbe() {
+        foregroundProbeTask?.cancel()
+        foregroundProbeTask = Task { [weak self, generation = currentGeneration] in
+            await self?.probeForegroundLiveness(generation: generation)
+        }
+    }
+
+    /// One foreground liveness iteration. Internal so a test drives it directly
+    /// against a scripted live or dead socket, proving the probe without real time.
+    func probeForegroundLiveness(generation: Int) async {
+        guard generation == currentGeneration else { return }
+        guard case .ready = state, let transport else { return }
+
+        if await pingSucceeds(within: config.foregroundProbeDeadline, transport: transport) {
+            return // the socket answered — keep it, no churn
+        }
+        // The probe may have raced a real drop the read loop already handled.
+        guard generation == currentGeneration else { return }
+        await handleConnectionLost(generation: generation, immediateReconnect: true)
     }
 
     // MARK: - Send

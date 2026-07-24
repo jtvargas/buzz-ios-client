@@ -21,6 +21,12 @@ public struct RelayConnectionConfig: Sendable {
     /// judged dead. Bounds a half-open socket whose `receive()` would otherwise
     /// hang until the OS gives up.
     public var pingDeadline: Duration
+    /// How long a *foreground* liveness probe waits for its pong before judging a
+    /// resumed socket dead. Deliberately far tighter than ``pingDeadline``: the
+    /// user is waiting on the catch-up, so a socket the background freeze silently
+    /// killed must be caught in about a second, not the tens of seconds the idle
+    /// watchdog tolerates.
+    public var foregroundProbeDeadline: Duration
     /// Idle beyond this declares the connection dead outright, without waiting on
     /// a ping — a stronger bound than ``pingInterval`` + ``pingDeadline`` for a
     /// socket that has gone completely silent.
@@ -42,6 +48,7 @@ public struct RelayConnectionConfig: Sendable {
         backgroundGrace: Duration = .seconds(5),
         pingInterval: Duration = .seconds(25),
         pingDeadline: Duration = .seconds(10),
+        foregroundProbeDeadline: Duration = .seconds(2),
         idleTimeout: Duration = .seconds(40),
         authTimeout: Duration = .seconds(30),
         queryTimeout: Duration = .seconds(15),
@@ -51,6 +58,7 @@ public struct RelayConnectionConfig: Sendable {
         self.backgroundGrace = backgroundGrace
         self.pingInterval = pingInterval
         self.pingDeadline = pingDeadline
+        self.foregroundProbeDeadline = foregroundProbeDeadline
         self.idleTimeout = idleTimeout
         self.authTimeout = authTimeout
         self.queryTimeout = queryTimeout
