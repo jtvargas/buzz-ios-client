@@ -159,8 +159,12 @@ extension BuzzEventStore {
         rootID: String? = nil,
         parentID: String? = nil
     ) async throws {
-        let payload = String(decoding: try JSONEncoder().encode(event), as: UTF8.self)
-        let tagsJSON = String(decoding: try JSONEncoder().encode(event.tags), as: UTF8.self)
+        let payloadData = try JSONEncoder().encode(event)
+        let tagsData = try JSONEncoder().encode(event.tags)
+        // JSONEncoder always emits UTF-8, so the fallbacks are unreachable; the
+        // failable initializer keeps this honest rather than force-decoding.
+        let payload = String(bytes: payloadData, encoding: .utf8) ?? "{}"
+        let tagsJSON = String(bytes: tagsData, encoding: .utf8) ?? "[]"
         try await writer.write { db in
             try db.execute(
                 sql: """
