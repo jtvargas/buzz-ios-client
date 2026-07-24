@@ -171,7 +171,12 @@ public actor BuzzEventStore {
     }
 
     /// The outcome of verifying one event, before the batch is partitioned.
-    private enum Verdict: Sendable {
+    ///
+    /// Internal rather than private so the sync extension
+    /// (`BuzzEventStore+Sync.swift`) can drive the *same* verification choke point
+    /// for the window-reconcile and watermark-advancing ingest paths, instead of
+    /// opening a second, divergent verifier.
+    enum Verdict: Sendable {
         case valid
         case idMismatch
         case badSignature
@@ -188,7 +193,7 @@ public actor BuzzEventStore {
     ///
     /// A single event verifies inline — a task group per live message would cost
     /// more than the check it parallelizes. Larger batches fan out.
-    private static func verify(_ batch: [NostrEvent]) async -> [Verdict] {
+    static func verify(_ batch: [NostrEvent]) async -> [Verdict] {
         if batch.count == 1 {
             return [verify(batch[0])]
         }
@@ -207,7 +212,7 @@ public actor BuzzEventStore {
     /// Recomputes the id and verifies the signature. Both are required: a valid id
     /// with a bad signature is a forgery, and a valid signature over a swapped id
     /// is the relay content-swap the id recomputation closes.
-    private static func verify(_ event: NostrEvent) -> Verdict {
+    static func verify(_ event: NostrEvent) -> Verdict {
         guard event.hasValidID else { return .idMismatch }
         guard event.isValid else { return .badSignature }
         return .valid
