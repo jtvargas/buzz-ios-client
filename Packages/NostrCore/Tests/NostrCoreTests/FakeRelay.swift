@@ -37,9 +37,16 @@ actor FakeRelay: RelayTransport {
 
     private var connectFailure: TransportError?
     private var sendFailure: TransportError?
+    private var pingFailure: TransportError?
     private var pending: [Delivery] = []
     private var waiter: CheckedContinuation<String, Error>?
     private var lastActivity: ContinuousClock.Instant?
+    /// When set, ``idleInterval()`` reports this fixed value, so a watchdog test
+    /// can pose an arbitrarily idle socket without spending real time.
+    private var scriptedIdle: Duration?
+    /// Continuations parked on ``awaitSend(index:)``, keyed by the send index
+    /// they are waiting for.
+    private var sendWaiters: [Int: [CheckedContinuation<String, Never>]] = [:]
 
     // MARK: - RelayTransport
 
@@ -53,6 +60,12 @@ actor FakeRelay: RelayTransport {
         if let sendFailure { throw sendFailure }
         if isClosed { throw TransportError.connectionClosed }
         sentFrames.append(text)
+        let index = sentFrames.count - 1
+        if let waiters = sendWaiters.removeValue(forKey: index) {
+            for waiter in waiters {
+                waiter.resume(returning: text)
+            }
+        }
     }
 
     func send(_ data: Data) async throws {
@@ -81,6 +94,7 @@ actor FakeRelay: RelayTransport {
 
     func ping() async throws {
         pingCount += 1
+        if let pingFailure { throw pingFailure }
         if isClosed { throw TransportError.connectionClosed }
         markActivity()
     }
@@ -100,7 +114,8 @@ actor FakeRelay: RelayTransport {
     }
 
     func idleInterval() -> Duration? {
-        lastActivity.map { ContinuousClock.now - $0 }
+        if let scriptedIdle { return scriptedIdle }
+        return lastActivity.map { ContinuousClock.now - $0 }
     }
 
     // MARK: - Test control
@@ -136,6 +151,27 @@ actor FakeRelay: RelayTransport {
     /// Clears an armed send failure.
     func recoverSends() {
         sendFailure = nil
+    }
+
+    /// Arms ``ping()`` to throw, standing in for a peer that no longer answers.
+    func failPings(with error: TransportError) {
+        pingFailure = error
+    }
+
+    /// Pins the value ``idleInterval()`` reports, so a watchdog can be shown an
+    /// arbitrarily idle socket deterministically.
+    func setIdle(_ interval: Duration) {
+        scriptedIdle = interval
+    }
+
+    /// Suspends until the client has sent at least `index + 1` frames, returning
+    /// the frame at `index`. Lets a test read a frame the client sends
+    /// asynchronously (an AUTH answer, a REQ) without polling.
+    func awaitSend(index: Int) async -> String {
+        if index < sentFrames.count { return sentFrames[index] }
+        return await withCheckedContinuation { continuation in
+            sendWaiters[index, default: []].append(continuation)
+        }
     }
 
     /// How many scripted deliveries are buffered and not yet pulled. A test can
