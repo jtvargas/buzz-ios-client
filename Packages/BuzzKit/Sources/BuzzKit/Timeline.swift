@@ -314,7 +314,12 @@ extension BuzzEventStore {
     /// owner. `owner` is the SQL expression yielding that owner pubkey, or NULL
     /// when the target carries no verified attestation — in which case the owner
     /// clause is a comparison against NULL and never matches.
-    private static func deletionApplies(target: String, author: String, owner: String) -> String {
+    ///
+    /// Internal rather than private so the channel-list read
+    /// (``fetchChannelList(_:)``) applies the *same* authority when it excludes a
+    /// deleted newest message, instead of forking a second predicate that could
+    /// drift from this one.
+    static func deletionApplies(target: String, author: String, owner: String) -> String {
         """
         EXISTS (
             SELECT 1 FROM deletion d
