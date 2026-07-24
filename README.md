@@ -51,7 +51,13 @@ Architecture decisions are recorded in `docs/adr/`.
 
 Requires Xcode 16+ / iOS 17 SDK.
 
-Personal signing config lives in `Config/Local.xcconfig` (gitignored — copy `Config/Local.xcconfig.example` and set your `DEVELOPMENT_TEAM`). CI and contributors build for the simulator with code signing disabled; no Apple team required.
+```sh
+./Scripts/bootstrap.sh   # generates BuzzClient.xcodeproj from project.yml (XcodeGen)
+make test                # package tests (native macOS, fast)
+make build               # app build for iOS Simulator, no signing
+```
+
+Personal signing config lives in `Config/Local.xcconfig` (gitignored — copy `Config/Local.xcconfig.example` and set your `DEVELOPMENT_TEAM`). CI and contributors build for the simulator with code signing disabled; no Apple team required. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Roadmap
 

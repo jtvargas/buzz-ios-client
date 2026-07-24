@@ -1,3 +1,6 @@
+# Xcode project is generated from project.yml by XcodeGen
+*.xcodeproj
+
 # Xcode
 xcuserdata/
 *.xcuserstate

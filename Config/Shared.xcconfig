@@ -1,0 +1,9 @@
+// Shared build settings. Nothing personal belongs in this file.
+SWIFT_VERSION = 6.0
+IPHONEOS_DEPLOYMENT_TARGET = 17.0
+PRODUCT_BUNDLE_IDENTIFIER = com.example.buzzclient
+CODE_SIGN_STYLE = Automatic
+DEVELOPMENT_TEAM =
+
+// Personal overrides (team ID, bundle id). Gitignored — see Local.xcconfig.example.
+#include? "Local.xcconfig"
