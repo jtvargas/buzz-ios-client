@@ -28,6 +28,10 @@ public enum RelayConnectionError: Error, Equatable, Sendable {
     case authenticationRejected(String)
     /// A publish was refused, carrying the relay's classified reason.
     case publishRejected(OKReason)
+    /// A publish for this event id is already awaiting its `OK`. Overwriting the
+    /// pending continuation would strand the first caller forever, so the second
+    /// call is refused instead; the outbox retries after the first resolves.
+    case duplicatePublish
     /// A subscription was closed by the relay for a reason that is not retryable
     /// under NIP-42 (e.g. `restricted:`), carrying the classified reason.
     case subscriptionClosed(OKReason)

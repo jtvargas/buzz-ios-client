@@ -263,4 +263,59 @@ struct RelayConnectionLifecycleTests {
 
         await connection.stop()
     }
+
+    @Test("Connecting while already live closes the previous socket instead of orphaning it")
+    func connectWhileLiveClosesPreviousTransport() async throws {
+        let signer = try InMemorySigner()
+        let firstRelay = FakeRelay()
+        let secondRelay = FakeRelay()
+        let transports = TransportQueue([firstRelay, secondRelay])
+        let connection = makeInertConnection(signer: signer, transports: transports)
+
+        try await connection.connect()
+        try await driveAuthToReady(connection, firstRelay, challenge: "c1", authSendIndex: 0)
+        #expect(await firstRelay.isClosed == false)
+
+        try await connection.connect()
+        #expect(await firstRelay.isClosed, "the superseded socket must be closed, not orphaned")
+
+        try await driveAuthToReady(connection, secondRelay, challenge: "c2", authSendIndex: 0)
+        await connection.stop()
+    }
+
+    @Test("A background suspend fails parked auth waiters fast instead of holding them to the auth timeout")
+    func suspendFailsParkedAuthWaitersFast() async throws {
+        let signer = try InMemorySigner()
+        let relay = FakeRelay()
+        let transports = TransportQueue([relay])
+        let graceGate = Gate()
+        let connection = RelayConnection(
+            url: testRelayURL,
+            signer: signer,
+            config: inertConfig(),
+            makeTransport: { await transports.next() },
+            backoffSleep: { _ in },
+            graceSleep: { try await graceGate.wait($0) }
+        )
+
+        // Deliver the challenge but never the auth OK: the handshake is pending
+        // (AUTH answer on the wire proves the .authenticating state), so the
+        // publish below parks in waitForAuthentication.
+        try await connection.connect()
+        await relay.enqueue(Frames.challenge("c1"))
+        _ = await relay.awaitSend(index: 0)
+        let event = try await signer.sign(kind: .channelMessage, content: "parked")
+        let publishTask = Task { try await connection.publish(event) }
+        await waitForState(connection) { $0 == .authenticating }
+
+        await connection.background()
+        await graceGate.release()
+
+        // With an inert 1-hour auth timeout, only the suspend path can resume
+        // the waiter — and it must do so with notConnected, immediately.
+        await #expect(throws: RelayConnectionError.notConnected) {
+            try await publishTask.value
+        }
+        await connection.stop()
+    }
 }

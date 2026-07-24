@@ -300,6 +300,9 @@ public actor RelayConnection {
         reconnectSuppressed = true
         await closeTransport()
         failInFlight(with: .notConnected)
+        // A caller parked mid-handshake must fail fast like everything else,
+        // not sit out the full auth timeout against a suspended connection.
+        resumeAuthWaiters(.failure(RelayConnectionError.notConnected))
         authenticatedAs = nil
         state = .suspended
     }
@@ -309,6 +312,14 @@ public actor RelayConnection {
     private func establishConnection() async throws {
         let generation = advanceGeneration()
         state = .connecting
+
+        // A superseded read loop exits via the generation guard without closing
+        // its socket — close the old transport here so a connect-while-live
+        // never leaves the previous socket open until the peer drops it.
+        if let previous = transport {
+            transport = nil
+            await previous.close()
+        }
 
         let transport = await makeTransport()
         self.transport = transport

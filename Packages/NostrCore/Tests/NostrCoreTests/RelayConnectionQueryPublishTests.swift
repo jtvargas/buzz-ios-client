@@ -258,4 +258,82 @@ struct RelayConnectionQueryPublishTests {
         }
         await connection.stop()
     }
+
+    @Test("A second publish of an already-pending event id is refused, not silently stranded")
+    func duplicateInFlightPublishIsRefused() async throws {
+        let signer = try InMemorySigner()
+        let relay = FakeRelay()
+        let transports = TransportQueue([relay])
+        let connection = makeInertConnection(signer: signer, transports: transports)
+
+        try await connection.connect()
+        try await driveAuthToReady(connection, relay, authSendIndex: 0)
+
+        let event = try await signer.sign(kind: .channelMessage, content: "once")
+        let firstPublish = Task { try await connection.publish(event) }
+        _ = await relay.awaitSend(index: 1) // first EVENT on the wire, OK pending
+
+        await #expect(throws: RelayConnectionError.duplicatePublish) {
+            try await connection.publish(event)
+        }
+
+        // The refusal must not have disturbed the first caller.
+        await relay.enqueue(Frames.ok(event.id, true))
+        try await firstPublish.value
+        await connection.stop()
+    }
+
+    @Test("A publish whose OK never arrives times out instead of hanging forever")
+    func publishTimesOutWithoutOK() async throws {
+        let signer = try InMemorySigner()
+        let relay = FakeRelay()
+        let transports = TransportQueue([relay])
+        var config = inertConfig()
+        config.publishTimeout = .milliseconds(80)
+        let connection = makeInertConnection(signer: signer, transports: transports, config: config)
+
+        try await connection.connect()
+        try await driveAuthToReady(connection, relay, authSendIndex: 0)
+
+        let event = try await signer.sign(kind: .channelMessage, content: "never acknowledged")
+        // The relay stays live (subscription traffic could keep the watchdog
+        // satisfied) but simply never sends the OK.
+        await #expect(throws: RelayConnectionError.timedOut) {
+            try await connection.publish(event)
+        }
+        await connection.stop()
+    }
+
+    @Test("An auth-required retry whose query already failed does not resend a zombie REQ")
+    func closedRetryAfterDropDoesNotResendREQ() async throws {
+        let signer = try InMemorySigner()
+        let firstRelay = FakeRelay()
+        let secondRelay = FakeRelay()
+        let transports = TransportQueue([firstRelay, secondRelay])
+        let connection = makeInertConnection(signer: signer, transports: transports)
+
+        try await connection.connect()
+        try await driveAuthToReady(connection, firstRelay, challenge: "c1", authSendIndex: 0)
+
+        let queryTask = Task { try await connection.query([Filter(kinds: [.channelMessage])]) }
+        let reqFrame = await firstRelay.awaitSend(index: 1)
+        let subscriptionID = try reqSubscriptionID(from: reqFrame)
+
+        // The relay demands re-auth, then the socket drops before re-auth can
+        // complete — failing the in-flight query.
+        await firstRelay.enqueue(Frames.closed(subscriptionID, "auth-required: re-authenticate"))
+        await firstRelay.enqueueFailure(.connectionClosed)
+        await #expect(throws: RelayConnectionError.self) {
+            _ = try await queryTask.value
+        }
+
+        // The reconnect authenticates on a fresh socket; the parked retry task
+        // wakes, finds its query gone, and must stay silent.
+        try await driveAuthToReady(connection, secondRelay, challenge: "c2", authSendIndex: 0)
+        try await Task.sleep(for: .milliseconds(80)) // grace for any wrong resend to surface
+        let framesAfterAuth = await secondRelay.sentFrames
+        #expect(framesAfterAuth.count == 1, "only the AUTH answer belongs on the new socket")
+
+        await connection.stop()
+    }
 }

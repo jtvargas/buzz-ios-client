@@ -31,6 +31,11 @@ public struct RelayConnectionConfig: Sendable {
     public var authTimeout: Duration
     /// The default deadline for a one-shot `query` from REQ to EOSE.
     public var queryTimeout: Duration
+    /// The longest a `publish` waits for its `OK`. Bounds a live socket whose
+    /// relay never answers — or answers with a frame that fails decode — so a
+    /// caller can never hang while subscription traffic keeps the idle
+    /// watchdog satisfied.
+    public var publishTimeout: Duration
 
     public init(
         reconnectPolicy: ReconnectPolicy = .default,
@@ -39,7 +44,8 @@ public struct RelayConnectionConfig: Sendable {
         pingDeadline: Duration = .seconds(10),
         idleTimeout: Duration = .seconds(40),
         authTimeout: Duration = .seconds(30),
-        queryTimeout: Duration = .seconds(15)
+        queryTimeout: Duration = .seconds(15),
+        publishTimeout: Duration = .seconds(15)
     ) {
         self.reconnectPolicy = reconnectPolicy
         self.backgroundGrace = backgroundGrace
@@ -48,6 +54,7 @@ public struct RelayConnectionConfig: Sendable {
         self.idleTimeout = idleTimeout
         self.authTimeout = authTimeout
         self.queryTimeout = queryTimeout
+        self.publishTimeout = publishTimeout
     }
 
     public static let `default` = RelayConnectionConfig()

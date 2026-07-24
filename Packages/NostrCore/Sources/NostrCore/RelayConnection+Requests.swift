@@ -10,11 +10,24 @@ extension RelayConnection {
     /// relay already has it); anything else fails with the typed reason so the
     /// caller's retry policy can act. A disconnect fails the publish with
     /// ``RelayConnectionError/connectionLost`` — the outbox owns the resend.
-    public func publish(_ event: NostrEvent) async throws {
+    public func publish(_ event: NostrEvent, timeout: Duration? = nil) async throws {
         guard !event.kind.isRelaySigned else {
             throw RelayConnectionError.publishRejected(.restricted("kind \(event.kind) is signed by the relay"))
         }
+        // Storing a second continuation under the same id would silently strand
+        // the first caller with no path to resumption — refuse instead.
+        guard pendingPublishes[event.id] == nil else {
+            throw RelayConnectionError.duplicatePublish
+        }
         try await waitForAuthentication()
+
+        let deadline = timeout ?? config.publishTimeout
+        let timeoutTask = Task { [weak self] in
+            guard let self else { return }
+            try? await sleep(deadline)
+            await timeOutPublish(event.id)
+        }
+        defer { timeoutTask.cancel() }
 
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             pendingPublishes[event.id] = continuation
@@ -29,6 +42,14 @@ extension RelayConnection {
                 }
             }
         }
+    }
+
+    private func timeOutPublish(_ eventID: String) {
+        // A relay that never answers — or answers with a frame that fails
+        // decode — must not hang the caller while subscription traffic keeps
+        // the idle watchdog satisfied.
+        pendingPublishes.removeValue(forKey: eventID)?
+            .resume(throwing: RelayConnectionError.timedOut)
     }
 
     func resolvePublish(_ eventID: String, accepted: Bool, message: String) {
@@ -98,6 +119,10 @@ extension RelayConnection {
         oneShotQueries.removeValue(forKey: subscriptionID)?.continuation.resume(throwing: error)
     }
 
+    private func isQueryPending(_ subscriptionID: String) -> Bool {
+        oneShotQueries[subscriptionID] != nil
+    }
+
     private func makeSubscriptionID() -> String {
         nextSubscriptionID += 1
         return "q\(nextSubscriptionID)"
@@ -141,6 +166,11 @@ extension RelayConnection {
                     guard let self else { return }
                     do {
                         try await waitForAuthentication()
+                        // The socket may have dropped while re-auth was in
+                        // flight, failing this query via failInFlight. Re-sending
+                        // then would open a zombie relay-side subscription no
+                        // one ever CLOSEs.
+                        guard await isQueryPending(subscriptionID) else { return }
                         try await send(.req(subscriptionID: subscriptionID, filters: query.filters))
                     } catch {
                         await failQuery(subscriptionID, with: .subscriptionClosed(reason))
