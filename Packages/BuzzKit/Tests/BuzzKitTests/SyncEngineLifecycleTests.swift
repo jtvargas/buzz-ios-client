@@ -56,6 +56,52 @@ struct SyncEngineLifecycleTests {
         #expect(await harness.engine.state == .stopped)
     }
 
+    /// The reported live-receive bug: a foreground resume must never trust a
+    /// `.ready` that survived a background freeze — the frozen process cannot notice
+    /// a silently-dropped TCP, so the socket can report ready while dead, and live
+    /// messages stop arriving until a relaunch. The engine forwards the resume to the
+    /// connection, whose liveness probe fails, forces a fresh socket, and re-runs
+    /// discovery + reconcile: the catch-up that recovers live receive without a
+    /// relaunch, with no background/suspend transition in between.
+    @Test("Foreground on a silently-dead socket reconnects and re-reconciles")
+    func foregroundDeadSocketReReconciles() async throws {
+        let socket1 = ScriptedRelay()
+        let socket2 = ScriptedRelay()
+        let database = TempDatabase()
+        defer { database.remove() }
+        let harness = try EngineHarness(path: database.path, identity: try PrivateKey(), relays: [socket1, socket2])
+
+        let build = try WindowResponseBuilder(channel: "room")
+        let metadata = try build.relay.event(.groupMetadata, "", tags: [["d", "room"], ["name", "Room"]])
+        let row = try build.row("m1", at: 1_700_000_005)
+        func page() throws -> Data {
+            try WindowResponseBuilder.body([row, try build.headBounds(hasMore: false)])
+        }
+
+        await harness.http.enqueue(status: 200, body: try page())
+        try await harness.engine.start()
+        try await driveAuth(harness.connection, socket1)
+        await answerDiscovery(on: socket1, events: [metadata])
+        await waitUntil { await harness.engine.channelSyncState("room") == .synced }
+
+        // The socket dies silently — no drop is delivered, it still reports ready.
+        // A foreground resume must probe it, fail, and reconnect on a fresh socket.
+        await socket1.failPings(with: .connectionClosed)
+        await harness.http.enqueue(status: 200, body: try page())
+        await harness.engine.enterForeground()
+
+        await waitUntil { await harness.transports.vendedCount == 2 }
+        try await driveAuth(harness.connection, socket2)
+        await answerDiscovery(on: socket2, events: [metadata])
+        // A second head reconcile ran on the fresh socket — the catch-up — and the
+        // channel is synced again.
+        await waitUntil { await harness.http.requests.count == 2 }
+        await waitUntil { await harness.engine.channelSyncState("room") == .synced }
+        #expect(await harness.engine.state == .running)
+
+        await harness.engine.stop()
+    }
+
     // MARK: - Discovery on ready
 
     /// Every `.ready` runs channel discovery — a one-shot query for the relay-signed

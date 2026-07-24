@@ -94,6 +94,7 @@ public actor RelayConnection {
     var watchdogTask: Task<Void, Never>?
     var reconnectTask: Task<Void, Never>?
     private var backgroundGraceTask: Task<Void, Never>?
+    var foregroundProbeTask: Task<Void, Never>?
 
     /// When the current socket last connected, for the ``ReconnectPolicy``
     /// health-based counter reset.
@@ -249,11 +250,11 @@ public actor RelayConnection {
         }
     }
 
-    /// Resumes from the background. If the socket survived the grace window this
-    /// is a no-op; otherwise it cancels any pending reconnect backoff, resets the
-    /// backoff schedule, and reconnects immediately — a foreground resume *is* a
-    /// reconnect. A connection stopped by a terminal auth rejection is not
-    /// revived.
+    /// Resumes from the background. A `.ready` that survived the grace window is
+    /// not trusted blindly — the process was frozen, so the socket may be silently
+    /// dead — and is probed for liveness; a suspended or backing-off connection
+    /// cancels any pending backoff and reconnects immediately. A connection stopped
+    /// by a terminal auth rejection is not revived.
     public func foreground() {
         backgroundGraceTask?.cancel()
         backgroundGraceTask = nil
@@ -261,8 +262,12 @@ public actor RelayConnection {
         if case .stopped = state { return }
 
         switch state {
-        case .ready, .connecting, .authenticating, .stopped:
-            return // survived the grace window (or already stopped); nothing to do
+        case .ready:
+            // A `.ready` that outlived a freeze is unproven; the probe confirms the
+            // socket or forces a reconnect. See ``armForegroundProbe()``.
+            armForegroundProbe()
+        case .connecting, .authenticating, .stopped:
+            return // an in-flight handshake resolves on its own; nothing to probe
         case .idle, .suspended, .backingOff:
             reconnectTask?.cancel()
             reconnectSuppressed = false
@@ -279,6 +284,7 @@ public actor RelayConnection {
         reconnectSuppressed = true
         advanceGeneration()
         backgroundGraceTask?.cancel(); backgroundGraceTask = nil
+        foregroundProbeTask?.cancel(); foregroundProbeTask = nil
         reconnectTask?.cancel(); reconnectTask = nil
         readTask?.cancel(); readTask = nil
         watchdogTask?.cancel(); watchdogTask = nil
@@ -349,7 +355,7 @@ public actor RelayConnection {
         }
     }
 
-    private func reconnectImmediately() async {
+    func reconnectImmediately() async {
         do {
             try await establishConnection()
         } catch {
