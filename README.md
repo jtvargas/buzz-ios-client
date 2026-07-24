@@ -1,0 +1,67 @@
+# buzz-ios-client
+
+A 100% Swift/SwiftUI native iOS client for [Buzz](https://github.com/block/buzz) — the Nostr-based messaging platform for human–agent collaboration.
+
+> **Status:** early foundations (Phase 0). Not yet usable. The first public milestone is feature parity with the upstream Buzz mobile app **v0.4.11** — tracked in [PARITY.md](PARITY.md).
+
+## Why
+
+Buzz ships an excellent Flutter mobile app. This project builds a fully native iOS client with a Slack-iOS-style UX, aiming for the things native does best: tight scrolling/animation performance, share extensions, widgets, App Intents, Live Activities, and first-class APNs push.
+
+## Product model
+
+Slack-style shell:
+
+- **Home** — channel list with unreads
+- **Activity** — mentions, reactions, thread replies
+- **Search** — cross-channel message search
+- **You** — profile and settings
+
+Channel view → timeline + composer; threads open as push/sheet; long-press → reactions and context menu.
+
+## Architecture
+
+App target plus two local SPM packages, modular from day one:
+
+| Layer | Contents |
+|-------|----------|
+| `NostrCore` | Keys (secp256k1 → Keychain), event model/codec, signing, relay WebSocket actor (reconnect/backoff/heartbeat), NIP-42 auth, subscription manager (REQ/EOSE/CLOSED) |
+| `BuzzKit` | Buzz domain layer: kinds & tags per Buzz's NIP extensions, channels/threads/reactions/profiles models, **SyncEngine** + **Outbox**, GRDB (SQLite) persistence |
+| App | SwiftUI, iOS 17+ (Observation), Swift 6 strict concurrency, MVVM with feature folders |
+
+### Sync reliability (client-owned)
+
+The Buzz relay has no negentropy/NIP-77 sync, so reliability is built client-side:
+
+- A single **RelayConnection actor**: exponential backoff + jitter, NIP-42 re-auth on every reconnect, app-lifecycle aware (background → suspend subscriptions, foreground → resubscribe + gap-fill).
+- **Cursor-based gap-fill**: per-subscription `since` cursors persisted in GRDB; on reconnect, REQ from the last cursor and dedupe by event id. The database is the single source of truth — the UI reads the DB, never the socket.
+- **Outbox pattern**: optimistic local insert → publish → confirm on relay OK → retry with backoff; unsent state visible in the UI (Slack-style "sending… / failed, tap to retry").
+
+### Protocol references
+
+- Upstream third-party client guide: `NOSTR.md` in [block/buzz](https://github.com/block/buzz)
+- Buzz NIP extensions: `docs/nips/` in block/buzz (AA, AE, AM, AO, AP, CW, DV, ER, GS, IA, OA, PL, RS, WP)
+- Base protocol: NIP-01, NIP-29 (groups), NIP-42 (auth)
+
+Architecture decisions are recorded in `docs/adr/`.
+
+## Building
+
+Requires Xcode 16+ / iOS 17 SDK.
+
+Personal signing config lives in `Config/Local.xcconfig` (gitignored — copy `Config/Local.xcconfig.example` and set your `DEVELOPMENT_TEAM`). CI and contributors build for the simulator with code signing disabled; no Apple team required.
+
+## Roadmap
+
+| Phase | Scope |
+|-------|-------|
+| 0 | Repo, project scaffolding, CI, contribution docs |
+| 1 | `NostrCore`: keys, codec, relay actor, NIP-42, subscriptions |
+| 2 | `BuzzKit`: GRDB storage, SyncEngine, Outbox |
+| 3 | MVP client: auth (nsec import, then QR pairing with Desktop), Home, timeline, composer, threads, reactions |
+| 4 | **v0.4.11 parity** — see [PARITY.md](PARITY.md) |
+| 5 | Native-only: push, share extension, widgets, App Intents / Live Activities, iPad |
+
+## License
+
+[Apache-2.0](LICENSE) — matching upstream block/buzz.
