@@ -6,9 +6,12 @@ bootstrap:
 generate:
 	xcodegen generate
 
+# Release config: current Swift toolchains (Xcode 26.2+) abort -Onone test
+# runs in the connection suites — an environmental codegen defect, see
+# .github/workflows/ci.yml. Same assertions either way.
 test:
-	swift test --package-path Packages/NostrCore
-	swift test --package-path Packages/BuzzKit
+	swift test -c release --package-path Packages/NostrCore
+	swift test -c release --package-path Packages/BuzzKit
 
 build: generate
 	xcodebuild build -project Hive.xcodeproj -scheme Hive \
