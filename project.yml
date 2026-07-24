@@ -12,6 +12,12 @@ packages:
     path: Packages/NostrCore
   BuzzKit:
     path: Packages/BuzzKit
+  # GRDB is a direct app dependency because the view models drive SwiftUI from
+  # GRDB `ValueObservation` over the store's public `reader` (spec §Observation
+  # pipeline). Pinned to the exact version BuzzKit resolves, so both link one copy.
+  GRDB:
+    url: https://github.com/groue/GRDB.swift
+    exactVersion: 7.11.1
 targets:
   Hive:
     type: application
@@ -21,11 +27,57 @@ targets:
     dependencies:
       - package: NostrCore
       - package: BuzzKit
+      - package: GRDB
+    info:
+      path: App/Info.plist
+      properties:
+        CFBundleDisplayName: Hive
+        UILaunchScreen: {}
+        # The relay is owner-configured and may be a plaintext `ws://` endpoint on
+        # a LAN or Tailscale address (the Pi in the slice's live run), which ATS
+        # blocks by default. This is a self-hosted developer client, not an App
+        # Store build; the exception is scoped to that reality and revisited when
+        # TLS relays are the norm.
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+        NSLocalNetworkUsageDescription: >-
+          Hive connects to the Buzz relay you configure, which may be on your local
+          or Tailscale network.
     settings:
       base:
-        GENERATE_INFOPLIST_FILE: YES
-        INFOPLIST_KEY_UILaunchScreen_Generation: YES
-        INFOPLIST_KEY_CFBundleDisplayName: Hive
         CURRENT_PROJECT_VERSION: 1
         MARKETING_VERSION: 0.1.0
         SWIFT_STRICT_CONCURRENCY: complete
+  HiveTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - App/Tests
+    dependencies:
+      - target: Hive
+      - package: BuzzKit
+      - package: NostrCore
+      - package: GRDB
+      # `NostrCoreTestSupport` is deliberately NOT linked here. It is a static
+      # product whose target depends on the NostrCore target, so linking it
+      # embeds a second copy of NostrCore into this bundle beside the host
+      # app's dynamic package framework — duplicate type metadata that breaks
+      # dynamic casts (`catch … as RelayConnectionError` stops matching) and
+      # with them the engine's whole rejection path. `FakeHTTPTransport` is
+      # copied into App/Tests/Support instead (duplicate-the-harness
+      # precedent).
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        SWIFT_STRICT_CONCURRENCY: complete
+schemes:
+  Hive:
+    build:
+      targets:
+        Hive: all
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - HiveTests

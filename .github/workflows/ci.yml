@@ -42,7 +42,7 @@ jobs:
         run: swiftlint
 
   app:
-    name: App build (iOS Simulator)
+    name: App tests (iOS Simulator)
     runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
@@ -55,11 +55,26 @@ jobs:
         run: which xcodegen || brew install xcodegen
       - name: Generate project
         run: xcodegen generate
-      - name: Build
-        run: >
-          xcodebuild build
-          -project Hive.xcodeproj
-          -scheme Hive
-          -destination 'generic/platform=iOS Simulator'
-          -skipPackagePluginValidation
-          CODE_SIGNING_ALLOWED=NO
+      # Test, not just build: HiveTests runs the view-model suites in the app
+      # as test host (spec step-1 scope). A concrete simulator is required —
+      # the generic destination can only build. The newest Xcode 26 selected
+      # above may ship on the runner image without its iOS simulator runtime,
+      # so install it when the device roster is empty, then pick whatever
+      # iPhone the runtime provides rather than hardcoding a model name.
+      - name: Ensure an iOS simulator exists
+        run: |
+          if ! xcrun simctl list devices available | grep -q "iPhone"; then
+            sudo xcodebuild -runFirstLaunch
+            xcodebuild -downloadPlatform iOS
+          fi
+          xcrun simctl list devices available
+      - name: Test
+        run: |
+          DEVICE=$(xcrun simctl list devices available | sed -n 's/^ *\(iPhone [^(]*\)(.*/\1/p' | head -1 | xargs)
+          echo "Testing on simulator: $DEVICE"
+          xcodebuild test \
+            -project Hive.xcodeproj \
+            -scheme Hive \
+            -destination "platform=iOS Simulator,name=$DEVICE" \
+            -skipPackagePluginValidation \
+            CODE_SIGNING_ALLOWED=NO
