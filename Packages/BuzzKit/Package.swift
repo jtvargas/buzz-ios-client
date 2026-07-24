@@ -33,6 +33,9 @@ let package = Package(
             ],
             resources: [
                 .copy("Fixtures/window-head-response.json"),
+                // A real populated NIP-CW window captured from the Buzz Pi relay by the
+                // step-7 live integration suite (see WindowPiFixtureTests).
+                .copy("Fixtures/window-head-response-pi.json"),
             ]
         ),
     ]

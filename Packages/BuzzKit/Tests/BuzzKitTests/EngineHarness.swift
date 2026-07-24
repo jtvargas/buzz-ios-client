@@ -36,6 +36,11 @@ struct EngineHarness {
     let identity: PrivateKey
     let nowSeconds: Int64
     let batchSize: Int
+    /// The store's injected clock, carried so a restart (``reopen(relays:)``) reopens
+    /// the same database on the same clock instance — the T4 engine path, where a
+    /// send's local age is what trips the relay's ±15-minute ingest gate, needs a
+    /// clock the test can wind rather than the wall clock.
+    let storeClock: @Sendable () -> Date
 
     static let relayURL = URL(string: "wss://relay.example.com")!
     static let queryURL = URL(string: "https://relay.example.com/query")!
@@ -46,13 +51,15 @@ struct EngineHarness {
         relays: [ScriptedRelay],
         http: FakeHTTPTransport = FakeHTTPTransport(),
         nowSeconds: Int64 = 1_700_000_000,
-        batchSize: Int = 2
+        batchSize: Int = 2,
+        storeClock: @escaping @Sendable () -> Date = { Date() }
     ) throws {
         self.path = path
         self.identity = identity
         self.http = http
         self.nowSeconds = nowSeconds
         self.batchSize = batchSize
+        self.storeClock = storeClock
 
         let transports = ScriptedTransportQueue(relays)
         self.transports = transports
@@ -60,7 +67,10 @@ struct EngineHarness {
         self.signer = signer
         selfPubkey = identity.publicKey.hex
 
-        let store = try BuzzEventStore(path: path)
+        // The production projector, as `BuzzEventStore(path:)` wires — discovery and
+        // reconcile ingest through it — but with an injectable clock for the age-based
+        // outbox re-sign.
+        let store = try BuzzEventStore(path: path, projector: BuzzProjector(), clock: storeClock)
         self.store = store
         let presence = PresenceStore()
         self.presence = presence
@@ -107,7 +117,8 @@ struct EngineHarness {
             relays: relays,
             http: FakeHTTPTransport(),
             nowSeconds: nowSeconds,
-            batchSize: batchSize
+            batchSize: batchSize,
+            storeClock: storeClock
         )
     }
 
@@ -229,6 +240,18 @@ func awaitPublish(on relay: ScriptedRelay, eventID: String) async {
     while true {
         for frame in await relay.frames() where publishedEventID(frame) == eventID {
             return
+        }
+        await Task.yield()
+    }
+}
+
+/// Spins until the client has published an EVENT frame whose id is *not* `excluded`,
+/// returning that id — the re-signed resend in the T4 engine path, whose fresh id
+/// the test cannot predict but must answer with an `OK`.
+func awaitPublish(on relay: ScriptedRelay, excluding excluded: String) async -> String {
+    while true {
+        for frame in await relay.frames() {
+            if let id = publishedEventID(frame), id != excluded { return id }
         }
         await Task.yield()
     }
