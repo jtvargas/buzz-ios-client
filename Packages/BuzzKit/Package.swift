@@ -26,7 +26,13 @@ let package = Package(
             name: "BuzzKitTests",
             dependencies: [
                 "BuzzKit",
+                // The scripted `FakeHTTPTransport` the window-client tests drive,
+                // shared from NostrCore rather than duplicated here.
+                .product(name: "NostrCoreTestSupport", package: "NostrCore"),
                 .product(name: "GRDB", package: "GRDB.swift"),
+            ],
+            resources: [
+                .copy("Fixtures/window-head-response.json"),
             ]
         ),
     ]

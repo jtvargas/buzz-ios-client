@@ -52,3 +52,27 @@ discipline the rest of the project uses.
 - **Trust note:** NIP-CW overlays are consumed under the authenticated-transport
   profile (`NIP-CW.md:188`) — TLS to the single configured relay. Revisit only if a
   non-TLS or multi-relay configuration ever lands.
+
+## Appendix — NIP-CW overlay trust, as built (step 5)
+
+The `WindowClient` realizes the authenticated-transport profile concretely. Under
+it, the origin of the response bytes is proven by the TLS certificate chain to the
+configured relay, not by a client-side signature check, so:
+
+- **Enforced (MUST, `NIP-CW.md:164`):** exactly one `kind:39006` per served
+  window; its `d`-tag binding echoes the request cursor (`head` or
+  `<created_at>:<id>`); its content parses as the bounds object; and
+  `has_more ⇔ next_cursor ≠ null`. Any violation discards the page — a bounds
+  overlay present-but-malformed is a retryable invalid page; a response with no
+  bounds overlay at all (or a transport/HTTP error) is the degradation signal that
+  falls the engine back to the standard WebSocket filter.
+- **Deferred (future hardening):** cryptographic verification of each overlay's
+  Schnorr signature against the advertised NIP-11 relay identity, and the SHOULD
+  checks (exact tag cardinality, exhaustive runtime field-type validation). These
+  are to be applied uniformly across all relay-signed reads (with NIP-DV, NIP-IA)
+  rather than bolted onto this one path. The window client already gets field-type
+  validation for the bounds content for free from typed decoding.
+
+Rows and aux events carry no such exemption: they are ordinary client-signed
+events and are verified where every event is — the store's ingest choke point —
+when the step-6 engine pushes them through it.
