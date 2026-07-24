@@ -78,8 +78,12 @@ public extension BuzzEventStore {
     /// a second, unverified path into the log, and the value of a single choke
     /// point is that it has no exceptions. If a relay echo already delivered the
     /// event, that write is a no-op and only the queue row is cleared.
+    ///
+    /// The gate is the store's own `verify` — the identical id-then-signature check
+    /// the ingest choke point runs — not `isValid` alone, so the confirm path admits
+    /// exactly what ingest would and no more.
     func confirmSent(_ event: NostrEvent) async throws {
-        guard event.isValid else { throw OutboxError.invalidEvent(event.id) }
+        guard case .valid = Self.verify(event) else { throw OutboxError.invalidEvent(event.id) }
         let receivedAt = Int64(clock().timeIntervalSince1970)
         let projector = projector
         try await writer.write { db in

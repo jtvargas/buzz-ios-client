@@ -21,7 +21,11 @@ import NostrCore
 ///   rich-content, and thread-summary rows keep only the newest source per key,
 ///   guarded so an older event a relay resends after a reconnect cannot overwrite
 ///   a newer one — and so the collapse lands the same row whatever order the log
-///   is replayed in. Event-id dedupe alone is wrong for these.
+///   is replayed in. The guard compares `(created_at, source_event_id)`, not
+///   `created_at` alone: a relay hands out many events in one second, and a tie
+///   broken by event id (bytewise, the NIP-CW total order) resolves a same-second
+///   collision the *same* way in first-arrival live ingest and in the id-ordered
+///   rebuild replay. Event-id dedupe alone is wrong for these.
 struct BuzzProjector: EventProjecting {
     func project(_ event: NostrEvent, into db: Database) throws {
         // Owner attestation is orthogonal to kind: any event may carry one, and the
@@ -101,6 +105,8 @@ struct BuzzProjector: EventProjecting {
                 source_event_id = excluded.source_event_id,
                 updated_at = excluded.updated_at
             WHERE excluded.updated_at > channel.updated_at
+               OR (excluded.updated_at = channel.updated_at
+                   AND excluded.source_event_id > channel.source_event_id)
             """,
             arguments: [
                 id,
@@ -124,25 +130,34 @@ struct BuzzProjector: EventProjecting {
     private static func projectRoster(_ event: NostrEvent, into db: Database) throws {
         guard let channelID = event.addressableIdentifier else { return }
 
-        let applied = try Int64.fetchOne(
+        // Reject a roster no newer than the one already applied, comparing the whole
+        // `(created_at, source_event_id)` cursor. Comparing `created_at` alone lets a
+        // same-second tie go to first-arrival live but to the higher-id replay winner
+        // under a rebuild; the id tiebreak makes both keep the same roster.
+        let existing = try Row.fetchOne(
             db,
-            sql: "SELECT source_created_at FROM channel_member WHERE channel_id = ? LIMIT 1",
+            sql: "SELECT source_created_at, source_event_id FROM channel_member WHERE channel_id = ? LIMIT 1",
             arguments: [channelID]
         )
-        if let applied, event.createdAt <= applied { return }
+        if let existing {
+            let appliedAt: Int64 = existing["source_created_at"]
+            let appliedID: String = existing["source_event_id"]
+            if (event.createdAt, event.id) <= (appliedAt, appliedID) { return }
+        }
 
         try db.execute(sql: "DELETE FROM channel_member WHERE channel_id = ?", arguments: [channelID])
 
         for tag in event.tags where tag.first == "p" && tag.count > 1 {
             try db.execute(
                 sql: """
-                INSERT INTO channel_member (channel_id, pubkey, role, source_created_at)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO channel_member (channel_id, pubkey, role, source_created_at, source_event_id)
+                VALUES (?, ?, ?, ?, ?)
                 ON CONFLICT(channel_id, pubkey) DO UPDATE SET
                     role = excluded.role,
-                    source_created_at = excluded.source_created_at
+                    source_created_at = excluded.source_created_at,
+                    source_event_id = excluded.source_event_id
                 """,
-                arguments: [channelID, tag[1], tag.count > 2 ? tag[2] : nil, event.createdAt]
+                arguments: [channelID, tag[1], tag.count > 2 ? tag[2] : nil, event.createdAt, event.id]
             )
         }
     }
@@ -166,6 +181,8 @@ struct BuzzProjector: EventProjecting {
                 source_event_id = excluded.source_event_id,
                 created_at = excluded.created_at
             WHERE excluded.created_at > profile.created_at
+               OR (excluded.created_at = profile.created_at
+                   AND excluded.source_event_id > profile.source_event_id)
             """,
             arguments: [
                 event.pubkey,
@@ -209,12 +226,15 @@ struct BuzzProjector: EventProjecting {
     /// (9005, honoured from anyone the relay accepted) from an author or owner
     /// deletion (5, honoured only from the target's author or its verified owner).
     private static func projectDeletion(_ event: NostrEvent, into db: Database) throws {
+        // One deletion can name several targets. The row is keyed by
+        // `(event_id, target_id)`, so every target tombstones — an `ON CONFLICT`
+        // on `event_id` alone would keep only the first and silently drop the rest.
         for target in event.referencedEventIDs {
             try db.execute(
                 sql: """
                 INSERT INTO deletion (event_id, target_id, deleted_by, kind, created_at)
                 VALUES (?, ?, ?, ?, ?)
-                ON CONFLICT(event_id) DO NOTHING
+                ON CONFLICT(event_id, target_id) DO NOTHING
                 """,
                 arguments: [event.id, target, event.pubkey, event.kind.rawValue, event.createdAt]
             )
@@ -251,6 +271,8 @@ struct BuzzProjector: EventProjecting {
                 payload = excluded.payload,
                 created_at = excluded.created_at
             WHERE excluded.created_at > rich_content.created_at
+               OR (excluded.created_at = rich_content.created_at
+                   AND excluded.event_id > rich_content.event_id)
             """,
             arguments: [target, event.id, event.content, event.createdAt]
         )
@@ -270,6 +292,8 @@ struct BuzzProjector: EventProjecting {
                 payload = excluded.payload,
                 updated_at = excluded.updated_at
             WHERE excluded.updated_at > thread_summary.updated_at
+               OR (excluded.updated_at = thread_summary.updated_at
+                   AND excluded.event_id > thread_summary.event_id)
             """,
             arguments: [root, event.id, event.content, event.createdAt]
         )
