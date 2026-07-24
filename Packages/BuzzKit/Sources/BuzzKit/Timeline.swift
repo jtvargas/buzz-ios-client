@@ -100,12 +100,13 @@ public enum Delivery: Sendable, Hashable {
 
     /// Maps an outbox row's `state`/`last_error` onto a delivery state. A row that
     /// is not in the outbox at all reaches here as the `sent` sentinel the event
-    /// branch selects.
+    /// branch selects. Exhaustive over ``OutboxState`` so a new queue state is a
+    /// compile error here, not a silently mis-rendered message.
     init(state: String, lastError: String?) {
-        switch state {
-        case "pending", "sending": self = .pending
-        case "failed": self = .failed(lastError)
-        default: self = .sent
+        switch OutboxState(rawValue: state) {
+        case .pending, .sending, .awaitingReauth: self = .pending
+        case .failed: self = .failed(lastError)
+        case nil: self = .sent
         }
     }
 }

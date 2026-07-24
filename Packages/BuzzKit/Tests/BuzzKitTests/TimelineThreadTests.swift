@@ -136,4 +136,23 @@ struct TimelineThreadTests {
         // Losing the text the user typed would be the worst possible outcome.
         #expect(row.content == "rejected")
     }
+
+    @Test("a send parked on re-auth renders pending, never sent")
+    func awaitingReauthRendersPending() async throws {
+        let database = TempDatabase()
+        defer { database.remove() }
+        let store = try database.open()
+        let fixture = try Fixture()
+
+        try await store.enqueueForTest(
+            fixture.message("parked", at: 1000),
+            channel: "room-1",
+            state: OutboxState.awaitingReauth.rawValue
+        )
+
+        // The relay has not accepted this event; showing it as sent would be a lie
+        // the user only discovers when the message never arrives for anyone else.
+        let row = try #require(try store.timeline(channel: "room-1").first)
+        #expect(row.delivery == .pending)
+    }
 }
