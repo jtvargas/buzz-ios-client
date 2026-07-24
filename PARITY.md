@@ -8,9 +8,12 @@ This is the living checklist for the headline milestone: feature parity with the
 
 - [ ] Relay connection with reconnect/backoff and lifecycle handling
 - [ ] NIP-42 authentication (including re-auth on reconnect)
-- [ ] Subscription management (REQ/EOSE/CLOSED) with `since`-cursor gap-fill
-- [ ] Event signing and publish with outbox retry
-- [ ] Local persistence as source of truth (GRDB)
+- [ ] NIP-98 HTTP auth signing (`POST /query`, media upload)
+- [ ] NIP-CW channel windows: history/pagination via the HTTP bridge, head-window reconcile on reconnect
+- [ ] NIP-44 v2 encryption (validated against official test vectors)
+- [ ] Subscription management (REQ/EOSE/CLOSED), live + one-shot modes, overlap-window gap-fill
+- [ ] Event signing and publish with outbox retry (OK/CLOSED prefix classification)
+- [ ] Local persistence as source of truth (GRDB; projected store with replaceable/deletion/edit semantics)
 
 ## Features (upstream `mobile/lib/features/`)
 
@@ -32,6 +35,12 @@ This is the living checklist for the headline milestone: feature parity with the
 | Custom emoji | `custom_emoji` | ☐ |
 | Media upload | — | ☐ |
 | Presence | — | ☐ |
+| Typing indicators | — | ☐ |
+| Message edits (kind:40003) | `channels` | ☐ |
+| Rich content rendering (kind:40002) | `channels`/`forum` | ☐ |
+| Cross-device read state (NIP-RS) | — | ☐ |
+| Channel mutes/stars/sections | `home`/`settings` | ☐ |
+| Agent activity observer | `activity` | ☐ |
 
 ## Process
 

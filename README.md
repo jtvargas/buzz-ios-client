@@ -31,11 +31,13 @@ App target plus two local SPM packages, modular from day one:
 
 ### Sync reliability (client-owned)
 
-The Buzz relay has no negentropy/NIP-77 sync, so reliability is built client-side:
+The Buzz relay has no negentropy/NIP-77 sync, so reliability is built client-side, mirroring the upstream hybrid model:
 
-- A single **RelayConnection actor**: exponential backoff + jitter, NIP-42 re-auth on every reconnect, app-lifecycle aware (background → suspend subscriptions, foreground → resubscribe + gap-fill).
-- **Cursor-based gap-fill**: per-subscription `since` cursors persisted in GRDB; on reconnect, REQ from the last cursor and dedupe by event id. The database is the single source of truth — the UI reads the DB, never the socket.
-- **Outbox pattern**: optimistic local insert → publish → confirm on relay OK → retry with backoff; unsent state visible in the UI (Slack-style "sending… / failed, tap to retry").
+- **NIP-CW channel windows** for history and pagination: relay-computed windows with authoritative `has_more` and composite `(created_at, id)` cursors over the NIP-98-authenticated HTTP bridge, merged at render with WS live subscriptions; head-window refetch on reconnect.
+- A single **RelayConnection actor**: exponential backoff + jitter, NIP-42 re-auth on every reconnect, explicit lifecycle state machine (foreground-resume is treated exactly like reconnect: connect → auth → re-arm subs → reconcile).
+- **Careful cursors**: advance only at EOSE during backfill, per event when live; persist cursors in the same transaction as their events; reconnect with an overlap window plus id-dedupe (`created_at` is author-controlled).
+- The database is the single source of truth — a projected store (raw events + projected messages/channels/members/profiles) with proper replaceable, deletion, and edit semantics. Ephemeral presence/typing bypass the DB into an in-memory store.
+- **Outbox pattern**: optimistic local insert → publish → confirm on relay OK → retry classified by OK/CLOSED machine-readable prefixes; unsent state visible in the UI (Slack-style "sending… / failed, tap to retry").
 
 ### Protocol references
 
