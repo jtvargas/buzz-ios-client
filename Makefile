@@ -12,7 +12,8 @@ test:
 
 build: generate
 	xcodebuild build -project Hive.xcodeproj -scheme Hive \
-		-destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO
+		-destination 'generic/platform=iOS Simulator' \
+		-skipPackagePluginValidation CODE_SIGNING_ALLOWED=NO
 
 format:
 	swiftformat .
