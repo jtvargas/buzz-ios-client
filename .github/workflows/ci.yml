@@ -50,4 +50,5 @@ jobs:
           -project Hive.xcodeproj
           -scheme Hive
           -destination 'generic/platform=iOS Simulator'
+          -skipPackagePluginValidation
           CODE_SIGNING_ALLOWED=NO
