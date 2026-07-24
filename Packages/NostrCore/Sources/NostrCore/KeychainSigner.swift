@@ -21,32 +21,52 @@ protocol KeychainStore: Sendable {
 /// `kSecAttrSynchronizable` attribute is deliberately absent, and accessibility
 /// is `AfterFirstUnlockThisDeviceOnly`, so the key is reachable to background work
 /// once the device has been unlocked at least once since boot yet never leaves
-/// the device. Saving deletes any prior item first rather than issuing an update:
-/// simpler, and the stored value is a single 32-byte scalar.
+/// the device. `kSecUseDataProtectionKeychain` is set on every call so the same
+/// guarantees hold on macOS, where items otherwise land in the legacy file-based
+/// keychain that ignores `kSecAttrAccessible`. Replacing a key updates the item
+/// in place — the stored value never passes through a deleted state, so a crash
+/// mid-replacement cannot destroy the only copy of an identity key.
 struct SystemKeychainStore: KeychainStore {
     let service: String
 
-    func save(_ secret: Data, account: String) throws {
-        try delete(account: account)
-        let attributes: [String: Any] = [
+    private func baseQuery(account: String) -> [String: Any] {
+        [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
-            kSecValueData as String: secret,
-            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
+            kSecUseDataProtectionKeychain as String: true,
         ]
+    }
+
+    func save(_ secret: Data, account: String) throws {
+        var attributes = baseQuery(account: account)
+        attributes[kSecValueData as String] = secret
+        attributes[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
         let status = SecItemAdd(attributes as CFDictionary, nil)
-        guard status == errSecSuccess else { throw KeychainError.unexpectedStatus(status) }
+        switch status {
+        case errSecSuccess:
+            return
+        case errSecDuplicateItem:
+            let update: [String: Any] = [
+                kSecValueData as String: secret,
+                kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
+            ]
+            let updateStatus = SecItemUpdate(
+                baseQuery(account: account) as CFDictionary,
+                update as CFDictionary
+            )
+            guard updateStatus == errSecSuccess else {
+                throw KeychainError.unexpectedStatus(updateStatus)
+            }
+        default:
+            throw KeychainError.unexpectedStatus(status)
+        }
     }
 
     func load(account: String) throws -> Data? {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-        ]
+        var query = baseQuery(account: account)
+        query[kSecReturnData as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
         var item: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &item)
         switch status {
@@ -57,12 +77,7 @@ struct SystemKeychainStore: KeychainStore {
     }
 
     func delete(account: String) throws {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-        ]
-        let status = SecItemDelete(query as CFDictionary)
+        let status = SecItemDelete(baseQuery(account: account) as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else {
             throw KeychainError.unexpectedStatus(status)
         }
