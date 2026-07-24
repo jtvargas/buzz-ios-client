@@ -26,10 +26,10 @@ Config/Local.xcconfig
 *.certSigningRequest
 *.p12
 
-# SPM
+# SPM (dependency versions are pinned .exact in Package.swift)
 .build/
 .swiftpm/
-Package.resolved.lock
+Package.resolved
 
 # macOS
 .DS_Store
