@@ -9,11 +9,12 @@ import NostrCore
 /// Because the projector runs inside the caller's write transaction, its rows land
 /// atomically with the log row that produced them.
 ///
-/// Step 1 ships only ``NullProjector``: the schema and the rebuild mechanism are
-/// in place, and the real channel/profile/thread/reaction derivation drops in at
-/// step 2 without the store or the rebuild path changing around it. Injecting the
-/// projector also lets tests observe exactly which events the rebuild replays and
-/// in what order.
+/// ``BuzzProjector`` is the production implementation — channel, roster, profile,
+/// thread, reaction, deletion, edit, rich-content, thread-summary, and owner
+/// attestation rows. ``NullProjector`` derives nothing and stays for the store and
+/// rebuild tests, where injecting the projector lets a test observe exactly which
+/// events the rebuild replays and in what order without depending on real row
+/// shapes.
 protocol EventProjecting: Sendable {
     /// Writes the projection rows for one already-verified event.
     ///

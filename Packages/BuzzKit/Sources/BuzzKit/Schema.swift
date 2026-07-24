@@ -23,9 +23,12 @@ enum Schema {
     /// Bump when any projection's shape or meaning changes. On the next open every
     /// projection table is dropped and replayed from `event`; the log is untouched.
     ///
-    /// Step 1 ships the tables and the rebuild mechanism; the projector that fills
-    /// them is step 2. Adding those cases will move this constant.
-    static let projectionVersion = 1
+    /// Step 1 shipped the tables and the rebuild mechanism at version 1. Step 2
+    /// adds the real ``BuzzProjector`` — channel/roster/profile/thread/reaction/
+    /// deletion/edit/rich-content/thread-summary rows, the owner-attestation index,
+    /// and the staleness columns those need — so the version moves to 2. A later
+    /// authority or parsing fix is another bump and a replay, never a resync.
+    static let projectionVersion = 2
 
     /// The `meta` key under which the applied projection version is recorded.
     static let projectionVersionKey = "projection_version"
@@ -167,12 +170,17 @@ enum Schema {
         """)
 
         // The relay-signed member roster, kind 39002. Authoritative and complete,
-        // so the projector replaces rather than merges it.
+        // so the projector replaces rather than merges it. A roster is addressable
+        // state a relay can resend older after a reconnect, and this projection
+        // collapses to one roster per channel, so every row carries the source
+        // event's `created_at`: the projector reads it back to reject a stale
+        // resend and to make the replace order-independent under a version rebuild.
         try db.execute(sql: """
         CREATE TABLE channel_member (
-            channel_id TEXT NOT NULL,
-            pubkey     TEXT NOT NULL,
-            role       TEXT,
+            channel_id        TEXT NOT NULL,
+            pubkey            TEXT NOT NULL,
+            role              TEXT,
+            source_created_at INTEGER NOT NULL,
             PRIMARY KEY (channel_id, pubkey)
         )
         """)
@@ -193,7 +201,8 @@ enum Schema {
     }
 
     /// Engagement projections that hang off a target message: threading, reactions,
-    /// and deletions.
+    /// deletions, and the verified owner attestations that widen delete/edit
+    /// authority at read time.
     private static func createThreadingTables(_ db: Database) throws {
         // Threading derived from NIP-10 markers: one row per real reply, so the
         // channel timeline can exclude replies with a single NOT EXISTS rather than
@@ -238,6 +247,20 @@ enum Schema {
         )
         """)
         try db.execute(sql: "CREATE INDEX deletion_target ON deletion(target_id)")
+
+        // The verified NIP-OA owner of an event's author, recorded for any event
+        // whose owner-signed `auth` tag checks out. It is a fact about the event,
+        // not a judgment about any deletion or edit: the read-time authority
+        // predicate joins it to widen delete/edit rights to a target author's
+        // owner. Absent for ordinary human-authored events, which carry no
+        // attestation. Rebuilding re-verifies from the log, so an attestation-logic
+        // fix is a version bump, not a resync.
+        try db.execute(sql: """
+        CREATE TABLE event_owner (
+            event_id     TEXT PRIMARY KEY NOT NULL,
+            owner_pubkey TEXT NOT NULL
+        )
+        """)
     }
 
     /// Content-overlay projections: edits, rich content, and cached thread
@@ -257,12 +280,16 @@ enum Schema {
         try db.execute(sql: "CREATE INDEX edit_target ON edit(target_id, created_at DESC)")
 
         // Buzz rich content, kind 40002, replaced per target. The renderer falls
-        // back to the target's plain `content` when this is absent.
+        // back to the target's plain `content` when this is absent. Kind 40002 is a
+        // regular event, so several may target one message over time; `created_at`
+        // guards the replace so the newest payload wins whatever order they arrive
+        // or replay in, rather than the last one written.
         try db.execute(sql: """
         CREATE TABLE rich_content (
-            target_id TEXT PRIMARY KEY NOT NULL,
-            event_id  TEXT NOT NULL,
-            payload   TEXT NOT NULL
+            target_id  TEXT PRIMARY KEY NOT NULL,
+            event_id   TEXT NOT NULL,
+            payload    TEXT NOT NULL,
+            created_at INTEGER NOT NULL
         )
         """)
 
@@ -282,8 +309,8 @@ enum Schema {
     /// Every projection table, in an order safe to drop (no cross-table foreign
     /// keys bind them).
     static let projectionTables = [
-        "thread_summary", "rich_content", "edit", "deletion", "reaction",
-        "thread", "profile", "channel_member", "channel",
+        "thread_summary", "rich_content", "edit", "deletion", "event_owner",
+        "reaction", "thread", "profile", "channel_member", "channel",
     ]
 
     static func dropProjectionTables(_ db: Database) throws {
