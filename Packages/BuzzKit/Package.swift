@@ -9,9 +9,25 @@ let package = Package(
     ],
     dependencies: [
         .package(path: "../NostrCore"),
+        // Pinned exact so a dependency bump is a reviewed change, not a silent
+        // resolve. GRDB 7 is the persistence layer (ADR-0003): value
+        // observation, a WAL DatabasePool, and raw-SQL migrations without an ORM.
+        .package(url: "https://github.com/groue/GRDB.swift", exact: "7.11.1"),
     ],
     targets: [
-        .target(name: "BuzzKit", dependencies: ["NostrCore"]),
-        .testTarget(name: "BuzzKitTests", dependencies: ["BuzzKit"]),
+        .target(
+            name: "BuzzKit",
+            dependencies: [
+                "NostrCore",
+                .product(name: "GRDB", package: "GRDB.swift"),
+            ]
+        ),
+        .testTarget(
+            name: "BuzzKitTests",
+            dependencies: [
+                "BuzzKit",
+                .product(name: "GRDB", package: "GRDB.swift"),
+            ]
+        ),
     ]
 )
