@@ -1,7 +1,7 @@
 import SwiftUI
 
 @main
-struct BuzzClientApp: App {
+struct HiveApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()

@@ -4,7 +4,7 @@
 
 ## Context
 
-`NostrCore` needs keys/signing (secp256k1), event codec, NIP-42, NIP-98, and NIP-44 v2. Candidates: NostrSDK-ios, NostrEssentials, rust-nostr Swift bindings, or a thin hand-rolled core over secp256k1.swift.
+`NostrCore` needs keys/signing (secp256k1), event codec, NIP-42, NIP-98, and NIP-44 v2. Candidates: NostrSDK-ios, NostrEssentials, rust-nostr Swift bindings, a thin hand-rolled core over secp256k1.swift, or **adapting comb's `CombCore`** ([jedbridges/comb](https://github.com/jedbridges/comb), MIT — license-compatible): a hand-rolled Swift core over `21-DOT-DEV/swift-secp256k1` with NostrEvent codec, keys, signing, NIP-44, NIP-98, and test suites, built for the same Buzz relay domain. Verify its NIP-44 tests use the official vectors during evaluation.
 
 Buzz-specific constraints (from the upstream v0.4.11 parity target):
 
