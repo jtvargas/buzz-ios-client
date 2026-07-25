@@ -33,7 +33,12 @@ struct ChannelListView: View {
             }
             .navigationTitle("Channels")
             .navigationDestination(for: ChannelListRow.self) { channel in
-                ChannelTimelineView(channel: channel, store: store, engine: engine)
+                ChannelTimelineView(
+                    channel: channel,
+                    store: store,
+                    engine: engine,
+                    selfPubkey: environment.selfPubkeyHex
+                )
             }
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {

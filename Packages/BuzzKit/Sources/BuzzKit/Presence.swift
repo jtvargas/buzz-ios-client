@@ -30,7 +30,9 @@ public enum PresenceStatus: Sendable, Equatable {
     }
 }
 
-/// One present member of a channel: who they are, and the status they announced.
+/// One present member of the workspace: who they are, and the status they
+/// announced. Presence is workspace-global (S-5), so a member is present in the
+/// workspace rather than in any one channel.
 public struct PresenceMember: Sendable, Equatable {
     public let pubkey: String
     public let status: PresenceStatus
@@ -38,35 +40,5 @@ public struct PresenceMember: Sendable, Equatable {
     public init(pubkey: String, status: PresenceStatus) {
         self.pubkey = pubkey
         self.status = status
-    }
-}
-
-/// A channel's ephemeral presence at one moment: who is present (and how), and who
-/// is typing.
-///
-/// This is what the UI layer subscribes to. Both lists are ordered by pubkey so
-/// two equal states compare equal — the change-vs-no-op test the store's observer
-/// stream turns on — and so a view renders members in a stable order rather than
-/// the arbitrary order of a dictionary walk.
-public struct ChannelPresence: Sendable, Equatable {
-    public let channel: String
-    public let present: [PresenceMember]
-    public let typing: [String]
-
-    public init(channel: String, present: [PresenceMember], typing: [String]) {
-        self.channel = channel
-        self.present = present
-        self.typing = typing
-    }
-
-    /// Whether the channel currently has no live presence and no one typing.
-    public var isEmpty: Bool {
-        present.isEmpty && typing.isEmpty
-    }
-
-    /// The no-presence snapshot for a channel — the baseline a first observer is
-    /// seeded with, and what a channel decays back to once everything lapses.
-    static func empty(_ channel: String) -> ChannelPresence {
-        ChannelPresence(channel: channel, present: [], typing: [])
     }
 }
