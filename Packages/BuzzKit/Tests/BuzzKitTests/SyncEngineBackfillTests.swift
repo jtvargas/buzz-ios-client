@@ -31,27 +31,32 @@ struct SyncEngineBackfillTests {
         try await harness.engine.start()
         try await driveAuth(harness.connection, socket1)
         await answerDiscovery(on: socket1)
+        // Channel messages now ride the standing per-channel content sub (the global
+        // REQ is `#h`-less and never receives them). Open "room"'s sub explicitly so
+        // this replay-cursor test has the standing sub it exercises.
+        await harness.engine.subscribeChannelContent("room")
 
         // e10…e6 as backfill, no EOSE. batchSize 2 flushes e10,e9 and e8,e7; e6 stays
         // buffered and is discarded when the reconnect resets the subscription.
-        let sub1 = await awaitREQ(on: socket1, matching: isLiveContentREQ)
+        let sub1 = await awaitChannelContentREQ(on: socket1, channel: "room")
         for event in newestFirst.prefix(5) {
             await socket1.enqueue(EngineFrames.event(sub1, event))
         }
         await waitUntil { (try? await harness.store.count(kind: .channelMessage)) == 4 }
         await socket1.enqueueFailure(.connectionClosed)
 
-        // Reconnect and re-auth on the second socket.
+        // Reconnect and re-auth on the second socket. The manager re-arms the standing
+        // "room" sub onto the fresh socket.
         try await driveAuth(harness.connection, socket2)
 
         // The re-REQ carries the original content filter — since = now − 5, never
         // shifted to a replay cursor, because no EOSE ever armed one.
-        let replayFilter = await awaitContentFilter(on: socket2)
+        let replayFilter = await awaitChannelContentFilter(on: socket2, channel: "room")
         #expect(replayFilter.since == harness.nowSeconds - 5)
         #expect(replayFilter.until == nil)
 
         await answerDiscovery(on: socket2)
-        let sub2 = await awaitREQ(on: socket2, matching: isLiveContentREQ)
+        let sub2 = await awaitChannelContentREQ(on: socket2, channel: "room")
         for event in newestFirst {
             await socket2.enqueue(EngineFrames.event(sub2, event))
         }
@@ -91,8 +96,9 @@ struct SyncEngineBackfillTests {
         try await harness.engine.start()
         try await driveAuth(harness.connection, socket1)
         await answerDiscovery(on: socket1)
+        await harness.engine.subscribeChannelContent("room")
 
-        let sub1 = await awaitREQ(on: socket1, matching: isLiveContentREQ)
+        let sub1 = await awaitChannelContentREQ(on: socket1, channel: "room")
         await socket1.enqueue(EngineFrames.eose(sub1)) // caught up → live
         await socket1.enqueue(EngineFrames.event(sub1, event1))
         await socket1.enqueue(EngineFrames.event(sub1, event2))
@@ -101,11 +107,11 @@ struct SyncEngineBackfillTests {
         await socket1.enqueueFailure(.connectionClosed) // airplane mode
 
         try await driveAuth(harness.connection, socket2)
-        let replayFilter = await awaitContentFilter(on: socket2)
+        let replayFilter = await awaitChannelContentFilter(on: socket2, channel: "room")
         #expect(replayFilter.since == event2.createdAt - 5)
 
         await answerDiscovery(on: socket2)
-        let sub2 = await awaitREQ(on: socket2, matching: isLiveContentREQ)
+        let sub2 = await awaitChannelContentREQ(on: socket2, channel: "room")
         await socket2.enqueue(EngineFrames.event(sub2, event2)) // overlap
         await socket2.enqueue(EngineFrames.event(sub2, event3))
         await socket2.enqueue(EngineFrames.event(sub2, event4))

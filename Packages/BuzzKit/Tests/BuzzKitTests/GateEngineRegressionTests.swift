@@ -40,8 +40,9 @@ struct GateEngineRegressionTests {
         await socket1.enqueue(EngineFrames.eose(historyID))
         await waitUntil { await harness1.engine.channelSyncState("room") == .fallbackSynced }
 
-        // A live message arrives on the caught-up-but-gapped channel.
-        let liveSub = await awaitREQ(on: socket1, matching: isLiveContentREQ)
+        // A live message arrives on the caught-up-but-gapped channel — on the standing
+        // per-channel content sub (registered by discovery), the only live path now.
+        let liveSub = await awaitChannelContentREQ(on: socket1, channel: "room")
         await socket1.enqueue(EngineFrames.eose(liveSub))
         let live = try fixtures.message("live", in: "room", at: harness1.nowSeconds + 100)
         await socket1.enqueue(EngineFrames.event(liveSub, live))
@@ -119,6 +120,77 @@ struct GateEngineRegressionTests {
         #expect(await rig.engine.channelSyncState("room") == .synced)
         #expect(try await rig.store.channelWatermark("room") == headCursor)
         await rig.engine.stop()
+    }
+
+    // MARK: - Rule 4 under live per-channel traffic
+
+    /// Live channel traffic now arrives on the standing per-channel content subs — a
+    /// path that, before this fix, never delivered a single live event (the engine's
+    /// only live REQ was `#h`-less and global, so channel events never fanned to it).
+    /// Activating that path re-arms rule 4, so pin the contract directly: within one
+    /// session a `.synced` channel and a `.fallbackSynced` channel receive a live
+    /// kind-9 each, and the live flush must advance the synced channel's watermark
+    /// (past the head the reconcile set) while holding the fallback channel's (its gap
+    /// is still open).
+    ///
+    /// The two states coexist realistically: the window path degrades per session, so
+    /// a channel reconciled *before* the degradation reaches `.synced` and one
+    /// reconciled after falls back. `chan-a` sorts first and reconciles cleanly;
+    /// `chan-b` reconciles next, degrades, and falls back.
+    @Test("live rows advance a synced channel's watermark and hold a fallbackSynced one's")
+    func liveWatermarkRule4AcrossSyncedAndFallback() async throws {
+        let socket = ScriptedRelay()
+        let database = TempDatabase()
+        defer { database.remove() }
+        let harness = try EngineHarness(path: database.path, identity: try PrivateKey(), relays: [socket])
+        let fixtures = try EngineFixtures()
+
+        let buildA = try WindowResponseBuilder(channel: "chan-a")
+        let metaA = try buildA.relay.event(.groupMetadata, "", tags: [["d", "chan-a"], ["name", "A"]])
+        let metaB = try fixtures.metadata(for: "chan-b", name: "B")
+        let headRow = try buildA.row("head", at: harness.nowSeconds + 10)
+        let headPage = try WindowResponseBuilder.body([headRow, try buildA.headBounds(hasMore: false)])
+
+        // Reconcile order is sorted [chan-a, chan-b]; HTTP is FIFO: a clean head page
+        // for chan-a (→ synced), a 503 for chan-b (→ degraded → fallback).
+        await harness.http.enqueue(status: 200, body: headPage)
+        await harness.http.enqueue(status: 503, body: Data())
+
+        try await harness.engine.start()
+        try await driveAuth(harness.connection, socket)
+        await answerDiscovery(on: socket, events: [metaA, metaB])
+
+        // chan-b's fallback reissues the standard history query over the socket.
+        let historyB = await awaitREQ(on: socket) { isChannelHistoryREQ($0, channel: "chan-b") }
+        await socket.enqueue(EngineFrames.eose(historyB))
+
+        await waitUntil { await harness.engine.channelSyncState("chan-a") == .synced }
+        await waitUntil { await harness.engine.channelSyncState("chan-b") == .fallbackSynced }
+
+        // A live kind-9 on each standing per-channel content sub (EOSE first → live).
+        let subA = await awaitChannelContentREQ(on: socket, channel: "chan-a")
+        let subB = await awaitChannelContentREQ(on: socket, channel: "chan-b")
+        await socket.enqueue(EngineFrames.eose(subA))
+        await socket.enqueue(EngineFrames.eose(subB))
+        let liveA = try fixtures.message("liveA", in: "chan-a", at: harness.nowSeconds + 500)
+        let liveB = try fixtures.message("liveB", in: "chan-b", at: harness.nowSeconds + 500)
+        await socket.enqueue(EngineFrames.event(subA, liveA))
+        await socket.enqueue(EngineFrames.event(subB, liveB))
+
+        await waitUntil { (try? await harness.store.event(id: liveA.id)) != nil }
+        await waitUntil { (try? await harness.store.event(id: liveB.id)) != nil }
+
+        // Rule 4: the synced channel's watermark advanced to the live cursor, past the
+        // head the reconcile committed…
+        let liveACursor = WindowCursor(createdAt: liveA.createdAt, id: liveA.id)
+        await waitUntil { (try? await harness.store.channelWatermark("chan-a")) == liveACursor }
+        #expect(try await harness.store.channelWatermark("chan-a") == liveACursor)
+        #expect(try await harness.store.channelWatermark("chan-a")
+            != WindowCursor(createdAt: headRow.createdAt, id: headRow.id))
+        // …and the fallbackSynced channel's watermark held over its still-open gap.
+        #expect(try await harness.store.channelWatermark("chan-b") == nil)
+
+        await harness.engine.stop()
     }
 }
 

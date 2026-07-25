@@ -22,13 +22,30 @@ extension SyncEngine: EventSink {
         }
 
         // A membership change is group state that does not ride the live fan-out, so
-        // its arrival is the signal to re-fetch that channel's head and roster.
-        var touched: Set<String> = []
-        for event in batch where event.kind == .memberAdded || event.kind == .memberRemoved {
-            if let channel = event.groupID { touched.insert(channel) }
+        // its arrival is the signal to reconcile the channel's standing content
+        // subscription and (on add) re-fetch its head and roster. These notifications
+        // are `#p`-scoped to self, so an add means "you joined channel X" and a remove
+        // means "you left / were removed from X".
+        var added: Set<String> = []
+        var removed: Set<String> = []
+        for event in batch {
+            guard let channel = event.groupID else { continue }
+            switch event.kind {
+            case .memberAdded: added.insert(channel)
+            case .memberRemoved: removed.insert(channel)
+            default: continue
+            }
         }
-        for channel in touched {
+        for channel in added {
+            // Start the standing content sub at once so live traffic flows, then
+            // reconcile the head/roster the membership change implies.
+            await subscribeChannelContent(channel)
             scheduleChannelReconcile(channel)
+        }
+        for channel in removed {
+            // Left the channel: drop its standing content sub — the relay would refuse
+            // further channel-scoped traffic to a non-member anyway.
+            await unsubscribeChannelContent(channel)
         }
     }
 
@@ -37,11 +54,16 @@ extension SyncEngine: EventSink {
     /// sink contract and a future backfill-drained optimization.
     public func endOfStoredEvents(subscription _: SubscriptionID) async {}
 
-    /// The relay closed the multiplexed live subscription with a terminal reason.
-    /// The connection layer owns reconnect and re-auth; a fresh `.ready`
-    /// re-registers the subscription through the manager, so nothing is torn down
-    /// here.
-    public func subscriptionClosed(subscription _: SubscriptionID, error _: SubscriptionError) async {}
+    /// The relay closed a subscription with a terminal reason.
+    ///
+    /// If it is one of the standing per-channel content subscriptions, drop it from
+    /// the set and log (``dropClosedChannelSubscription(_:)``); a later discovery pass
+    /// re-registers the channel if it is still desired. If it is the global REQ, the
+    /// connection layer owns reconnect and re-auth and a fresh `.ready` re-registers
+    /// it through the manager, so nothing is torn down here.
+    public func subscriptionClosed(subscription id: SubscriptionID, error _: SubscriptionError) async {
+        dropClosedChannelSubscription(id)
+    }
 
     // MARK: - Membership-triggered reconcile
 

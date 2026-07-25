@@ -178,6 +178,10 @@ enum EngineFrames {
         #"["EOSE","\#(subscriptionID)"]"#
     }
 
+    static func closed(_ subscriptionID: String, _ message: String = "") -> String {
+        #"["CLOSED","\#(subscriptionID)","\#(message)"]"#
+    }
+
     static func event(_ subscriptionID: String, _ event: NostrEvent) -> String {
         guard let data = try? JSONEncoder().encode(event),
               let json = String(bytes: data, encoding: .utf8)
