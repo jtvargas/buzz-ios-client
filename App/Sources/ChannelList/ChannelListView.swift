@@ -8,6 +8,7 @@ struct ChannelListView: View {
     @Environment(AppEnvironment.self) private var environment
 
     @State private var model: ChannelListModel
+    @State private var showAccount = false
     private let store: BuzzEventStore
     private let engine: SyncEngine
 
@@ -41,9 +42,20 @@ struct ChannelListView: View {
                 )
             }
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button {
+                        showAccount = true
+                    } label: {
+                        Image(systemName: "person.crop.circle")
+                    }
+                    .accessibilityLabel("Account")
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     EngineStatePill(state: environment.engineState)
                 }
+            }
+            .sheet(isPresented: $showAccount) {
+                AccountView(store: store, engine: engine, selfPubkey: environment.selfPubkeyHex)
             }
         }
         .task { await model.run() }

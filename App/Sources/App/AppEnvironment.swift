@@ -137,6 +137,34 @@ final class AppEnvironment {
         }
     }
 
+    /// Signs the current identity out: stops the engine, deletes the key from the
+    /// Keychain, and returns to onboarding.
+    ///
+    /// The store is intentionally **not** wiped here. The recorded store owner is
+    /// left in place so the next login decides: a same-key re-login keeps the
+    /// history, and a different key logging in wipes it in ``startEngine(relayURLString:)``.
+    func signOut() async {
+        engineStateTask?.cancel()
+        engineStateTask = nil
+        if let engine {
+            await engine.stop()
+        }
+        heartbeat = nil
+        engine = nil
+        try? signer.delete()
+        selfPubkeyHex = nil
+        engineState = .stopped
+        phase = .needsIdentity
+    }
+
+    /// Loads the stored secret key for a gated backup/reveal, or `nil` if none is
+    /// stored. The caller must gate this behind device authentication and never
+    /// persist or log the result — it is the one deliberate read-out boundary for
+    /// the secret.
+    func revealSecretKey() -> PrivateKey? {
+        try? signer.loadPrivateKey()
+    }
+
     /// Forwards a scene-phase change to the engine and drives the presence
     /// heartbeat, if an engine exists. A no-op before the engine is built (i.e. while
     /// the gate is up).
@@ -172,6 +200,17 @@ final class AppEnvironment {
             throw CompositionError.invalidRelayURL
         }
 
+        // Resolve the identity before the engine writes anything, so a store left by
+        // a *different* key (a sign-out then a new login) is wiped first; a same-key
+        // re-login keeps its history. A fresh install has no recorded owner.
+        let intendedPubkey = try? await signer.publicKey().hex
+        if let intendedPubkey {
+            if StoreOwnership.shouldWipe(forIncoming: intendedPubkey) {
+                try await store.wipe()
+            }
+            StoreOwnership.ownerPubkeyHex = intendedPubkey
+        }
+
         let connection = RelayConnection(url: websocketURL, signer: signer)
         let subscriptions = SubscriptionManager(connection: connection, signer: signer)
         let presence = PresenceStore()
@@ -193,9 +232,9 @@ final class AppEnvironment {
 
         observeEngineState(of: engine)
         try await engine.start()
-        // Resolve the identity for presence keying and own-typing exclusion. The
-        // signer read can fail benignly; presence simply degrades to keyless.
-        selfPubkeyHex = try? await signer.publicKey().hex
+        // The identity, resolved above, keys presence and excludes our own typing
+        // echo; a nil (Keychain read failure) degrades presence to keyless.
+        selfPubkeyHex = intendedPubkey
         phase = .running
         // Launch is a foreground start; scene-phase `.onChange` does not fire for the
         // initial value, so begin beating explicitly here.
