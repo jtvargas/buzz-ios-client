@@ -34,6 +34,25 @@ struct PresenceStoreTests {
         #expect(await store.workspacePresenceSnapshot() == [PresenceMember(pubkey: alice.pubkey, status: .online)])
     }
 
+    @Test("a relay-synthesized snapshot keys by its p-tag subject, not the relay author")
+    func synthesizedSnapshotKeysBySubject() async throws {
+        let clock = MutableClock()
+        let store = PresenceStore(now: { clock.current })
+        let relay = try Fixture() // stands in for the relay signing key
+        let subject = try Fixture() // the member the snapshot is about
+        // bridge.rs `synthesize_presence`: relay-signed, the subject in a `p` tag, the
+        // status in content — `event.pubkey` is the relay, not the subject.
+        let synthesized = try relay.event(.presence, "online", tags: [["p", subject.pubkey]])
+
+        await store.apply([synthesized])
+
+        // The roster shows the subject online, never the relay.
+        #expect(
+            await store.workspacePresenceSnapshot()
+                == [PresenceMember(pubkey: subject.pubkey, status: .online)]
+        )
+    }
+
     @Test("typing keys per (channel, pubkey) and requires a channel")
     func typingIsChannelScoped() async throws {
         let clock = MutableClock()

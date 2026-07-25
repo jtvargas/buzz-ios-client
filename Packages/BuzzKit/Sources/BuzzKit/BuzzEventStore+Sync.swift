@@ -47,6 +47,16 @@ public extension BuzzEventStore {
         }
     }
 
+    /// Every distinct member pubkey across every known channel roster — the authors a
+    /// cold-start presence-snapshot REQ names. Read from the `channel_member`
+    /// projection the discovery pass populates, so it is available the moment group
+    /// state lands, before any heartbeat.
+    func allMemberPubkeys() async throws -> Set<String> {
+        try await reader.read { db in
+            Set(try String.fetchAll(db, sql: "SELECT DISTINCT pubkey FROM channel_member"))
+        }
+    }
+
     // MARK: - Watermark-advancing ingest (live phase)
 
     /// Ingests a batch and, in the same transaction, advances the watermark for

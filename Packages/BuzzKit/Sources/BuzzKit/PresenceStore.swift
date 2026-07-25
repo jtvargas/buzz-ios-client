@@ -125,10 +125,18 @@ public actor PresenceStore {
         for channel in touchedTypingChannels { publishTyping(channel) }
     }
 
-    /// Records a presence heartbeat under the peer's pubkey (workspace-global), or
-    /// clears the peer on an `"offline"` status. Returns whether the roster changed.
+    /// Records a presence heartbeat under the subject's pubkey (workspace-global), or
+    /// clears the subject on an `"offline"` status. Returns whether the roster changed.
+    ///
+    /// The subject is normally the event's own author — a live heartbeat is bare status
+    /// with no `p` tag, and its `pubkey` is who it is about. A relay-synthesized
+    /// cold-start snapshot (`bridge.rs` `synthesize_presence`) is different: it is
+    /// signed by the *relay* key and carries the subject member in a `["p", pubkey]`
+    /// tag, so `event.pubkey` is the relay, not the member. Keying by the `p` tag when
+    /// present and the author otherwise folds both into the one roster under the right
+    /// identity.
     private func applyPresence(_ event: NostrEvent) -> Bool {
-        let key = event.pubkey
+        let key = event.firstValue(forTag: "p") ?? event.pubkey
         // A relay can redeliver an older heartbeat after a reconnect; an older one
         // must never override a newer status or extend a liveness the newer one
         // already superseded. The staleness guard the projections use, in miniature.
@@ -137,11 +145,11 @@ public actor PresenceStore {
         }
         let raw = statusString(event)
         if raw == Self.offlineStatus {
-            // "offline" is a departure, not a status — the peer leaves the roster.
+            // "offline" is a departure, not a status — the subject leaves the roster.
             return presenceRecords.removeValue(forKey: key) != nil
         }
         presenceRecords[key] = PresenceRecord(
-            pubkey: event.pubkey,
+            pubkey: key,
             status: PresenceStatus(raw),
             createdAt: event.createdAt,
             deadline: now().advanced(by: presenceTTL)
