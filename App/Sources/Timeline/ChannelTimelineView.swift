@@ -30,7 +30,7 @@ struct ChannelTimelineView: View {
             store: store,
             sender: engine,
             typing: engine,
-            typingSubscription: engine,
+            readStateMarking: engine,
             selfPubkey: selfPubkey
         ))
         _presence = State(initialValue: PresenceModel(store: presenceStore))

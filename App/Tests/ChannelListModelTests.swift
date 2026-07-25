@@ -35,6 +35,38 @@ struct ChannelListModelTests {
         #expect(model.channels.count == 1)
     }
 
+    @Test("unread count reflects others' messages past the frontier and clears live when marked read")
+    func unreadCountTracksReadState() async throws {
+        let temp = TempStore()
+        defer { temp.remove() }
+        let store = try temp.open()
+        let relay = try Fixture()
+        let peer = try Fixture()
+        let reader = try Fixture()
+
+        let model = ChannelListModel(store: store, selfPubkey: reader.pubkey)
+        let run = Task { await model.run() }
+        defer { run.cancel() }
+
+        _ = try await store.ingest(batch: [
+            try relay.channelMetadata("general", name: "General", at: 500),
+            try peer.message("one", in: "general", at: 1_000),
+            try peer.message("two", in: "general", at: 2_000),
+        ], phase: .backfill)
+
+        await waitUntil { model.channels.first?.unreadCount == 2 }
+        #expect(model.channels.first?.hasUnread == true)
+
+        // Marking read up to the newest clears the badge live — `read_state` is tracked
+        // by the observation, so no message needs to arrive to refresh the count.
+        try await store.applyReadState(
+            author: reader.pubkey, slot: "phone", contexts: ["general": 2_000],
+            sourceCreatedAt: 10, sourceEventID: "e"
+        )
+        await waitUntil { model.channels.first?.unreadCount == 0 }
+        #expect(model.channels.first?.hasUnread == false)
+    }
+
     @Test("a newer message reorders the list live")
     func newerMessageUpdatesPreview() async throws {
         let temp = TempStore()

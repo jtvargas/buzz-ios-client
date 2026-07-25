@@ -20,9 +20,13 @@ final class ChannelListModel {
     private(set) var hasLoaded = false
 
     private let store: BuzzEventStore
+    /// The local identity, so a channel's own posts are excluded from its unread
+    /// count. `nil` degrades to counting every author (keyless fallback).
+    private let selfPubkey: String?
 
-    init(store: BuzzEventStore) {
+    init(store: BuzzEventStore, selfPubkey: String? = nil) {
         self.store = store
+        self.selfPubkey = selfPubkey
     }
 
     /// Consumes the observation until cancelled. Attach with SwiftUI's `.task`,
@@ -31,7 +35,7 @@ final class ChannelListModel {
     nonisolated func run() async {
         do {
             for try await _ in DatabaseSignal.changes(in: store.reader) {
-                let rows = (try? store.channelList()) ?? []
+                let rows = (try? store.channelList(selfPubkey: selfPubkey)) ?? []
                 await apply(rows)
             }
         } catch {

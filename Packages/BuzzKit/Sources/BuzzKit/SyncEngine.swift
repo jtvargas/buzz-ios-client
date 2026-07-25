@@ -260,13 +260,18 @@ public actor SyncEngine {
         }
 
         // Register the one global REQ carrying the narrowed content filter (metadata
-        // + presence) and the membership filter. Both are `#h`-less, so the whole REQ
-        // is global — which is exactly what these kinds need. Channel-scoped traffic
-        // rides the per-channel standing subs, reconciled on `.ready` after discovery.
-        // The manager keeps this REQ alive across reconnects; the engine never
-        // re-registers it.
+        // + presence), the membership filter, and the read-state filter. All three are
+        // `#h`-less, so the whole REQ is global — which is exactly what these kinds need
+        // (read state is channel-less user data the relay fans out globally). Channel-
+        // scoped traffic rides the per-channel standing subs, reconciled on `.ready`
+        // after discovery. The manager keeps this REQ alive across reconnects; the
+        // engine never re-registers it.
         liveSubscription = try await subscriptions.register(
-            filters: [contentFilter(), membershipFilter(selfPubkeyHex: pubkey)],
+            filters: [
+                contentFilter(),
+                membershipFilter(selfPubkeyHex: pubkey),
+                readStateFilter(selfPubkeyHex: pubkey),
+            ],
             sink: self
         )
 

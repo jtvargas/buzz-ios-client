@@ -30,6 +30,10 @@ public extension BuzzEventStore {
     ///   - tags: the event tags, including thread markers if this is a reply.
     ///   - signer: the identity to sign with.
     ///   - maxContentBytes: the send ceiling, from NIP-11 when known.
+    ///   - createdAt: an explicit signing timestamp, defaulting to the store clock.
+    ///     Read-state sends pass one strictly newer than their slot's last blob so
+    ///     the addressable replace never ties on `created_at` (NIP-RS clock skew);
+    ///     ordinary sends leave it `nil` and take the wall clock.
     /// - Returns: the queued entry.
     @discardableResult
     func enqueue(
@@ -38,14 +42,15 @@ public extension BuzzEventStore {
         in channel: String,
         tags: [[String]] = [],
         with signer: any EventSigner,
-        maxContentBytes: Int = OutboxPolicy.maxContentBytes
+        maxContentBytes: Int = OutboxPolicy.maxContentBytes,
+        createdAt: Date? = nil
     ) async throws -> OutboxEntry {
         let byteCount = content.utf8.count
         guard byteCount <= maxContentBytes else {
             throw OutboxError.contentTooLarge(bytes: byteCount, limit: maxContentBytes)
         }
 
-        let event = try await signer.sign(kind: kind, content: content, tags: tags, createdAt: clock())
+        let event = try await signer.sign(kind: kind, content: content, tags: tags, createdAt: createdAt ?? clock())
         try await writer.write { db in
             try Self.insertOutboxRow(event, channel: channel, state: .pending, into: db)
         }

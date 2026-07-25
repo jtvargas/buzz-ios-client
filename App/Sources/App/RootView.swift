@@ -12,7 +12,11 @@ struct RootView: View {
             IdentityGateView()
         case .running:
             if let engine = environment.engine {
-                ChannelListView(store: environment.store, engine: engine)
+                ChannelListView(
+                    store: environment.store,
+                    engine: engine,
+                    selfPubkey: environment.selfPubkeyHex
+                )
             } else {
                 ProgressView()
             }

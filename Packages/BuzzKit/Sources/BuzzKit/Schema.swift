@@ -65,6 +65,36 @@ enum Schema {
             try db.execute(sql: "ALTER TABLE outbox ADD COLUMN kind INTEGER NOT NULL DEFAULT 9")
         }
 
+        // NIP-RS cross-device read state. A *local* table, not a projection: its rows
+        // are the decrypted plaintext of `kind:30078` blobs, and decryption needs the
+        // identity's secret — which the pure ``BuzzProjector`` (a function of the event
+        // alone, keyless, shared by live ingest and the version-bump replay) does not
+        // have. A projection rebuild would only ever reproduce it empty, so it lives
+        // with the other precious tables (``outbox``/``channel_sync``/``meta``) that a
+        // rebuild must not erase. The engine decrypts an incoming blob and applies it
+        // here; the relay re-delivers the latest replaceable blob per slot on every
+        // reconnect, so this table is also self-healing from a fresh install.
+        //
+        // Keyed by `(author, slot)` — the addressable coordinate of one device's blob —
+        // collapsed replaceable per slot (newest `(created_at, event_id)` wins). The
+        // effective read frontier of a context is `MAX(read_at)` across every slot.
+        migrator.registerMigration("v3.read-state") { db in
+            try db.execute(sql: """
+            CREATE TABLE read_state (
+                author            TEXT NOT NULL,
+                slot              TEXT NOT NULL,
+                context_id        TEXT NOT NULL,
+                read_at           INTEGER NOT NULL,
+                source_created_at INTEGER NOT NULL,
+                source_event_id   TEXT NOT NULL,
+                PRIMARY KEY (author, slot, context_id)
+            )
+            """)
+            // The channel-list unread join reads MAX(read_at) grouped by context id,
+            // so index the context lookup.
+            try db.execute(sql: "CREATE INDEX read_state_context ON read_state(context_id)")
+        }
+
         return migrator
     }
 

@@ -29,6 +29,12 @@ public struct ChannelListRow: Sendable, Hashable, Identifiable {
     /// one is known, otherwise the raw pubkey. Truncation and npub formatting are
     /// the UI's call, exactly as with the snippet.
     public let lastMessageAuthor: String?
+    /// How many top-level messages by *other* people are newer than this channel's
+    /// read frontier — the NIP-RS unread count. Own posts never count, thread replies
+    /// never count (they carry their own thread badges), and a channel no blob has
+    /// ever marked read counts every such message (unknown state is unread, the
+    /// conservative NIP-RS default). Zero when caught up.
+    public let unreadCount: Int
 
     public init(
         id: String,
@@ -38,7 +44,8 @@ public struct ChannelListRow: Sendable, Hashable, Identifiable {
         isPrivate: Bool,
         lastMessageAt: Int64?,
         lastMessageSnippet: String?,
-        lastMessageAuthor: String?
+        lastMessageAuthor: String?,
+        unreadCount: Int = 0
     ) {
         self.id = id
         self.name = name
@@ -48,7 +55,11 @@ public struct ChannelListRow: Sendable, Hashable, Identifiable {
         self.lastMessageAt = lastMessageAt
         self.lastMessageSnippet = lastMessageSnippet
         self.lastMessageAuthor = lastMessageAuthor
+        self.unreadCount = unreadCount
     }
+
+    /// Whether the channel carries any unread messages — the bold-name / count-pill gate.
+    public var hasUnread: Bool { unreadCount > 0 }
 
     public var hasMessages: Bool { lastMessageAt != nil }
 
@@ -58,15 +69,21 @@ public struct ChannelListRow: Sendable, Hashable, Identifiable {
 }
 
 public extension BuzzEventStore {
-    /// Every channel, each carrying a preview of its newest visible message,
-    /// most-recently-active first and channels with no messages last.
+    /// Every channel, each carrying a preview of its newest visible message and its
+    /// unread count, most-recently-active first and channels with no messages last.
     ///
     /// Synchronous and `nonisolated` so it runs on the concurrent reader off the
     /// actor, and so `ValueObservation.tracking` can watch the `channel`, `event`,
-    /// `outbox`, `deletion`, `event_owner`, and `profile` tables it reads — the same
-    /// discipline that lets ``timeline(channel:before:limit:)`` back a live view.
-    nonisolated func channelList() throws -> [ChannelListRow] {
-        try reader.read { db in try Self.fetchChannelList(db) }
+    /// `outbox`, `deletion`, `event_owner`, `profile`, `thread`, and `read_state`
+    /// tables it reads — the same discipline that lets
+    /// ``timeline(channel:before:limit:)`` back a live view.
+    ///
+    /// - Parameter selfPubkey: the local identity's hex pubkey, so a channel's own
+    ///   posts are excluded from its unread count. `nil` degrades to counting every
+    ///   author (the keyless fallback), the same posture the timeline's own-row
+    ///   affordances take.
+    nonisolated func channelList(selfPubkey: String? = nil) throws -> [ChannelListRow] {
+        try reader.read { db in try Self.fetchChannelList(db, selfPubkey: selfPubkey) }
     }
 }
 
@@ -82,8 +99,17 @@ extension BuzzEventStore {
     /// wins; a pending send outranks the log until its own copy is ingested, at
     /// which point the outbox row is excluded and the log row takes its place with
     /// no double count.
-    static func fetchChannelList(_ db: Database) throws -> [ChannelListRow] {
-        let sql = """
+    static func fetchChannelList(_ db: Database, selfPubkey: String? = nil) throws -> [ChannelListRow] {
+        let rows = try Row.fetchAll(db, sql: channelListSQL, arguments: [
+            "kind": EventKind.channelMessage.rawValue,
+            "selfPubkey": selfPubkey,
+        ])
+        return rows.map(makeChannelListRow)
+    }
+
+    /// The channel-list query. A stored constant so the deletion-predicate
+    /// interpolation is resolved once, and so the fetch stays a short function over it.
+    static let channelListSQL = """
         WITH visible AS (
             SELECT e.h          AS channel_id,
                    e.id         AS msg_id,
@@ -107,16 +133,42 @@ extension BuzzEventStore {
             -- Messages only (`o.kind = :kind`), so a queued reaction never becomes a
             -- channel's "last message"; `:kind` is the channel-message kind bound below.
             WHERE NOT EXISTS (SELECT 1 FROM event WHERE event.id = o.event_id) AND o.kind = :kind
+        ),
+        -- The effective read frontier per channel: MAX(read_at) across every device's
+        -- slot (the grow-only NIP-RS merge), so one device's stale slot can never lower
+        -- another's frontier.
+        frontier AS (
+            SELECT context_id AS channel_id, MAX(read_at) AS read_at
+            FROM read_state
+            GROUP BY context_id
+        ),
+        -- Unread = top-level channel messages by OTHERS, newer than the frontier, not
+        -- deleted. Thread replies (a `thread` row) are excluded — they carry their own
+        -- badges. A channel with no frontier falls to COALESCE(…,0), so every such
+        -- message counts (unknown read state is unread — the conservative NIP-RS default).
+        unread AS (
+            SELECT ue.h AS channel_id, COUNT(*) AS n
+            FROM event ue
+            LEFT JOIN event_owner ueo ON ueo.event_id = ue.id
+            LEFT JOIN frontier uf ON uf.channel_id = ue.h
+            WHERE ue.kind = :kind
+              AND ue.h IS NOT NULL
+              AND (:selfPubkey IS NULL OR ue.pubkey <> :selfPubkey)
+              AND ue.created_at > COALESCE(uf.read_at, 0)
+              AND NOT EXISTS (SELECT 1 FROM thread t WHERE t.event_id = ue.id)
+              AND NOT \(deletionApplies(target: "ue.id", author: "ue.pubkey", owner: "ueo.owner_pubkey"))
+            GROUP BY ue.h
         )
-        SELECT c.id           AS id,
-               c.name         AS name,
-               c.about        AS about,
-               c.picture      AS picture,
-               c.is_private   AS is_private,
-               n.created_at   AS last_message_at,
-               n.content      AS last_message_snippet,
-               n.pubkey       AS author_pubkey,
-               p.display_name AS author_name
+        SELECT c.id            AS id,
+               c.name          AS name,
+               c.about         AS about,
+               c.picture       AS picture,
+               c.is_private    AS is_private,
+               n.created_at    AS last_message_at,
+               n.content       AS last_message_snippet,
+               n.pubkey        AS author_pubkey,
+               p.display_name  AS author_name,
+               COALESCE(u.n, 0) AS unread_count
         FROM channel c
         LEFT JOIN visible n
                ON n.channel_id = c.id
@@ -126,15 +178,10 @@ extension BuzzEventStore {
                        AND (n2.created_at > n.created_at
                             OR (n2.created_at = n.created_at AND n2.msg_id > n.msg_id))
                   )
+        LEFT JOIN unread u ON u.channel_id = c.id
         LEFT JOIN profile p ON p.pubkey = n.pubkey
         ORDER BY last_message_at DESC NULLS LAST, c.name ASC, c.id ASC
         """
-
-        let rows = try Row.fetchAll(db, sql: sql, arguments: [
-            "kind": EventKind.channelMessage.rawValue,
-        ])
-        return rows.map(makeChannelListRow)
-    }
 
     private static func makeChannelListRow(_ row: Row) -> ChannelListRow {
         let authorPubkey: String? = row["author_pubkey"]
@@ -153,7 +200,8 @@ extension BuzzEventStore {
             isPrivate: row["is_private"] ?? false,
             lastMessageAt: row["last_message_at"],
             lastMessageSnippet: row["last_message_snippet"],
-            lastMessageAuthor: author
+            lastMessageAuthor: author,
+            unreadCount: row["unread_count"] ?? 0
         )
     }
 }
