@@ -72,6 +72,14 @@ public struct EventKind: RawRepresentable, Hashable, Sendable, ExpressibleByInte
     public static let presence: EventKind = 20001
     public static let typing: EventKind = 20002
 
+    // MARK: - Device pairing (NIP-AB, ephemeral)
+
+    /// The single event kind NIP-AB device pairing uses for every message —
+    /// `offer`, `sas-confirm`, `payload`, `complete`, `abort` — each NIP-44 v2
+    /// encrypted and addressed to a throwaway ephemeral pubkey. In the ephemeral
+    /// range, so relays route but never store it.
+    public static let devicePairing: EventKind = 24134
+
     // MARK: - Rich channel messaging
 
     public static let richMessage: EventKind = 40002

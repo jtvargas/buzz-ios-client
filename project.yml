@@ -43,6 +43,9 @@ targets:
         NSLocalNetworkUsageDescription: >-
           Hive connects to the Buzz relay you configure, which may be on your local
           or Tailscale network.
+        NSCameraUsageDescription: >-
+          Hive uses the camera to scan the pairing QR code shown on your desktop so
+          it can move your identity to this device.
     settings:
       base:
         CURRENT_PROJECT_VERSION: 1

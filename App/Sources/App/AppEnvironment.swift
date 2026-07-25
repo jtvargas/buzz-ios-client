@@ -94,6 +94,49 @@ final class AppEnvironment {
         }
     }
 
+    /// Creates a brand-new identity in-app: generates a fresh secp256k1 key,
+    /// commits it to the Keychain, and starts the engine against the given relay.
+    /// The generated key is handed straight to `signer.store` and never retained
+    /// here — the same custody discipline as the paste path.
+    func createIdentity(relayURLString: String) async -> IdentityGateError? {
+        guard RelayEndpoint.websocketURL(from: relayURLString) != nil else {
+            return .invalidRelayURL
+        }
+        let key: PrivateKey
+        do {
+            key = try PrivateKey()
+        } catch {
+            return .couldNotStart(String(describing: error))
+        }
+        do {
+            try signer.store(key)
+            RelayEndpoint.storedURLString = relayURLString
+            try await startEngine(relayURLString: relayURLString)
+            return nil
+        } catch {
+            return .couldNotStart(String(describing: error))
+        }
+    }
+
+    /// The application-specific sink a ``TargetPairingSession`` hands its decrypted
+    /// credential to. It commits the imported key to the Keychain and persists the
+    /// paired relay; the session sends `complete(true)` only if it succeeds.
+    func pairingImporter() -> PairingCredentialImporter {
+        PairingCredentialImporter(keyStore: signer)
+    }
+
+    /// Finishes a completed pairing by starting the engine against the relay the
+    /// importer just persisted. The key is already durably stored (that is what let
+    /// the session acknowledge), so this only brings the connection up.
+    func completePairing() async -> IdentityGateError? {
+        do {
+            try await startEngine(relayURLString: RelayEndpoint.storedURLString)
+            return nil
+        } catch {
+            return .couldNotStart(String(describing: error))
+        }
+    }
+
     /// Forwards a scene-phase change to the engine and drives the presence
     /// heartbeat, if an engine exists. A no-op before the engine is built (i.e. while
     /// the gate is up).
