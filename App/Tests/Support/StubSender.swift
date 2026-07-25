@@ -21,4 +21,8 @@ struct StubSender: MessageSending {
     func retry(_: String) async throws {
         throw StubError.unexpectedSend
     }
+
+    func discard(_: String) async throws {
+        throw StubError.unexpectedSend
+    }
 }

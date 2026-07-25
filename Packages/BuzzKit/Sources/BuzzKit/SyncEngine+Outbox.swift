@@ -44,6 +44,14 @@ extension SyncEngine {
         await drainOutbox()
     }
 
+    /// Drops a queued send without delivering it — the "delete" action on an own
+    /// pending or failed row. Best-effort: if the relay has already accepted a
+    /// `sending` row the log holds it and it renders sent, which is the honest
+    /// outcome; there is nothing left to unsend.
+    public func discard(_ eventID: String) async throws {
+        try await store.discard(eventID)
+    }
+
     /// Requests a drain, coalescing with any in-flight one. If a drain is already
     /// running, this records that another pass is wanted and returns; the running
     /// drain re-runs once more when it finishes. That single-drain-at-a-time

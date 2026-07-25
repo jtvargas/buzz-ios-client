@@ -137,6 +137,29 @@ struct TimelineThreadTests {
         #expect(row.content == "rejected")
     }
 
+    @Test("a queued reaction rides the outbox but never renders as a channel message")
+    func queuedReactionNotAMessage() async throws {
+        // Reactions take the same durable send path as messages, so a pending kind-7
+        // is an outbox row too — but the message unions must exclude it, or the
+        // channel would flash a bare emoji "message" until the relay's OK lands.
+        let database = TempDatabase()
+        defer { database.remove() }
+        let store = try database.open()
+        let fixture = try Fixture()
+        let metadata = try fixture.event(.groupMetadata, "", tags: [["d", "room-1"], ["name", "Room"]], at: 999)
+        let message = try fixture.message("real message", at: 1000)
+        let reaction = try fixture.event(.reaction, "👍", tags: [["e", message.id]], at: 1001)
+
+        _ = try await store.ingest(batch: [metadata, message], phase: .backfill)
+        try await store.enqueueForTest(reaction, channel: "room-1")
+
+        // The timeline shows the message, never the queued reaction.
+        #expect(try store.timeline(channel: "room-1").map(\.content) == ["real message"])
+        // Nor does the reaction become the channel's "last message".
+        let channel = try #require(try store.channelList().first { $0.id == "room-1" })
+        #expect(channel.lastMessageSnippet == "real message")
+    }
+
     @Test("a send parked on re-auth renders pending, never sent")
     func awaitingReauthRendersPending() async throws {
         let database = TempDatabase()

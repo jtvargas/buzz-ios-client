@@ -53,6 +53,18 @@ enum Schema {
             try createProjectionTables(db)
         }
 
+        // The outbox gains a denormalized `kind` so the timeline and channel-list
+        // unions can keep only queued *messages* (kind 9) and let queued reactions
+        // (kind 7) or their withdrawals (kind 5) flow through the same durable send
+        // path without masquerading as pending messages. Denormalized like
+        // `channel_id`/`root_id`/`parent_id` before it, so the union never decodes
+        // the payload JSON in SQL. Added by migration rather than folded into
+        // `v1.local` so an existing store gains the column without a resync; the
+        // `DEFAULT 9` backfills the messages that are all any prior row could be.
+        migrator.registerMigration("v2.outbox-kind") { db in
+            try db.execute(sql: "ALTER TABLE outbox ADD COLUMN kind INTEGER NOT NULL DEFAULT 9")
+        }
+
         return migrator
     }
 
