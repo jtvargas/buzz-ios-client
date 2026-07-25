@@ -11,9 +11,18 @@ struct ChannelRowView: View {
         return channel.id
     }
 
+    private var pictureURL: URL? {
+        guard let picture = channel.picture, !picture.isEmpty else { return nil }
+        return URL(string: picture)
+    }
+
+    private var monogramInitial: String {
+        displayName.first.map { String($0).uppercased() } ?? "#"
+    }
+
     var body: some View {
         HStack(spacing: 12) {
-            ChannelAvatar(pictureURL: channel.picture, seed: channel.id)
+            AvatarView(url: pictureURL, seed: channel.id, initial: monogramInitial)
 
             VStack(alignment: .leading, spacing: 3) {
                 HStack {
@@ -91,51 +100,5 @@ private struct UnreadBadge: View {
             .padding(.vertical, 2)
             .background(Capsule().fill(Color.accentColor))
             .accessibilityHidden(true)
-    }
-}
-
-/// The channel picture, falling back to a monogram tinted from the channel id so
-/// every channel has a stable, distinct avatar even without artwork.
-private struct ChannelAvatar: View {
-    let pictureURL: String?
-    let seed: String
-
-    private var url: URL? {
-        guard let pictureURL, !pictureURL.isEmpty else { return nil }
-        return URL(string: pictureURL)
-    }
-
-    var body: some View {
-        AsyncImage(url: url) { phase in
-            switch phase {
-            case let .success(image):
-                image.resizable().scaledToFill()
-            default:
-                monogram
-            }
-        }
-        .frame(width: 44, height: 44)
-        .clipShape(.circle)
-    }
-
-    private var monogram: some View {
-        Circle()
-            .fill(Color(hue: hue, saturation: 0.5, brightness: 0.8).gradient)
-            .overlay {
-                Text(initial)
-                    .font(.headline)
-                    .foregroundStyle(.white)
-            }
-    }
-
-    private var initial: String {
-        seed.first.map { String($0).uppercased() } ?? "#"
-    }
-
-    /// A stable hue from the channel id — a byte sum rather than `hashValue`, which
-    /// is randomised per launch and would flicker a channel's colour between runs.
-    private var hue: Double {
-        let sum = seed.utf8.reduce(0) { $0 &+ Int($1) }
-        return Double(sum % 360) / 360
     }
 }

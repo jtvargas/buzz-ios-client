@@ -58,10 +58,25 @@ public extension BuzzEventStore {
     /// computed without the local identity. Pass `nil` when it is unknown (the same
     /// keyless degradation presence uses) and no chip is highlighted.
     ///
+    /// # Optimistic own reactions
+    ///
+    /// The result also folds in the local identity's own reactions that are still in
+    /// the outbox — signed and queued, not yet acknowledged. This mirrors the way the
+    /// timeline unions pending message sends: a chip appears the instant a react is
+    /// enqueued, not a round trip later. It is also the fix for the relay's pre-fanout
+    /// reaction dedup — the relay dedups on `(target, actor, emoji)` and answers a
+    /// re-react `OK duplicate:`, so an own re-react produces no live kind-7 echo; a UI
+    /// that waited for one would show the tap doing nothing. Reading the queued row
+    /// instead makes own reactions immediate and echo-independent. An own pending
+    /// withdrawal (a queued kind-5) is honoured too, so a toggle-off clears the chip at
+    /// once. A queued reaction is dropped from the optimistic layer the moment its own
+    /// copy lands in the log (the same `NOT EXISTS` guard the timeline union uses), so
+    /// confirmation never double-counts.
+    ///
     /// Synchronous and `nonisolated` so it runs on the concurrent reader off the
-    /// actor, and so `ValueObservation` can track the `reaction`, `deletion`, and
-    /// `event_owner` tables it reads — the discipline that lets the chips update
-    /// live alongside the timeline.
+    /// actor, and so `ValueObservation` can track the `reaction`, `deletion`,
+    /// `event_owner`, and `outbox` tables it reads — the discipline that lets the chips
+    /// update live alongside the timeline.
     nonisolated func reactions(
         for targetIDs: [String],
         selfPubkey: String?
@@ -130,6 +145,142 @@ extension BuzzEventStore {
             )
             result[target, default: []].append(group)
         }
+
+        // Layer optimistic own reactions from the outbox over the confirmed
+        // projection. No local identity means no own reactions to fold, the same
+        // keyless degradation the highlight takes.
+        if let selfPubkey {
+            try applyOptimisticLayer(db, to: &result, targetIDs: targetIDs, selfPubkey: selfPubkey)
+        }
         return result
+    }
+
+    /// Folds each target's queued own reactions and withdrawals over its confirmed
+    /// groups in place, dropping a target that ends with no surviving chip.
+    private static func applyOptimisticLayer(
+        _ db: Database,
+        to result: inout [String: [ReactionGroup]],
+        targetIDs: [String],
+        selfPubkey: String
+    ) throws {
+        let targets = Set(targetIDs)
+        let pending = try optimisticOwnReactions(db, targetIDs: targets, selfPubkey: selfPubkey)
+        for target in targets {
+            let merged = mergeOptimistic(
+                into: result[target] ?? [],
+                additions: pending.additions[target] ?? [],
+                withdrawnReactionIDs: pending.withdrawnReactionIDs
+            )
+            if merged.isEmpty {
+                result.removeValue(forKey: target)
+            } else {
+                result[target] = merged
+            }
+        }
+    }
+
+    // MARK: - Optimistic own reactions (outbox)
+
+    /// One queued own reaction not yet in the log: which message it targets and the
+    /// emoji it carries, keyed for the merge by its own (pending) event id.
+    private struct PendingReaction {
+        let eventID: String
+        let emoji: String
+    }
+
+    /// The optimistic own-reaction layer read off the outbox: pending additions per
+    /// target, and the set of reaction ids a pending own withdrawal (queued kind-5)
+    /// names. Only queued sends the log does not yet hold are read — the same
+    /// `NOT EXISTS` guard the timeline union uses — so a confirmed reaction is counted
+    /// once, by the projection, never twice.
+    private static func optimisticOwnReactions(
+        _ db: Database,
+        targetIDs: Set<String>,
+        selfPubkey: String
+    ) throws -> (additions: [String: [PendingReaction]], withdrawnReactionIDs: Set<String>) {
+        let rows = try Row.fetchAll(
+            db,
+            sql: """
+            SELECT payload FROM outbox
+            WHERE state <> :failed
+              AND pubkey = :self
+              AND kind IN (:reaction, :deletion)
+              AND NOT EXISTS (SELECT 1 FROM event WHERE event.id = outbox.event_id)
+            ORDER BY rowid ASC
+            """,
+            arguments: [
+                "failed": OutboxState.failed.rawValue,
+                "self": selfPubkey,
+                "reaction": EventKind.reaction.rawValue,
+                "deletion": EventKind.deletion.rawValue,
+            ]
+        )
+
+        var additions: [String: [PendingReaction]] = [:]
+        var withdrawnReactionIDs: Set<String> = []
+        for row in rows {
+            let payload: String = row["payload"]
+            guard let event = try? JSONDecoder().decode(NostrEvent.self, from: Data(payload.utf8)),
+                  let target = event.referencedEventIDs.last
+            else { continue }
+            if event.kind == .deletion {
+                // A queued withdrawal names the reaction it retracts in its `e` tag.
+                withdrawnReactionIDs.insert(target)
+            } else if event.kind == .reaction, targetIDs.contains(target) {
+                let emoji = event.content.isEmpty || event.content == "+" ? "❤️" : event.content
+                additions[target, default: []].append(PendingReaction(eventID: event.id, emoji: emoji))
+            }
+        }
+        return (additions, withdrawnReactionIDs)
+    }
+
+    /// Folds the optimistic own-reaction layer into one target's confirmed groups.
+    ///
+    /// Withdrawals apply first: a group whose own reaction a pending kind-5 names loses
+    /// that reactor (count −1, highlight cleared), and an emptied group drops out.
+    /// Additions apply second and only when the identity is not already a surviving
+    /// reactor for that emoji — a re-react on a chip already highlighted is a no-op, so
+    /// the count means "distinct reactors" exactly as the projection query does. A
+    /// pending reaction its own pending withdrawal also names nets to nothing.
+    private static func mergeOptimistic(
+        into confirmed: [ReactionGroup],
+        additions: [PendingReaction],
+        withdrawnReactionIDs: Set<String>
+    ) -> [ReactionGroup] {
+        var groups = confirmed.map { group -> ReactionGroup in
+            guard let selfID = group.selfReactionID, withdrawnReactionIDs.contains(selfID) else {
+                return group
+            }
+            return ReactionGroup(
+                emoji: group.emoji,
+                count: group.count - 1,
+                reactedBySelf: false,
+                selfReactionID: nil
+            )
+        }
+        .filter { $0.count > 0 }
+
+        for pending in additions where !withdrawnReactionIDs.contains(pending.eventID) {
+            if let index = groups.firstIndex(where: { $0.emoji == pending.emoji }) {
+                let group = groups[index]
+                guard !group.reactedBySelf else { continue }
+                groups[index] = ReactionGroup(
+                    emoji: group.emoji,
+                    count: group.count + 1,
+                    reactedBySelf: true,
+                    selfReactionID: pending.eventID
+                )
+            } else {
+                // A brand-new emoji sorts to the end — the newest chip — matching the
+                // projection query's oldest-first ordering.
+                groups.append(ReactionGroup(
+                    emoji: pending.emoji,
+                    count: 1,
+                    reactedBySelf: true,
+                    selfReactionID: pending.eventID
+                ))
+            }
+        }
+        return groups
     }
 }

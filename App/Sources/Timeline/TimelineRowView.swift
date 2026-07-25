@@ -30,25 +30,29 @@ struct TimelineRowView: View {
     var onOpenThread: (() -> Void)?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        HStack(alignment: .top, spacing: 10) {
+            avatar
             VStack(alignment: .leading, spacing: 4) {
-                header
-                content
-            }
-            .accessibilityElement(children: .combine)
+                VStack(alignment: .leading, spacing: 4) {
+                    header
+                    content
+                }
+                .accessibilityElement(children: .combine)
+                .accessibilityValue(accessibilityStatus)
 
-            if !row.isDeleted {
-                ReactionChipsView(
-                    groups: reactions,
-                    onTap: onToggleReaction,
-                    onReact: onReact
-                )
-            }
-            if row.hasThread, let onOpenThread {
-                RepliesButton(count: row.replyCount, action: onOpenThread)
-            }
-            if case let .failed(reason) = row.delivery {
-                RetryStrip(reason: reason) { onRetry(row.id) }
+                if !row.isDeleted {
+                    ReactionChipsView(
+                        groups: reactions,
+                        onTap: onToggleReaction,
+                        onReact: onReact
+                    )
+                }
+                if row.hasThread, let onOpenThread {
+                    RepliesButton(count: row.replyCount, action: onOpenThread)
+                }
+                if case let .failed(reason) = row.delivery {
+                    RetryStrip(reason: reason) { onRetry(row.id) }
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -63,9 +67,39 @@ struct TimelineRowView: View {
         }
     }
 
+    /// The author's avatar with a presence badge — the downsampled artwork (or a
+    /// monogram) and a green dot at its corner when the author is online. The badge
+    /// carries the presence signal VoiceOver reads through the row's accessibility
+    /// value, so the avatar itself stays decorative.
+    private var avatar: some View {
+        AvatarView(url: authorPictureURL, seed: row.pubkey, initial: authorInitial, size: 36)
+            .overlay(alignment: .bottomTrailing) {
+                if isAuthorOnline {
+                    Circle()
+                        .fill(Color.green)
+                        .frame(width: 11, height: 11)
+                        .overlay(Circle().strokeBorder(Color(.systemBackground), lineWidth: 2))
+                }
+            }
+    }
+
+    private var authorPictureURL: URL? {
+        guard let picture = row.authorPicture, !picture.isEmpty else { return nil }
+        return URL(string: picture)
+    }
+
+    private var authorInitial: String {
+        row.displayName.first.map { String($0).uppercased() } ?? "#"
+    }
+
+    /// The status VoiceOver announces after the message: presence, whether it was
+    /// edited, and its delivery state. Pure and testable via ``MessageAccessibility``.
+    private var accessibilityStatus: String {
+        MessageAccessibility.status(isOnline: isAuthorOnline, isEdited: row.isEdited, delivery: row.delivery)
+    }
+
     private var header: some View {
         HStack(spacing: 6) {
-            PresenceDot(isOnline: isAuthorOnline)
             Text(row.displayName)
                 .font(.subheadline.weight(.semibold))
                 .lineLimit(1)
@@ -89,6 +123,11 @@ struct TimelineRowView: View {
                 .font(.body)
                 .italic()
                 .foregroundStyle(.secondary)
+        } else if let rich = row.richContent, !rich.isEmpty {
+            // Kind-40002 rich content is CommonMark markdown: render it as laid-out
+            // blocks (headings, lists, code, quotes), falling back per-block to plain
+            // text. Absent on relays that do not implement it — the plain branch below.
+            MessageContentView(markdown: rich)
         } else {
             Text(Self.rendered(row.content))
                 .font(.body)
@@ -128,16 +167,13 @@ struct TimelineRowView: View {
         }
     }
 
-    /// Renders content as inline markdown, falling back to the raw text when it is
-    /// not valid markdown. `.inlineOnlyPreservingWhitespace` keeps newlines and
-    /// avoids block constructs the slice does not lay out; kind-40002 rich content
-    /// is step 6.
+    /// Renders a plain (kind-9) message's content as inline markdown — bold, italic,
+    /// code spans, and *safe* links — preserving newlines and falling back to the raw
+    /// text when it is not valid markdown. Shares ``MessageContent/inline(_:)`` with the
+    /// rich renderer, so link sanitisation (only http/https/mailto stay tappable)
+    /// applies to every message, not only kind-40002 rich content.
     static func rendered(_ content: String) -> AttributedString {
-        let options = AttributedString.MarkdownParsingOptions(
-            interpretedSyntax: .inlineOnlyPreservingWhitespace
-        )
-        return (try? AttributedString(markdown: content, options: options))
-            ?? AttributedString(content)
+        MessageContent.inline(content)
     }
 }
 

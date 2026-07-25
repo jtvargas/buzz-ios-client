@@ -35,6 +35,14 @@ extension SyncEngine {
         await ensureChannelSubscriptions(channels)
         guard isCurrent(generation) else { return }
 
+        // With the rosters discovered, pull the relay's current-presence snapshot in a
+        // detached task so the who's-online roster fills at launch — but never awaited
+        // here. The snapshot is a one-shot query that can go unanswered (a relay that
+        // does not synthesize presence), and awaiting it would stall the reconcile and
+        // drain — the timeline's critical path — behind an enhancement. The generation
+        // guard inside abandons it if a reconnect supersedes this socket.
+        Task { [weak self] in await self?.requestPresenceSnapshot(generation: generation) }
+
         // Sorted so the reconcile order — and therefore the scripted HTTP request
         // order in tests — is deterministic.
         for channel in channels.sorted() {
@@ -81,6 +89,34 @@ extension SyncEngine {
     /// discovery response.
     private func channelIDs(inMetadata events: [NostrEvent]) -> Set<String> {
         Set(events.compactMap { $0.kind == .groupMetadata ? $0.addressableIdentifier : nil })
+    }
+
+    // MARK: - Cold-start presence snapshot
+
+    /// Fetches the relay's current-presence snapshot: a one-shot REQ naming every
+    /// known member as an author. The relay answers such a REQ — one whose filters all
+    /// target `kind:20001` with a non-empty `authors` list — with synthesized
+    /// kind-20001 events read from its live presence store (`bridge.rs`
+    /// `synthesize_presence`), each relay-signed and carrying its subject in a `p` tag.
+    /// This gives an instant who's-online roster at launch instead of waiting up to a
+    /// heartbeat interval (60 s) for the first live 20001.
+    ///
+    /// The events flow through the store's verification choke point like any batch: they
+    /// are ephemeral, so they divert into ``IngestResult/ephemeral`` and reach the
+    /// presence store, which keys each by its `p`-tag subject rather than the relay
+    /// author. Best-effort throughout — no discovered members, a relay that does not
+    /// synthesize, or a superseded generation all simply leave the roster to fill from
+    /// live heartbeats, exactly as before.
+    func requestPresenceSnapshot(generation: Int) async {
+        let authors = (try? await store.allMemberPubkeys()) ?? []
+        guard !authors.isEmpty else { return }
+        let filter = Filter(authors: Array(authors), kinds: [.presence])
+        let events = (try? await subscriptions.query([filter])) ?? []
+        guard isCurrent(generation) else { return }
+        guard let result = try? await store.ingest(batch: events, phase: .backfill),
+              !result.ephemeral.isEmpty
+        else { return }
+        await presence.apply(result.ephemeral)
     }
 
     // MARK: - Reconcile

@@ -24,6 +24,7 @@ targets:
     platform: iOS
     sources:
       - App/Sources
+      - App/Resources
     dependencies:
       - package: NostrCore
       - package: BuzzKit
@@ -32,7 +33,10 @@ targets:
       path: App/Info.plist
       properties:
         CFBundleDisplayName: Hive
-        UILaunchScreen: {}
+        # A branded launch background (honey-tinted, light/dark) so the first frame is
+        # not a bare white/black flash. The colour asset lives in the app's catalog.
+        UILaunchScreen:
+          UIColorName: LaunchBackground
         # The relay is owner-configured and may be a plaintext `ws://` endpoint on
         # a LAN or Tailscale address (the Pi in the slice's live run), which ATS
         # blocks by default. This is a self-hosted developer client, not an App
@@ -51,6 +55,10 @@ targets:
         CURRENT_PROJECT_VERSION: 1
         MARKETING_VERSION: 0.1.0
         SWIFT_STRICT_CONCURRENCY: complete
+        # The app icon and the global accent (a honey amber that tints buttons,
+        # reaction chips, and the unread pill) live in App/Resources/Assets.xcassets.
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
   HiveTests:
     type: bundle.unit-test
     platform: iOS

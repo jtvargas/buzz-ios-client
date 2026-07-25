@@ -30,6 +30,9 @@
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Hive connects to the Buzz relay you configure, which may be on your local or Tailscale network.</string>
 	<key>UILaunchScreen</key>
-	<dict/>
+	<dict>
+		<key>UIColorName</key>
+		<string>LaunchBackground</string>
+	</dict>
 </dict>
 </plist>
