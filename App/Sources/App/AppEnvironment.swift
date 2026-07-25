@@ -137,13 +137,24 @@ final class AppEnvironment {
         }
     }
 
-    /// Signs the current identity out: stops the engine, deletes the key from the
-    /// Keychain, and returns to onboarding.
+    /// Signs the current identity out: removes the key from the Keychain, stops the
+    /// engine, and returns to onboarding.
+    ///
+    /// The key deletion is verified *before* anything is torn down. If the key could
+    /// not be removed (a Keychain failure), the running session is left intact and
+    /// ``SignOutResult/keyNotCleared`` is returned — a sign-out never reports success
+    /// while the `nsec` is still recoverable on this device. Deleting the key while
+    /// the engine is briefly still live is safe: the signer loads fresh per operation,
+    /// and the engine is stopped immediately after.
     ///
     /// The store is intentionally **not** wiped here. The recorded store owner is
     /// left in place so the next login decides: a same-key re-login keeps the
     /// history, and a different key logging in wipes it in ``startEngine(relayURLString:)``.
-    func signOut() async {
+    @discardableResult
+    func signOut() async -> SignOutResult {
+        guard deleteAndVerifyKey(signer) == .signedOut else {
+            return .keyNotCleared // still signed in; nothing torn down
+        }
         engineStateTask?.cancel()
         engineStateTask = nil
         if let engine {
@@ -151,10 +162,10 @@ final class AppEnvironment {
         }
         heartbeat = nil
         engine = nil
-        try? signer.delete()
         selfPubkeyHex = nil
         engineState = .stopped
         phase = .needsIdentity
+        return .signedOut
     }
 
     /// Loads the stored secret key for a gated backup/reveal, or `nil` if none is

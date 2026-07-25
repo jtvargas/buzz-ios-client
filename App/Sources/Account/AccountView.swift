@@ -10,6 +10,7 @@ struct AccountView: View {
 
     @State private var model: ProfileModel?
     @State private var showSignOutConfirm = false
+    @State private var signOutFailed = false
     @State private var copiedNpub = false
 
     private let store: BuzzEventStore
@@ -117,8 +118,13 @@ struct AccountView: View {
             ) {
                 Button("Sign Out", role: .destructive) {
                     Task {
-                        dismiss()
-                        await environment.signOut()
+                        // Only leave once the key is confirmed removed; a failed
+                        // delete keeps us here and surfaces the error.
+                        if await environment.signOut() == .signedOut {
+                            dismiss()
+                        } else {
+                            signOutFailed = true
+                        }
                     }
                 }
                 Button("Cancel", role: .cancel) {}
@@ -127,6 +133,12 @@ struct AccountView: View {
                     "You'll need your key or a fresh pairing to sign back in. Your messages stay on this "
                         + "device unless a different identity signs in."
                 )
+            }
+
+            if signOutFailed {
+                Text("Couldn't remove your key from this device. You're still signed in — please try again.")
+                    .font(.footnote)
+                    .foregroundStyle(.red)
             }
         }
     }
