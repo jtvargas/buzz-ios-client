@@ -19,6 +19,9 @@ protocol MessageSending: Sendable {
     ) async throws -> OutboxEntry
 
     func retry(_ eventID: String) async throws
+
+    /// Drops an own queued send — the "delete" action on a pending or failed row.
+    func discard(_ eventID: String) async throws
 }
 
 extension SyncEngine: MessageSending {}

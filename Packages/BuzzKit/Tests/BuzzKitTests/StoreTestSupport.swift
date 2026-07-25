@@ -170,12 +170,12 @@ extension BuzzEventStore {
                 sql: """
                 INSERT INTO outbox
                     (event_id, channel_id, pubkey, content, created_at,
-                     payload, state, attempts, last_error, root_id, parent_id, tags)
-                VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)
+                     payload, state, attempts, last_error, root_id, parent_id, tags, kind)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)
                 """,
                 arguments: [
                     event.id, channel, event.pubkey, event.content, event.createdAt,
-                    payload, state, lastError, rootID, parentID, tagsJSON,
+                    payload, state, lastError, rootID, parentID, tagsJSON, event.kind.rawValue,
                 ]
             )
         }

@@ -104,7 +104,9 @@ extension BuzzEventStore {
                    o.content    AS content,
                    o.pubkey     AS pubkey
             FROM outbox o
-            WHERE NOT EXISTS (SELECT 1 FROM event WHERE event.id = o.event_id)
+            -- Messages only (`o.kind = :kind`), so a queued reaction never becomes a
+            -- channel's "last message"; `:kind` is the channel-message kind bound below.
+            WHERE NOT EXISTS (SELECT 1 FROM event WHERE event.id = o.event_id) AND o.kind = :kind
         )
         SELECT c.id           AS id,
                c.name         AS name,

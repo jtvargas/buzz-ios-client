@@ -359,6 +359,10 @@ extension BuzzEventStore {
         FROM outbox o
         LEFT JOIN profile p ON p.pubkey = o.pubkey
         WHERE NOT EXISTS (SELECT 1 FROM event WHERE event.id = o.event_id)
+          -- Messages only: a queued reaction or withdrawal rides the same durable
+          -- outbox but must never render as a pending message. `:kind` is the
+          -- channel-message kind both timeline callers already bind.
+          AND o.kind = :kind
           AND (\(predicate))
         """
     }

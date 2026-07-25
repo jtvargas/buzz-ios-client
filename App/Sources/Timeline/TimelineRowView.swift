@@ -1,24 +1,48 @@
 import BuzzKit
 import SwiftUI
+import UIKit
 
 /// One timeline message: author, relative time, content (markdown with a plain
-/// fallback, or a "message deleted" placeholder), and the delivery treatment —
-/// `.pending` dimmed, `.failed` carrying a tap-to-retry strip, `.sent` plain.
+/// fallback, or a "message deleted" placeholder), reaction chips, a "N replies"
+/// affordance, and the delivery treatment — `.pending` dimmed, `.failed` carrying a
+/// tap-to-retry strip, `.sent` plain.
 ///
-/// A reply is rendered inline for the slice with a subtle "reply" affordance;
-/// dedicated thread views are step 3. The timeline query only surfaces replies
-/// here when their author broadcast them, so this never buries a threaded
-/// conversation.
+/// A long-press menu offers a quick-reaction palette and Copy, plus Retry/Delete on
+/// an own pending or failed row. The same row renders in the channel timeline and
+/// inside a thread; `onOpenThread` is supplied only in the channel, where a threaded
+/// message can be opened, and omitted inside the thread it already shows.
 struct TimelineRowView: View {
     let row: TimelineRow
     /// Whether this message's author is present in the workspace (S-5 presence).
     var isAuthorOnline: Bool = false
+    /// The surviving reaction groups for this row (S-2), own reaction highlighted.
+    var reactions: [ReactionGroup] = []
+    /// Whether this is the local identity's own send, gating Delete/Retry in the menu.
+    var isOwn: Bool = false
     let onRetry: (String) -> Void
+    /// Send a fresh reaction with this emoji.
+    var onReact: (String) -> Void = { _ in }
+    /// Toggle an existing chip (add, or withdraw an own reaction).
+    var onToggleReaction: (ReactionGroup) -> Void = { _ in }
+    /// Discard this own pending/failed row.
+    var onDelete: (String) -> Void = { _ in }
+    /// Open this message's thread; absent when already inside a thread.
+    var onOpenThread: (() -> Void)?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            header
-            content
+            VStack(alignment: .leading, spacing: 4) {
+                header
+                content
+            }
+            .accessibilityElement(children: .combine)
+
+            if !reactions.isEmpty {
+                ReactionChipsView(groups: reactions, onTap: onToggleReaction)
+            }
+            if row.hasThread, let onOpenThread {
+                RepliesButton(count: row.replyCount, action: onOpenThread)
+            }
             if case let .failed(reason) = row.delivery {
                 RetryStrip(reason: reason) { onRetry(row.id) }
             }
@@ -27,7 +51,8 @@ struct TimelineRowView: View {
         .opacity(row.delivery == .pending ? 0.5 : 1)
         .animation(.default, value: row.delivery)
         .animation(.default, value: isAuthorOnline)
-        .accessibilityElement(children: .combine)
+        .contentShape(.rect)
+        .contextMenu { menuItems }
     }
 
     private var header: some View {
@@ -63,6 +88,38 @@ struct TimelineRowView: View {
         }
     }
 
+    /// The long-press menu: a quick-reaction palette and Copy on any live message,
+    /// plus Retry (on a failed send) and Delete on an own pending/failed row.
+    @ViewBuilder
+    private var menuItems: some View {
+        if !row.isDeleted {
+            ControlGroup {
+                ForEach(ReactionPalette.common, id: \.self) { emoji in
+                    Button(emoji) { onReact(emoji) }
+                }
+            }
+            Button {
+                UIPasteboard.general.string = row.content
+            } label: {
+                Label("Copy", systemImage: "doc.on.doc")
+            }
+        }
+        if isOwn, row.delivery != .sent {
+            if case .failed = row.delivery {
+                Button {
+                    onRetry(row.id)
+                } label: {
+                    Label("Retry", systemImage: "arrow.clockwise")
+                }
+            }
+            Button(role: .destructive) {
+                onDelete(row.id)
+            } label: {
+                Label("Delete", systemImage: "trash")
+            }
+        }
+    }
+
     /// Renders content as inline markdown, falling back to the raw text when it is
     /// not valid markdown. `.inlineOnlyPreservingWhitespace` keeps newlines and
     /// avoids block constructs the slice does not lay out; kind-40002 rich content
@@ -73,6 +130,25 @@ struct TimelineRowView: View {
         )
         return (try? AttributedString(markdown: content, options: options))
             ?? AttributedString(content)
+    }
+}
+
+/// The "N replies" affordance under a message that has a thread.
+private struct RepliesButton: View {
+    let count: Int
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                Image(systemName: "bubble.left.and.bubble.right")
+                Text(count == 1 ? "1 reply" : "\(count) replies")
+            }
+            .font(.caption.weight(.medium))
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.tint)
+        .accessibilityHint("Double tap to open the thread")
     }
 }
 

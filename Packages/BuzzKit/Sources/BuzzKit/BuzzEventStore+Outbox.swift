@@ -222,8 +222,8 @@ public extension BuzzEventStore {
             sql: """
             INSERT INTO outbox
                 (event_id, channel_id, pubkey, content, created_at, payload,
-                 state, attempts, root_id, parent_id, tags)
-            VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
+                 state, attempts, root_id, parent_id, tags, kind)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)
             ON CONFLICT(event_id) DO NOTHING
             """,
             arguments: [
@@ -237,6 +237,10 @@ public extension BuzzEventStore {
                 reference.rootID,
                 reference.parentID,
                 try Self.json(event.tags),
+                // Denormalized so the message unions can exclude a queued reaction or
+                // withdrawal without decoding `payload`; the drain still sends every
+                // kind, so a reaction is delivered durably like any other send.
+                event.kind.rawValue,
             ]
         )
     }

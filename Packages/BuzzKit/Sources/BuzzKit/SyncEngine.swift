@@ -138,6 +138,12 @@ public actor SyncEngine {
     /// The multiplexed live subscription's id, held so the engine can identify its
     /// frames if it ever needs to.
     var liveSubscription: SubscriptionID?
+    /// Per-channel typing subscriptions, keyed by channel id. Typing (kind 20002) is
+    /// fanned out only to a subscription whose filter carries the matching `#h`, so
+    /// the global content filter never sees it; an open channel registers one of
+    /// these and closes it when the channel leaves the screen. One entry per channel
+    /// keeps ``openChannelTyping(_:)`` idempotent.
+    var channelTypingSubscriptions: [String: SubscriptionID] = [:]
 
     // MARK: - Tasks
 
@@ -256,6 +262,10 @@ public actor SyncEngine {
         await subscriptions.shutdown()
         await connection.stop()
         channelStates.removeAll()
+        // `shutdown()` dropped every registered subscription; forget the per-channel
+        // typing ids so a later reopen re-registers cleanly rather than believing a
+        // channel is still subscribed.
+        channelTypingSubscriptions.removeAll()
         state = .stopped
     }
 

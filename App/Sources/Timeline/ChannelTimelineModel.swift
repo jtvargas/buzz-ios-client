@@ -20,6 +20,10 @@ final class ChannelTimelineModel {
     /// The loaded messages, ascending by `(createdAt, id)` — the total order the
     /// keyset query pages on, so "newest" means the same thing here and in the DB.
     private(set) var rows: [TimelineRow] = []
+    /// Surviving reaction groups for each loaded row, keyed by message id. Re-read
+    /// on the same observation as the rows, so a react, a withdrawal, or a peer's
+    /// reaction updates the chips live without a second pipeline.
+    private(set) var reactionGroups: [String: [ReactionGroup]] = [:]
     private(set) var hasLoaded = false
     /// Whether an older page may still exist before the oldest loaded row.
     private(set) var hasMoreOlder = true
@@ -39,7 +43,15 @@ final class ChannelTimelineModel {
     private let store: BuzzEventStore
     private let sender: any MessageSending
     private let typing: any EphemeralPublishing
+    /// Opens/closes this channel's typing subscription for the lifetime of the
+    /// observation, so a visible channel actually receives typing. `nil` in tests
+    /// that do not exercise the subscription.
+    private let typingSubscription: (any ChannelTypingControlling)?
     private let pageSize: Int
+    /// The local identity's hex pubkey, for own-reaction highlighting and the
+    /// delete affordance on own pending/failed rows. `nil` degrades to no highlight
+    /// and no delete, the same keyless fallback presence uses.
+    let selfPubkey: String?
 
     /// The minimum gap between own-typing publishes while the composer has active
     /// input. Short enough that a peer's 8 s indicator never lapses mid-typing, long
@@ -62,6 +74,8 @@ final class ChannelTimelineModel {
         store: BuzzEventStore,
         sender: any MessageSending,
         typing: any EphemeralPublishing = NoopEphemeralPublisher(),
+        typingSubscription: (any ChannelTypingControlling)? = nil,
+        selfPubkey: String? = nil,
         pageSize: Int = 50,
         typingThrottle: Duration = .seconds(3),
         clock: @escaping @Sendable () -> ContinuousClock.Instant = { ContinuousClock.now }
@@ -70,6 +84,8 @@ final class ChannelTimelineModel {
         self.store = store
         self.sender = sender
         self.typing = typing
+        self.typingSubscription = typingSubscription
+        self.selfPubkey = selfPubkey
         self.pageSize = pageSize
         self.typingThrottle = typingThrottle
         self.clock = clock
@@ -79,14 +95,24 @@ final class ChannelTimelineModel {
 
     /// Consumes the observation until cancelled. Attach with SwiftUI's `.task`.
     nonisolated func run() async {
+        // The channel is now on screen: open its typing subscription so h-tagged
+        // typing is actually delivered, and close it when the observation ends —
+        // which is when the view's `.task` is cancelled on pop. A pushed thread keeps
+        // this task alive, so the one channel-level subscription covers the thread too.
+        try? await typingSubscription?.openChannelTyping(channel)
         do {
             for try await _ in DatabaseSignal.changes(in: store.reader) {
                 let head = fetch(before: nil)
-                await mergeHead(head)
+                let ids = await mergeHead(head)
+                // Same signal, same reader, off the main actor: re-read reactions for
+                // every loaded row so the chips track the timeline exactly.
+                let groups = fetchReactions(for: ids)
+                await applyReactions(groups)
             }
         } catch {
             // Ends on cancellation or teardown; last snapshot stays on screen.
         }
+        await typingSubscription?.closeChannelTyping(channel)
     }
 
     /// Reads one page off the main actor. `channel`, `store`, and `pageSize` are
@@ -95,7 +121,10 @@ final class ChannelTimelineModel {
         (try? store.timeline(channel: channel, before: cursor, limit: pageSize)) ?? []
     }
 
-    private func mergeHead(_ head: [TimelineRow]) {
+    /// Merges the newest page into the loaded set and returns every loaded row id,
+    /// so the caller can re-read reactions for exactly what is on screen.
+    @discardableResult
+    private func mergeHead(_ head: [TimelineRow]) -> [String] {
         let firstSnapshot = !hasLoaded
         for row in head { loaded[row.id] = row }
         rebuild()
@@ -106,6 +135,7 @@ final class ChannelTimelineModel {
         if firstSnapshot {
             hasMoreOlder = head.count >= pageSize
         }
+        return Array(loaded.keys)
     }
 
     // MARK: - Pagination
@@ -123,6 +153,9 @@ final class ChannelTimelineModel {
         for row in older { loaded[row.id] = row }
         rebuild()
         if older.count < pageSize { hasMoreOlder = false }
+        // Bring in the older rows' reactions immediately rather than waiting on the
+        // next commit signal, so a scroll back never shows chip-less history.
+        applyReactions(fetchReactions(for: Array(loaded.keys)))
     }
 
     private func rebuild() {
@@ -203,5 +236,71 @@ final class ChannelTimelineModel {
         case .invalidEvent, .notQueued, .encodingFailed:
             "Couldn't send that message."
         }
+    }
+}
+
+// MARK: - Reactions & row actions
+
+extension ChannelTimelineModel {
+    /// The reaction groups to render under a row, empty when it has none.
+    func reactions(for id: String) -> [ReactionGroup] { reactionGroups[id] ?? [] }
+
+    /// Whether a row is the local identity's own send — the gate on the delete
+    /// affordance for a pending or failed row.
+    func isOwn(_ row: TimelineRow) -> Bool {
+        guard let selfPubkey else { return false }
+        return row.pubkey == selfPubkey
+    }
+
+    /// Reads reactions for `ids` off the main actor. `store` and `selfPubkey` are
+    /// immutable, so this is safe to call from the `nonisolated` observation loop.
+    nonisolated func fetchReactions(for ids: [String]) -> [String: [ReactionGroup]] {
+        (try? store.reactions(for: ids, selfPubkey: selfPubkey)) ?? [:]
+    }
+
+    func applyReactions(_ groups: [String: [ReactionGroup]]) {
+        reactionGroups = groups
+    }
+
+    /// Sends a reaction on a message through the durable send path — an ordinary
+    /// persisted kind-7, not an ephemeral.
+    func react(_ emoji: String, on targetID: String) {
+        let channel = self.channel
+        let sender = self.sender
+        Task {
+            try? await sender.enqueue(
+                kind: .reaction,
+                content: emoji,
+                in: channel,
+                tags: OutboundTags.reaction(target: targetID),
+                maxContentBytes: OutboxPolicy.maxContentBytes
+            )
+        }
+    }
+
+    /// Toggles a chip: withdraws the local identity's own reaction (a kind-5 naming
+    /// it) when it is highlighted, otherwise adds that emoji.
+    func toggleReaction(_ group: ReactionGroup, on targetID: String) {
+        guard group.reactedBySelf, let reactionID = group.selfReactionID else {
+            react(group.emoji, on: targetID)
+            return
+        }
+        let channel = self.channel
+        let sender = self.sender
+        Task {
+            try? await sender.enqueue(
+                kind: .deletion,
+                content: "",
+                in: channel,
+                tags: OutboundTags.withdrawal(reactionID: reactionID),
+                maxContentBytes: OutboxPolicy.maxContentBytes
+            )
+        }
+    }
+
+    /// Drops an own pending or failed row — the context-menu "delete".
+    func delete(_ eventID: String) {
+        let sender = self.sender
+        Task { try? await sender.discard(eventID) }
     }
 }
