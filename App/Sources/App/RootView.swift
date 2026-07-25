@@ -9,7 +9,7 @@ struct RootView: View {
     var body: some View {
         switch environment.phase {
         case .needsIdentity:
-            IdentityGateView()
+            OnboardingView()
         case .running:
             if let engine = environment.engine {
                 ChannelListView(

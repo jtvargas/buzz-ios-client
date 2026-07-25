@@ -30,6 +30,30 @@ enum RelayEndpoint {
         return url
     }
 
+    /// Normalises a relay URL that may arrive as an HTTP(S) API base into the
+    /// `ws`/`wss` string the engine connects on, returning `nil` for anything that
+    /// is neither a WebSocket nor an HTTP URL with a host.
+    ///
+    /// The NIP-AB pairing payload the desktop sends carries its *HTTP* API base as
+    /// `relayUrl` (`relay_http_base_url` — `wss→https`, `ws→http`), not a socket
+    /// URL. The engine needs the socket URL, so this inverts that mapping
+    /// (`https→wss`, `http→ws`) while passing an already-`ws`/`wss` URL through
+    /// untouched (the paste path).
+    static func websocketURLString(fromAnyRelay raw: String) -> String? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard var components = URLComponents(string: trimmed),
+              let scheme = components.scheme?.lowercased()
+        else { return nil }
+        switch scheme {
+        case "ws", "wss": break
+        case "http": components.scheme = "ws"
+        case "https": components.scheme = "wss"
+        default: return nil
+        }
+        guard let candidate = components.string, websocketURL(from: candidate) != nil else { return nil }
+        return candidate
+    }
+
     /// The HTTP `/query` endpoint derived from a websocket URL: the scheme is
     /// swapped `ws → http` / `wss → https` and a `query` path component appended —
     /// the Phase-1 integration pattern (`RelayIntegrationTests.swift:20-22,108`).

@@ -94,6 +94,88 @@ final class AppEnvironment {
         }
     }
 
+    /// Creates a brand-new identity in-app: generates a fresh secp256k1 key,
+    /// commits it to the Keychain, and starts the engine against the given relay.
+    /// The generated key is handed straight to `signer.store` and never retained
+    /// here — the same custody discipline as the paste path.
+    func createIdentity(relayURLString: String) async -> IdentityGateError? {
+        guard RelayEndpoint.websocketURL(from: relayURLString) != nil else {
+            return .invalidRelayURL
+        }
+        let key: PrivateKey
+        do {
+            key = try PrivateKey()
+        } catch {
+            return .couldNotStart(String(describing: error))
+        }
+        do {
+            try signer.store(key)
+            RelayEndpoint.storedURLString = relayURLString
+            try await startEngine(relayURLString: relayURLString)
+            return nil
+        } catch {
+            return .couldNotStart(String(describing: error))
+        }
+    }
+
+    /// The application-specific sink a ``TargetPairingSession`` hands its decrypted
+    /// credential to. It commits the imported key to the Keychain and persists the
+    /// paired relay; the session sends `complete(true)` only if it succeeds.
+    func pairingImporter() -> PairingCredentialImporter {
+        PairingCredentialImporter(keyStore: signer)
+    }
+
+    /// Finishes a completed pairing by starting the engine against the relay the
+    /// importer just persisted. The key is already durably stored (that is what let
+    /// the session acknowledge), so this only brings the connection up.
+    func completePairing() async -> IdentityGateError? {
+        do {
+            try await startEngine(relayURLString: RelayEndpoint.storedURLString)
+            return nil
+        } catch {
+            return .couldNotStart(String(describing: error))
+        }
+    }
+
+    /// Signs the current identity out: removes the key from the Keychain, stops the
+    /// engine, and returns to onboarding.
+    ///
+    /// The key deletion is verified *before* anything is torn down. If the key could
+    /// not be removed (a Keychain failure), the running session is left intact and
+    /// ``SignOutResult/keyNotCleared`` is returned — a sign-out never reports success
+    /// while the `nsec` is still recoverable on this device. Deleting the key while
+    /// the engine is briefly still live is safe: the signer loads fresh per operation,
+    /// and the engine is stopped immediately after.
+    ///
+    /// The store is intentionally **not** wiped here. The recorded store owner is
+    /// left in place so the next login decides: a same-key re-login keeps the
+    /// history, and a different key logging in wipes it in ``startEngine(relayURLString:)``.
+    @discardableResult
+    func signOut() async -> SignOutResult {
+        guard deleteAndVerifyKey(signer) == .signedOut else {
+            return .keyNotCleared // still signed in; nothing torn down
+        }
+        engineStateTask?.cancel()
+        engineStateTask = nil
+        if let engine {
+            await engine.stop()
+        }
+        heartbeat = nil
+        engine = nil
+        selfPubkeyHex = nil
+        engineState = .stopped
+        phase = .needsIdentity
+        return .signedOut
+    }
+
+    /// Loads the stored secret key for a gated backup/reveal, or `nil` if none is
+    /// stored. The caller must gate this behind device authentication and never
+    /// persist or log the result — it is the one deliberate read-out boundary for
+    /// the secret.
+    func revealSecretKey() -> PrivateKey? {
+        try? signer.loadPrivateKey()
+    }
+
     /// Forwards a scene-phase change to the engine and drives the presence
     /// heartbeat, if an engine exists. A no-op before the engine is built (i.e. while
     /// the gate is up).
@@ -129,6 +211,17 @@ final class AppEnvironment {
             throw CompositionError.invalidRelayURL
         }
 
+        // Resolve the identity before the engine writes anything, so a store left by
+        // a *different* key (a sign-out then a new login) is wiped first; a same-key
+        // re-login keeps its history. A fresh install has no recorded owner.
+        let intendedPubkey = try? await signer.publicKey().hex
+        if let intendedPubkey {
+            if StoreOwnership.shouldWipe(forIncoming: intendedPubkey) {
+                try await store.wipe()
+            }
+            StoreOwnership.ownerPubkeyHex = intendedPubkey
+        }
+
         let connection = RelayConnection(url: websocketURL, signer: signer)
         let subscriptions = SubscriptionManager(connection: connection, signer: signer)
         let presence = PresenceStore()
@@ -150,9 +243,9 @@ final class AppEnvironment {
 
         observeEngineState(of: engine)
         try await engine.start()
-        // Resolve the identity for presence keying and own-typing exclusion. The
-        // signer read can fail benignly; presence simply degrades to keyless.
-        selfPubkeyHex = try? await signer.publicKey().hex
+        // The identity, resolved above, keys presence and excludes our own typing
+        // echo; a nil (Keychain read failure) degrades presence to keyless.
+        selfPubkeyHex = intendedPubkey
         phase = .running
         // Launch is a foreground start; scene-phase `.onChange` does not fire for the
         // initial value, so begin beating explicitly here.
