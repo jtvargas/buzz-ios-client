@@ -17,16 +17,14 @@ import NostrCore
 ///   channel's membership, independent of any one view's lifetime.
 public extension SyncEngine {
     /// Ensures the standing content subscription for `channel` exists and returns its
-    /// id. Idempotent. Subsumed by the per-channel content subscription; retained as a
-    /// shim for the app's `ChannelTypingControlling` seam.
+    /// id. Idempotent and reentrancy-safe — it delegates to the single registration
+    /// primitive ``subscribeChannelContent(_:)``, so a view opening a channel and a
+    /// concurrent discovery pass cannot double-REQ it. Subsumed by the per-channel
+    /// content subscription; retained as a shim for the app's `ChannelTypingControlling`
+    /// seam.
     @discardableResult
     func openChannelTyping(_ channel: String) async throws -> SubscriptionID {
-        if let existing = channelContentSubscriptions[channel] { return existing }
-        let id = try await subscriptions.register(
-            filters: [contentFilter(forChannel: channel)], sink: self
-        )
-        channelContentSubscriptions[channel] = id
-        return id
+        try await subscribeChannelContent(channel)
     }
 
     /// No-op. The standing content subscription's lifecycle is owned by discovery and

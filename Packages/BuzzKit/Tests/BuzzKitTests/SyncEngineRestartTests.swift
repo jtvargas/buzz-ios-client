@@ -40,7 +40,7 @@ struct SyncEngineRestartTests {
         try await driveAuth(harness1.connection, socket1)
         await answerDiscovery(on: socket1)
         // Channel messages ride the standing per-channel content sub; open "room"'s.
-        await harness1.engine.subscribeChannelContent("room")
+        try await harness1.engine.subscribeChannelContent("room")
 
         // e10…e6 arrive as backfill with no EOSE. batchSize 2 flushes e10,e9 and e8,e7;
         // e6 stays buffered in the manager and is lost with the process — the store holds
@@ -64,7 +64,7 @@ struct SyncEngineRestartTests {
         try await driveAuth(harness2.connection, socket2)
         // A fresh engine on the reopened db has no standing channel subs yet; the
         // channel is not in group state (discovery was empty), so open "room" again.
-        await harness2.engine.subscribeChannelContent("room")
+        try await harness2.engine.subscribeChannelContent("room")
 
         // The re-REQ carries the original content filter — since = now − 5, no `until` —
         // because a fresh engine has no armed replay cursor to inherit.

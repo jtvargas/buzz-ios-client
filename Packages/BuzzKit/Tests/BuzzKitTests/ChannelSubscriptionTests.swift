@@ -77,8 +77,8 @@ struct ChannelSubscriptionTests {
 
         try await bootstrap(harness, socket)
         // Two channels already subscribed (as a prior discovery pass would have done).
-        await harness.engine.subscribeChannelContent("room-keep")
-        await harness.engine.subscribeChannelContent("room-leave")
+        try await harness.engine.subscribeChannelContent("room-keep")
+        try await harness.engine.subscribeChannelContent("room-leave")
         let leaveID = await awaitChannelContentREQ(on: socket, channel: "room-leave")
 
         // A membership notification arrives on the global REQ. It is `#p`-scoped to
@@ -106,6 +106,70 @@ struct ChannelSubscriptionTests {
         await harness.engine.stop()
     }
 
+    // MARK: - Same-batch membership churn (reconnect replay)
+
+    /// A reconnect replays offline membership changes as one batch. When it carries a
+    /// leave then a *later* rejoin for the SAME channel, the net fact is joined, so the
+    /// standing sub must survive. The old code collapsed the batch into add/remove sets
+    /// and applied removes last, ending unsubscribed — silently live-dead until the next
+    /// `.ready`. The fix acts on the most-recent `(created_at, id)` event per channel.
+    @Test("same-batch leave-then-rejoin for one channel stays subscribed")
+    func sameBatchLeaveThenRejoinStaysSubscribed() async throws {
+        let socket = ScriptedRelay()
+        let database = TempDatabase()
+        defer { database.remove() }
+        let harness = try EngineHarness(path: database.path, identity: try PrivateKey(), relays: [socket])
+        let relay = try Fixture()
+
+        try await bootstrap(harness, socket)
+        try await harness.engine.subscribeChannelContent("room")
+        #expect(await harness.engine.channelContentSubscriptions["room"] != nil)
+
+        // One ingested batch: leave at t1, rejoin at t2 > t1, same channel. Ingested
+        // directly so the assertion is deterministic — the membership handler awaits its
+        // subscribe/unsubscribe, so the set is settled the moment ingest returns.
+        let leave = try relay.event(
+            .memberRemoved, "", tags: [["h", "room"], ["p", harness.selfPubkey]], at: 1_700_000_100
+        )
+        let rejoin = try relay.event(
+            .memberAdded, "", tags: [["h", "room"], ["p", harness.selfPubkey]], at: 1_700_000_101
+        )
+        await harness.engine.ingest(batch: [leave, rejoin], subscription: SubscriptionID("global"), phase: .live)
+
+        // Net fact is the rejoin → still subscribed.
+        #expect(await harness.engine.channelContentSubscriptions["room"] != nil)
+
+        await harness.engine.stop()
+    }
+
+    /// The mirror: a rejoin then a *later* leave for the same channel nets to left, so
+    /// the sub is dropped. Confirms the most-recent-fact rule in the removing direction.
+    @Test("same-batch rejoin-then-leave for one channel ends unsubscribed")
+    func sameBatchRejoinThenLeaveEndsUnsubscribed() async throws {
+        let socket = ScriptedRelay()
+        let database = TempDatabase()
+        defer { database.remove() }
+        let harness = try EngineHarness(path: database.path, identity: try PrivateKey(), relays: [socket])
+        let relay = try Fixture()
+
+        try await bootstrap(harness, socket)
+        try await harness.engine.subscribeChannelContent("room")
+        #expect(await harness.engine.channelContentSubscriptions["room"] != nil)
+
+        let rejoin = try relay.event(
+            .memberAdded, "", tags: [["h", "room"], ["p", harness.selfPubkey]], at: 1_700_000_100
+        )
+        let leave = try relay.event(
+            .memberRemoved, "", tags: [["h", "room"], ["p", harness.selfPubkey]], at: 1_700_000_101
+        )
+        await harness.engine.ingest(batch: [rejoin, leave], subscription: SubscriptionID("global"), phase: .live)
+
+        // Net fact is the leave → unsubscribed.
+        #expect(await harness.engine.channelContentSubscriptions["room"] == nil)
+
+        await harness.engine.stop()
+    }
+
     // MARK: - Relay CLOSE
 
     @Test("a relay CLOSE of a channel sub drops it from the set")
@@ -116,7 +180,7 @@ struct ChannelSubscriptionTests {
         let harness = try EngineHarness(path: database.path, identity: try PrivateKey(), relays: [socket])
 
         try await bootstrap(harness, socket)
-        await harness.engine.subscribeChannelContent("room")
+        try await harness.engine.subscribeChannelContent("room")
         let subID = await awaitChannelContentREQ(on: socket, channel: "room")
         #expect(await harness.engine.channelContentSubscriptions["room"] != nil)
 

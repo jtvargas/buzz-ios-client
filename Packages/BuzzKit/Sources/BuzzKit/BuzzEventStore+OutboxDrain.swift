@@ -63,8 +63,20 @@ public extension BuzzEventStore {
         }
     }
 
-    /// Everything still awaiting delivery, oldest first: `pending`, `sending`, and
+    /// Everything still awaiting delivery, in enqueue order: `pending`, `sending`, and
     /// `awaitingReauth`, but never `failed`.
+    ///
+    /// **Ordered by `rowid`, not `created_at`.** The drain sends these one at a time,
+    /// awaiting each relay verdict before the next, so their order *is* the wire order.
+    /// `created_at` is an author-controlled, second-resolution stamp: three sends
+    /// composed inside one second tie on it and fall back to `event_id` (a content
+    /// hash) — a nondeterministic order. For a reaction lifecycle that is a correctness
+    /// bug: a re-react must not overtake its own withdrawal, or the relay dedups the
+    /// re-react (OK `duplicate:` → confirmed into the local log) while the withdrawal
+    /// then deletes the original relay-side, leaving this device showing a reaction no
+    /// other device has. `rowid` is the SQLite insertion order — the true enqueue order
+    /// — and the outbox is a rowid table (`Schema`); a re-signed re-queued row lands at
+    /// the tail with a fresh row, which is correct (it is a fresh send).
     ///
     /// `sending` rows are included on purpose. That state means the app stopped
     /// between handing a send to the relay and hearing back, so the outcome is
@@ -77,7 +89,7 @@ public extension BuzzEventStore {
         let sql = """
         SELECT * FROM outbox
         WHERE state <> :failed \(channelFilter)
-        ORDER BY created_at ASC, event_id ASC
+        ORDER BY rowid ASC
         """
         return try await reader.read { db in
             try Row.fetchAll(

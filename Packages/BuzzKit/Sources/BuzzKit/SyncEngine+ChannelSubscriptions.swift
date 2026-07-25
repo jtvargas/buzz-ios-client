@@ -55,13 +55,14 @@ extension SyncEngine {
     /// Ensures a standing content subscription exists for every channel in `desired`,
     /// registering the ones not yet subscribed. Add-only and idempotent (see the type
     /// doc for why discovery never removes): a channel already subscribed is left
-    /// untouched, so a reconnect's rediscovery does not churn the wire.
+    /// untouched, so a reconnect's rediscovery does not churn the wire. Best-effort —
+    /// a filter the relay would refuse is skipped rather than aborting the pass.
     ///
     /// Called on every discovery pass with the discovered ∪ known channel set, the
     /// same set the head reconcile iterates.
     func ensureChannelSubscriptions(_ desired: Set<String>) async {
         for channel in desired.subtracting(Set(channelContentSubscriptions.keys)) {
-            await subscribeChannelContent(channel)
+            _ = try? await subscribeChannelContent(channel)
         }
     }
 
@@ -72,15 +73,27 @@ extension SyncEngine {
     /// existing id without a second `REQ`. Registration tolerates a not-yet-ready
     /// socket — the ``SubscriptionManager`` arms it on the next `.ready` and keeps it
     /// alive across reconnects.
+    ///
+    /// The single registration primitive: both the discovery pass and the
+    /// ``openChannelTyping(_:)`` shim funnel through here, so the reentrancy re-check
+    /// below covers every caller.
     @discardableResult
-    func subscribeChannelContent(_ channel: String) async -> SubscriptionID? {
+    func subscribeChannelContent(_ channel: String) async throws -> SubscriptionID {
         if let existing = channelContentSubscriptions[channel] { return existing }
         // A single `#h` filter per REQ — never multiplexed with a global filter, or
         // the relay would demote the whole REQ to global and it would receive no
         // channel traffic at all.
-        guard let id = try? await subscriptions.register(
+        let id = try await subscriptions.register(
             filters: [contentFilter(forChannel: channel)], sink: self
-        ) else { return nil }
+        )
+        // A concurrent caller may have registered this same channel while we awaited
+        // the REQ above (actor reentrancy across the await). Keep the winner already in
+        // the map and drop this duplicate, so we never leak a second standing sub that
+        // would only be cleaned up at ``stop()``.
+        if let winner = channelContentSubscriptions[channel] {
+            await subscriptions.unsubscribe(id)
+            return winner
+        }
         channelContentSubscriptions[channel] = id
         return id
     }

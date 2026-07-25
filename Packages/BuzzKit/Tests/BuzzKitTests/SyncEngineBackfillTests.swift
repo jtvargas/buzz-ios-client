@@ -34,7 +34,7 @@ struct SyncEngineBackfillTests {
         // Channel messages now ride the standing per-channel content sub (the global
         // REQ is `#h`-less and never receives them). Open "room"'s sub explicitly so
         // this replay-cursor test has the standing sub it exercises.
-        await harness.engine.subscribeChannelContent("room")
+        try await harness.engine.subscribeChannelContent("room")
 
         // e10…e6 as backfill, no EOSE. batchSize 2 flushes e10,e9 and e8,e7; e6 stays
         // buffered and is discarded when the reconnect resets the subscription.
@@ -96,7 +96,7 @@ struct SyncEngineBackfillTests {
         try await harness.engine.start()
         try await driveAuth(harness.connection, socket1)
         await answerDiscovery(on: socket1)
-        await harness.engine.subscribeChannelContent("room")
+        try await harness.engine.subscribeChannelContent("room")
 
         let sub1 = await awaitChannelContentREQ(on: socket1, channel: "room")
         await socket1.enqueue(EngineFrames.eose(sub1)) // caught up → live

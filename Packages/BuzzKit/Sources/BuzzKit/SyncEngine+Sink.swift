@@ -26,24 +26,32 @@ extension SyncEngine: EventSink {
         // subscription and (on add) re-fetch its head and roster. These notifications
         // are `#p`-scoped to self, so an add means "you joined channel X" and a remove
         // means "you left / were removed from X".
-        var added: Set<String> = []
-        var removed: Set<String> = []
+        //
+        // Collapse to the single most-recent membership fact per channel by the
+        // `(created_at, id)` total order. One batch can carry a leave *and* a later
+        // rejoin (or vice versa) for the same channel — exactly what a reconnect replay
+        // of offline membership changes produces — and only the newest event states the
+        // current fact. Acting on per-kind sets with removes applied last would end a
+        // leave-then-rejoin unsubscribed and silently live-dead until the next `.ready`.
+        var latest: [String: NostrEvent] = [:]
         for event in batch {
-            guard let channel = event.groupID else { continue }
-            switch event.kind {
-            case .memberAdded: added.insert(channel)
-            case .memberRemoved: removed.insert(channel)
-            default: continue
+            guard event.kind == .memberAdded || event.kind == .memberRemoved,
+                  let channel = event.groupID else { continue }
+            let cursor = WindowCursor(createdAt: event.createdAt, id: event.id)
+            if let current = latest[channel],
+               WindowCursor(createdAt: current.createdAt, id: current.id) >= cursor {
+                continue
             }
+            latest[channel] = event
         }
-        for channel in added {
-            // Start the standing content sub at once so live traffic flows, then
-            // reconcile the head/roster the membership change implies.
-            await subscribeChannelContent(channel)
+        for (channel, event) in latest where event.kind == .memberAdded {
+            // Joined (net): start the standing content sub at once so live traffic
+            // flows, then reconcile the head/roster the membership change implies.
+            _ = try? await subscribeChannelContent(channel)
             scheduleChannelReconcile(channel)
         }
-        for channel in removed {
-            // Left the channel: drop its standing content sub — the relay would refuse
+        for (channel, event) in latest where event.kind == .memberRemoved {
+            // Left (net): drop the standing content sub — the relay would refuse
             // further channel-scoped traffic to a non-member anyway.
             await unsubscribeChannelContent(channel)
         }

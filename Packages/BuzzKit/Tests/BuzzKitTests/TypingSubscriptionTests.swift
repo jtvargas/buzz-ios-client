@@ -32,7 +32,7 @@ struct TypingSubscriptionTests {
         let harness = try EngineHarness(path: database.path, identity: try PrivateKey(), relays: [socket])
 
         try await bootstrap(harness, socket)
-        await harness.engine.subscribeChannelContent("room-1")
+        try await harness.engine.subscribeChannelContent("room-1")
         let request = await contentREQ(on: socket, channel: "room-1")
 
         // Exactly one filter in the REQ — never multiplexed with a global filter, or
@@ -53,7 +53,7 @@ struct TypingSubscriptionTests {
         let peer = try Fixture()
 
         try await bootstrap(harness, socket)
-        await harness.engine.subscribeChannelContent("room-1")
+        try await harness.engine.subscribeChannelContent("room-1")
         let request = await contentREQ(on: socket, channel: "room-1")
 
         // A peer types: kind-20002 scoped to the channel by `h`. Followed by EOSE so
