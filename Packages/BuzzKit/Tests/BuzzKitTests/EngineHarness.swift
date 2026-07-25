@@ -155,24 +155,37 @@ struct EngineFixtures {
 
 // MARK: - Filter predicates
 
-func isLiveContentREQ(_ filters: [Filter]) -> Bool {
-    filters.contains { filter in
-        filter.kinds?.contains(.channelMessage) == true
-            && filter.tagQueries["h"] == nil
-            && filter.tagQueries["e"] == nil
-    }
+/// The standing per-channel content REQ for `channel`: a single `#h`-scoped filter
+/// carrying the channel's live kinds. Discriminated by the presence of `.typing`
+/// (20002), which only the standing content sub requests — the degradation-fallback
+/// history query and the window reconcile never carry typing, so this never confuses
+/// them for the standing sub.
+func isChannelContentREQ(_ filters: [Filter], channel: String) -> Bool {
+    channelContentFilter(in: filters, channel: channel) != nil
 }
 
-func contentFilter(in filters: [Filter]) -> Filter? {
-    filters.first { $0.kinds?.contains(.channelMessage) == true && $0.tagQueries["h"] == nil }
+func channelContentFilter(in filters: [Filter], channel: String) -> Filter? {
+    filters.first { $0.tagQueries["h"] == [channel] && $0.kinds?.contains(.typing) == true }
+}
+
+/// The narrowed global content filter (metadata + presence, `#h`-less).
+func globalContentFilter(in filters: [Filter]) -> Filter? {
+    filters.first { $0.kinds?.contains(.metadata) == true && $0.tagQueries["h"] == nil }
+}
+
+/// The membership filter (`#p`-scoped 44100/44101 notifications).
+func membershipFilter(in filters: [Filter]) -> Filter? {
+    filters.first { $0.kinds?.contains(.memberAdded) == true }
 }
 
 func isDiscoveryREQ(_ filters: [Filter]) -> Bool {
     filters.contains { $0.kinds?.contains(.groupMetadata) == true }
 }
 
+/// The degradation-fallback history query: a single-kind `[.channelMessage]` filter
+/// scoped by `#h`, distinct from the multi-kind standing content sub.
 func isChannelHistoryREQ(_ filters: [Filter], channel: String) -> Bool {
-    filters.contains { $0.kinds?.contains(.channelMessage) == true && $0.tagQueries["h"] == [channel] }
+    filters.contains { $0.kinds == [.channelMessage] && $0.tagQueries["h"] == [channel] }
 }
 
 // MARK: - Drive helpers
@@ -214,12 +227,19 @@ func awaitREQ(
     }
 }
 
-/// Spins until the live subscription's REQ has been sent on `relay`, returning its
-/// content filter — the one whose `since` a replay assertion inspects.
-func awaitContentFilter(on relay: ScriptedRelay) async -> Filter {
+/// Spins until the standing content REQ for `channel` has been sent on `relay`,
+/// returning its subscription id.
+func awaitChannelContentREQ(on relay: ScriptedRelay, channel: String) async -> String {
+    await awaitREQ(on: relay) { isChannelContentREQ($0, channel: channel) }
+}
+
+/// Spins until the standing content REQ for `channel` has been sent, returning its
+/// filter — the one whose `since` a replay assertion inspects.
+func awaitChannelContentFilter(on relay: ScriptedRelay, channel: String) async -> Filter {
     while true {
         for frame in await relay.frames() {
-            if let request = decodeREQ(frame), let filter = contentFilter(in: request.filters) {
+            if let request = decodeREQ(frame),
+               let filter = channelContentFilter(in: request.filters, channel: channel) {
                 return filter
             }
         }

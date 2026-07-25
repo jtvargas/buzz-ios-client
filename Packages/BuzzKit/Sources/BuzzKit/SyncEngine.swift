@@ -21,11 +21,27 @@ import NostrCore
 ///
 /// A fresh, authenticated socket triggers, in order: channel discovery (a one-shot
 /// query for the relay-signed group state that does not ride the live fan-out),
-/// a per-channel reconcile that closes exactly the offline gap through the window
-/// client, and an outbox drain. The multiplexed live subscription — one REQ
-/// carrying a content filter and a membership filter — is registered once and kept
-/// alive across reconnects by the manager, re-armed with its EOSE-gated replay
-/// cursor.
+/// reconciliation of the standing per-channel content subscriptions against the
+/// discovered/known channel list, a per-channel reconcile that closes exactly the
+/// offline gap through the window client, and an outbox drain.
+///
+/// # Two live-subscription tiers
+///
+/// Live traffic arrives on two kinds of standing subscription, split by the relay's
+/// scoping rule (a REQ is channel-scoped only when *every* filter carries `#h`):
+///
+/// - **One global REQ**, registered once at ``start()`` and kept alive across
+///   reconnects by the manager: a `#h`-less content filter (profile metadata and
+///   workspace presence) multiplexed with the membership filter (`#p`-scoped
+///   add/remove notifications). Channel-scoped kinds are deliberately absent — a
+///   global REQ never receives them (see ``contentFilter()``).
+/// - **One standing per-channel content REQ per joined channel**, each a single
+///   `#h`-scoped filter carrying that channel's message/overlay/reaction/deletion
+///   and typing kinds. These are the only live path for channel traffic; the set is
+///   reconciled on every discovery pass and on membership changes.
+///
+/// Every standing subscription is re-armed with its EOSE-gated replay cursor after a
+/// reconnect.
 ///
 /// # Isolation and generations
 ///
@@ -135,15 +151,19 @@ public actor SyncEngine {
     /// The authenticated identity's hex pubkey, resolved once at ``start()`` for
     /// the membership filter's `#p` scope.
     var selfPubkeyHex: String?
-    /// The multiplexed live subscription's id, held so the engine can identify its
-    /// frames if it ever needs to.
+    /// The global live subscription's id (the narrowed content filter + membership
+    /// filter REQ), held so the engine can identify its frames if it ever needs to.
     var liveSubscription: SubscriptionID?
-    /// Per-channel typing subscriptions, keyed by channel id. Typing (kind 20002) is
-    /// fanned out only to a subscription whose filter carries the matching `#h`, so
-    /// the global content filter never sees it; an open channel registers one of
-    /// these and closes it when the channel leaves the screen. One entry per channel
-    /// keeps ``openChannelTyping(_:)`` idempotent.
-    var channelTypingSubscriptions: [String: SubscriptionID] = [:]
+    /// The standing per-channel content subscriptions, keyed by channel id — one REQ
+    /// per joined channel carrying that channel's message/overlay/reaction/typing
+    /// kinds scoped by `#h` (``contentFilter(forChannel:)``). This is the only live
+    /// path for channel-scoped traffic: the relay never fans channel events out to
+    /// the `#h`-less global REQ (see ``contentFilter()``). The set is reconciled
+    /// against the discovered/known channel list on every `.ready` and mutated on
+    /// membership add/remove; one entry per channel keeps registration idempotent.
+    /// Persisted across reconnects (the ``SubscriptionManager`` re-arms them), cleared
+    /// only in ``stop()``.
+    var channelContentSubscriptions: [String: SubscriptionID] = [:]
 
     // MARK: - Tasks
 
@@ -239,8 +259,11 @@ public actor SyncEngine {
             }
         }
 
-        // Register the one live REQ that carries both the content and membership
-        // filters. The manager keeps it alive across reconnects; the engine never
+        // Register the one global REQ carrying the narrowed content filter (metadata
+        // + presence) and the membership filter. Both are `#h`-less, so the whole REQ
+        // is global — which is exactly what these kinds need. Channel-scoped traffic
+        // rides the per-channel standing subs, reconciled on `.ready` after discovery.
+        // The manager keeps this REQ alive across reconnects; the engine never
         // re-registers it.
         liveSubscription = try await subscriptions.register(
             filters: [contentFilter(), membershipFilter(selfPubkeyHex: pubkey)],
@@ -263,9 +286,9 @@ public actor SyncEngine {
         await connection.stop()
         channelStates.removeAll()
         // `shutdown()` dropped every registered subscription; forget the per-channel
-        // typing ids so a later reopen re-registers cleanly rather than believing a
-        // channel is still subscribed.
-        channelTypingSubscriptions.removeAll()
+        // content-subscription ids so a later reopen re-registers cleanly rather than
+        // believing a channel is still subscribed.
+        channelContentSubscriptions.removeAll()
         state = .stopped
     }
 
@@ -333,30 +356,6 @@ public actor SyncEngine {
     /// assembled over a possibly-open gap, so its watermark must hold.
     func syncedChannels() -> Set<String> {
         Set(channelStates.compactMap { $0.value == .synced ? $0.key : nil })
-    }
-
-    // MARK: - Filters
-
-    /// The live content filter: the Buzz message and overlay kinds, reaching back a
-    /// small window so the connect gap drops nothing. Deep history is the window
-    /// reconcile's job.
-    private func contentFilter() -> Filter {
-        Filter(
-            kinds: [
-                .channelMessage, .reaction, .deletion, .groupDeleteEvent,
-                .richMessage, .messageEdit, .metadata, .presence, .typing,
-            ],
-            since: Int64(now().timeIntervalSince1970) - Int64(config.liveSinceWindow)
-        )
-    }
-
-    /// The membership filter: relay-signed add/remove notifications scoped to the
-    /// authenticated identity, as the relay requires for these p-gated kinds.
-    private func membershipFilter(selfPubkeyHex: String) -> Filter {
-        Filter(
-            kinds: [.memberAdded, .memberRemoved],
-            tagQueries: ["p": [selfPubkeyHex]]
-        )
     }
 
     // MARK: - Presence sweep

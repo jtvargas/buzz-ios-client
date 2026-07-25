@@ -24,9 +24,20 @@ extension SyncEngine {
         let known = (try? await store.knownChannels()) ?? []
         guard isCurrent(generation) else { return }
 
+        let channels = discovered.union(known)
+
+        // Ensure a standing content subscription for every discovered/known channel
+        // *before* the head reconcile: registration is a cheap socket REQ that returns
+        // at once, so live channel traffic starts flowing while the (possibly slow,
+        // HTTP-paged) reconcile runs. This is the only live path for channel-scoped
+        // events — the global REQ never receives them. Add-only: departures are handled
+        // by membership events and relay CLOSEs, not a discovery gap.
+        await ensureChannelSubscriptions(channels)
+        guard isCurrent(generation) else { return }
+
         // Sorted so the reconcile order — and therefore the scripted HTTP request
         // order in tests — is deterministic.
-        for channel in discovered.union(known).sorted() {
+        for channel in channels.sorted() {
             guard isCurrent(generation) else { return }
             await reconcile(channel, generation: generation)
         }

@@ -39,11 +39,13 @@ struct SyncEngineRestartTests {
         try await harness1.engine.start()
         try await driveAuth(harness1.connection, socket1)
         await answerDiscovery(on: socket1)
+        // Channel messages ride the standing per-channel content sub; open "room"'s.
+        try await harness1.engine.subscribeChannelContent("room")
 
         // e10…e6 arrive as backfill with no EOSE. batchSize 2 flushes e10,e9 and e8,e7;
         // e6 stays buffered in the manager and is lost with the process — the store holds
         // exactly four when the app dies.
-        let sub1 = await awaitREQ(on: socket1, matching: isLiveContentREQ)
+        let sub1 = await awaitChannelContentREQ(on: socket1, channel: "room")
         for event in newestFirst.prefix(5) {
             await socket1.enqueue(EngineFrames.event(sub1, event))
         }
@@ -60,15 +62,18 @@ struct SyncEngineRestartTests {
 
         try await harness2.engine.start()
         try await driveAuth(harness2.connection, socket2)
+        // A fresh engine on the reopened db has no standing channel subs yet; the
+        // channel is not in group state (discovery was empty), so open "room" again.
+        try await harness2.engine.subscribeChannelContent("room")
 
         // The re-REQ carries the original content filter — since = now − 5, no `until` —
         // because a fresh engine has no armed replay cursor to inherit.
-        let replayFilter = await awaitContentFilter(on: socket2)
+        let replayFilter = await awaitChannelContentFilter(on: socket2, channel: "room")
         #expect(replayFilter.since == harness2.nowSeconds - 5)
         #expect(replayFilter.until == nil)
 
         await answerDiscovery(on: socket2)
-        let sub2 = await awaitREQ(on: socket2, matching: isLiveContentREQ)
+        let sub2 = await awaitChannelContentREQ(on: socket2, channel: "room")
         for event in newestFirst {
             await socket2.enqueue(EngineFrames.event(sub2, event))
         }
