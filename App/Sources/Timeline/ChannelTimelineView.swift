@@ -76,6 +76,8 @@ struct ChannelTimelineView: View {
                         row: row,
                         isAuthorOnline: presence.isOnline(row.pubkey),
                         reactions: model.reactions(for: row.id),
+                        mentions: model.mentions(for: row.id),
+                        selfPubkey: selfPubkey,
                         isOwn: model.isOwn(row),
                         onRetry: { model.retry($0) },
                         onReact: { model.react($0, on: row.id) },

@@ -58,6 +58,10 @@ struct ChannelListView: View {
                 AccountView(store: store, engine: engine, selfPubkey: environment.selfPubkeyHex)
             }
         }
+        // The app-wide `#channel` name→id map, built from the live channel list and
+        // injected once here so every pushed timeline and thread resolves `#`-tokens
+        // through the same source. Rebuilt only when the channel set changes.
+        .environment(\.channelNameMap, ChannelNameMap(channels: model.channels))
         .task { await model.run() }
     }
 
