@@ -37,8 +37,12 @@ struct TimelineRowView: View {
             }
             .accessibilityElement(children: .combine)
 
-            if !reactions.isEmpty {
-                ReactionChipsView(groups: reactions, onTap: onToggleReaction)
+            if !row.isDeleted {
+                ReactionChipsView(
+                    groups: reactions,
+                    onTap: onToggleReaction,
+                    onReact: onReact
+                )
             }
             if row.hasThread, let onOpenThread {
                 RepliesButton(count: row.replyCount, action: onOpenThread)
@@ -52,7 +56,11 @@ struct TimelineRowView: View {
         .animation(.default, value: row.delivery)
         .animation(.default, value: isAuthorOnline)
         .contentShape(.rect)
-        .contextMenu { menuItems }
+        .contextMenu {
+            menuItems
+        } preview: {
+            MessagePreview(row: row)
+        }
     }
 
     private var header: some View {
@@ -130,6 +138,31 @@ struct TimelineRowView: View {
         )
         return (try? AttributedString(markdown: content, options: options))
             ?? AttributedString(content)
+    }
+}
+
+/// A tight preview for the long-press menu: the author and message content sized to
+/// their content. Supplying it makes the lift a compact rounded card instead of the
+/// default full-width row snapshot, which read as a large square bubble.
+private struct MessagePreview: View {
+    let row: TimelineRow
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(row.displayName)
+                .font(.subheadline.weight(.semibold))
+            if row.isDeleted {
+                Text("message deleted")
+                    .font(.body)
+                    .italic()
+                    .foregroundStyle(.secondary)
+            } else {
+                Text(TimelineRowView.rendered(row.content))
+                    .font(.body)
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: 320, alignment: .leading)
     }
 }
 

@@ -6,22 +6,29 @@ enum ReactionPalette {
     static let common = ["👍", "❤️", "😂", "🎉", "🙏", "🔥"]
 }
 
-/// The reaction chips under a message: one capsule per emoji with its reactor
-/// count, the local identity's own reaction tinted and outlined. Tapping a chip
-/// toggles that reaction (add, or withdraw an own one).
+/// The reaction row under a message: the surviving reactions as Slack-style capsule
+/// pills — emoji and count, hairline border, subtle fill, the local identity's own
+/// reaction tinted — followed by a compact "add reaction" pill that opens the quick
+/// palette. Tapping a chip toggles that reaction (add, or withdraw an own one);
+/// chips scale-and-fade in and out so a reaction never snaps the layout.
 struct ReactionChipsView: View {
     let groups: [ReactionGroup]
+    /// Toggle an existing chip: add that emoji, or withdraw an own reaction.
     let onTap: (ReactionGroup) -> Void
+    /// Add a fresh reaction with the chosen emoji from the add-reaction palette.
+    let onReact: (String) -> Void
 
     var body: some View {
-        if !groups.isEmpty {
-            FlowLayout(spacing: 6) {
-                ForEach(groups) { group in
-                    ReactionChip(group: group) { onTap(group) }
-                }
+        FlowLayout(spacing: 6) {
+            ForEach(groups) { group in
+                ReactionChip(group: group) { onTap(group) }
+                    .transition(.scale(scale: 0.6).combined(with: .opacity))
             }
-            .animation(.default, value: groups)
+            AddReactionButton(onReact: onReact)
         }
+        // A gentle spring on the chip set: additions and withdrawals ease in place
+        // rather than jumping, and the add pill slides as chips reflow around it.
+        .animation(.spring(response: 0.3, dampingFraction: 0.85), value: groups)
     }
 }
 
@@ -45,15 +52,16 @@ private struct ReactionChip: View {
             .padding(.vertical, 4)
             .background(
                 Capsule().fill(
-                    group.reactedBySelf ? Color.accentColor.opacity(0.22) : Color.secondary.opacity(0.12)
+                    group.reactedBySelf ? Color.accentColor.opacity(0.18) : Color.secondary.opacity(0.12)
                 )
             )
             .overlay(
                 Capsule().strokeBorder(
-                    group.reactedBySelf ? Color.accentColor.opacity(0.6) : .clear,
+                    group.reactedBySelf ? Color.accentColor.opacity(0.6) : Color.secondary.opacity(0.25),
                     lineWidth: 1
                 )
             )
+            .contentShape(.capsule)
         }
         .buttonStyle(.plain)
         .accessibilityLabel(accessibilityLabel)
@@ -64,6 +72,38 @@ private struct ReactionChip: View {
     private var accessibilityLabel: String {
         let base = "\(group.emoji), \(group.count)"
         return group.reactedBySelf ? "\(base), you reacted" : base
+    }
+}
+
+/// The compact "add reaction" pill: a capsule the size of a chip, a smiley with a
+/// small plus, opening the quick-reaction palette on tap. Sits at the end of the
+/// reaction row so a message can always be reacted to without the long-press menu.
+private struct AddReactionButton: View {
+    let onReact: (String) -> Void
+
+    var body: some View {
+        Menu {
+            ControlGroup {
+                ForEach(ReactionPalette.common, id: \.self) { emoji in
+                    Button(emoji) { onReact(emoji) }
+                }
+            }
+        } label: {
+            HStack(spacing: 1) {
+                Image(systemName: "face.smiling")
+                Image(systemName: "plus")
+                    .font(.system(size: 8, weight: .bold))
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(Capsule().fill(Color.secondary.opacity(0.12)))
+            .overlay(Capsule().strokeBorder(Color.secondary.opacity(0.25), lineWidth: 1))
+            .contentShape(.capsule)
+        }
+        .accessibilityLabel("Add reaction")
+        .accessibilityHint("Double tap to choose an emoji")
     }
 }
 

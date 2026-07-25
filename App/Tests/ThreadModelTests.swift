@@ -43,6 +43,30 @@ struct ThreadModelTests {
         await waitUntil { model.rows.map(\.content) == ["root", "first", "second"] }
     }
 
+    @Test("renders the opener from the store without waiting on the one-shot fetch")
+    func rendersOpenerBeforeFetchReturns() async throws {
+        let temp = TempStore()
+        defer { temp.remove() }
+        let store = try temp.open()
+        let author = try Fixture()
+        let root = try author.message("root", in: "room-1", at: 1_000)
+        _ = try await store.ingest(batch: [root], phase: .backfill)
+
+        // The opener stalls forever: the thread must still fill from the store on the
+        // first emission. A gated open (fetch before observe) would leave rows empty
+        // until the 3600 s sleep — the very stall that laid the thread out blank and
+        // left the scroll gap under the newest message.
+        let model = ThreadModel(
+            root: root.id, channel: "room-1", store: store,
+            sender: StubSender(), opener: BlockingThreadOpener(), selfPubkey: author.pubkey
+        )
+        let run = Task { await model.run() }
+        defer { run.cancel() }
+
+        await waitUntil { model.rows.map(\.content) == ["root"] }
+        #expect(model.hasLoaded)
+    }
+
     @Test("a reply from the composer threads to the root through the durable path")
     func replyThreadsToRoot() async throws {
         let temp = TempStore()
