@@ -11,10 +11,10 @@ struct ChannelListView: View {
     private let store: BuzzEventStore
     private let engine: SyncEngine
 
-    init(store: BuzzEventStore, engine: SyncEngine) {
+    init(store: BuzzEventStore, engine: SyncEngine, selfPubkey: String?) {
         self.store = store
         self.engine = engine
-        _model = State(initialValue: ChannelListModel(store: store))
+        _model = State(initialValue: ChannelListModel(store: store, selfPubkey: selfPubkey))
     }
 
     var body: some View {

@@ -21,6 +21,20 @@ extension SyncEngine: EventSink {
             await presence.apply(result.ephemeral)
         }
 
+        // Read-state blobs (`kind:30078`) are stored in the log like any event but
+        // carry NIP-44 ciphertext the keyless projector cannot read, so the engine —
+        // which holds the identity — decrypts the freshly-inserted ones and applies
+        // them to the precious `read_state` table. Only newly-inserted events are
+        // decrypted: a reconnect resends the latest replaceable blob, and re-decrypting
+        // a duplicate every reconnect would be wasted work for an idempotent apply.
+        if let result, !result.inserted.isEmpty {
+            let insertedIDs = Set(result.inserted)
+            let readStateEvents = batch.filter { $0.kind == .readState && insertedIDs.contains($0.id) }
+            if !readStateEvents.isEmpty {
+                await applyIncomingReadState(readStateEvents)
+            }
+        }
+
         // A membership change is group state that does not ride the live fan-out, so
         // its arrival is the signal to reconcile the channel's standing content
         // subscription and (on add) re-fetch its head and roster. These notifications

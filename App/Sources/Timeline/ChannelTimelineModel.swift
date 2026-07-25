@@ -43,10 +43,9 @@ final class ChannelTimelineModel {
     private let store: BuzzEventStore
     private let sender: any MessageSending
     private let typing: any EphemeralPublishing
-    /// Opens/closes this channel's typing subscription for the lifetime of the
-    /// observation, so a visible channel actually receives typing. `nil` in tests
-    /// that do not exercise the subscription.
-    private let typingSubscription: (any ChannelTypingControlling)?
+    /// Marks the channel read as messages come into view (mark-on-view). `nil` in
+    /// tests that do not exercise read state.
+    private let readStateMarking: (any ReadStateMarking)?
     private let pageSize: Int
     /// The local identity's hex pubkey, for own-reaction highlighting and the
     /// delete affordance on own pending/failed rows. `nil` degrades to no highlight
@@ -69,12 +68,17 @@ final class ChannelTimelineModel {
     /// The oldest loaded row's cursor, the basis of the next older page.
     private var earliest: TimelineCursor?
 
+    /// The newest message `created_at` this view has already marked read, so a scroll
+    /// back through older history (which never changes the newest row) re-marks
+    /// nothing and only a genuinely newer arrival advances the frontier.
+    private var lastMarkedReadAt: Int64 = 0
+
     init(
         channel: String,
         store: BuzzEventStore,
         sender: any MessageSending,
         typing: any EphemeralPublishing = NoopEphemeralPublisher(),
-        typingSubscription: (any ChannelTypingControlling)? = nil,
+        readStateMarking: (any ReadStateMarking)? = nil,
         selfPubkey: String? = nil,
         pageSize: Int = 50,
         typingThrottle: Duration = .seconds(3),
@@ -84,7 +88,7 @@ final class ChannelTimelineModel {
         self.store = store
         self.sender = sender
         self.typing = typing
-        self.typingSubscription = typingSubscription
+        self.readStateMarking = readStateMarking
         self.selfPubkey = selfPubkey
         self.pageSize = pageSize
         self.typingThrottle = typingThrottle
@@ -95,15 +99,16 @@ final class ChannelTimelineModel {
 
     /// Consumes the observation until cancelled. Attach with SwiftUI's `.task`.
     nonisolated func run() async {
-        // The channel is now on screen: open its typing subscription so h-tagged
-        // typing is actually delivered, and close it when the observation ends —
-        // which is when the view's `.task` is cancelled on pop. A pushed thread keeps
-        // this task alive, so the one channel-level subscription covers the thread too.
-        try? await typingSubscription?.openChannelTyping(channel)
+        // Typing is delivered by the engine's standing per-channel content subscription
+        // now, whose lifecycle discovery and membership own — the view no longer opens
+        // or closes it. This loop is purely the read side: observe, merge, mark read.
         do {
             for try await _ in DatabaseSignal.changes(in: store.reader) {
                 let head = fetch(before: nil)
                 let ids = await mergeHead(head)
+                // Viewing the channel marks it read up to the newest message — on open
+                // (the first snapshot) and on each newer arrival while it is on screen.
+                await markReadIfNeeded()
                 // Same signal, same reader, off the main actor: re-read reactions for
                 // every loaded row so the chips track the timeline exactly.
                 let groups = fetchReactions(for: ids)
@@ -112,7 +117,22 @@ final class ChannelTimelineModel {
         } catch {
             // Ends on cancellation or teardown; last snapshot stays on screen.
         }
-        await typingSubscription?.closeChannelTyping(channel)
+    }
+
+    /// Marks the channel read up to the newest loaded message, once per advance —
+    /// mark-on-view. Fires the moment the channel opens (the first head snapshot) and
+    /// again whenever a newer message arrives while the view is up; a scroll back
+    /// through older history leaves the newest row unchanged, so it re-marks nothing
+    /// and never spams the outbox. Fire-and-forget so the observation loop never blocks
+    /// on the publish, and grow-only on the engine side so a redundant call is a no-op.
+    private func markReadIfNeeded() {
+        guard let readStateMarking,
+              let newest = rows.last?.createdAt,
+              newest > lastMarkedReadAt
+        else { return }
+        lastMarkedReadAt = newest
+        let channel = self.channel
+        Task { await readStateMarking.markRead(channel: channel, upTo: newest) }
     }
 
     /// Reads one page off the main actor. `channel`, `store`, and `pageSize` are

@@ -1,10 +1,10 @@
 import BuzzKit
 import GRDB
 
-/// A change signal over the two tables that back every timeline and channel-list
-/// read: the append-only `event` log and the `outbox`.
+/// A change signal over the three tables that back every timeline and channel-list
+/// read: the append-only `event` log, the `outbox`, and `read_state`.
 ///
-/// # Why these two tables are sufficient
+/// # Why these tables are sufficient
 ///
 /// BuzzKit's storage model makes every mutation that can change a rendered row
 /// commit a write to one of these tables inside the *same* transaction:
@@ -14,9 +14,11 @@ import GRDB
 ///   in the same write (see `BuzzEventStore.write`).
 /// - An optimistic send, and every delivery-state change (`pending → sending →
 ///   failed`, or the confirm that deletes the row), is an `outbox` write.
+/// - A read-state change — this device marking a channel read, or another device's
+///   blob arriving — is a `read_state` write, which moves a channel's unread count.
 ///
-/// So tracking the full-table regions of `event` and `outbox` re-fires the
-/// observation on every change either read would reflect, while the *value* is
+/// So tracking the full-table regions of `event`, `outbox`, and `read_state` re-fires
+/// the observation on every change either read would reflect, while the *value* is
 /// fetched through BuzzKit's public read API (`channelList()` / `timeline(...)`).
 ///
 /// This is the app-side realisation of the spec's observation pipeline. The
@@ -50,6 +52,18 @@ enum DatabaseSignal {
                     let state: String = row["state"] ?? ""
                     let lastError: String = row["last_error"] ?? ""
                     token = token &+ eventID.hashValue &+ state.hashValue &+ lastError.hashValue
+                }
+
+                // `read_state` collapses replaceable per slot, so a mark advances a
+                // `read_at` in place rather than adding a row — a COUNT would miss it.
+                // Fold each `(context, read_at)` into the token so the channel list's
+                // unread counts re-read the instant a frontier moves, from this device
+                // or another. Tracking the read means GRDB re-fires on any write to it.
+                let frontiers = try Row.fetchAll(db, sql: "SELECT context_id, read_at FROM read_state")
+                for row in frontiers {
+                    let context: String = row["context_id"] ?? ""
+                    let readAt: Int64 = row["read_at"] ?? 0
+                    token = token &+ context.hashValue &+ Int(truncatingIfNeeded: readAt)
                 }
                 return token
             }
