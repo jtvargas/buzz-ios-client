@@ -198,6 +198,14 @@ public actor SyncEngine {
         channelStates[channel] ?? .unsynced
     }
 
+    /// The in-memory presence/typing store the engine diverts ephemerals into.
+    ///
+    /// Exposed so the app can subscribe to the presence roster and per-channel
+    /// typing without reaching the socket (the BuzzKit boundary rule holds — this is
+    /// in-memory ephemeral state, not the connection). `nonisolated` because it hands
+    /// back an immutable, `Sendable` collaborator; no actor hop is needed to read it.
+    public nonisolated var presenceStore: PresenceStore { presence }
+
     private func removeStateObserver(_ id: Int) {
         stateObservers.removeValue(forKey: id)
     }

@@ -22,6 +22,9 @@ struct ComposerView: View {
                     .padding(.horizontal, 16)
                     .padding(.vertical, 10)
                     .glassEffect(.regular, in: .capsule)
+                    .onChange(of: model.draft) { _, newValue in
+                        model.handleTyping(newValue)
+                    }
 
                 Button {
                     model.send()

@@ -38,7 +38,14 @@ final class AppEnvironment {
     /// Built once an identity and relay URL are known; `nil` until then.
     private(set) var engine: SyncEngine?
 
+    /// The authenticated identity's hex pubkey, resolved once the engine starts.
+    /// Used to exclude our own typing echo and to key our own presence.
+    private(set) var selfPubkeyHex: String?
+
     private var engineStateTask: Task<Void, Never>?
+    /// Publishes our own presence: `"online"` every 60 s while foregrounded, and
+    /// `"offline"` on background. Built alongside the engine.
+    private var heartbeat: PresenceHeartbeat?
 
     /// Opens the store and prepares the signer. The engine is not built yet — that
     /// waits until an identity is present (a returning user) or entered (the gate).
@@ -87,11 +94,30 @@ final class AppEnvironment {
         }
     }
 
-    /// Forwards a scene-phase change to the engine, if one exists. A no-op before
-    /// the engine is built (i.e. while the gate is up).
+    /// Forwards a scene-phase change to the engine and drives the presence
+    /// heartbeat, if an engine exists. A no-op before the engine is built (i.e. while
+    /// the gate is up).
+    ///
+    /// On background the heartbeat publishes `"offline"` *before* the engine arms its
+    /// grace window, so the departure goes out while the socket is still live; on
+    /// foreground it forwards first, then resumes beating.
     func handleScenePhase(_ phase: ScenePhase) {
         guard let engine else { return }
-        Task { await forwardScenePhase(phase, to: engine) }
+        let heartbeat = self.heartbeat
+        Task {
+            switch phase {
+            case .active:
+                await forwardScenePhase(phase, to: engine)
+                heartbeat?.startForeground()
+            case .background:
+                await heartbeat?.stopBackground()
+                await forwardScenePhase(phase, to: engine)
+            case .inactive:
+                await forwardScenePhase(phase, to: engine)
+            @unknown default:
+                break
+            }
+        }
     }
 
     // MARK: - Engine composition
@@ -120,10 +146,17 @@ final class AppEnvironment {
             signer: signer
         )
         self.engine = engine
+        heartbeat = PresenceHeartbeat(publisher: engine)
 
         observeEngineState(of: engine)
         try await engine.start()
+        // Resolve the identity for presence keying and own-typing exclusion. The
+        // signer read can fail benignly; presence simply degrades to keyless.
+        selfPubkeyHex = try? await signer.publicKey().hex
         phase = .running
+        // Launch is a foreground start; scene-phase `.onChange` does not fire for the
+        // initial value, so begin beating explicitly here.
+        heartbeat?.startForeground()
     }
 
     private func observeEngineState(of engine: SyncEngine) {

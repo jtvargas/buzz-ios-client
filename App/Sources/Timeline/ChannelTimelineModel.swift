@@ -38,7 +38,18 @@ final class ChannelTimelineModel {
 
     private let store: BuzzEventStore
     private let sender: any MessageSending
+    private let typing: any EphemeralPublishing
     private let pageSize: Int
+
+    /// The minimum gap between own-typing publishes while the composer has active
+    /// input. Short enough that a peer's 8 s indicator never lapses mid-typing, long
+    /// enough not to spam the relay on every keystroke.
+    private let typingThrottle: Duration
+    /// The monotonic clock the throttle measures against, injected so a test drives
+    /// the throttle window without real time.
+    private let clock: @Sendable () -> ContinuousClock.Instant
+    /// When own typing was last published, for the throttle.
+    private var lastTypingPublish: ContinuousClock.Instant?
 
     /// Loaded rows keyed by id, so a re-read of the head merges into — rather than
     /// duplicates — rows an older page already holds.
@@ -50,12 +61,18 @@ final class ChannelTimelineModel {
         channel: String,
         store: BuzzEventStore,
         sender: any MessageSending,
-        pageSize: Int = 50
+        typing: any EphemeralPublishing = NoopEphemeralPublisher(),
+        pageSize: Int = 50,
+        typingThrottle: Duration = .seconds(3),
+        clock: @escaping @Sendable () -> ContinuousClock.Instant = { ContinuousClock.now }
     ) {
         self.channel = channel
         self.store = store
         self.sender = sender
+        self.typing = typing
         self.pageSize = pageSize
+        self.typingThrottle = typingThrottle
+        self.clock = clock
     }
 
     // MARK: - Live observation
@@ -151,6 +168,26 @@ final class ChannelTimelineModel {
     func retry(_ eventID: String) {
         let sender = self.sender
         Task { try? await sender.retry(eventID) }
+    }
+
+    // MARK: - Typing
+
+    /// Publishes an own typing indicator for this channel as the composer changes,
+    /// throttled to at most one publish per ``typingThrottle`` window. Empty input
+    /// never publishes — clearing the field is not typing.
+    ///
+    /// Fire-and-forget: typing is ephemeral (S-3), so a failure is dropped. The
+    /// indicator carries the `["h", channel]` tag the relay requires for a channel-
+    /// scoped ephemeral (S-5); a non-member's typing would be rejected without it.
+    func handleTyping(_ text: String) {
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        let instant = clock()
+        if let last = lastTypingPublish, instant - last < typingThrottle { return }
+        lastTypingPublish = instant
+
+        let channel = self.channel
+        let typing = self.typing
+        Task { await typing.publishEphemeral(kind: .typing, content: "", tags: [["h", channel]]) }
     }
 
     private func restore(draft text: String, error: OutboxError) {

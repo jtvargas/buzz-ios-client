@@ -1,16 +1,26 @@
 import NostrCore
 
 /// The in-memory home of ephemeral presence (kind 20001) and typing (kind 20002)
-/// state, keyed by `(channel, pubkey)`.
+/// state.
+///
+/// # Two keyings, one store (S-5)
+///
+/// Presence and typing key differently because the relay scopes them differently.
+/// **Presence is workspace-global**: the upstream builder emits a bare status with
+/// no `h` tag and the relay fans it out to every subscriber, so a peer is "online"
+/// wherever they last published — this store keys presence by **pubkey alone** and
+/// accepts an `h`-less event (an `h`, if present, is ignored). **Typing is
+/// channel-scoped**: the relay checks channel membership for a channel-tagged
+/// ephemeral and rejects a non-member, so typing carries `["h", channel]` and this
+/// store keys it by **(channel, pubkey)**. A typing event with no channel has
+/// nowhere to be placed and is dropped.
 ///
 /// Presence and typing are ephemeral by definition: relays never store them
 /// (``NostrCore/EventKind/isEphemeral``), and neither do we. ``BuzzEventStore``
 /// verifies these kinds at the ingest choke point and then *diverts* them here —
-/// into ``IngestResult/ephemeral`` — instead of writing them to the log. Storing
-/// seconds-lived heartbeats would grow an append-only log without bound for data
-/// that is meaningless almost as soon as it lands. This actor is that diversion's
-/// destination and the whole of its persistence: purely in memory, never touching
-/// GRDB.
+/// into ``IngestResult/ephemeral`` — instead of writing them to the log. This actor
+/// is that diversion's destination and the whole of its persistence: purely in
+/// memory, never touching GRDB.
 ///
 /// # Why an actor
 ///
@@ -24,15 +34,15 @@ import NostrCore
 /// read. Two reasons. An event's `created_at` is author-controlled and skewable, so
 /// liveness is timed from *local receipt*, not a timestamp a peer chose. And a test
 /// drives expiry by advancing the injected clock — no sleeps, no real time. Expiry
-/// is lazy on read (a record past its deadline is already invisible to a
-/// ``snapshot(for:)``) and pushed to observers by ``sweep()``, the seam the sync
-/// engine's timer will drive in a later step. This actor owns no timer of its own.
+/// is lazy on read (a record past its deadline is already invisible to a snapshot)
+/// and pushed to observers by ``sweep()``, the seam the sync engine's timer drives.
+/// This actor owns no timer of its own.
 ///
-/// # The TTLs are placeholders
+/// # TTLs
 ///
-/// 60 s presence / 10 s typing are the spec's inferred defaults, to be tuned
-/// against upstream in Phase 3. Both are injectable so that tuning is a call-site
-/// change, not an edit here.
+/// Presence 150 s, typing 8 s (spec §Step 2, source-derived: typing matches the
+/// desktop 8 s TTL; presence is 2.5× the 60 s heartbeat, so one dropped heartbeat
+/// does not flap the dot). Both are injectable so tuning is a call-site change.
 public actor PresenceStore {
     // MARK: - Injected collaborators
 
@@ -47,28 +57,35 @@ public actor PresenceStore {
 
     // MARK: - State
 
-    private var presenceRecords: [Key: PresenceRecord] = [:]
-    private var typingRecords: [Key: TypingRecord] = [:]
+    /// Workspace-global presence, keyed by pubkey (S-5): a peer is present in the
+    /// workspace, not in a channel.
+    var presenceRecords: [String: PresenceRecord] = [:]
+    /// Per-channel typing, keyed by `(channel, pubkey)` (S-5).
+    var typingRecords: [TypingKey: TypingRecord] = [:]
 
-    /// Per-channel observer continuations.
-    private var observers: [String: [Int: AsyncStream<ChannelPresence>.Continuation]] = [:]
-    /// The last snapshot published per channel, so a real change is told from a
-    /// no-op and a repeated identical yield is suppressed. A channel that has
-    /// decayed to empty carries no entry, so the map does not accumulate one row
-    /// per channel ever seen.
-    private var lastPublished: [String: ChannelPresence] = [:]
-    private var nextObserverID = 0
+    /// Observers of the global presence roster.
+    var presenceObservers: [Int: AsyncStream<[PresenceMember]>.Continuation] = [:]
+    /// Per-channel observers of who is typing.
+    var typingObservers: [String: [Int: AsyncStream<[String]>.Continuation]] = [:]
+
+    /// The last roster published, so a real change is told from a no-op and an
+    /// identical repeat yield is suppressed.
+    var lastPublishedPresence: [PresenceMember] = []
+    /// The last typer list published per channel. A channel that decayed to empty
+    /// carries no entry, so the map does not accumulate a row per channel ever seen.
+    var lastPublishedTyping: [String: [String]] = [:]
+    var nextObserverID = 0
 
     // MARK: - Lifecycle
 
     /// - Parameters:
-    ///   - presenceTTL: how long a presence heartbeat stays live. Default 60 s.
-    ///   - typingTTL: how long a typing indicator stays live. Default 10 s.
+    ///   - presenceTTL: how long a presence heartbeat stays live. Default 150 s.
+    ///   - typingTTL: how long a typing indicator stays live. Default 8 s.
     ///   - now: the monotonic clock. Defaults to the system continuous clock;
     ///     tests inject a hand-advanced one.
     public init(
-        presenceTTL: Duration = .seconds(60),
-        typingTTL: Duration = .seconds(10),
+        presenceTTL: Duration = .seconds(150),
+        typingTTL: Duration = .seconds(8),
         now: @escaping @Sendable () -> ContinuousClock.Instant = { ContinuousClock.now }
     ) {
         self.presenceTTL = presenceTTL
@@ -81,40 +98,37 @@ public actor PresenceStore {
     /// Folds a batch of diverted ephemerals into presence and typing state.
     ///
     /// The batch is exactly what ``IngestResult/ephemeral`` carried, already
-    /// verified at the choke point, so this trusts each event's identity. Kinds
-    /// other than presence and typing are ignored: a future ephemeral kind rides
-    /// the same divert path but is not this store's to interpret. An ephemeral with
-    /// no `h` tag has no channel to be placed in and is skipped.
+    /// verified at the choke point, so this trusts each event's identity. Presence
+    /// (20001) is folded into the global roster keyed by pubkey — an `h`-less event
+    /// is accepted. Typing (20002) is folded per channel from its `h` tag — an
+    /// `h`-less typing event is skipped. Other ephemeral kinds ride the same divert
+    /// path but are not this store's to interpret and are ignored.
     ///
-    /// Each touched channel publishes at most once, after the whole batch is
-    /// folded, so a flush of ten heartbeats for one channel wakes its observers
-    /// once, not ten times.
+    /// Presence publishes at most once and each touched typing channel at most once,
+    /// after the whole batch is folded — a flush of ten heartbeats wakes the roster's
+    /// observers once, not ten times.
     ///
-    /// This is the seam the sync engine drives: it forwards `store.ingest(…).ephemeral`
-    /// straight here. Nothing else is wired in this step.
+    /// This is the seam the sync engine drives: it forwards
+    /// `store.ingest(…).ephemeral` straight here.
     public func apply(_ events: [NostrEvent]) {
-        var touched: Set<String> = []
+        var presenceChanged = false
+        var touchedTypingChannels: Set<String> = []
         for event in events {
-            guard let channel = event.groupID else { continue }
-            let changed: Bool
             if event.kind == .presence {
-                changed = applyPresence(event, channel: channel)
+                if applyPresence(event) { presenceChanged = true }
             } else if event.kind == .typing {
-                changed = applyTyping(event, channel: channel)
-            } else {
-                continue
+                guard let channel = event.groupID else { continue }
+                if applyTyping(event, channel: channel) { touchedTypingChannels.insert(channel) }
             }
-            if changed { touched.insert(channel) }
         }
-        for channel in touched {
-            publish(channel)
-        }
+        if presenceChanged { publishPresence() }
+        for channel in touchedTypingChannels { publishTyping(channel) }
     }
 
-    /// Records a presence heartbeat, or clears the peer on an `"offline"` status.
-    /// Returns whether the backing map changed.
-    private func applyPresence(_ event: NostrEvent, channel: String) -> Bool {
-        let key = Key(channel: channel, pubkey: event.pubkey)
+    /// Records a presence heartbeat under the peer's pubkey (workspace-global), or
+    /// clears the peer on an `"offline"` status. Returns whether the roster changed.
+    private func applyPresence(_ event: NostrEvent) -> Bool {
+        let key = event.pubkey
         // A relay can redeliver an older heartbeat after a reconnect; an older one
         // must never override a newer status or extend a liveness the newer one
         // already superseded. The staleness guard the projections use, in miniature.
@@ -135,9 +149,10 @@ public actor PresenceStore {
         return true
     }
 
-    /// Records a typing indicator. Returns whether the backing map changed.
+    /// Records a typing indicator under `(channel, pubkey)`. Returns whether the
+    /// channel's typer set changed.
     private func applyTyping(_ event: NostrEvent, channel: String) -> Bool {
-        let key = Key(channel: channel, pubkey: event.pubkey)
+        let key = TypingKey(channel: channel, pubkey: event.pubkey)
         if let existing = typingRecords[key], event.createdAt < existing.createdAt {
             return false
         }
@@ -160,118 +175,40 @@ public actor PresenceStore {
 
     // MARK: - Expiry
 
-    /// Physically evicts every lapsed record and republishes any channel whose
-    /// snapshot shrank as a result.
+    /// Physically evicts every lapsed record and republishes the roster and any
+    /// typing channel whose snapshot shrank as a result.
     ///
-    /// Expiry is otherwise lazy — a lapsed record is already invisible to a
-    /// ``snapshot(for:)`` read — so this exists for the *push* half of observation:
-    /// a typing indicator must vanish from a subscribed UI when it lapses, not only
-    /// when the next event happens to arrive. The sync engine drives this on a timer
-    /// in a later step; this actor owns no timer itself.
+    /// Expiry is otherwise lazy — a lapsed record is already invisible to a snapshot
+    /// read — so this exists for the *push* half of observation: a typing indicator
+    /// must vanish from a subscribed UI when it lapses, not only when the next event
+    /// happens to arrive. The sync engine drives this on a timer; this actor owns no
+    /// timer itself.
     public func sweep() {
-        let channels = Set(presenceRecords.keys.map(\.channel))
-            .union(typingRecords.keys.map(\.channel))
-        for channel in channels {
-            publish(channel)
+        publishPresence()
+        for channel in Set(typingRecords.keys.map(\.channel)) {
+            publishTyping(channel)
         }
-    }
-
-    // MARK: - Observation
-
-    /// A live feed of one channel's presence and typing, seeded with the current
-    /// snapshot so a new subscriber never misses the state it subscribed into
-    /// (mirroring the connection-state stream in the transport layer).
-    public func presence(for channel: String) -> AsyncStream<ChannelPresence> {
-        let (stream, continuation) = AsyncStream.makeStream(of: ChannelPresence.self)
-        let id = nextObserverID
-        nextObserverID += 1
-        observers[channel, default: [:]][id] = continuation
-        continuation.yield(snapshotNow(channel))
-        continuation.onTermination = { [weak self] _ in
-            Task { await self?.removeObserver(id, channel: channel) }
-        }
-        return stream
-    }
-
-    /// The current snapshot for a channel, lapsed records already excluded. A pure
-    /// read: it neither mutates state nor notifies observers.
-    public func snapshot(for channel: String) -> ChannelPresence {
-        snapshotNow(channel)
-    }
-
-    private func removeObserver(_ id: Int, channel: String) {
-        observers[channel]?.removeValue(forKey: id)
-        if observers[channel]?.isEmpty == true {
-            observers.removeValue(forKey: channel)
-        }
-    }
-
-    // MARK: - Publishing
-
-    /// Evicts lapsed records for one channel, then yields a fresh snapshot to its
-    /// observers only if it differs from the last one published.
-    private func publish(_ channel: String) {
-        evict(channel)
-        let snapshot = snapshotNow(channel)
-        let previous = lastPublished[channel] ?? .empty(channel)
-        guard previous != snapshot else { return }
-        if snapshot.isEmpty {
-            lastPublished.removeValue(forKey: channel)
-        } else {
-            lastPublished[channel] = snapshot
-        }
-        guard let channelObservers = observers[channel] else { return }
-        for continuation in channelObservers.values {
-            continuation.yield(snapshot)
-        }
-    }
-
-    /// Removes lapsed records for one channel from the backing maps.
-    private func evict(_ channel: String) {
-        let cutoff = now()
-        presenceRecords = presenceRecords.filter { key, record in
-            key.channel != channel || record.deadline > cutoff
-        }
-        typingRecords = typingRecords.filter { key, record in
-            key.channel != channel || record.deadline > cutoff
-        }
-    }
-
-    /// Builds the live snapshot for a channel, treating any record past its deadline
-    /// as already gone — expiry is visible on read whether or not a sweep has
-    /// physically evicted it. Ordered by pubkey so equal states compare equal.
-    private func snapshotNow(_ channel: String) -> ChannelPresence {
-        let cutoff = now()
-        let present = presenceRecords
-            .filter { $0.key.channel == channel && $0.value.deadline > cutoff }
-            .map { PresenceMember(pubkey: $0.value.pubkey, status: $0.value.status) }
-            .sorted { $0.pubkey < $1.pubkey }
-        let typing = typingRecords
-            .filter { $0.key.channel == channel && $0.value.deadline > cutoff }
-            .map(\.value.pubkey)
-            .sorted()
-        return ChannelPresence(channel: channel, present: present, typing: typing)
     }
 
     // MARK: - Backing types
 
     /// The one presence content that clears state rather than setting it.
-    private static let offlineStatus = "offline"
+    static let offlineStatus = "offline"
 
-    /// The composite identity of a presence or typing record.
-    private struct Key: Hashable {
+    /// The composite identity of a typing record.
+    struct TypingKey: Hashable {
         let channel: String
         let pubkey: String
     }
 
-    private struct PresenceRecord {
+    struct PresenceRecord {
         let pubkey: String
         let status: PresenceStatus
         let createdAt: Int64
         let deadline: ContinuousClock.Instant
     }
 
-    private struct TypingRecord {
+    struct TypingRecord {
         let pubkey: String
         let createdAt: Int64
         let deadline: ContinuousClock.Instant

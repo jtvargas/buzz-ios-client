@@ -11,6 +11,8 @@ import SwiftUI
 /// conversation.
 struct TimelineRowView: View {
     let row: TimelineRow
+    /// Whether this message's author is present in the workspace (S-5 presence).
+    var isAuthorOnline: Bool = false
     let onRetry: (String) -> Void
 
     var body: some View {
@@ -24,11 +26,13 @@ struct TimelineRowView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .opacity(row.delivery == .pending ? 0.5 : 1)
         .animation(.default, value: row.delivery)
+        .animation(.default, value: isAuthorOnline)
         .accessibilityElement(children: .combine)
     }
 
     private var header: some View {
         HStack(spacing: 6) {
+            PresenceDot(isOnline: isAuthorOnline)
             Text(row.displayName)
                 .font(.subheadline.weight(.semibold))
                 .lineLimit(1)
