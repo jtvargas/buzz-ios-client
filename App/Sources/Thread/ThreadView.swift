@@ -35,21 +35,26 @@ struct ThreadView: View {
         ScrollView {
             LazyVStack(spacing: 0) {
                 ForEach(model.rows) { row in
-                    TimelineRowView(
-                        row: row,
-                        reactions: model.reactions(for: row.id),
-                        isOwn: model.isOwn(row),
-                        onRetry: { model.retry($0) },
-                        onReact: { model.react($0, on: row.id) },
-                        onToggleReaction: { model.toggleReaction($0, on: row.id) },
-                        onDelete: { model.delete($0) }
-                    )
-                    .padding(.horizontal)
-                    .padding(.vertical, 4)
+                    // One view per element keeps the lazy stack's sizing stable as
+                    // replies stream in, so the bottom anchor never fights a changing
+                    // per-element view count.
+                    VStack(spacing: 0) {
+                        TimelineRowView(
+                            row: row,
+                            reactions: model.reactions(for: row.id),
+                            isOwn: model.isOwn(row),
+                            onRetry: { model.retry($0) },
+                            onReact: { model.react($0, on: row.id) },
+                            onToggleReaction: { model.toggleReaction($0, on: row.id) },
+                            onDelete: { model.delete($0) }
+                        )
+                        .padding(.horizontal)
+                        .padding(.vertical, 4)
 
-                    // Set the opener apart from its replies.
-                    if row.id == model.root {
-                        Divider().padding(.horizontal)
+                        // Set the opener apart from its replies.
+                        if row.id == model.root {
+                            Divider().padding(.horizontal)
+                        }
                     }
                 }
             }

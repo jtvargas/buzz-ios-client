@@ -54,15 +54,32 @@ final class ThreadModel {
 
     // MARK: - Open + observe
 
-    /// Fetches the thread once on open, then consumes the observation until
-    /// cancelled. Attach with SwiftUI's `.task`.
+    /// Renders the thread from the local store immediately, pulling the thread from
+    /// the relay in parallel, then consumes the observation until cancelled. Attach
+    /// with SwiftUI's `.task`.
     ///
-    /// The one-shot fetch pulls replies that live-fan-out may not have delivered;
-    /// the observation's initial emission then reads whatever the fetch ingested, so
-    /// no reply is missed between the fetch and the subscription.
+    /// Observation and the one-shot fetch run concurrently — the fetch never gates
+    /// the first render. Gating it did: the thread laid out empty and only filled
+    /// after a relay round-trip, so ``ThreadView``'s `.defaultScrollAnchor(.bottom)`
+    /// anchored against empty content and left a gap under the newest message. Read
+    /// first, the observation's initial emission renders the opener (and any already
+    /// ingested replies) on the first frame — exactly as the channel timeline does —
+    /// and the fetch's replies merge in live as they land.
+    ///
+    /// The one-shot fetch still pulls replies that live fan-out may not have
+    /// delivered; the observation re-reads on the commit that ingest raises, so no
+    /// reply is missed between the fetch and the subscription.
     func run() async {
-        _ = try? await opener.openThread(root: root)
+        async let opened: Void = openOnce()
         await observe()
+        _ = await opened
+    }
+
+    /// The one-shot thread fetch, run concurrently with the observation so it never
+    /// delays the first render. A failure is dropped: the live observation still
+    /// carries whatever the store already holds and whatever fan-out later delivers.
+    private func openOnce() async {
+        _ = try? await opener.openThread(root: root)
     }
 
     private nonisolated func observe() async {
