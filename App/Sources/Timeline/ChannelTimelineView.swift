@@ -85,8 +85,6 @@ struct ChannelTimelineView: View {
             onLeavingScreen: releaseComposer
         ) {
             list
-        } header: {
-            header
         } bar: {
             // One bottom bar, not two insets: stacked safe-area insets place the
             // last-applied one closest to the screen edge, which would put the typing
@@ -99,11 +97,7 @@ struct ChannelTimelineView: View {
             accessory
         }
         .overlay { emptyState }
-        // The system bar is hidden and ``ConversationHeaderRow`` takes its place, back
-        // chevron included — a 44pt bar cannot hold the two-line heading the owner asked
-        // for at back-button level. The swipe-back gesture belongs to the navigation stack
-        // rather than to the bar and survives this; that is measured, not assumed.
-        .toolbar(.hidden, for: .navigationBar)
+        .modifier(header)
         .sheet(isPresented: $showsChannelDetails) {
             ChannelDetailsView(
                 channel: channel,
@@ -196,9 +190,8 @@ struct ChannelTimelineView: View {
             onOpenThread: row.isDeleted ? nil : { open(thread: row) },
             onOpenProfile: { profilePeer = ProfilePeer(pubkey: $0) }
         )
-        // The shared constant, not a bare `.padding(.horizontal)`: the day separator and
-        // the header pill start on this same line, and three defaults agreeing is not the
-        // same as one number.
+        // The shared constant, not a bare `.padding(.horizontal)`: the day separator starts
+        // on this same line, and two defaults agreeing is not the same as one number.
         .padding(.horizontal, MessageRowMetrics.rowLeading)
     }
 
@@ -236,30 +229,24 @@ struct ChannelTimelineView: View {
         }
     }
 
-    /// The header: the back chevron, a glass pill carrying the conversation's name with its
-    /// member count beneath, and the trailing glyph group (§4).
+    /// The heading, in the navigation bar's leading slot beside the system back button: the
+    /// conversation's mark, its name, and its member count beneath. See
+    /// ``ConversationTitleBar``.
     ///
-    /// The pill opens the details sheet on tap. The dropdown arrow is gone: a sheet is not a
-    /// menu, so a chevron promising one was the wrong affordance. What tells a reader this is
-    /// a control is the same pressed dim the row's avatar and name use.
-    private var header: some View {
-        // Resolved once for the pill's two lines and its label, rather than four times
+    /// It opens the details sheet on tap. No dropdown arrow: a sheet is not a menu, so a
+    /// chevron promising one is the wrong affordance, and the bar's own capsule already
+    /// reads as a control.
+    private var header: ConversationTitleBar {
+        // Resolved once for both lines and the accessibility label, rather than four times
         // through the directory on every pass.
         let identity = conversation
-        return ConversationHeaderRow {
-            Button {
-                showsChannelDetails = true
-            } label: {
-                ConversationHeaderPill(
-                    symbol: ConversationHeaderPill.symbol(for: identity.kind),
-                    title: identity.title,
-                    subtitle: subtitle(for: identity)
-                )
-            }
-            .buttonStyle(PressFeedbackButtonStyle())
-            .accessibilityLabel(identity.title)
-            .accessibilityHint("Double tap to show conversation details")
-        }
+        return ConversationTitleBar(
+            symbol: ConversationTitleBar.symbol(for: identity.kind),
+            title: identity.title,
+            subtitle: subtitle(for: identity),
+            action: { showsChannelDetails = true },
+            actionHint: "Double tap to show conversation details"
+        )
     }
 
     /// The header's second line: a channel's member count, or a direct peer's own quiet
@@ -275,7 +262,7 @@ struct ChannelTimelineView: View {
         if let peer = conversation.peer {
             return names.secondaryLabel(for: peer)
         }
-        return ConversationHeaderPill.memberCount(names.members(of: channelID).count)
+        return ConversationTitleBar.memberCount(names.members(of: channelID).count)
     }
 
     /// The scaffold's "the top of history is near" report. It arrives as a level

@@ -21,21 +21,14 @@ import SwiftUI
 /// history out from under a reader" and "load the next page" testable without a view
 /// host, and keeps this file free of per-surface special cases.
 ///
-/// # Why the header is a top bar and not a toolbar item or a list row
+/// # Why there is no header slot here
 ///
-/// A conversation's heading is chrome, not content: it must not scroll away with the
-/// messages, and it must not be compressed by something else's layout. A navigation-bar
-/// item is compressed — that is the "unreadable bubble" the header used to be, and it is why
-/// the surfaces hide the system bar and ``ConversationHeaderRow`` draws the back button
-/// itself. The first item of the scroll content would scroll away. So the header is attached
-/// with `safeAreaBar(edge: .top)`, the mirror of the composer's own attachment: it stays put,
-/// and by the same documented behaviour the bottom bar relies on — a safe-area inset plus
-/// "the edge effect of any scroll views affected by the inset safe area" — it insets the
-/// *scrollable* content, so the oldest message is reachable rather than stranded under it.
-///
-/// It also cannot double-count with anything. `barHeight` is measured from the bottom
-/// bar's geometry alone and is only ever used to lift the accessory off it, and keyboard
-/// avoidance is a bottom-edge inset — a top bar is outside both.
+/// There was one, and it is gone: the heading is the navigation bar's own leading item now
+/// (``ConversationTitleBar``), so the top of this shell is the system bar's to inset and the
+/// system bar's to blur under. That also returns the real back button and the interactive
+/// drag-back, which the app-drawn row cost. `barHeight` is measured from the bottom bar's
+/// geometry alone and is only ever used to lift the accessory off it, and keyboard avoidance
+/// is a bottom-edge inset, so nothing here double-counts with the bar above.
 ///
 /// # What must not be added
 ///
@@ -43,7 +36,7 @@ import SwiftUI
 /// inset, and no `ToolbarItem(placement: .keyboard)` — each of those double-counts
 /// with SwiftUI's own keyboard avoidance and is the mechanism behind a keyboard-sized
 /// strip left behind after dismissal.
-struct ConversationScaffold<Content: View, Header: View, Bar: View, Accessory: View>: View {
+struct ConversationScaffold<Content: View, Bar: View, Accessory: View>: View {
     /// Whether the newest row is in view. The owner freezes its rendered tail while
     /// this is `false`, so an arriving message cannot move the reader's place.
     @Binding var isAtBottom: Bool
@@ -62,9 +55,6 @@ struct ConversationScaffold<Content: View, Header: View, Bar: View, Accessory: V
     /// resolves against an empty stack and the surface opens in the wrong place and
     /// then jumps.
     @ViewBuilder var content: Content
-    /// The conversation's heading. Declared after `content` only so the call site can
-    /// write all four slots as trailing closures.
-    @ViewBuilder var header: Header
     /// The floating composer. Its height insets the scrollable content, nothing else.
     @ViewBuilder var bar: Bar
     /// Floats over the list just above the bar — deliberately *not* inside it, so
@@ -99,10 +89,10 @@ struct ConversationScaffold<Content: View, Header: View, Bar: View, Accessory: V
                 .padding(.bottom, barHeight + 6)
         }
         .releasesKeyboardWhenLeavingScreen(then: onLeavingScreen)
-        // Both surfaces hide the system navigation bar so the header can be one row of
-        // capsules, and a hidden bar stops UIKit's pop gesture recognising — measured, and
-        // invisible in the recogniser's own properties. This puts the swipe back.
-        .conversationBackSwipe()
+        // No app-drawn back swipe. Both surfaces keep the system navigation bar, so the
+        // interactive pop is UIKit's own — including the drag that carries the previous
+        // screen under the thumb and can be abandoned half-way, which the app's own pan
+        // could not reproduce.
     }
 
     private var scroll: some View {
@@ -147,12 +137,6 @@ struct ConversationScaffold<Content: View, Header: View, Bar: View, Accessory: V
             withAnimation(.smooth(duration: 0.2)) {
                 position.scrollTo(edge: .bottom)
             }
-        }
-        // No alignment or inset of its own: the header is a full-width row that owns its
-        // margins, because the trailing capsule has to reach the trailing edge while the
-        // pill hugs its content.
-        .safeAreaBar(edge: .top) {
-            header
         }
         .safeAreaBar(edge: .bottom) {
             bar
