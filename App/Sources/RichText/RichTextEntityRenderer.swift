@@ -9,6 +9,11 @@ struct RichTextEntityMarker: TextAttribute {
     /// The target's URL string — the same value the flash compares against, so the
     /// renderer never has to know what kind of entity it is drawing.
     let key: String
+    /// Advance sitting after this run's last glyph that belongs to the *gap*, not to
+    /// the pill (see ``RichTextStyle/pillAdvance``). Only the final character of a
+    /// range carries it, so a range that wraps keeps a full-width fill on every line
+    /// but the last.
+    var trailingAdvance: CGFloat = 0
 }
 
 /// Builds the `Text` one inline is drawn as.
@@ -22,9 +27,23 @@ enum RichTextInline {
     static func text(_ attributed: AttributedString, base: Font) -> Text {
         let styled = RichTextStyle.styled(attributed, base: base, interactive: true)
         return RichTextSegments.segments(of: styled).reduce(Text("")) { text, segment in
-            let piece = Text(AttributedString(styled[segment.range]))
-            guard let link = segment.link else { return text + piece }
-            return text + piece.customAttribute(RichTextEntityMarker(key: link.absoluteString))
+            guard let link = segment.link else {
+                return text + Text(AttributedString(styled[segment.range]))
+            }
+            let key = link.absoluteString
+            // The range's last character is marked apart from the rest of it because
+            // it carries the trailing gap's advance inside its own typographic bounds
+            // — the renderer needs to know which run to take that width back out of.
+            let last = styled.index(beforeCharacter: segment.range.upperBound)
+            let head = segment.range.lowerBound ..< last
+            let marked = head.isEmpty
+                ? text
+                : text + Text(AttributedString(styled[head]))
+                    .customAttribute(RichTextEntityMarker(key: key))
+            return marked + Text(AttributedString(styled[last ..< segment.range.upperBound]))
+                .customAttribute(
+                    RichTextEntityMarker(key: key, trailingAdvance: RichTextStyle.pillAdvance)
+                )
         }
     }
 }
@@ -51,17 +70,17 @@ struct RichTextEntityRenderer: TextRenderer, Equatable {
 
     func draw(layout: Text.Layout, in context: inout GraphicsContext) {
         for line in layout {
-            for (key, rect) in Self.pills(in: line) {
+            for pill in Self.pills(in: line) {
                 context.fill(
                     Path(
-                        roundedRect: rect.insetBy(
+                        roundedRect: pill.rect.insetBy(
                             dx: -RichTextStyle.pillPadding.width,
                             dy: -RichTextStyle.pillPadding.height
                         ),
                         cornerRadius: RichTextStyle.pillCornerRadius,
                         style: .continuous
                     ),
-                    with: .color(RichTextStyle.pillFill(dark: dark, pressed: key == flashing))
+                    with: .color(RichTextStyle.pillFill(dark: dark, pressed: pill.key == flashing))
                 )
             }
         }
@@ -72,6 +91,24 @@ struct RichTextEntityRenderer: TextRenderer, Equatable {
                 context.draw(run)
             }
         }
+    }
+
+    /// One laid-out run, reduced to what the merge needs. A value rather than a
+    /// `Text.Layout.Run`, which cannot be built in a test.
+    struct Run {
+        /// The entity this run belongs to, or `nil` for ordinary text.
+        let key: String?
+        /// See ``RichTextEntityMarker/trailingAdvance``.
+        var trailingAdvance: CGFloat = 0
+        let rect: CGRect
+    }
+
+    /// One pill: which entity it belongs to, and the glyphs it is drawn behind.
+    struct Pill: Equatable {
+        let key: String
+        /// The glyphs' own rect — any trailing gap advance has already been taken back
+        /// out, so this is what the padding is applied to.
+        let rect: CGRect
     }
 
     /// One rect per interactive range *per line*, merged across adjacent runs.
@@ -86,8 +123,15 @@ struct RichTextEntityRenderer: TextRenderer, Equatable {
     ///   them.
     ///
     /// So: merge along a line, break at the end of it.
-    static func pills(in line: Text.Layout.Line) -> [(key: String, rect: CGRect)] {
-        merged(line.map { ($0[RichTextEntityMarker.self]?.key, $0.typographicBounds.rect) })
+    static func pills(in line: Text.Layout.Line) -> [Pill] {
+        merged(line.map { run in
+            let marker = run[RichTextEntityMarker.self]
+            return Run(
+                key: marker?.key,
+                trailingAdvance: marker?.trailingAdvance ?? 0,
+                rect: run.typographicBounds.rect
+            )
+        })
     }
 
     /// The merge itself, over plain values — `Text.Layout.Line` cannot be built in a
@@ -96,18 +140,22 @@ struct RichTextEntityRenderer: TextRenderer, Equatable {
     /// Only *adjacent* runs merge. Two references to the same person on one line are
     /// two pills, and unioning them would paint one shape straight through the words
     /// between them.
-    static func merged(_ runs: [(key: String?, rect: CGRect)]) -> [(key: String, rect: CGRect)] {
-        var pills: [(key: String, rect: CGRect)] = []
+    static func merged(_ runs: [Run]) -> [Pill] {
+        var pills: [Pill] = []
         var isContiguous = false
         for run in runs {
             guard let key = run.key else {
                 isContiguous = false
                 continue
             }
+            // The gap's advance sits inside the run that carries it, so it is trimmed
+            // before the union: it is space beside the pill, not part of the pill.
+            var rect = run.rect
+            rect.size.width = max(0, rect.width - run.trailingAdvance)
             if isContiguous, let last = pills.last, last.key == key {
-                pills[pills.count - 1] = (key, last.rect.union(run.rect))
+                pills[pills.count - 1] = Pill(key: key, rect: last.rect.union(rect))
             } else {
-                pills.append((key, run.rect))
+                pills.append(Pill(key: key, rect: rect))
             }
             isContiguous = true
         }
