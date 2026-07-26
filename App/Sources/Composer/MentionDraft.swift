@@ -21,11 +21,11 @@ struct ComposerMentionToken: Hashable, Sendable, Identifiable {
     var pubkey: String? { kind == .user ? entityID : nil }
 }
 
-/// The still-being-typed token at the end of a draft: what the panel is completing,
+/// The still-being-typed token the caret sits inside: what the panel is completing,
 /// and what an insertion replaces.
-struct TrailingMention: Hashable, Sendable {
-    /// The UTF-16 range an insertion replaces — the trigger plus everything typed
-    /// after it.
+struct ActiveMention: Hashable, Sendable {
+    /// The UTF-16 range an insertion replaces — the trigger, and everything between it
+    /// and the caret. Never anything after the caret.
     let range: NSRange
     /// The typed query without its trigger, trimmed. Empty for a bare trigger, which
     /// opens the full list.
@@ -131,6 +131,13 @@ struct MentionDraft: Hashable, Sendable {
     /// Inserts `suggestion` over the token being typed: the visible label, then
     /// exactly one space, with the caret left after that space.
     ///
+    /// Only the token's own range is replaced, so everything before and after it
+    /// survives — a mention completed in the middle of a sentence leaves the rest of the
+    /// sentence alone. **Exactly one** space follows the label: when the text already
+    /// carries one at the insertion point, which is the everyday case for a mention
+    /// completed mid-sentence, that space is the one, and appending a second would leave
+    /// the author a gap to go back and delete.
+    ///
     /// Identical for every kind — the label goes in the text, the identity goes in
     /// ``tokens`` — so a channel reference and a person reference are the same edit
     /// with a different trigger. Returns the caret location.
@@ -139,16 +146,16 @@ struct MentionDraft: Hashable, Sendable {
         let visible = suggestion.insertionLabel
         let visibleLength = (visible as NSString).length
         let before = text
-        let cursor = replaceCharacters(in: range, with: visible + " ")
+        let labelEnd = replaceCharacters(in: range, with: visible)
         // `replaceCharacters` refuses an out-of-bounds range and leaves the text alone.
         // Appending a token then would claim a label the text does not contain — and, for
         // a person, tag someone the message never names. Nothing reachable does this
         // today; the guard is here so a future caller cannot make it reachable silently.
-        guard text != before else { return cursor }
+        guard text != before else { return labelEnd }
         // Located back from the caret rather than from `range`: `replaceCharacters`
         // widens an edit that touched an existing token, so the inserted run may not
-        // start where the caller asked. Back off the label and its one space.
-        let start = max(0, cursor - visibleLength - 1)
+        // start where the caller asked.
+        let start = max(0, labelEnd - visibleLength)
         tokens.append(ComposerMentionToken(
             kind: suggestion.kind,
             entityID: suggestion.entityID,
@@ -156,46 +163,89 @@ struct MentionDraft: Hashable, Sendable {
             range: NSRange(location: start, length: visibleLength)
         ))
         tokens.sort { $0.range.location < $1.range.location }
+
+        // Read back from the text rather than from the caller's range, so a widened
+        // replacement cannot leave the decision resting on a character that moved.
+        let nsText = text as NSString
+        let followedBySpace = labelEnd < nsText.length && nsText.character(at: labelEnd) == Self.space
+        // Appending at the label's end shifts nothing: the edit is empty and sits *at*
+        // the token's upper bound, which is outside it.
+        let cursor = followedBySpace
+            ? labelEnd + 1
+            : replaceCharacters(in: NSRange(location: labelEnd, length: 0), with: " ")
+        preferredCursor = cursor
         return cursor
     }
 
-    /// The trailing, still-editing `@query` or `#query`, if one exists.
+    /// The `@query` or `#query` the caret is inside, if any.
     ///
-    /// The *latest* trigger wins, so `@ada #gen` is completing a channel and not a
-    /// person. Four rules stop the panel from opening over text that is not a
-    /// mention: a trigger must open a word (`mail@test` and `C#` are not mentions);
-    /// a query may not *start* with a space, so the markdown heading `# Title` is a
-    /// heading (a bare trigger with nothing after it still opens the full list); a
-    /// newline ends the token; and **two consecutive spaces** end it — one internal
-    /// space is allowed so a multi-word name can still be completed, but a double
-    /// space means the author moved on. A completed token does not reopen the panel
-    /// merely because its own trailing space remains.
-    func trailingMention() -> TrailingMention? {
+    /// Anchored to the caret and not to the end of the draft, which is the whole
+    /// difference between a mention that only works on the last word of the last line
+    /// and one that works anywhere. The token starts at the nearest trigger *before*
+    /// `cursor` and ends *at* `cursor`, so text after the caret — more words, more
+    /// lines, another mention — cannot affect the query or close the panel.
+    ///
+    /// Scanning backwards is also what makes it cheap enough to run on every keystroke:
+    /// it stops at the first delimiter instead of searching the whole draft, and gives
+    /// up entirely past ``maxTokenLength`` so a long line cannot turn a keypress into a
+    /// walk over the draft on the main actor.
+    ///
+    /// Five rules stop the panel from opening over text that is not a mention: a
+    /// trigger must open a word (`mail@test` and `C#` are not mentions, and neither is
+    /// anything further back — the word the caret is in is already spoken for); a query
+    /// may not *start* with a space, so the markdown heading `# Title` is a heading (a
+    /// bare trigger still opens the full list); a line break or a tab ends the token;
+    /// **two consecutive spaces** end it — one internal space is allowed so a
+    /// multi-word display name can still be completed, but a double space means the
+    /// author moved on; and an already-inserted token is never re-completed.
+    func activeMention(at cursor: Int) -> ActiveMention? {
         let nsText = text as NSString
-        guard nsText.length > 0 else { return nil }
-        let full = NSRange(location: 0, length: nsText.length)
+        let caret = min(max(cursor, 0), nsText.length)
+        let floor = max(0, caret - Self.maxTokenLength)
 
-        var latest: (location: Int, kind: MentionKind)?
-        for kind in MentionKind.allCases {
-            let hit = nsText.range(of: String(kind.trigger), options: .backwards, range: full)
-            guard hit.location != NSNotFound else { continue }
-            if let latest, latest.location >= hit.location { continue }
-            latest = (hit.location, kind)
+        var index = caret - 1
+        while index >= floor {
+            let unit = nsText.character(at: index)
+            if let kind = MentionKind(utf16Unit: unit) {
+                return mention(kind: kind, triggerAt: index, caret: caret, in: nsText)
+            }
+            // A tab and a line break both end a token. Both arrive from a hardware
+            // keyboard and from a paste, and a token that swallowed one would offer to
+            // complete a query spanning two fields of pasted text.
+            if Self.endsToken(unit) { return nil }
+            // One internal space is allowed; the second means the author moved on.
+            if unit == Self.space, index > 0, nsText.character(at: index - 1) == Self.space {
+                return nil
+            }
+            index -= 1
         }
-        guard let trigger = latest else { return nil }
+        return nil
+    }
 
-        if trigger.location > 0 {
-            let prior = nsText.substring(with: NSRange(location: trigger.location - 1, length: 1))
+    /// The active mention with the caret at the very end of the draft — the state a
+    /// draft nobody has edited is in (a fresh one, or one restored after a failed send),
+    /// and the caret ``TokenTextView`` places when it first renders one.
+    func trailingMention() -> ActiveMention? {
+        activeMention(at: (text as NSString).length)
+    }
+
+    /// Validates a candidate trigger the backward scan reached, and builds the token.
+    private func mention(
+        kind: MentionKind,
+        triggerAt trigger: Int,
+        caret: Int,
+        in nsText: NSString
+    ) -> ActiveMention? {
+        if trigger > 0 {
+            let prior = nsText.substring(with: NSRange(location: trigger - 1, length: 1))
             guard prior.rangeOfCharacter(from: .whitespacesAndNewlines) != nil else { return nil }
         }
 
-        let suffixRange = NSRange(
-            location: trigger.location,
-            length: nsText.length - trigger.location
-        )
-        let suffix = nsText.substring(with: suffixRange)
-        guard !suffix.contains("\n"), !suffix.contains("\t"), !suffix.contains("  ") else { return nil }
-        let query = String(suffix.dropFirst())
+        let range = NSRange(location: trigger, length: caret - trigger)
+        let query = nsText.substring(with: NSRange(
+            location: trigger + 1,
+            length: caret - trigger - 1
+        ))
         guard query.first?.isWhitespace != true else { return nil }
 
         // An already-inserted token is never re-completed. This is a *range* test, not
@@ -204,18 +254,32 @@ struct MentionDraft: Hashable, Sendable {
         // (`@Ada @ Acme`, `#design #2`) put the trigger *inside* a token and offered to
         // complete a fragment of it, and one more typed word after a finished `@Ada`
         // re-opened the panel on `Ada Lovelace` — and selecting from either rewrote the
-        // token, silently swapping which person the message tags.
+        // token, silently swapping which person the message tags. The trigger itself
+        // needs no separate check: the range starts there and is never empty.
         let touchesToken = tokens.contains { token in
-            NSLocationInRange(trigger.location, token.range)
-                || NSIntersectionRange(suffixRange, token.range).length > 0
+            NSIntersectionRange(range, token.range).length > 0
         }
         guard !touchesToken else { return nil }
 
-        return TrailingMention(
-            range: suffixRange,
+        return ActiveMention(
+            range: range,
             query: query.trimmingCharacters(in: .whitespaces),
-            kind: trigger.kind
+            kind: kind
         )
+    }
+
+    /// How far back the scan looks for a trigger, in UTF-16 units. A query longer than
+    /// this matches nothing anyway, and the bound is what keeps the per-keystroke cost
+    /// independent of how long the draft has grown.
+    static let maxTokenLength = 128
+
+    private static let space: unichar = 0x20
+
+    /// Whether this unit ends a token outright — any line break, or a tab.
+    private static func endsToken(_ unit: unichar) -> Bool {
+        if unit == 0x09 { return true }
+        guard let scalar = UnicodeScalar(unit) else { return false }
+        return CharacterSet.newlines.contains(scalar)
     }
 
     /// The `p`-tag recipients this draft mentions: **people only**. A channel token

@@ -77,6 +77,14 @@ struct MessageComposerView: View {
             autocomplete.update(for: newValue)
             onTextChange(newValue.text)
         }
+        // The panel is already hidden while the composer is unfocused, but hidden is not
+        // closed: the query behind it stayed active, so dismissing the keyboard with its
+        // own hide key and bringing it back re-opened the panel on a mention the author
+        // had walked away from.
+        .onChange(of: autocomplete.isComposerFocused) { _, isFocused in
+            guard !isFocused else { return }
+            autocomplete.dismiss()
+        }
         .task {
             autocomplete.update(for: document)
             await autocomplete.run()
@@ -111,7 +119,8 @@ struct MessageComposerView: View {
         TokenTextView(
             document: $document,
             isFocused: $autocomplete.isComposerFocused,
-            placeholder: placeholder
+            placeholder: placeholder,
+            onSelectionChange: autocomplete.updateSelection
         )
         .frame(maxWidth: .infinity)
         .overlay(alignment: .topLeading) {

@@ -17,6 +17,10 @@ final class MentionAutocompleteModel {
     /// Where an insertion lands. Not observable: no view reads it, and publishing it
     /// only invalidated readers of the object for a value they never look at.
     @ObservationIgnored private var activeRange: NSRange?
+    /// The caret, in UTF-16 units — the anchor everything the panel shows is derived
+    /// from. Not observable for the same reason ``activeRange`` is not: it moves on
+    /// every keystroke and no view reads it.
+    @ObservationIgnored private var cursor = 0
     var isComposerFocused = false
 
     private let channel: String
@@ -65,6 +69,32 @@ final class MentionAutocompleteModel {
 
     func update(for document: MentionDraft) {
         self.document = document
+        // The edit that produced this draft knows exactly where it left the caret. A
+        // draft nobody has edited — a fresh one, or one restored after a failed send —
+        // is presented with the caret at its end, which is where ``TokenTextView`` puts
+        // it on the first render.
+        cursor = document.preferredCursor ?? (document.text as NSString).length
+        refresh()
+    }
+
+    /// The caret moved without the text changing: a tap somewhere else in the draft, an
+    /// arrow key, a selection. Without this the panel stayed open over a query that was
+    /// no longer under the caret, and completion still filtered on the last word typed
+    /// rather than on the word being edited.
+    func updateSelection(_ selection: NSRange) {
+        // A range selection has no single insertion point, so there is nothing to
+        // complete — `@ad` with two of its characters selected is not a query anyone is
+        // still typing.
+        guard selection.length == 0 else {
+            dismiss()
+            return
+        }
+        // Recomputed even when the caret has not moved, deliberately. Skipping that made
+        // a dismissal sticky: selecting a range and then putting the caret back where it
+        // was left the panel closed for good, because the caret matched and the selection
+        // that closed it had not moved anything. `refresh` already declines to write when
+        // the result is unchanged, which is the cheap guard that actually holds.
+        cursor = min(max(selection.location, 0), (document.text as NSString).length)
         refresh()
     }
 
@@ -96,7 +126,7 @@ final class MentionAutocompleteModel {
     }
 
     private func refresh() {
-        guard let mention = document.trailingMention() else {
+        guard let mention = document.activeMention(at: cursor) else {
             dismiss()
             return
         }

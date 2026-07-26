@@ -18,6 +18,11 @@ struct TokenTextView: UIViewRepresentable {
     @Binding var document: MentionDraft
     @Binding var isFocused: Bool
     let placeholder: String
+    /// Where the caret went, for a move the text did not cause. Mention completion is
+    /// anchored to the caret, and UIKit is the only thing that knows a tap or an arrow
+    /// key moved it — an edit carries its own caret in the draft, but a bare selection
+    /// change has no edit to carry it.
+    var onSelectionChange: (NSRange) -> Void = { _ in }
 
     /// How tall the composer grows before it scrolls its own text.
     static let maxVisibleLines: CGFloat = 6
@@ -119,6 +124,8 @@ struct TokenTextView: UIViewRepresentable {
         private var pendingNativeDocument: MentionDraft?
         /// True only while a SwiftUI-requested responder change is being applied.
         private var isReconcilingFocus = false
+        /// True only while ``render`` is replacing the text view's contents.
+        private var isRendering = false
 
         init(_ parent: TokenTextView) {
             self.parent = parent
@@ -193,6 +200,22 @@ struct TokenTextView: UIViewRepresentable {
             renderedDocument = next
         }
 
+        /// The caret moved. Reported only when the text view and the published draft
+        /// already agree about the text.
+        ///
+        /// Two things must not reach the model from here. While an edit is in flight
+        /// UIKit's selection describes a string the draft has not caught up with, and
+        /// acting on it would place the caret in the *previous* text — the edit carries
+        /// its own caret a moment later, which is the authoritative one. And a render
+        /// sets `selectedRange` itself, from `updateUIView`: writing observed state back
+        /// during SwiftUI's own update pass is what this file avoids everywhere else, and
+        /// whoever asked for the render already told the model where the caret is.
+        func textViewDidChangeSelection(_ textView: UITextView) {
+            guard !isRendering, !isReconcilingFocus else { return }
+            guard textView.text == parent.document.text else { return }
+            parent.onSelectionChange(textView.selectedRange)
+        }
+
         func textViewDidBeginEditing(_: UITextView) {
             guard !isReconcilingFocus else { return }
             parent.isFocused = true
@@ -204,6 +227,8 @@ struct TokenTextView: UIViewRepresentable {
         }
 
         func render(_ document: MentionDraft, in view: UITextView, selection: Int) {
+            isRendering = true
+            defer { isRendering = false }
             let attributed = NSMutableAttributedString(
                 string: document.text,
                 attributes: baseAttributes
