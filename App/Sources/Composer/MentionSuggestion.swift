@@ -116,6 +116,16 @@ enum MentionSuggestion: Identifiable, Hashable, Sendable {
         }
     }
 
-    /// The identifier the last-resort prefix match scans: a pubkey or a group id.
-    var matchIdentifier: String { entityID }
+    /// The identifier the last-resort prefix match scans — a person's pubkey only.
+    ///
+    /// A key is something an author can plausibly have in hand and paste a prefix of. A
+    /// channel's group id is never shown anywhere in ordinary UI, so matching on it
+    /// cannot help anyone type and only surfaces channels whose *names* have nothing to
+    /// do with the query.
+    var matchIdentifier: String {
+        switch self {
+        case let .user(candidate): candidate.pubkey
+        case .channel: ""
+        }
+    }
 }

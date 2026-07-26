@@ -51,7 +51,10 @@ struct TokenTextView: UIViewRepresentable {
         // message list owns keyboard dismissal, not the text view.
         view.keyboardDismissMode = .none
         view.accessibilityLabel = placeholder
-        context.coordinator.render(document, in: view, selection: 0)
+        // At the end of whatever is already there, not at zero: a draft restored after a
+        // failed send arrives non-empty, and `makeUIView` marks it as rendered, so the
+        // caret placed here is the one the author gets.
+        context.coordinator.render(document, in: view, selection: (document.text as NSString).length)
         return view
     }
 
@@ -144,6 +147,11 @@ struct TokenTextView: UIViewRepresentable {
             var next = parent.document
             let cursor = next.replaceCharacters(in: range, with: text)
             if parent.document.requiresAtomicEdit(in: range) {
+                // Cleared because UIKit will *not* perform this edit: a pending document
+                // left here would be picked up by the next `textViewDidChange` — which
+                // may be reporting something else entirely — and applied to the wrong
+                // text.
+                pendingNativeDocument = nil
                 parent.document = next
                 render(next, in: textView, selection: cursor)
                 return false
@@ -158,7 +166,14 @@ struct TokenTextView: UIViewRepresentable {
 
         func textViewDidChange(_ textView: UITextView) {
             let next: MentionDraft
-            if let pendingNativeDocument {
+            // The pending document is only trusted when it actually describes what the
+            // text view now holds. An edit that passes `shouldChangeTextIn` and is then
+            // *not* performed (backspace at position zero is the everyday case) used to
+            // strand it here, and the next change — dictation, which never passes through
+            // `shouldChangeTextIn` — took this branch and locked the model out of step
+            // with the screen for the rest of the draft. Sending then transmitted text
+            // the author never saw.
+            if let pendingNativeDocument, pendingNativeDocument.text == textView.text {
                 next = pendingNativeDocument
             } else {
                 // Defensive reconciliation for system-originated edits that do not
@@ -196,6 +211,10 @@ struct TokenTextView: UIViewRepresentable {
             view.attributedText = attributed
             applyAttributes(document, in: view)
             view.selectedRange = NSRange(location: min(selection, attributed.length), length: 0)
+            // Setting `selectedRange` does not scroll, and the composer now scrolls its
+            // own text past six lines — so a mention inserted or deleted below the fold
+            // would leave the caret out of sight.
+            view.scrollRangeToVisible(view.selectedRange)
             renderedDocument = document
         }
 

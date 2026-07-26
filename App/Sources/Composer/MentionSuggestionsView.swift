@@ -20,7 +20,11 @@ struct MentionSuggestionsView: View {
     private static var maxHeight: CGFloat { 240 }
 
     var body: some View {
-        if !autocomplete.suggestions.isEmpty {
+        // Focus is part of the condition: dismissing the keyboard with its own hide key
+        // leaves the draft (and therefore the suggestions) exactly as they were, and a
+        // panel floating over the list with no keyboard and nothing to type into is just
+        // in the way.
+        if autocomplete.isComposerFocused, !autocomplete.suggestions.isEmpty {
             panel
                 .transition(.opacity.combined(with: .offset(y: 8)))
                 // Scoped to the panel on purpose. This is the *only* animation in the

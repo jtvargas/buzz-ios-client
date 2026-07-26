@@ -14,7 +14,9 @@ import Observation
 @Observable
 final class MentionAutocompleteModel {
     private(set) var suggestions: [MentionSuggestion] = []
-    private(set) var activeRange: NSRange?
+    /// Where an insertion lands. Not observable: no view reads it, and publishing it
+    /// only invalidated readers of the object for a value they never look at.
+    @ObservationIgnored private var activeRange: NSRange?
     var isComposerFocused = false
 
     private let channel: String
@@ -42,7 +44,19 @@ final class MentionAutocompleteModel {
                     selfPubkey: selfPubkey
                 )) ?? []
                 let channels = (try? store.channelSuggestions()) ?? []
-                await apply(users: candidates, channels: channels)
+                // Indexed here, off the main actor. Normalizing every row costs a few
+                // milliseconds per hundred, and this loop re-fires on *every* committed
+                // transaction — an arriving message, a reaction, a read-state blob — so
+                // doing it on the way in would spend most of a frame on the main actor
+                // each time. `IndexedSuggestion` is `Sendable`, so the built indexes
+                // cross the hop instead of the raw rows.
+                let users = candidates.enumerated().map {
+                    IndexedSuggestion(.user($1), originalOrder: $0)
+                }
+                let references = channels.enumerated().map {
+                    IndexedSuggestion(.channel($1), originalOrder: $0)
+                }
+                await apply(users: users, channels: references)
             }
         } catch {
             // Cancellation/teardown leaves the latest candidate snapshot visible.
@@ -60,9 +74,14 @@ final class MentionAutocompleteModel {
         update(for: document)
     }
 
+    /// Clears the panel — and only *writes* when something actually changes.
+    ///
+    /// Observation's setters publish unconditionally, so assigning an already-empty
+    /// array here invalidated the panel once per incoming message, forever, for a view
+    /// whose content had not moved.
     func dismiss() {
-        activeRange = nil
-        suggestions = []
+        if activeRange != nil { activeRange = nil }
+        if !suggestions.isEmpty { suggestions = [] }
     }
 
     func dismissComposer() {
@@ -70,13 +89,9 @@ final class MentionAutocompleteModel {
         dismiss()
     }
 
-    private func apply(users: [MentionCandidateProfile], channels: [ChannelSuggestion]) {
-        userIndex = users.enumerated().map {
-            IndexedSuggestion(.user($1), originalOrder: $0)
-        }
-        channelIndex = channels.enumerated().map {
-            IndexedSuggestion(.channel($1), originalOrder: $0)
-        }
+    private func apply(users: [IndexedSuggestion], channels: [IndexedSuggestion]) {
+        userIndex = users
+        channelIndex = channels
         refresh()
     }
 
@@ -85,10 +100,11 @@ final class MentionAutocompleteModel {
             dismiss()
             return
         }
-        activeRange = mention.range
+        if activeRange != mention.range { activeRange = mention.range }
         let query = Self.normalized(mention.query)
         let index = mention.kind == .user ? userIndex : channelIndex
-        suggestions = bestMatches(in: index, for: query, limit: 8)
+        let matches = bestMatches(in: index, for: query, limit: 8)
+        if matches != suggestions { suggestions = matches }
     }
 
     /// Keeps only the best few matches while scanning the pre-normalized index.
@@ -121,9 +137,10 @@ final class MentionAutocompleteModel {
     }
 }
 
-/// One indexed row: the normalized strings matching scans, computed once when the
-/// store hands over a new snapshot rather than per keystroke.
-private struct IndexedSuggestion {
+/// One indexed row: the normalized strings matching scans, computed off the main actor
+/// when the store hands over a new snapshot — never per keystroke, and never on the
+/// actor that has to draw the next frame.
+private struct IndexedSuggestion: Sendable {
     let suggestion: MentionSuggestion
     let name: String
     let secondary: String
@@ -151,7 +168,7 @@ private struct IndexedSuggestion {
         if name.hasPrefix(query) || secondary.hasPrefix(query) { return 1 }
         if words.contains(query) { return 2 }
         if words.contains(where: { $0.hasPrefix(query) }) { return 3 }
-        if identifier.hasPrefix(query) { return 4 }
+        if !identifier.isEmpty, identifier.hasPrefix(query) { return 4 }
         return nil
     }
 }

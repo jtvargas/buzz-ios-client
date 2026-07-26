@@ -138,7 +138,13 @@ struct MentionDraft: Hashable, Sendable {
     mutating func insert(_ suggestion: MentionSuggestion, replacing range: NSRange) -> Int {
         let visible = suggestion.insertionLabel
         let visibleLength = (visible as NSString).length
+        let before = text
         let cursor = replaceCharacters(in: range, with: visible + " ")
+        // `replaceCharacters` refuses an out-of-bounds range and leaves the text alone.
+        // Appending a token then would claim a label the text does not contain — and, for
+        // a person, tag someone the message never names. Nothing reachable does this
+        // today; the guard is here so a future caller cannot make it reachable silently.
+        guard text != before else { return cursor }
         // Located back from the caret rather than from `range`: `replaceCharacters`
         // widens an edit that touched an existing token, so the inserted run may not
         // start where the caller asked. Back off the label and its one space.
@@ -188,14 +194,22 @@ struct MentionDraft: Hashable, Sendable {
             length: nsText.length - trigger.location
         )
         let suffix = nsText.substring(with: suffixRange)
-        guard !suffix.contains("\n"), !suffix.contains("  ") else { return nil }
+        guard !suffix.contains("\n"), !suffix.contains("\t"), !suffix.contains("  ") else { return nil }
         let query = String(suffix.dropFirst())
         guard query.first?.isWhitespace != true else { return nil }
-        if let selected = tokens.first(where: { $0.range.location == trigger.location }),
-           NSMaxRange(selected.range) <= nsText.length,
-           nsText.substring(from: NSMaxRange(selected.range)).allSatisfy(\.isWhitespace) {
-            return nil
+
+        // An already-inserted token is never re-completed. This is a *range* test, not
+        // a comparison against the token's start, because both of the ways it used to be
+        // wrong were reachable: a display name or channel name containing a trigger
+        // (`@Ada @ Acme`, `#design #2`) put the trigger *inside* a token and offered to
+        // complete a fragment of it, and one more typed word after a finished `@Ada`
+        // re-opened the panel on `Ada Lovelace` — and selecting from either rewrote the
+        // token, silently swapping which person the message tags.
+        let touchesToken = tokens.contains { token in
+            NSLocationInRange(trigger.location, token.range)
+                || NSIntersectionRange(suffixRange, token.range).length > 0
         }
+        guard !touchesToken else { return nil }
 
         return TrailingMention(
             range: suffixRange,

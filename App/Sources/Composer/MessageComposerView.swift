@@ -47,9 +47,16 @@ struct MessageComposerView: View {
     }
 
     var body: some View {
-        GlassEffectContainer(spacing: 8) {
+        // Read here, in `body`, on purpose. Focus is only *used* inside the binding
+        // closure `TokenTextView` invokes, and an observable property read from outside a
+        // body registers no dependency — so a programmatic `isComposerFocused = true`
+        // (tapping the bar's dead space, restoring focus after the alert) had nothing
+        // subscribed to it and could simply never reach `updateUIView`.
+        let isFocused = autocomplete.isComposerFocused
+
+        return GlassEffectContainer(spacing: 8) {
             VStack(alignment: .leading, spacing: 2) {
-                field
+                field(isFocused: isFocused)
                 controls
             }
             .padding(.horizontal, 4)
@@ -72,7 +79,16 @@ struct MessageComposerView: View {
             await autocomplete.run()
         }
         .alert("WIP", isPresented: $isShowingWorkInProgress) {
-            Button("OK", role: .cancel) { restoreFocusAfterNotice() }
+            Button("OK", role: .cancel) {}
+        }
+        // Restored on *dismissal*, not from the OK action: an alert dismissed any other
+        // way (a hardware Escape, a programmatic dismissal) would otherwise leave the
+        // author mid-draft with no keyboard, and restoring after the alert's own window
+        // has gone is also the moment `becomeFirstResponder` can actually succeed.
+        .onChange(of: isShowingWorkInProgress) { _, isPresented in
+            guard !isPresented, wasFocusedBeforeNotice else { return }
+            wasFocusedBeforeNotice = false
+            autocomplete.isComposerFocused = true
         }
     }
 
@@ -81,11 +97,11 @@ struct MessageComposerView: View {
     /// No tap gesture of its own — the text view handles its own touches natively,
     /// which is what puts the caret where the author actually tapped. A SwiftUI
     /// gesture layered over a `UIViewRepresentable` would swallow that.
-    private var field: some View {
+    private func field(isFocused: Bool) -> some View {
         TokenTextView(
             document: $document,
             isFocused: Binding(
-                get: { autocomplete.isComposerFocused },
+                get: { isFocused },
                 set: { autocomplete.isComposerFocused = $0 }
             ),
             placeholder: placeholder
@@ -159,11 +175,4 @@ struct MessageComposerView: View {
         isShowingWorkInProgress = true
     }
 
-    /// An alert takes first responder while it is up, which UIKit reports as an
-    /// end-editing. Put focus back exactly where it was, so `+` cannot become a way
-    /// to lose the keyboard in the middle of a draft.
-    private func restoreFocusAfterNotice() {
-        guard wasFocusedBeforeNotice else { return }
-        autocomplete.isComposerFocused = true
-    }
 }
