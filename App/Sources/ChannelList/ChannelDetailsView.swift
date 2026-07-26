@@ -1,8 +1,12 @@
 import BuzzKit
 import SwiftUI
 
-/// Slack-style channel information surfaced from the title button: topic,
-/// privacy/settings context, and the live member roster.
+/// The details sheet behind a conversation's title.
+///
+/// It reads as whatever the conversation *is* (§4/§8): a channel gets Slack's topic,
+/// settings, and roster; a direct message gets the person — their avatar, their name,
+/// and what they are (a NIP-05 identifier, or "Agent") — because a two-person roster
+/// and a "Visibility: Private" row tell a reader nothing they did not already know.
 struct ChannelDetailsView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.entityNames) private var names
@@ -17,39 +21,20 @@ struct ChannelDetailsView: View {
     }
 
     var body: some View {
-        NavigationStack {
+        let conversation = names.conversation(for: channel)
+
+        return NavigationStack {
             List {
-                Section("Topic") {
-                    Text(topic)
-                        .foregroundStyle(channel.about?.isEmpty == false ? .primary : .secondary)
-                }
-
-                Section("Settings") {
-                    LabeledContent("Visibility", value: channel.isPrivate ? "Private" : "Public")
-                    LabeledContent("Members", value: "\(model.members.count)")
-                }
-
-                Section("Members") {
-                    if model.members.isEmpty, !model.hasLoaded {
-                        ProgressView()
-                    } else if model.members.isEmpty {
-                        Text("No members available")
-                            .foregroundStyle(.secondary)
-                    } else {
-                        ForEach(model.members, id: \.pubkey) { member in
-                            MemberRow(
-                                pubkey: member.pubkey,
-                                name: names.name(for: member.pubkey),
-                                picture: names.picture(for: member.pubkey) ?? member.picture
-                                    .flatMap(URL.init(string:)),
-                                initials: names.initials(for: member.pubkey),
-                                role: member.role,
-                                isOnline: presence.isOnline(member.pubkey)
-                            )
-                        }
+                if conversation.isDirect {
+                    peerSection(conversation)
+                    // A DM has no topic to set, so the section appears only when one
+                    // somehow exists rather than as an empty placeholder.
+                    if !topic.isEmpty {
+                        Section("Topic") { Text(topic) }
                     }
+                } else {
+                    channelSections
                 }
-
                 // The group id is a developer detail, not something a reader should
                 // meet in the ordinary UI — it stays, labelled for what it is.
                 Section("Developer") {
@@ -62,7 +47,7 @@ struct ChannelDetailsView: View {
                     }
                 }
             }
-            .navigationTitle(title)
+            .navigationTitle(conversation.title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
@@ -73,16 +58,94 @@ struct ChannelDetailsView: View {
         .task { await model.run() }
         .task { await presence.run() }
     }
+}
 
-    /// The conversation's own title — a channel's name, or the peer's name when this
-    /// two-person roster is a direct message. Never the group id.
-    private var title: String {
-        names.conversation(for: channel).title
+// MARK: - Direct messages
+
+private extension ChannelDetailsView {
+    /// A DM's header: the peer, large. No visibility row (a DM is private by
+    /// definition), no member list (it is the two of you).
+    @ViewBuilder
+    func peerSection(_ conversation: ConversationIdentity) -> some View {
+        Section {
+            VStack(spacing: 8) {
+                AvatarView(
+                    url: conversation.picture,
+                    seed: conversation.avatarSeed,
+                    monogram: conversation.initials,
+                    size: 76
+                )
+                Text(conversation.title)
+                    .font(.title3.weight(.semibold))
+                if let subtitle = peerSubtitle(conversation) {
+                    Text(subtitle)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+                if let peer = conversation.peer {
+                    Label(
+                        presence.isOnline(peer) ? "Online" : "Offline",
+                        systemImage: presence.isOnline(peer) ? "circle.fill" : "circle"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(presence.isOnline(peer) ? .green : .secondary)
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 8)
+            .accessibilityElement(children: .combine)
+        }
+        .listRowBackground(Color.clear)
     }
 
-    private var topic: String {
-        guard let about = channel.about, !about.isEmpty else { return "No topic set" }
-        return about
+    /// What the peer *is*: their NIP-05 identifier, or "Agent" when that is all the
+    /// directory knows. Never a raw key.
+    func peerSubtitle(_ conversation: ConversationIdentity) -> String? {
+        guard let peer = conversation.peer else { return nil }
+        if let label = names.secondaryLabel(for: peer) { return label }
+        return conversation.kind == .agent ? "Agent" : nil
+    }
+}
+
+// MARK: - Channels
+
+private extension ChannelDetailsView {
+    @ViewBuilder
+    var channelSections: some View {
+        Section("Topic") {
+            Text(topic.isEmpty ? "No topic set" : topic)
+                .foregroundStyle(topic.isEmpty ? .secondary : .primary)
+        }
+
+        Section("Settings") {
+            LabeledContent("Visibility", value: channel.isPrivate ? "Private" : "Public")
+            LabeledContent("Members", value: "\(model.members.count)")
+        }
+
+        Section("Members") {
+            if model.members.isEmpty, !model.hasLoaded {
+                ProgressView()
+            } else if model.members.isEmpty {
+                Text("No members available")
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(model.members, id: \.pubkey) { member in
+                    MemberRow(
+                        pubkey: member.pubkey,
+                        name: names.name(for: member.pubkey),
+                        picture: names.picture(for: member.pubkey) ?? member.picture
+                            .flatMap(URL.init(string:)),
+                        initials: names.initials(for: member.pubkey),
+                        role: member.role,
+                        isOnline: presence.isOnline(member.pubkey)
+                    )
+                }
+            }
+        }
+    }
+
+    var topic: String {
+        channel.about?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     }
 }
 
