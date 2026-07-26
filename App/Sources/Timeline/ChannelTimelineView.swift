@@ -241,7 +241,7 @@ struct ChannelTimelineView: View {
         // through the directory on every pass.
         let identity = conversation
         return ConversationTitleBar(
-            symbol: ConversationTitleBar.symbol(for: identity.kind),
+            mark: ConversationTitleBar.mark(for: identity),
             title: identity.title,
             subtitle: subtitle(for: identity),
             action: { showsChannelDetails = true },
@@ -249,20 +249,26 @@ struct ChannelTimelineView: View {
         )
     }
 
-    /// The header's second line: a channel's member count, or a direct peer's own quiet
-    /// label.
+    /// The header's second line: who is in this channel and how many of them are here now,
+    /// or — for a direct message — whether the person on the other end is.
     ///
-    /// `2 members` under a person's name is a category error — a direct message *is* a
-    /// two-member roster, so the number is a restatement of the fact that this is a DM.
-    /// The peer's NIP-05 identifier (or "Agent") is what a reader does not already know,
-    /// and it comes from the same ``EntityNames`` the sidebar and the details sheet read.
-    /// The roster arrives asynchronously, so both branches may legitimately have nothing
-    /// to say yet, and the pill then draws one line.
-    private func subtitle(for conversation: ConversationIdentity) -> String? {
+    /// `2 members` under a person's name is a category error: a direct message *is* a
+    /// two-member roster, so the number restates the fact that this is a DM. Their presence
+    /// is the part that changes, and it is read from the same ``PresenceModel`` the message
+    /// rows' dots are, so the header and a row cannot disagree about the same person.
+    ///
+    /// The roster and the presence roster arrive asynchronously and independently, so both
+    /// branches may legitimately have nothing to say yet; the pill then draws one line.
+    private func subtitle(for conversation: ConversationIdentity) -> ConversationTitleBar.Subtitle? {
         if let peer = conversation.peer {
-            return names.secondaryLabel(for: peer)
+            return .presence(presence.isOnline(peer))
         }
-        return ConversationTitleBar.memberCount(names.members(of: channelID).count)
+        let members = names.members(of: channelID)
+        return ConversationTitleBar.memberCount(
+            members.count,
+            online: members.count(where: { presence.isOnline($0) })
+        )
+        .map(ConversationTitleBar.Subtitle.text)
     }
 
     /// The scaffold's "the top of history is near" report. It arrives as a level

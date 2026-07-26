@@ -127,7 +127,7 @@ struct ProfileSheetView: View {
     private var presenceLabel: some View {
         HStack(spacing: 5) {
             Circle()
-                .fill(presence.isOnline(pubkey) ? Color.green : Color.secondary.opacity(0.5))
+                .fill(PresenceDot.tint(isOnline: presence.isOnline(pubkey)))
                 .frame(width: 8, height: 8)
             Text(presence.isOnline(pubkey) ? "Online" : "Offline")
                 .font(.subheadline)

@@ -15,4 +15,16 @@ struct PresenceDot: View {
             .accessibilityHidden(!isOnline)
             .accessibilityLabel(isOnline ? "Online" : "")
     }
+
+    /// What presence looks like where absence is *stated* rather than left blank — the
+    /// conversation header's second line and the profile sheet, both of which say "Offline"
+    /// in words and need a dot to match.
+    ///
+    /// Here rather than at either call site so the workspace has one answer to "what colour
+    /// is online": a row's dot, a header's dot, and a sheet's dot are the same fact about the
+    /// same person, and two of them drifting to different greens is the kind of thing nobody
+    /// notices until both are on screen at once.
+    static func tint(isOnline: Bool) -> Color {
+        isOnline ? .green : Color.secondary.opacity(0.5)
+    }
 }

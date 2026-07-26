@@ -4,6 +4,7 @@ import Foundation
 import NostrCore
 import SwiftUI
 import Testing
+import UIKit
 
 /// The parts of the Slack-parity message pass that are logic rather than appearance: the
 /// reply-preview participants arriving on the timeline's own observation, the conversation
@@ -139,6 +140,33 @@ struct MessageSurfaceTests {
         #expect(ConversationTitleBar.memberCount(12) == "12 members")
     }
 
+    @Test("the member line reports who is present, and stays quiet when nobody is yet")
+    func memberOnlineLine() {
+        #expect(ConversationTitleBar.memberCount(12, online: 3) == "12 members · 3 online")
+        #expect(ConversationTitleBar.memberCount(12, online: 1) == "12 members · 1 online")
+        // Presence arrives on its own heartbeat, seconds after the roster. `0 online` in that
+        // gap would be a claim about the channel where the truth is "not heard from yet".
+        #expect(ConversationTitleBar.memberCount(12, online: 0) == "12 members")
+        // Everyone present is still worth saying — it is the count that is quiet at zero,
+        // not the count that is quiet when it equals the roster.
+        #expect(ConversationTitleBar.memberCount(2, online: 2) == "2 members · 2 online")
+        // The two rosters are read a frame apart and one is workspace-global, so more
+        // "online" than members is reachable — and would read as a contradiction.
+        #expect(ConversationTitleBar.memberCount(2, online: 5) == "2 members · 2 online")
+        // An empty roster still says nothing, whatever presence claims.
+        #expect(ConversationTitleBar.memberCount(0, online: 4) == nil)
+    }
+
+    @Test("a peer's second line is their presence, in the profile sheet's own words")
+    func presenceSubtitle() {
+        #expect(ConversationTitleBar.Subtitle.presence(true).text == "Online")
+        #expect(ConversationTitleBar.Subtitle.presence(false).text == "Offline")
+        // The dot is drawn from `presence`, so a line that is *about* presence must carry it
+        // — a plain line must not, or every channel header would grow a dot.
+        #expect(ConversationTitleBar.Subtitle.presence(false).presence == false)
+        #expect(ConversationTitleBar.Subtitle.text("5 members").presence == nil)
+    }
+
     @Test("the heading's text column stays inside what the bar can give it")
     func headingKeepsOutOfTheOverflowMenu() {
         // A toolbar item that does not fit is not truncated — it is moved into the `…`
@@ -147,25 +175,62 @@ struct MessageSurfaceTests {
         // does not scale: the back button, the bar's margins, the glyph, the capsule's
         // padding. Measured on the iOS 26 simulator, a 66-character name collapses at a
         // 250pt column on a 402pt device and survives 245.
-        #expect(ConversationTitleBar.labelWidth(forSurfaceWidth: 402) <= 245)
-        #expect(ConversationTitleBar.labelWidth(forSurfaceWidth: 440) <= 245 + 38)
+        let hash = ConversationTitleBar.Mark.symbol("number")
+        #expect(ConversationTitleBar.labelWidth(forSurfaceWidth: 402, mark: hash) <= 245)
+        #expect(ConversationTitleBar.labelWidth(forSurfaceWidth: 440, mark: hash) <= 245 + 38)
         // The reserve is a constant, so a wider surface buys the name exactly its extra width.
-        let narrow = ConversationTitleBar.labelWidth(forSurfaceWidth: 402)
-        #expect(ConversationTitleBar.labelWidth(forSurfaceWidth: 440) - narrow == 38)
+        let narrow = ConversationTitleBar.labelWidth(forSurfaceWidth: 402, mark: hash)
+        #expect(ConversationTitleBar.labelWidth(forSurfaceWidth: 440, mark: hash) - narrow == 38)
         // And a narrow device floors rather than going to nothing: 375 less the reserve is
         // under the floor, and a heading of two characters would be worse than one that
         // truncates.
-        #expect(ConversationTitleBar.labelWidth(forSurfaceWidth: 375) >= 190)
-        #expect(ConversationTitleBar.labelWidth(forSurfaceWidth: 0) >= 190)
+        #expect(ConversationTitleBar.labelWidth(forSurfaceWidth: 375, mark: hash) >= 190)
+        #expect(ConversationTitleBar.labelWidth(forSurfaceWidth: 0, mark: hash) >= 190)
     }
 
-    @Test("only a channel is marked with a hash")
-    func headerSymbolPerKind() {
-        // A `#` in front of a person's name would be a category error, and the absence of the
-        // mark is how a direct message reads as a person rather than as a room.
-        #expect(ConversationTitleBar.symbol(for: .channel) == "number")
-        #expect(ConversationTitleBar.symbol(for: .direct) == nil)
-        #expect(ConversationTitleBar.symbol(for: .agent) == nil)
+    @Test("a face costs the name the width a glyph did not")
+    func avatarChargesItsOwnWidth() {
+        // The overflow rule is about the item's *ideal* width, and a face is wider than a
+        // `#`. Absorbing that difference rather than charging it is how a long agent name
+        // would take the whole heading into the `…` menu on a narrow screen.
+        let hash = ConversationTitleBar.Mark.symbol("number")
+        let face = ConversationTitleBar.Mark.avatar(url: nil, seed: "a", initials: "AL")
+        #expect(ConversationTitleBar.reservedChrome(for: face) > ConversationTitleBar.reservedChrome(for: hash))
+        #expect(ConversationTitleBar.labelWidth(forSurfaceWidth: 440, mark: face)
+            < ConversationTitleBar.labelWidth(forSurfaceWidth: 440, mark: hash))
+        // The floor still holds for a face on the narrowest screen.
+        #expect(ConversationTitleBar.labelWidth(forSurfaceWidth: 375, mark: face) >= 190)
+    }
+
+    @Test("a channel is marked with a hash and a person with their own face")
+    func headerMarkPerKind() {
+        // A `#` in front of a person's name would be a category error, and so would a face in
+        // front of a room's name.
+        #expect(ConversationTitleBar.mark(for: identity(.channel)) == .symbol("number"))
+        #expect(ConversationTitleBar.mark(for: identity(.direct))
+            == .avatar(url: URL(string: "https://example.test/a.png"), seed: "peer-1", initials: "AL"))
+        // An agent is a person as far as the heading is concerned: it has a face too.
+        #expect(ConversationTitleBar.mark(for: identity(.agent))
+            == .avatar(url: URL(string: "https://example.test/a.png"), seed: "peer-1", initials: "AL"))
+    }
+
+    @Test("the thread heading's glyph is a symbol the system actually has")
+    func threadSymbolExists() {
+        // A name SF Symbols does not know renders as nothing at all, with no warning — so the
+        // glyph would simply be missing on device and nowhere else.
+        #expect(UIImage(systemName: ThreadView.threadSymbol) != nil)
+    }
+
+    private func identity(_ kind: ConversationIdentity.Kind) -> ConversationIdentity {
+        ConversationIdentity(
+            channelID: "room-1",
+            kind: kind,
+            title: "Ada Lovelace",
+            peer: kind == .channel ? nil : "peer-1",
+            picture: URL(string: "https://example.test/a.png"),
+            initials: "AL",
+            isPrivate: false
+        )
     }
 
     @Test("the day separator starts where an avatar starts, not where message text does")
