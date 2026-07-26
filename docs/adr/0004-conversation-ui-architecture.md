@@ -58,9 +58,10 @@ floating composer, and the keyboard/safe-area behaviour for every surface. The l
 keeps full height and the composer is attached with `safeAreaBar(edge: .bottom)`; the
 mention suggestion panel floats over the list as a `ZStack` accessory rather than
 living inside the bar. Scroll *policy* lives in the scaffold (three
-`defaultScrollAnchor` roles, one `onScrollGeometryChange` reporting two `Bool`
-thresholds); scroll *content* policy lives in the model, which decides what "the reader
-is not at the bottom" means.
+`defaultScrollAnchor` roles, one `onScrollGeometryChange` reporting three `Bool` bands —
+at the bottom, clearly away from it, and near the top, the first two being the hysteresis
+loop); scroll *content* policy lives in the model, which decides what "the reader is not
+at the bottom" means.
 
 ## Rationale
 

@@ -292,7 +292,12 @@ final class ChannelTimelineModel {
     /// a read failure into an empty page, and reading that as "the channel is empty"
     /// would blank a timeline the store merely failed to read this once.
     private func prune(against head: [TimelineRow]) {
-        guard let floor = head.first else { return }
+        // The page's floor is its *oldest* row, and `timeline(channel:before:limit:)`
+        // returns newest-first — so reading `head.first` put the floor at the newest row
+        // instead, which made this guard nearly a no-op: almost every loaded row compared
+        // as older than it and survived, and only a ghost newer than the entire page was
+        // ever dropped. `min` says what is meant without depending on the query's order.
+        guard let floor = head.min(by: { ($0.createdAt, $0.id) < ($1.createdAt, $1.id) }) else { return }
         let returned = Set(head.map(\.id))
         loaded = loaded.filter { _, row in
             returned.contains(row.id) || (row.createdAt, row.id) < (floor.createdAt, floor.id)

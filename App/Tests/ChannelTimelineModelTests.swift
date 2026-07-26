@@ -1,4 +1,5 @@
 import BuzzKit
+import Foundation
 @testable import Hive
 import NostrCore
 import Testing
@@ -131,6 +132,44 @@ struct ChannelTimelineModelTests {
         // reopened — and the frozen tail then counted a row that no longer exists.
         try await store.discard(mine.event.id)
         await waitUntil { model.rows.map(\.content) == ["logged"] }
+    }
+
+    /// The case the newest-row-only version of the prune could not see.
+    ///
+    /// A ghost that is *not* the newest loaded row has to be dropped too, and it is the
+    /// realistic shape: an own send fails, the author leaves it queued, other people keep
+    /// talking, and only then is it discarded. With the page's floor mistaken for its
+    /// newest row, every such row compared as older than the floor and survived.
+    @Test("a discarded own row is pruned even with newer messages above it")
+    func discardedMiddleRowIsPruned() async throws {
+        let temp = TempStore()
+        defer { temp.remove() }
+        let store = try temp.open()
+        let author = try Fixture()
+        _ = try await store.ingest(batch: [
+            try author.message("before", in: "room-1", at: 1_000),
+        ], phase: .backfill)
+
+        let model = ChannelTimelineModel(channel: "room-1", store: store, sender: StubSender())
+        let run = Task { await model.run() }
+        defer { run.cancel() }
+        await waitUntil { model.rows.map(\.content) == ["before"] }
+
+        // Queued at 1_500, so it sorts *between* the two relay messages.
+        let mine = try await store.enqueue(
+            content: "mine",
+            in: "room-1",
+            tags: [["h", "room-1"]],
+            with: InMemorySigner(author.key),
+            createdAt: Date(timeIntervalSince1970: 1_500)
+        )
+        _ = try await store.ingest(batch: [
+            try author.message("after", in: "room-1", at: 2_000),
+        ], phase: .live)
+        await waitUntil { model.rows.map(\.content) == ["before", "mine", "after"] }
+
+        try await store.discard(mine.event.id)
+        await waitUntil { model.rows.map(\.content) == ["before", "after"] }
     }
 
     @Test("page one is on screen on the first body pass, before any observation fires")
