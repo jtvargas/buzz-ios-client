@@ -11,11 +11,12 @@ import SwiftUI
 /// behave identically without a second copy of that arithmetic.
 struct ThreadView: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.entityNames) private var names
     @State private var model: ThreadModel
-    private let title: String
+    private let channelID: String
 
-    init(root: String, channel: String, title: String, store: BuzzEventStore, engine: SyncEngine, selfPubkey: String?) {
-        self.title = title
+    init(root: String, channel: String, store: BuzzEventStore, engine: SyncEngine, selfPubkey: String?) {
+        channelID = channel
         _model = State(initialValue: ThreadModel(
             root: root,
             channel: channel,
@@ -123,6 +124,19 @@ struct ThreadView: View {
         }
     }
 
+    /// The conversation this thread hangs off, resolved through the shared directory
+    /// rather than carried down from the pushing view — so a thread inside a DM is
+    /// labelled with the person, not with the group the relay happens to have named.
+    private var conversation: ConversationIdentity {
+        names.conversation(for: channelID)
+    }
+
+    /// The line under "Thread": `#channel` for a channel, and a plain name for a direct
+    /// message, where a `#` would be a category error.
+    private var context: String {
+        conversation.isDirect ? conversation.title : "#\(conversation.title)"
+    }
+
     private var titleItem: some ToolbarContent {
         ToolbarItem(placement: .principal) {
             Button {
@@ -132,13 +146,13 @@ struct ThreadView: View {
                     Text("Thread")
                         .font(.headline)
                         .foregroundStyle(.primary)
-                    Text("#\(title)")
+                    Text(context)
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("Back to \(title)")
+            .accessibilityLabel("Back to \(conversation.title)")
         }
     }
 }

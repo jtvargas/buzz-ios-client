@@ -19,7 +19,6 @@ struct ChannelTimelineView: View {
     @State private var showsChannelDetails = false
     @Environment(\.entityNames) private var names
     private let channel: ChannelListRow
-    private let title: String
     private let channelID: String
     private let store: BuzzEventStore
     private let engine: SyncEngine
@@ -33,7 +32,6 @@ struct ChannelTimelineView: View {
 
     init(channel: ChannelListRow, store: BuzzEventStore, engine: SyncEngine, selfPubkey: String?) {
         self.channel = channel
-        title = (channel.name?.isEmpty == false) ? channel.name! : channel.id
         channelID = channel.id
         self.store = store
         self.engine = engine
@@ -92,7 +90,6 @@ struct ChannelTimelineView: View {
             ThreadView(
                 root: route.root,
                 channel: route.channel,
-                title: route.title,
                 store: store,
                 engine: engine,
                 selfPubkey: selfPubkey
@@ -100,6 +97,15 @@ struct ChannelTimelineView: View {
         }
         .task { await model.run() }
         .task { await presence.run() }
+    }
+
+    /// The conversation's own title: a channel's name, or the peer's when this
+    /// two-person roster is a direct message. Computed rather than captured in `init`
+    /// because the resolver arrives from the environment — and because capturing it
+    /// there is what let a DM read as its group name and an unnamed channel render its
+    /// whole group id (§4).
+    private var title: String {
+        names.conversation(for: channel).title
     }
 
     // MARK: - List
@@ -218,7 +224,7 @@ struct ChannelTimelineView: View {
     /// root when it is a (broadcast) reply.
     private func open(thread row: TimelineRow) {
         let root = row.rootID ?? row.id
-        openedThread = ThreadRoute(root: root, channel: channelID, title: title)
+        openedThread = ThreadRoute(root: root, channel: channelID)
     }
 
     /// A typer's name, through the injected directory — the same answer the sidebar,
@@ -229,11 +235,12 @@ struct ChannelTimelineView: View {
     }
 }
 
-/// A pushed thread: its root id, the channel it lives in, and the title to show.
+/// A pushed thread: its root id and the channel it lives in. No title — the thread
+/// resolves its own heading through the shared directory, so a DM's thread cannot be
+/// labelled with the group name the pushing view happened to be showing.
 struct ThreadRoute: Hashable, Identifiable {
     let root: String
     let channel: String
-    let title: String
 
     var id: String { root }
 }
