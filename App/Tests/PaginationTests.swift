@@ -79,7 +79,7 @@ struct PaginationTests {
         _ = try await store.ingest(batch: [
             try author.message("arrival", in: "room-1", at: 2_000),
         ], phase: .live)
-        await waitUntil { model.heldBackCount == 1 }
+        await waitUntil { model.jump.unreadCount == 1 }
 
         // Older pages still page from the oldest *loaded* row, which the freeze never
         // touches — the freeze is a tail, and `earliest` is a head. Both pages land,
@@ -88,13 +88,13 @@ struct PaginationTests {
         #expect(model.lastOlderCursor == cursor(of: batch[15]))
         #expect(model.rows.first?.content == "m5")
         #expect(model.rows.count == 20)
-        #expect(model.heldBackCount == 1)
+        #expect(model.jump.unreadCount == 1)
 
         await model.loadOlder()
         #expect(model.lastOlderCursor == cursor(of: batch[5]))
         #expect(model.rows.first?.content == "m0")
         #expect(model.rows.count == 25)
-        #expect(model.heldBackCount == 1)
+        #expect(model.jump.unreadCount == 1)
         #expect(!model.hasMoreOlder)
 
         // And releasing it renders the arrival on the end of the full history.

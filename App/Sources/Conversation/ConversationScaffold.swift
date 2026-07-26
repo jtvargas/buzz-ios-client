@@ -40,9 +40,15 @@ struct ConversationScaffold<Content: View, Bar: View, Accessory: View>: View {
     /// Whether the newest row is in view. The owner freezes its rendered tail while
     /// this is `false`, so an arriving message cannot move the reader's place.
     @Binding var isAtBottom: Bool
-    /// Bumped by the owner to force a jump to the newest row — an own send, or the
-    /// "N new messages" affordance.
+    /// Whether the newest row is far enough below to be worth offering a way back to it.
+    /// A separate, wider band than the freeze's — see ``farFromBottom(_:container:)``.
+    @Binding var isFarFromBottom: Bool
+    /// Bumped by the owner to force a jump — an own send, or one of the affordances
+    /// above the composer.
     var jumpToken: Int = 0
+    /// Where that jump lands. Read when ``jumpToken`` changes, so the owner sets both
+    /// before bumping.
+    var jumpTarget: ConversationJumpTarget = .bottom
     /// Fired while the top of the loaded history is near. The owner must be
     /// idempotent: this can fire repeatedly across one page load.
     var onReachedTop: () -> Void = {}
@@ -75,18 +81,38 @@ struct ConversationScaffold<Content: View, Bar: View, Accessory: View>: View {
     /// each other, so a reader sitting just outside it could flip the state, lose the
     /// freeze, and get no re-freeze because they were still inside the band.
     private static var awayFromBottomSlack: CGFloat { 120 }
+    /// The floor under the band that offers a way back to the newest message, for a
+    /// viewport short enough that half of it is less than about two messages.
+    private static var farFromBottomFloor: CGFloat { 240 }
     /// About a screen, so the older page lands before the reader reaches the end.
     private static var topTrigger: CGFloat { 800 }
 
+    /// Whether the newest row is far enough below to be worth a floating control.
+    ///
+    /// Deliberately *not* ``awayFromBottomSlack``. That band is about one message, which
+    /// is the right distance to stop moving someone's place at and far too eager for a
+    /// button: it would appear the moment a reader nudged up to re-read the last thing
+    /// said, and then sit on top of it. Half a viewport is the distance at which
+    /// scrolling back is a journey rather than a flick, and taking it from the container
+    /// rather than a constant keeps that true on an iPad and in a landscape split.
+    private static func farFromBottom(_ distance: CGFloat, container: CGFloat) -> Bool {
+        distance >= max(farFromBottomFloor, container / 2)
+    }
+
     var body: some View {
-        ZStack(alignment: .bottom) {
-            scroll
-            // A `ZStack` child is laid out inside the safe area, so this bottom edge
-            // already sits above the keyboard (or the home indicator); `barHeight`
-            // lifts it clear of the composer. No inset arithmetic, no observer.
-            accessory
-                .padding(.horizontal, 12)
-                .padding(.bottom, barHeight + 6)
+        // The reader is here for one job — landing on a *particular* message, which is
+        // what the "N new messages" affordance asks for. See ``jump(using:)``.
+        ScrollViewReader { proxy in
+            ZStack(alignment: .bottom) {
+                scroll
+                // A `ZStack` child is laid out inside the safe area, so this bottom edge
+                // already sits above the keyboard (or the home indicator); `barHeight`
+                // lifts it clear of the composer. No inset arithmetic, no observer.
+                accessory
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, barHeight + 6)
+            }
+            .onChange(of: jumpToken) { jump(using: proxy) }
         }
         .releasesKeyboardWhenLeavingScreen(then: onLeavingScreen)
         // No app-drawn back swipe. Both surfaces keep the system navigation bar, so the
@@ -109,6 +135,7 @@ struct ConversationScaffold<Content: View, Bar: View, Accessory: View>: View {
             return Edges(
                 atBottom: distance <= Self.atBottomSlack,
                 awayFromBottom: distance >= Self.awayFromBottomSlack,
+                farFromBottom: Self.farFromBottom(distance, container: geometry.containerSize.height),
                 nearTop: geometry.visibleRect.minY <= Self.topTrigger
             )
         } action: { _, edges in
@@ -120,6 +147,14 @@ struct ConversationScaffold<Content: View, Bar: View, Accessory: View>: View {
             } else if edges.awayFromBottom, isAtBottom {
                 isAtBottom = false
             }
+            // One threshold rather than a second hysteresis loop: what this decides is
+            // whether a button is offered, and the crossing is animated. The bands above
+            // need their gap because releasing the freeze *moves* the reader.
+            //
+            // Written only on a real crossing. `Edges` compares equal on most scrolled
+            // frames, but `nearTop` can flip under an unchanged bottom distance, and an
+            // equal write still notifies every observer of this state.
+            if isFarFromBottom != edges.farFromBottom { isFarFromBottom = edges.farFromBottom }
             if edges.nearTop { onReachedTop() }
         }
         .scrollPosition($position)
@@ -133,11 +168,6 @@ struct ConversationScaffold<Content: View, Bar: View, Accessory: View>: View {
         // Only the message list dismisses the keyboard, and this is applied inside
         // `safeAreaBar` so the bar's own scroll views do not inherit the mode.
         .scrollDismissesKeyboard(.interactively)
-        .onChange(of: jumpToken) {
-            withAnimation(.smooth(duration: 0.2)) {
-                position.scrollTo(edge: .bottom)
-            }
-        }
         .safeAreaBar(edge: .bottom) {
             bar
                 .onGeometryChange(for: CGFloat.self) { proxy in
@@ -148,41 +178,46 @@ struct ConversationScaffold<Content: View, Bar: View, Accessory: View>: View {
         }
     }
 
+    /// Performs the jump the owner just asked for.
+    ///
+    /// # Why two mechanisms for one scroll
+    ///
+    /// `ScrollPosition` takes the bottom edge, which is what an own send and `↓ Latest`
+    /// want, and it is the same object the list's position is bound to.
+    ///
+    /// It cannot take a *message*, though — not here. `scrollTo(id:anchor:)` reaches the
+    /// right row, but its `anchor` argument loses to `defaultScrollAnchor(.bottom, for:
+    /// .alignment)` above: measured in a harness against this file, `anchor: .top` landed
+    /// the target hard against the *bottom* edge, with everything the pill had just
+    /// announced still below the fold — the same place the reader was already looking.
+    /// Dropping the `.alignment` anchor to fix it is not a trade worth making: that is
+    /// what rests a short conversation against the composer instead of under the
+    /// navigation bar.
+    ///
+    /// A `ScrollViewReader`'s proxy honours the anchor in the same hierarchy, so the two
+    /// jumps take the two paths, and each takes the one it is good at.
+    private func jump(using proxy: ScrollViewProxy) {
+        withAnimation(.smooth(duration: 0.2)) {
+            switch jumpTarget {
+            case .bottom:
+                position.scrollTo(edge: .bottom)
+            case let .message(id):
+                // Anchored at the top, so the first thing under the reader's eye is the
+                // first message they have not read; a target too near the end of the
+                // content simply lands as far as the scroll view can go, which is the
+                // bottom — and the bottom is where that message is anyway.
+                proxy.scrollTo(id, anchor: .top)
+            }
+        }
+    }
+
     /// The bands the scaffold reacts to. `atBottom` and `awayFromBottom` are the two
     /// sides of one hysteresis loop and are deliberately both projected: the gap between
     /// them is the region where nothing changes.
     private struct Edges: Equatable {
         let atBottom: Bool
         let awayFromBottom: Bool
+        let farFromBottom: Bool
         let nearTop: Bool
-    }
-}
-
-/// The "N new messages" affordance: shown when the reader has scrolled up and the
-/// timeline is holding new arrivals back, so nothing moves under them until they ask.
-struct NewMessagesPill: View {
-    let count: Int
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 6) {
-                Image(systemName: "arrow.down")
-                    .font(.caption.weight(.bold))
-                Text(label)
-                    .font(.caption.weight(.semibold))
-                    .monospacedDigit()
-            }
-            .padding(.horizontal, 12)
-            .frame(minHeight: 32)
-        }
-        .buttonStyle(.glassProminent)
-        .clipShape(.capsule)
-        .accessibilityLabel(label)
-        .accessibilityHint("Double tap to jump to the newest message")
-    }
-
-    private var label: String {
-        count == 1 ? "1 new message" : "\(count) new messages"
     }
 }

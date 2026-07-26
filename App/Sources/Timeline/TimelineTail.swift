@@ -61,26 +61,31 @@ struct TimelineTail: Equatable {
     }
 
     /// Splits the full loaded set — ascending by `(createdAt, id)` — into the rows to
-    /// render and the count held back behind the boundary.
+    /// render and the rows held back behind the boundary.
     ///
     /// A partition rather than a prefix: a held-back row can sort *below* the boundary
     /// in the total order when it shares the boundary's second, so the held set is not
     /// always a suffix. Taking a prefix would drop the boundary row itself along with
     /// it — shrinking the content, which is the exact movement the freeze exists to
     /// prevent.
-    func split(_ ordered: [TimelineRow]) -> (rendered: [TimelineRow], heldBack: Int) {
-        guard let boundary else { return (ordered, 0) }
+    ///
+    /// The held rows come back as rows rather than as a count because the affordance
+    /// above the composer needs both halves of "3 new messages": how many, and *which
+    /// one to land on* — the oldest of them, which is `held.first` in the same ascending
+    /// order the rendered set keeps.
+    func split(_ ordered: [TimelineRow]) -> (rendered: [TimelineRow], held: [TimelineRow]) {
+        guard let boundary else { return (ordered, []) }
         var rendered: [TimelineRow] = []
         rendered.reserveCapacity(ordered.count)
-        var heldBack = 0
+        var held: [TimelineRow] = []
         for row in ordered {
             if boundary.holdsBack(row) {
-                heldBack += 1
+                held.append(row)
             } else {
                 rendered.append(row)
             }
         }
-        return (rendered, heldBack)
+        return (rendered, held)
     }
 
     /// The frozen boundary: a second, and everything that second already held.

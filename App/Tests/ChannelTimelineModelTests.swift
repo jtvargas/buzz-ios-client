@@ -92,7 +92,7 @@ struct ChannelTimelineModelTests {
         _ = try await store.ingest(batch: [
             try author.message("two", in: "room-1", at: 2_000),
         ], phase: .live)
-        await waitUntil { model.heldBackCount == 1 }
+        await waitUntil { model.jump.unreadCount == 1 }
         #expect(await marker.upTos == [1_000])
 
         // Asking for the held-back messages renders them, and only then does the frontier
