@@ -8,9 +8,9 @@ import SwiftUI
 /// opens its thread. Reads are live from the store; presence and typing are live from
 /// the engine's ``PresenceStore``; the composer sends and signals typing through it.
 ///
-/// The list, the bar, and the keyboard/safe-area arithmetic all belong to
-/// ``ConversationScaffold`` — this view supplies the three slots and nothing else, so
-/// a thread and a DM inherit the same behaviour for free.
+/// The list, the header's placement, the bar, and the keyboard/safe-area arithmetic all
+/// belong to ``ConversationScaffold`` — this view supplies the four slots and nothing
+/// else, so a thread and a DM inherit the same behaviour for free.
 struct ChannelTimelineView: View {
     @State private var model: ChannelTimelineModel
     @State private var presence: PresenceModel
@@ -81,9 +81,12 @@ struct ChannelTimelineView: View {
             // on each scroll threshold crossing.
             isAtBottom: Binding(get: { model.isAtBottom }, set: { model.isAtBottom = $0 }),
             jumpToken: model.jumpToken,
-            onReachedTop: loadOlderPage
+            onReachedTop: loadOlderPage,
+            onLeavingScreen: releaseComposer
         ) {
             list
+        } header: {
+            headerPill
         } bar: {
             // One bottom bar, not two insets: stacked safe-area insets place the
             // last-applied one closest to the screen edge, which would put the typing
@@ -96,9 +99,11 @@ struct ChannelTimelineView: View {
             accessory
         }
         .overlay { emptyState }
+        // An empty inline title, and no item of our own: the bar is here for the back
+        // chevron and the swipe-back gesture that comes with it, and the conversation's
+        // name is in the surface's own chrome where it has room to be read.
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar { titleItem }
         .sheet(isPresented: $showsChannelDetails) {
             ChannelDetailsView(
                 channel: channel,
@@ -191,7 +196,10 @@ struct ChannelTimelineView: View {
             onOpenThread: row.isDeleted ? nil : { open(thread: row) },
             onOpenProfile: { profilePeer = ProfilePeer(pubkey: $0) }
         )
-        .padding(.horizontal)
+        // The shared constant, not a bare `.padding(.horizontal)`: the day separator and
+        // the header pill start on this same line, and three defaults agreeing is not the
+        // same as one number.
+        .padding(.horizontal, MessageRowMetrics.rowLeading)
     }
 
     /// What floats over the list just above the composer: the held-back arrivals
@@ -231,25 +239,23 @@ struct ChannelTimelineView: View {
     /// The header: a left-aligned glass pill carrying the conversation's name with its
     /// member count beneath, opening the details sheet on tap (§4).
     ///
-    /// `.topBarLeading`, not `.principal`, because `.principal` centres its content and
-    /// offers no way to pull it to the leading edge. The dropdown arrow is gone — the tap
-    /// stays, and a sheet is not a menu, so a chevron promising one was the wrong
-    /// affordance for it. What tells a reader this is a control now is the same pressed
-    /// dim the row's avatar and name use.
-    private var titleItem: some ToolbarContent {
-        ToolbarItem(placement: .topBarLeading) {
-            // Resolved once for the pill's two lines and its label, rather than three
-            // times through the directory on every toolbar pass.
-            let identity = conversation
-            Button {
-                showsChannelDetails = true
-            } label: {
-                ConversationHeaderPill(title: identity.title, subtitle: subtitle(for: identity))
-            }
-            .buttonStyle(PressFeedbackButtonStyle())
-            .accessibilityLabel(identity.title)
-            .accessibilityHint("Double tap to show conversation details")
+    /// It sits in the scaffold's top bar rather than in the navigation bar, which is what
+    /// gives it the width to be read — see ``ConversationHeaderPill``. The dropdown arrow
+    /// is gone: a sheet is not a menu, so a chevron promising one was the wrong
+    /// affordance. What tells a reader this is a control is the same pressed dim the row's
+    /// avatar and name use.
+    private var headerPill: some View {
+        // Resolved once for the pill's two lines and its label, rather than three times
+        // through the directory on every pass.
+        let identity = conversation
+        return Button {
+            showsChannelDetails = true
+        } label: {
+            ConversationHeaderPill(title: identity.title, subtitle: subtitle(for: identity))
         }
+        .buttonStyle(PressFeedbackButtonStyle())
+        .accessibilityLabel(identity.title)
+        .accessibilityHint("Double tap to show conversation details")
     }
 
     /// The header's second line: a channel's member count, or a direct peer's own quiet
@@ -273,6 +279,14 @@ struct ChannelTimelineView: View {
     /// model's own guard absorbs.
     private func loadOlderPage() {
         Task { await model.loadOlder() }
+    }
+
+    /// The scaffold's "this surface is leaving the screen" report: drop the composer's
+    /// focus and its suggestion panel, so a keyboard raised for this channel cannot
+    /// outlive it into a thread — or be restored under it on the way back. The scaffold
+    /// has already resigned the responder; this is the observed half of the same state.
+    private func releaseComposer() {
+        model.mentionAutocomplete.dismissComposer()
     }
 
     /// Opens the thread a row belongs to: its own id when it is the opener, its

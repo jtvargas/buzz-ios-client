@@ -21,10 +21,13 @@ import SwiftUI
 /// suggestion panel is likewise hosted over the message list, not in this stack, so a
 /// keystroke that changes the result count never re-insets the conversation.
 ///
-/// Focus is a single piece of state (`autocomplete.isComposerFocused`) that only
-/// ``TokenTextView`` reconciles into UIKit, and there is no animation on this
-/// subtree: an ambient `.animation` here would catch keyboard-driven layout and run
-/// the composer's height on a different clock from the keyboard's.
+/// Focus is a single piece of state (`autocomplete.isComposerFocused`), and
+/// ``TokenTextView`` is the only thing that turns it into a first responder. The one
+/// other place that touches UIKit's responder is ``ConversationKeyboardRelease``, which
+/// hands the keyboard back as the whole surface leaves the screen — a transition this
+/// view has no way to see. There is no animation on this subtree either: an ambient
+/// `.animation` here would catch keyboard-driven layout and run the composer's height on
+/// a different clock from the keyboard's.
 struct MessageComposerView: View {
     @Binding var document: MentionDraft
     @Bindable var autocomplete: MentionAutocompleteModel
@@ -47,16 +50,16 @@ struct MessageComposerView: View {
     }
 
     var body: some View {
-        // Read here, in `body`, on purpose. Focus is only *used* inside the binding
-        // closure `TokenTextView` invokes, and an observable property read from outside a
-        // body registers no dependency — so a programmatic `isComposerFocused = true`
-        // (tapping the bar's dead space, restoring focus after the alert) had nothing
-        // subscribed to it and could simply never reach `updateUIView`.
-        let isFocused = autocomplete.isComposerFocused
+        // Discarded, and load-bearing. The field's binding reads the flag *live* (see
+        // `field()`), and Observation only records reads made during a `body` pass — so
+        // without this read a programmatic `isComposerFocused = true` (tapping the bar's
+        // dead space, restoring focus after the alert) has nothing subscribed to it and
+        // never reaches `updateUIView`.
+        _ = autocomplete.isComposerFocused
 
         return GlassEffectContainer(spacing: 8) {
             VStack(alignment: .leading, spacing: 2) {
-                field(isFocused: isFocused)
+                field()
                 controls
             }
             .padding(.horizontal, 4)
@@ -97,13 +100,17 @@ struct MessageComposerView: View {
     /// No tap gesture of its own — the text view handles its own touches natively,
     /// which is what puts the caret where the author actually tapped. A SwiftUI
     /// gesture layered over a `UIViewRepresentable` would swallow that.
-    private func field(isFocused: Bool) -> some View {
+    ///
+    /// `$autocomplete.isComposerFocused` rather than a `Bool` captured in `body`: a
+    /// captured value is a snapshot, and `updateUIView` runs on layout passes as well as
+    /// on body passes. Measured in the navigation harness — a layout pass between the flag
+    /// being cleared and the next `body` re-applied the stale `true` and called
+    /// `becomeFirstResponder` again mid-transition, which is a keyboard raised for a
+    /// composer that is on its way off the screen.
+    private func field() -> some View {
         TokenTextView(
             document: $document,
-            isFocused: Binding(
-                get: { isFocused },
-                set: { autocomplete.isComposerFocused = $0 }
-            ),
+            isFocused: $autocomplete.isComposerFocused,
             placeholder: placeholder
         )
         .frame(maxWidth: .infinity)

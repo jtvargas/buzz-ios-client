@@ -9,12 +9,16 @@ import Testing
 /// header's two lines, the row's tap arbitration, and the identifier the profile sheet
 /// hands to the pasteboard.
 ///
-/// Deliberately not here: anything about how a row *looks*. Avatar size, the gutter a
-/// day separator aligns to, the pressed dim on the name, and Liquid Glass rendering are
-/// all layout and material questions that a unit test can only restate as the constants
-/// it is asserting against. They are on the owner's device pass instead — as is whether a
-/// gesture *fires*, which is why the arbitration below is tested as the value it is rather
-/// than through a view host.
+/// Deliberately not here: anything about how a row *looks*. Avatar size, the pressed dim
+/// on the name, and Liquid Glass rendering are layout and material questions that a unit
+/// test can only restate as the constants it is asserting against. They are on the owner's
+/// device pass instead — as is whether a gesture *fires*, which is why the arbitration
+/// below is tested as the value it is rather than through a view host.
+///
+/// The day separator is the one geometry that is here, and only for the part that is a
+/// *relationship* rather than an appearance: which of two shared lines its label starts on,
+/// and that its air is derived from the list's rhythm instead of duplicated. Whether the
+/// result reads as a heading is still a screenshot's answer.
 @MainActor
 @Suite("Message surface reads", .timeLimit(.minutes(1)))
 struct MessageSurfaceTests {
@@ -134,18 +138,24 @@ struct MessageSurfaceTests {
         #expect(ConversationHeaderPill.memberCount(12) == "12 members")
     }
 
-    @Test("the header keeps its second line only at the sizes a 44pt bar can hold it")
-    func headerSubtitleThreshold() {
-        // Two lines plus the pill's padding is ~42pt of a 44pt navigation bar at the default
-        // text size, and *both* lines scale — so one step up already overflows the bar, and
-        // at AX3 the two-line pill is around 68pt. The subtitle is what goes: it is the
-        // quiet line, and everything it says is in the details sheet the pill opens.
-        #expect(ConversationHeaderPill.showsSubtitle(at: .large))
-        #expect(ConversationHeaderPill.showsSubtitle(at: .small))
-        #expect(ConversationHeaderPill.showsSubtitle(at: .xLarge) == false)
-        #expect(ConversationHeaderPill.showsSubtitle(at: .accessibility3) == false)
-        // The remaining line is capped too, so it cannot grow past the bar on its own.
-        #expect(ConversationHeaderPill.maximumTypeSize < .accessibility2)
+    @Test("the day separator starts where an avatar starts, not where message text does")
+    func daySeparatorAlignsToTheRow() {
+        // The reported defect: the label was indented by the avatar gutter, which put the
+        // day on the message *text* column with every avatar outdented to its left.
+        let textColumn = MessageRowMetrics.rowLeading
+            + MessageRowMetrics.avatarSize
+            + MessageRowMetrics.avatarGap
+        #expect(DaySeparatorView.leadingInset == MessageRowMetrics.rowLeading)
+        #expect(DaySeparatorView.leadingInset < textColumn)
+
+        // The rule is the label's underline: closer to the label than the pair is to the
+        // messages around it. Reversed, the line reads as the boundary and the day as an
+        // annotation on it, which is the shape this replaced.
+        #expect(DaySeparatorView.labelToRule < DaySeparatorView.verticalAir)
+
+        // And the air is derived from the list's own rhythm rather than being a literal
+        // beside it: half of it on each side, so a boundary gets 1.5x an ordinary gap.
+        #expect(DaySeparatorView.verticalAir * 2 == MessageRowMetrics.betweenMessages)
     }
 
     @Test("a control's action claims the tap for one window, and the row's tap for no longer")

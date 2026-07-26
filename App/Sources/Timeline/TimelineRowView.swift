@@ -45,8 +45,7 @@ struct TimelineRowView: View {
 
     /// The avatar's point size, and so the width the content column is indented by, at
     /// this reader's text size. Scaled against `.subheadline` — the name beside it — so
-    /// the gutter and the attribution grow together; ``DaySeparatorView`` declares the
-    /// same metric so its label lands on the same vertical line as the message text.
+    /// the gutter and the attribution grow together.
     ///
     /// Internal rather than private because the row's identity half lives beside it in
     /// `TimelineRowView+Identity.swift`, and Swift's `private` is file-scoped.

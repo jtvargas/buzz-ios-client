@@ -43,18 +43,22 @@ struct ThreadView: View {
             // Hand-written rather than `$model.isAtBottom`, which would write the
             // model reference back into `State` on every scroll threshold crossing.
             isAtBottom: Binding(get: { model.isAtBottom }, set: { model.isAtBottom = $0 }),
-            jumpToken: model.jumpToken
+            jumpToken: model.jumpToken,
+            onLeavingScreen: releaseComposer
         ) {
             list
+        } header: {
+            headerPill
         } bar: {
             ThreadComposerView(model: model)
         } accessory: {
             accessory
         }
         .overlay { emptyState }
+        // Empty on purpose: the bar carries the back chevron and the swipe-back gesture,
+        // and the heading is in the surface's own chrome.
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar { titleItem }
         .profileSheet(peer: $profilePeer, presence: presence)
         .task { await model.run() }
         .task { await presence.run() }
@@ -102,14 +106,16 @@ struct ThreadView: View {
                 // which is also why no row here draws a reply preview.
                 onOpenProfile: { profilePeer = ProfilePeer(pubkey: $0) }
             )
-            .padding(.horizontal)
+            // The shared constant rather than a bare `.padding(.horizontal)`, so a reply
+            // starts on the same line as the header pill and the day separators above it.
+            .padding(.horizontal, MessageRowMetrics.rowLeading)
 
             // Set the opener apart from its replies. Padded, because the inter-message
             // spacing now belongs to the enclosing stack and would otherwise leave the
             // rule sitting against the opener it separates.
             if row.id == model.root {
                 Divider()
-                    .padding(.horizontal)
+                    .padding(.horizontal, MessageRowMetrics.rowLeading)
                     .padding(.top, MessageRowMetrics.betweenMessages)
             }
         }
@@ -160,18 +166,24 @@ struct ThreadView: View {
     }
 
     /// The header: `Thread` over the conversation it hangs off, in the same
-    /// left-aligned glass pill the channel uses (§4).
+    /// left-aligned glass pill the channel uses (§4), in the scaffold's top bar.
     ///
-    /// Not a control. It used to dismiss on tap, which duplicated the back chevron
-    /// sitting three points to its left with no affordance saying so — and §4's rule
-    /// that a header only advertises an action when it has one cuts the same way for a
-    /// hidden one. So the pill is inert here, and the back button is the way out.
-    private var titleItem: some ToolbarContent {
-        ToolbarItem(placement: .topBarLeading) {
-            ConversationHeaderPill(title: "Thread", subtitle: context)
-                .accessibilityElement(children: .combine)
-                .accessibilityLabel("Thread in \(conversation.title)")
-        }
+    /// Not a control. It used to dismiss on tap, which duplicated the back chevron with no
+    /// affordance saying so — and §4's rule that a header only advertises an action when it
+    /// has one cuts the same way for a hidden one. So the pill is inert here, and the back
+    /// button is the way out.
+    private var headerPill: some View {
+        ConversationHeaderPill(title: "Thread", subtitle: context)
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Thread in \(conversation.title)")
+    }
+
+    /// The scaffold's "this surface is leaving the screen" report. A reply composer's
+    /// keyboard must not outlive the thread it belongs to — nor be restored under the
+    /// channel once this view is gone, which is what UIKit does if the responder is still
+    /// held when the window detaches.
+    private func releaseComposer() {
+        model.mentionAutocomplete.dismissComposer()
     }
 }
 

@@ -14,11 +14,21 @@ import SwiftUI
 /// and 2pt of extra leading on the body. Deliberately *not* a card: no row background,
 /// no border, no inset panel — the only thing separating two messages is space.
 enum MessageRowMetrics {
+    /// The screen inset a message row carries, and so the vertical line an avatar's
+    /// leading edge sits on.
+    ///
+    /// A constant rather than a bare `.padding(.horizontal)` in each view because four
+    /// things have to start on that line — the row, a day separator's label, the
+    /// conversation header's pill, and the rule under the thread opener — and SwiftUI's
+    /// default padding agreeing in four files is an accident waiting to be changed in
+    /// one of them.
+    static let rowLeading: CGFloat = 16
+
     /// The avatar's point size at the default text size, and so the width the content
     /// column is indented by. Declare it in a view as
     /// `@ScaledMetric(relativeTo: .subheadline) var avatarSize: CGFloat = MessageRowMetrics.avatarSize`
-    /// — the row and the day separator both do, which is what keeps them aligned at
-    /// every Dynamic Type setting rather than only at the default one.
+    /// so the gutter grows with the name beside it rather than only at the default text
+    /// size.
     static let avatarSize: CGFloat = 34
 
     /// Between the avatar and the content column. Fixed rather than scaled: the gutter
