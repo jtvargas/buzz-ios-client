@@ -203,3 +203,46 @@ body re-applied the stale value and re-raised the keyboard mid-transition.
 
 The `TextEditor` spike noted above would delete this class of bug outright, and this pass is
 one more argument for taking it.
+
+## Amendment (Part 1c/1d): the heading goes back on the system bar
+
+The Part 1b amendment above is **superseded**. `ConversationHeaderRow`,
+`ConversationHeaderPill` and `ConversationBackSwipe` are deleted; the heading is a leading
+`ToolbarItem` again, with a flexible `ToolbarSpacer` splitting it from the back button so the
+two read as separate glass capsules. `ConversationTitleBar` is the whole of it.
+
+**The diagnosis behind all three previous placements was wrong.** "The bar squeezes a two-line
+item to a stub" was inferred from a symptom, not measured. A leading toolbar item holds two
+lines fine. What did not fit was the *old pill*, which carried its own `glassEffect` capsule
+and 6pt of vertical padding **inside** the item, so it asked the bar for ~46pt where its text
+needed ~34. Handing the capsule back to iOS 26 fixes it, and the back button, the material, the
+metrics, the interactive drag-back and the type cap all come from the system — none of which
+the hand-drawn row could reproduce. The row cost the drag-back (Part 1b's own finding) to solve
+a problem that was never the bar's.
+
+Three things the bar does that are not in the documentation and had to be measured:
+
+1. **An item that does not fit is moved into the `…` overflow menu, not truncated.** A long
+   channel name took the *entire heading* off screen. The defence is to bound the text column
+   to the surface width less measured chrome (`ConversationTitleBar.labelWidth(forSurfaceWidth:mark:)`);
+   an avatar is charged the extra width a `#` did not cost.
+2. **A bare label is squeezed to its minimum where a `Button`'s label is sized to its ideal.**
+   The thread heading had no action and came out `Th…` over `#gen…`, jammed against the glass.
+   That is why the heading's action is not optional: every heading is a control, so every
+   heading gets the room the bar gives a control.
+3. **`padding(.vertical, _)` inside the item does nothing.** Screenshots at 0, 2, 4 and 6pt are
+   byte-identical — the bar clamps the item's height. The capsule *is* ~5pt taller than the
+   item on each side, but a two-line text box carries more empty ascent above its cap heights
+   than descent below its baselines, so the ink sits low and the second line reads as resting
+   on the glass. A 2pt `offset` is the only lever that reaches this, and it does not move the
+   tap target.
+
+What the heading now carries: a `#` and `12 members · 3 online` for a channel; `text.append`
+and the parent conversation for a thread; and for a direct message the peer's own face with
+their presence — a green or grey dot and the word — in place of the NIP-05 identifier, which
+does not change and is still on the profile sheet. Presence is read from the same
+`PresenceModel` the message rows' dots are, so a row and the header cannot disagree about the
+same person. The thread heading pops back to its conversation on tap, driven as a real tap in
+`~/.buzz/.scratch/headerharness` (`UITests/ThreadHeadingTests.swift`) rather than assumed —
+the harness now builds the shipping `ConversationTitleBar.swift` by symlink, so what is
+screenshotted there is this file.

@@ -11,6 +11,10 @@ import SwiftUI
 /// behave identically without a second copy of that arithmetic.
 struct ThreadView: View {
     @Environment(\.entityNames) private var names
+    /// Pops back to the conversation this thread hangs off — the heading's own action, and
+    /// the same pop the back button and the edge swipe perform, so there is one way out
+    /// rather than three that could diverge.
+    @Environment(\.dismiss) private var dismiss
     @State private var model: ThreadModel
     /// The same workspace roster the channel timeline reads, so a reply's presence dot
     /// and the profile sheet this view presents agree with the row that pushed it.
@@ -18,6 +22,12 @@ struct ThreadView: View {
     /// Whose profile is open, if anyone's — set by a tap on a reply's avatar or name.
     @State private var profilePeer: ProfilePeer?
     private let channelID: String
+
+    /// The mark on a thread's heading. `text.append` rather than a bubble or an arrow: it is
+    /// the symbol for adding a line to something already written, which is what a thread is.
+    /// Named here rather than at the call site so the test that it is a symbol the system
+    /// actually has can reach it — a missing name renders as nothing at all, silently.
+    static let threadSymbol = "text.append"
 
     init(root: String, channel: String, store: BuzzEventStore, engine: SyncEngine, selfPubkey: String?) {
         channelID = channel
@@ -53,7 +63,13 @@ struct ThreadView: View {
             accessory
         }
         .overlay { emptyState }
-        .conversationTitle(title: "Thread", subtitle: context)
+        .conversationTitle(
+            mark: .symbol(Self.threadSymbol),
+            title: "Thread",
+            subtitle: .text(context),
+            actionHint: "Double tap to return to the conversation",
+            action: { dismiss() }
+        )
         .profileSheet(peer: $profilePeer, presence: presence)
         .task { await model.run() }
         .task { await presence.run() }
@@ -157,9 +173,10 @@ struct ThreadView: View {
     /// The line under "Thread": `#channel` for a channel, and a plain name for a direct
     /// message, where a `#` would be a category error.
     ///
-    /// The heading is not a control here. It used to dismiss on tap, which duplicated the
-    /// back button with no affordance saying so; the system chevron beside it is the way
-    /// out, along with the swipe it brings back.
+    /// The heading names the way out and takes it: the second line already says which
+    /// conversation this thread hangs off, so tapping it goes there. That it duplicates the
+    /// back button beside it is the point — it is the larger target, and it is the one a
+    /// reader's eye is already on.
     private var context: String {
         conversation.isDirect ? conversation.title : "#\(conversation.title)"
     }
