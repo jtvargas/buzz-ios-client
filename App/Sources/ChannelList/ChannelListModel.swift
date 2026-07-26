@@ -9,6 +9,11 @@ import Observation
 /// commit, and each fire re-reads `store.channelList()` — BuzzKit's public,
 /// deletion-aware, outbox-unioned query. SwiftUI reads plain properties; the model
 /// never keeps a second list to fall out of step.
+///
+/// Rosters are deliberately *not* read here. ``EntityDirectoryModel`` already reads
+/// every channel's members in one `directorySnapshot()`, and the sidebar's presence
+/// marker takes them from the resolver — so the sidebar derives a roster once per
+/// commit, not twice.
 @MainActor
 @Observable
 final class ChannelListModel {
@@ -18,8 +23,6 @@ final class ChannelListModel {
     /// True once the first snapshot has been applied, so the view can tell "empty"
     /// from "not loaded yet".
     private(set) var hasLoaded = false
-    /// Channel rosters, used only to derive the small channel-level online marker.
-    private(set) var memberPubkeysByChannel: [String: Set<String>] = [:]
     /// Mention identities for each newest-message preview.
     private(set) var mentionsByMessageID: [String: MentionRefList] = [:]
 
@@ -40,10 +43,9 @@ final class ChannelListModel {
         do {
             for try await _ in DatabaseSignal.changes(in: store.reader) {
                 let rows = (try? store.channelList(selfPubkey: selfPubkey)) ?? []
-                let memberships = (try? store.channelMemberPubkeysByChannel()) ?? [:]
                 let messageIDs = rows.compactMap(\.lastMessageID)
                 let mentions = (try? store.mentions(for: messageIDs)) ?? [:]
-                await apply(rows, memberships: memberships, mentions: mentions)
+                await apply(rows, mentions: mentions)
             }
         } catch {
             // The stream ends on cancellation or store teardown; the last snapshot
@@ -51,23 +53,13 @@ final class ChannelListModel {
         }
     }
 
-    func hasOnlineMember(in channelID: String, online: Set<String>) -> Bool {
-        guard let members = memberPubkeysByChannel[channelID] else { return false }
-        return !members.isDisjoint(with: online)
-    }
-
     func mentions(for channel: ChannelListRow) -> [MentionRef] {
         guard let messageID = channel.lastMessageID else { return [] }
         return mentionsByMessageID[messageID]?.refs ?? []
     }
 
-    private func apply(
-        _ rows: [ChannelListRow],
-        memberships: [String: Set<String>],
-        mentions: [String: MentionRefList]
-    ) {
+    private func apply(_ rows: [ChannelListRow], mentions: [String: MentionRefList]) {
         channels = rows
-        memberPubkeysByChannel = memberships
         mentionsByMessageID = mentions
         hasLoaded = true
     }
