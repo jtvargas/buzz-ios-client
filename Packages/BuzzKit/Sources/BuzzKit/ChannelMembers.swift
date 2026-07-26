@@ -74,6 +74,22 @@ public extension BuzzEventStore {
             try Self.fetchChannelMembers(db, channel: channel)
         }
     }
+
+    /// Every channel's member keys in one read. Channel-list presence uses this
+    /// batch shape so a new message does not trigger one roster query per channel.
+    nonisolated func channelMemberPubkeysByChannel() throws -> [String: Set<String>] {
+        try reader.read { db in
+            let rows = try Row.fetchAll(
+                db,
+                sql: "SELECT channel_id, pubkey FROM channel_member ORDER BY channel_id, pubkey"
+            )
+            return rows.reduce(into: [String: Set<String>]()) { result, row in
+                let channelID: String = row["channel_id"]
+                let pubkey: String = row["pubkey"]
+                result[channelID, default: []].insert(pubkey)
+            }
+        }
+    }
 }
 
 extension BuzzEventStore {

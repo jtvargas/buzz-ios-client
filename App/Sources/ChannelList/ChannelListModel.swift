@@ -18,6 +18,10 @@ final class ChannelListModel {
     /// True once the first snapshot has been applied, so the view can tell "empty"
     /// from "not loaded yet".
     private(set) var hasLoaded = false
+    /// Channel rosters, used only to derive the small channel-level online marker.
+    private(set) var memberPubkeysByChannel: [String: Set<String>] = [:]
+    /// Mention identities for each newest-message preview.
+    private(set) var mentionsByMessageID: [String: MentionRefList] = [:]
 
     private let store: BuzzEventStore
     /// The local identity, so a channel's own posts are excluded from its unread
@@ -36,7 +40,10 @@ final class ChannelListModel {
         do {
             for try await _ in DatabaseSignal.changes(in: store.reader) {
                 let rows = (try? store.channelList(selfPubkey: selfPubkey)) ?? []
-                await apply(rows)
+                let memberships = (try? store.channelMemberPubkeysByChannel()) ?? [:]
+                let messageIDs = rows.compactMap(\.lastMessageID)
+                let mentions = (try? store.mentions(for: messageIDs)) ?? [:]
+                await apply(rows, memberships: memberships, mentions: mentions)
             }
         } catch {
             // The stream ends on cancellation or store teardown; the last snapshot
@@ -44,8 +51,24 @@ final class ChannelListModel {
         }
     }
 
-    private func apply(_ rows: [ChannelListRow]) {
+    func hasOnlineMember(in channelID: String, online: Set<String>) -> Bool {
+        guard let members = memberPubkeysByChannel[channelID] else { return false }
+        return !members.isDisjoint(with: online)
+    }
+
+    func mentions(for channel: ChannelListRow) -> [MentionRef] {
+        guard let messageID = channel.lastMessageID else { return [] }
+        return mentionsByMessageID[messageID]?.refs ?? []
+    }
+
+    private func apply(
+        _ rows: [ChannelListRow],
+        memberships: [String: Set<String>],
+        mentions: [String: MentionRefList]
+    ) {
         channels = rows
+        memberPubkeysByChannel = memberships
+        mentionsByMessageID = mentions
         hasLoaded = true
     }
 }

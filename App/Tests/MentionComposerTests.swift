@@ -54,6 +54,30 @@ struct MentionComposerTests {
         #expect(draft.text == "Hi @Ada Lovelace ")
     }
 
+    @Test("ordinary typing stays native while mention edits remain atomic")
+    func editPolicy() throws {
+        var draft = MentionDraft(text: "hello @ad")
+        draft.insert(candidate(), replacing: try #require(draft.trailingMention()).range)
+        let token = try #require(draft.tokens.first)
+
+        #expect(!draft.requiresAtomicEdit(in: NSRange(location: 0, length: 0)))
+        #expect(!draft.requiresAtomicEdit(in: NSRange(location: NSMaxRange(token.range), length: 0)))
+        #expect(draft.requiresAtomicEdit(in: NSRange(
+            location: NSMaxRange(token.range) - 1,
+            length: 1
+        )))
+        #expect(draft.requiresAtomicEdit(in: NSRange(
+            location: token.range.location + 1,
+            length: 0
+        )))
+
+        var systemEdit = draft
+        systemEdit.reconcileText("Prefix \(draft.text)")
+        #expect(systemEdit.tokens.first?.range.location == token.range.location + 7)
+        systemEdit.reconcileText("Prefix hello ")
+        #expect(systemEdit.tokens.isEmpty)
+    }
+
     @Test("channel send emits one normalized p tag for the selected mention")
     func sendTagsMention() async throws {
         let temp = TempStore()

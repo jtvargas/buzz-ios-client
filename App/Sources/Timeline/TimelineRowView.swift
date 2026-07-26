@@ -13,6 +13,8 @@ import UIKit
 /// message can be opened, and omitted inside the thread it already shows.
 struct TimelineRowView: View {
     @Environment(\.channelNameMap) private var channelNameMap
+    @Environment(\.openURL) private var openURL
+    @State private var suppressNextRowTap = false
 
     let row: TimelineRow
     /// Whether this message's author is present in the workspace (S-5 presence).
@@ -48,15 +50,25 @@ struct TimelineRowView: View {
                 .accessibilityElement(children: .combine)
                 .accessibilityValue(accessibilityStatus)
 
-                if !row.isDeleted {
+                if !row.isDeleted, !reactions.isEmpty {
                     ReactionChipsView(
                         groups: reactions,
-                        onTap: onToggleReaction,
-                        onReact: onReact
+                        onTap: { group in
+                            performControlAction { onToggleReaction(group) }
+                        },
+                        onReact: { emoji in
+                            performControlAction { onReact(emoji) }
+                        }
                     )
                 }
                 if row.hasThread, let onOpenThread {
-                    RepliesButton(count: row.replyCount, action: onOpenThread)
+                    RepliesButton(
+                        count: row.replyCount,
+                        lastReplyAt: row.lastReplyDate,
+                        action: {
+                            performControlAction(onOpenThread)
+                        }
+                    )
                 }
                 if case let .failed(reason) = row.delivery {
                     RetryStrip(reason: reason) { onRetry(row.id) }
@@ -68,10 +80,44 @@ struct TimelineRowView: View {
         .animation(.default, value: row.delivery)
         .animation(.default, value: isAuthorOnline)
         .contentShape(.rect)
+        .onTapGesture {
+            scheduleRowTap()
+        }
+        // AttributedString links are controls inside the otherwise tappable row.
+        // Mark their gesture before handing the URL back to the app environment so
+        // opening a link never also pushes the message's thread.
+        .environment(\.openURL, OpenURLAction { url in
+            suppressRowTapBriefly()
+            openURL(url)
+            return .handled
+        })
+        .accessibilityAction(named: "Open thread") {
+            onOpenThread?()
+        }
         .contextMenu {
             menuItems
         } preview: {
             MessagePreview(row: row, bodyText: bodyText, resolver: resolver)
+        }
+    }
+
+    private func scheduleRowTap() {
+        guard !row.isDeleted, let onOpenThread else { return }
+        DispatchQueue.main.async {
+            guard !suppressNextRowTap else { return }
+            onOpenThread()
+        }
+    }
+
+    private func performControlAction(_ action: () -> Void) {
+        suppressRowTapBriefly()
+        action()
+    }
+
+    private func suppressRowTapBriefly() {
+        suppressNextRowTap = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            suppressNextRowTap = false
         }
     }
 
@@ -214,19 +260,73 @@ private struct MessagePreview: View {
 /// The "N replies" affordance under a message that has a thread.
 private struct RepliesButton: View {
     let count: Int
+    let lastReplyAt: Date?
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 4) {
-                Image(systemName: "bubble.left.and.bubble.right")
+            HStack(spacing: 8) {
                 Text(count == 1 ? "1 reply" : "\(count) replies")
+                    .fontWeight(.semibold)
+                    .foregroundStyle(.tint)
+                if let lastReplyAt {
+                    Text(ThreadSummaryDateFormatter.label(for: lastReplyAt))
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
             }
-            .font(.caption.weight(.medium))
+            .font(.caption)
+            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+            .contentShape(.rect)
         }
-        .buttonStyle(.plain)
-        .foregroundStyle(.tint)
+        .buttonStyle(ThreadSummaryButtonStyle())
         .accessibilityHint("Double tap to open the thread")
+    }
+}
+
+/// Slack's compact relative-day timestamp used beside the reply count.
+enum ThreadSummaryDateFormatter {
+    static func label(
+        for date: Date,
+        relativeTo now: Date = Date(),
+        calendar: Calendar = .autoupdatingCurrent,
+        locale: Locale = .autoupdatingCurrent
+    ) -> String {
+        let today = calendar.startOfDay(for: now)
+        let day = calendar.startOfDay(for: date)
+        let prefix: String
+        if day == today {
+            prefix = "Today"
+        } else if day == calendar.date(byAdding: .day, value: -1, to: today) {
+            prefix = "Yesterday"
+        } else {
+            let formatter = DateFormatter()
+            formatter.locale = locale
+            formatter.calendar = calendar
+            formatter.timeZone = calendar.timeZone
+            formatter.setLocalizedDateFormatFromTemplate("MMM d")
+            prefix = formatter.string(from: date)
+        }
+        let timeFormatter = DateFormatter()
+        timeFormatter.locale = locale
+        timeFormatter.calendar = calendar
+        timeFormatter.timeZone = calendar.timeZone
+        timeFormatter.dateStyle = .none
+        timeFormatter.timeStyle = .short
+        let time = timeFormatter.string(from: date)
+        return "\(prefix) at \(time)"
+    }
+}
+
+private struct ThreadSummaryButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .padding(.horizontal, 8)
+            .background(
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(Color.secondary.opacity(configuration.isPressed ? 0.12 : 0))
+            )
+            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
     }
 }
 

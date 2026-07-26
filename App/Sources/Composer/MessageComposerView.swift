@@ -61,13 +61,19 @@ struct MessageComposerView: View {
                 .padding(.trailing, 8)
                 .padding(.vertical, 4)
                 .contentShape(.rect(cornerRadius: 22))
-                .onTapGesture { autocomplete.isComposerFocused = true }
+                .onTapGesture {
+                    if !autocomplete.isComposerFocused {
+                        autocomplete.isComposerFocused = true
+                    }
+                }
                 .composerGlass(interactive: true)
             }
         }
         .padding(.horizontal)
         .padding(.vertical, 8)
-        .animation(.smooth(duration: 0.18), value: autocomplete.suggestions.isEmpty)
+        // This transaction runs only when suggestion visibility changes, never for
+        // ordinary text-height changes, so multiline typing is not animated.
+        .animation(.smooth(duration: 0.16), value: autocomplete.suggestions.isEmpty)
         .onChange(of: document) { _, newValue in
             autocomplete.update(for: newValue)
             onTextChange(newValue.text)

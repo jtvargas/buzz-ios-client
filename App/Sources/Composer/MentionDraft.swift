@@ -22,6 +22,46 @@ struct MentionDraft: Hashable, Sendable {
         self.tokens = tokens
     }
 
+    /// Whether UIKit must hand this edit back to us instead of applying it
+    /// natively. Ordinary typing stays on UITextView's fast path; only an edit
+    /// inside or across a selected mention needs expansion to the whole token.
+    func requiresAtomicEdit(in editRange: NSRange) -> Bool {
+        tokens.contains { token in
+            if editRange.length == 0 {
+                return editRange.location > token.range.location
+                    && editRange.location < NSMaxRange(token.range)
+            }
+            return NSIntersectionRange(editRange, token.range).length > 0
+        }
+    }
+
+    /// Reconciles a system-originated whole-text update (for example dictation)
+    /// as one minimal UTF-16 edit so mention ranges shift or delete atomically.
+    @discardableResult
+    mutating func reconcileText(_ updatedText: String) -> Int {
+        let old = text as NSString
+        let new = updatedText as NSString
+        var prefix = 0
+        while prefix < old.length, prefix < new.length,
+              old.character(at: prefix) == new.character(at: prefix) {
+            prefix += 1
+        }
+
+        var suffix = 0
+        while suffix < old.length - prefix, suffix < new.length - prefix,
+              old.character(at: old.length - suffix - 1)
+                == new.character(at: new.length - suffix - 1) {
+            suffix += 1
+        }
+
+        let oldRange = NSRange(location: prefix, length: old.length - prefix - suffix)
+        let replacement = new.substring(with: NSRange(
+            location: prefix,
+            length: new.length - prefix - suffix
+        ))
+        return replaceCharacters(in: oldRange, with: replacement)
+    }
+
     /// Applies one UIKit edit, expanding any edit that touches a mention to the
     /// whole token. Returns the UTF-16 cursor location after the replacement.
     @discardableResult
