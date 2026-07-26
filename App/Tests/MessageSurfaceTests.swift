@@ -2,6 +2,7 @@ import BuzzKit
 import Foundation
 @testable import Hive
 import NostrCore
+import SwiftUI
 import Testing
 
 /// The parts of the Slack-parity message pass that are logic rather than appearance: the
@@ -136,6 +137,43 @@ struct MessageSurfaceTests {
         #expect(ConversationHeaderPill.memberCount(1) == "1 member")
         #expect(ConversationHeaderPill.memberCount(2) == "2 members")
         #expect(ConversationHeaderPill.memberCount(12) == "12 members")
+    }
+
+    @Test("the header drops its decoration before it drops the conversation's name")
+    func headerYieldsDecorationFirst() {
+        // The row's width is the screen's and does not scale, so something has to give at the
+        // accessibility sizes. The trailing glyphs are the only thing in the row that does
+        // nothing, so they go first — measured at AX5, keeping them left the pill about 115pt,
+        // which is the `#` and no name at all.
+        typealias Row = ConversationHeaderRow<EmptyView>
+        #expect(Row.showsAccessoryGlyphs(at: .large))
+        #expect(Row.showsAccessoryGlyphs(at: .xxxLarge))
+        #expect(Row.showsAccessoryGlyphs(at: .accessibility1) == false)
+        #expect(Row.showsAccessoryGlyphs(at: .accessibility5) == false)
+        // And what survives is still capped, because past this the name is a few characters
+        // however much is dropped around it.
+        #expect(Row.maximumTypeSize == .accessibility1)
+    }
+
+    @Test("only a channel is marked with a hash")
+    func headerSymbolPerKind() {
+        // A `#` in front of a person's name would be a category error, and the absence of the
+        // mark is how a direct message reads as a person rather than as a room.
+        #expect(ConversationHeaderPill.symbol(for: .channel) == "number")
+        #expect(ConversationHeaderPill.symbol(for: .direct) == nil)
+        #expect(ConversationHeaderPill.symbol(for: .agent) == nil)
+    }
+
+    @Test("the back swipe commits on distance or on a flick")
+    func backSwipeCommitBand() {
+        // Two ways to go back, because a short fast flick is the common one and a slow
+        // deliberate drag is the other. Neither alone covers both.
+        #expect(ConversationBackSwipe.commits(translationX: 80, velocityX: 0))
+        #expect(ConversationBackSwipe.commits(translationX: 5, velocityX: 900))
+        // A small slow drag is someone changing their mind, and must not pop.
+        #expect(ConversationBackSwipe.commits(translationX: 12, velocityX: 40) == false)
+        // A leftward drag is not a back swipe however fast it is.
+        #expect(ConversationBackSwipe.commits(translationX: -200, velocityX: -900) == false)
     }
 
     @Test("the day separator starts where an avatar starts, not where message text does")

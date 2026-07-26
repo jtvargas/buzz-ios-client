@@ -152,11 +152,36 @@ Three findings from the owner's device pass amend the above rather than replace 
 `ToolbarItem(placement: .topBarLeading)`, on the unverified assumption that the bar would
 compress the item so `lineLimit(1)` truncated. It does not: the bar squeezes a two-line
 item to a stub, and the reported symptom was "a little bubble, not an actual header".
-`ConversationScaffold` now owns a `header` slot attached with
-`safeAreaBar(edge: .top, alignment: .leading)`, inset by `MessageRowMetrics.rowLeading` so
-the heading, the avatars and the day separators all start on one line. The navigation bar
-keeps only the back chevron and the swipe-back gesture that comes with it. Out of a 44pt
-bar there is no reason left to drop the subtitle or clamp Dynamic Type, and both are gone.
+`ConversationScaffold` now owns a `header` slot attached with `safeAreaBar(edge: .top)`.
+
+That slot first held only the pill, under an otherwise empty system bar, and the owner
+rejected the result: two rows of chrome, about 100pt before the first message. He supplied a
+Slack screenshot instead, and it resolves the tension — the reference has **no system
+navigation bar**. Three floating glass capsules share one row over the conversation: the back
+chevron alone in a circle, the heading, and a trailing group. That is how a two-line pill sits
+at back-button level; the 44pt ceiling belongs to the system bar, and there is no system bar.
+So ``ConversationHeaderRow`` draws all three, the surfaces call
+`.toolbar(.hidden, for: .navigationBar)`, and the row's leading inset stays
+`MessageRowMetrics.rowLeading` so the heading, the avatars and the day separators start on one
+line.
+
+**Hiding the navigation bar costs the interactive pop gesture, and nothing readable says so.**
+Measured by driving real left-edge drags through XCUITest (`~/.buzz/.scratch/headerharness`):
+the same drag pops with the bar visible and does not with it hidden, and forcing
+`interactivePopGestureRecognizer.isEnabled` back to `true` does not help. Meanwhile every
+property of that recogniser reads *identically* in both cases — enabled, same
+`_UINavigationInteractiveTransition` delegate, same host view, same two recognisers on the
+navigation controller's view — because the refusal lives in the delegate's
+`gestureRecognizerShouldBegin`. A probe that logged `isEnabled` would have reported the gesture
+healthy while it was dead. `ConversationBackSwipe` restores it with a
+`UIScreenEdgePanGestureRecognizer` that pops on release; what it does not restore is
+interactivity, which has no public entry point.
+
+Because the row is the app's, the height ceiling is gone — but the *width* one is not, since
+the screen does not scale with the text. At AX5 the back circle and the trailing group left the
+pill about 115pt, enough for the `#` and no name. So the decoration is dropped at the
+accessibility sizes (it is the only thing in the row that does nothing) and the row's type is
+capped at `.accessibility1`; every message still scales without limit.
 
 **`safeAreaBar` tracks a keyboard that appears; it does not discover one already up.** The
 34 → 345 → 34 measurement above holds only while the surface stays in the window. Measured
