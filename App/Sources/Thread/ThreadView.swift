@@ -10,9 +10,13 @@ import SwiftUI
 /// thread is loaded whole — so the keyboard, the safe area, and the floating bar
 /// behave identically without a second copy of that arithmetic.
 struct ThreadView: View {
-    @Environment(\.dismiss) private var dismiss
     @Environment(\.entityNames) private var names
     @State private var model: ThreadModel
+    /// The same workspace roster the channel timeline reads, so a reply's presence dot
+    /// and the profile sheet this view presents agree with the row that pushed it.
+    @State private var presence: PresenceModel
+    /// Whose profile is open, if anyone's — set by a tap on a reply's avatar or name.
+    @State private var profilePeer: ProfilePeer?
     private let channelID: String
 
     init(root: String, channel: String, store: BuzzEventStore, engine: SyncEngine, selfPubkey: String?) {
@@ -25,6 +29,7 @@ struct ThreadView: View {
             opener: engine,
             selfPubkey: selfPubkey
         ))
+        _presence = State(initialValue: PresenceModel(store: engine.presenceStore))
     }
 
     var body: some View {
@@ -50,13 +55,17 @@ struct ThreadView: View {
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { titleItem }
+        .profileSheet(peer: $profilePeer, presence: presence)
         .task { await model.run() }
+        .task { await presence.run() }
     }
 
     // MARK: - List
 
     private var list: some View {
-        LazyVStack(spacing: 0) {
+        // The channel's rhythm, from the same constant, so a message does not change
+        // size or spacing when a reader follows it into its thread.
+        LazyVStack(spacing: MessageRowMetrics.betweenMessages) {
             // The same grouped items the channel renders, so a thread that spans days
             // separates them the same way; the model suppresses the separator that
             // would otherwise sit above the thread's own opener.
@@ -80,6 +89,7 @@ struct ThreadView: View {
         VStack(spacing: 0) {
             TimelineRowView(
                 row: row,
+                isAuthorOnline: presence.isOnline(row.pubkey),
                 reactions: model.reactions(for: row.id),
                 mentions: model.mentions(for: row.id),
                 selfPubkey: model.selfPubkey,
@@ -87,14 +97,20 @@ struct ThreadView: View {
                 onRetry: { model.retry($0) },
                 onReact: { model.react($0, on: row.id) },
                 onToggleReaction: { model.toggleReaction($0, on: row.id) },
-                onDelete: { model.delete($0) }
+                onDelete: { model.delete($0) },
+                // No `onOpenThread`: a reply inside a thread has nowhere further to go,
+                // which is also why no row here draws a reply preview.
+                onOpenProfile: { profilePeer = ProfilePeer(pubkey: $0) }
             )
             .padding(.horizontal)
-            .padding(.vertical, 4)
 
-            // Set the opener apart from its replies.
+            // Set the opener apart from its replies. Padded, because the inter-message
+            // spacing now belongs to the enclosing stack and would otherwise leave the
+            // rule sitting against the opener it separates.
             if row.id == model.root {
-                Divider().padding(.horizontal)
+                Divider()
+                    .padding(.horizontal)
+                    .padding(.top, MessageRowMetrics.betweenMessages)
             }
         }
     }
@@ -143,22 +159,18 @@ struct ThreadView: View {
         conversation.isDirect ? conversation.title : "#\(conversation.title)"
     }
 
+    /// The header: `Thread` over the conversation it hangs off, in the same
+    /// left-aligned glass pill the channel uses (§4).
+    ///
+    /// Not a control. It used to dismiss on tap, which duplicated the back chevron
+    /// sitting three points to its left with no affordance saying so — and §4's rule
+    /// that a header only advertises an action when it has one cuts the same way for a
+    /// hidden one. So the pill is inert here, and the back button is the way out.
     private var titleItem: some ToolbarContent {
-        ToolbarItem(placement: .principal) {
-            Button {
-                dismiss()
-            } label: {
-                VStack(spacing: 0) {
-                    Text("Thread")
-                        .font(.headline)
-                        .foregroundStyle(.primary)
-                    Text(context)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Back to \(conversation.title)")
+        ToolbarItem(placement: .topBarLeading) {
+            ConversationHeaderPill(title: "Thread", subtitle: context)
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("Thread in \(conversation.title)")
         }
     }
 }
