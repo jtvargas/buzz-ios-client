@@ -2,45 +2,59 @@
 
 **Target version: v0.4.11** ([block/buzz](https://github.com/block/buzz) `mobile/`)
 
-This is the living checklist for the headline milestone: feature parity with the upstream Flutter app at v0.4.11. Each row is checked off only when the feature works end-to-end against a real Buzz relay and matches the behavior documented in the corresponding `docs/nips/` spec.
+This is the living checklist for the headline milestone: feature parity with the upstream Flutter app at v0.4.11. A row is checked only when the feature works end-to-end against a real Buzz relay and matches the behavior documented in the corresponding `docs/nips/` spec.
+
+**Legend** — ✅ done · ◐ partial (what is missing is named) · ☐ not started
 
 ## Core protocol
 
-- [ ] Relay connection with reconnect/backoff and lifecycle handling
-- [ ] NIP-42 authentication (including re-auth on reconnect)
-- [ ] NIP-98 HTTP auth signing (`POST /query`, media upload)
-- [ ] NIP-CW channel windows: history/pagination via the HTTP bridge, head-window reconcile on reconnect
-- [ ] NIP-44 v2 encryption (validated against official test vectors)
-- [ ] Subscription management (REQ/EOSE/CLOSED), live + one-shot modes, overlap-window gap-fill
-- [ ] Event signing and publish with outbox retry (OK/CLOSED prefix classification)
-- [ ] Local persistence as source of truth (GRDB; projected store with replaceable/deletion/edit semantics)
+- ✅ Relay connection with reconnect/backoff and lifecycle handling
+- ✅ NIP-42 authentication (including re-auth on reconnect)
+- ◐ NIP-98 HTTP auth signing — `POST /query` is signed and in use; media upload has no client yet
+- ✅ NIP-CW channel windows: history/pagination via the HTTP bridge, head-window reconcile on reconnect
+- ✅ NIP-44 v2 encryption, validated against the official test vectors (`Packages/NostrCore/Tests/NostrCoreTests/nip44.vectors.json`)
+- ✅ NIP-AB device pairing (target role): encrypted session, short-authentication-string confirmation, transcript binding
+- ✅ Subscription management (REQ/EOSE/CLOSED), live + one-shot modes, overlap-window gap-fill
+- ✅ Event signing and publish with outbox retry (OK/CLOSED prefix classification)
+- ✅ Local persistence as source of truth (GRDB; projected store with replaceable/deletion/edit semantics)
 
 ## Features (upstream `mobile/lib/features/`)
 
-| Feature | Upstream module | Status |
-|---------|-----------------|--------|
-| Home (channel list, unreads) | `home` | ☐ |
-| Channels (timeline, composer) | `channels` | ☐ |
-| Threads | `channels` | ☐ |
-| Reactions | `channels` | ☐ |
-| Activity feed (mentions/replies/reactions) | `activity` | ☐ |
-| Search | `search` | ☐ |
-| Profiles | `profile` | ☐ |
-| Settings | `settings` | ☐ |
-| Auth: nsec import | — | ☐ |
-| Auth: QR pairing with Desktop | `pairing` | ☐ |
-| Invites + deeplinks | `invites` | ☐ |
-| Forum | `forum` | ☐ |
-| Pulse | `pulse` | ☐ |
-| Custom emoji | `custom_emoji` | ☐ |
-| Media upload | — | ☐ |
-| Presence | — | ☐ |
-| Typing indicators | — | ☐ |
-| Message edits (kind:40003) | `channels` | ☐ |
-| Rich content rendering (kind:40002) | `channels`/`forum` | ☐ |
-| Cross-device read state (NIP-RS) | — | ☐ |
-| Channel mutes/stars/sections | `home`/`settings` | ☐ |
-| Agent activity observer | `activity` | ☐ |
+| Feature | Upstream module | Status | Notes |
+|---------|-----------------|--------|-------|
+| Home (channel list, unreads) | `home` | ✅ | Sidebar: Channels / Direct Messages / Agents, collapsible and persisted; last message, time, unread indicator |
+| Channels (timeline, composer) | `channels` | ✅ | One shared shell for channel, thread and DM |
+| Threads | `channels` | ✅ | Replies row with participant faces; heading pops back to the conversation |
+| Reactions | `channels` | ✅ | Six-emoji palette, chips with counts, own reaction withdrawable |
+| Direct messages | `channels` | ✅ | A DM is a channel whose roster is exactly two members including you; opened or created from the profile sheet |
+| Activity feed (mentions/replies/reactions) | `activity` | ☐ | No inbox surface |
+| Search | `search` | ☐ | No in-app search |
+| Profiles | `profile` | ◐ | Profile sheet (picture, name, member/agent, presence, npub + copy, Message) opens from a message's avatar, name or mention; not yet from the sidebar or the channel roster. Own profile (display name, About) editable in Account |
+| Settings | `settings` | ◐ | Account sheet: profile, key backup, own npub, sign out; relay endpoint at sign-in; connection-state pill in the sidebar. No general settings screen |
+| Auth: nsec import | — | ✅ | Paste a key, or create one on device |
+| Auth: QR pairing with Desktop | `pairing` | ✅ | NIP-AB, target role: encrypted transfer with short-authentication-string confirmation on both screens, plus a paste-the-`nostrpair://`-link fallback when the camera is unavailable |
+| Invites + deeplinks | `invites` | ☐ | `buzz://message` links render and route in-app; no invite or pairing deep-link entry point |
+| Forum | `forum` | ☐ | |
+| Pulse | `pulse` | ☐ | |
+| Custom emoji | `custom_emoji` | ☐ | Unicode emoji only |
+| Media upload | — | ☐ | Composer `+` is a placeholder; no attachments and no inline media |
+| Presence | — | ✅ | Live dots in rows, sidebar and DM heading; own heartbeat published |
+| Typing indicators | — | ✅ | Shown above the composer; own typing throttled |
+| Message edits (kind:40003) and deletions | `channels` | ◐ | Both are projected and rendered when they arrive; the app can author neither. The menu's Delete discards an own message still in the outbox |
+| Rich content rendering (kind:40002) | `channels`/`forum` | ✅ | Markdown subset plus interactive mentions, channel mentions, URLs, emails and `buzz://message` links |
+| Cross-device read state (NIP-RS) | — | ✅ | Published and adopted, NIP-44 encrypted to self |
+| Channel mutes/stars/sections | `home`/`settings` | ◐ | Sidebar sections ship; no mutes or stars |
+| Agent activity observer | `activity` | ☐ | The agent directory (kind 10100) is projected and agents have their own sidebar section, but there is no activity surface |
+| Channel creation / membership management | `channels` | ◐ | Opening a direct message publishes the kind-41010 open-or-create command and the relay creates the channel if it does not exist. No named-channel creation and no roster editing |
+
+## Beyond parity
+
+Native work already in place that upstream's Flutter app does not have an equivalent for:
+
+- Interactive keyboard dismissal with the composer attached to the keyboard, over the list *and* the composer's own band.
+- Jump controls that hold an arrival back while you read history and land you on the first unread rather than the bottom.
+- SVG `data:` URI avatar rendering (iOS ships no SVG decoder in its imaging pipeline).
+- VoiceOver: a message read as one sentence with the author's profile as a rotor action.
 
 ## Process
 
