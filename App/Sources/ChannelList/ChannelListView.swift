@@ -9,6 +9,8 @@ struct ChannelListView: View {
 
     @State private var model: ChannelListModel
     @State private var presence: PresenceModel
+    @State private var directory: EntityDirectoryModel
+    @State private var ticker = RelativeTimeTicker()
     @State private var showAccount = false
     private let store: BuzzEventStore
     private let engine: SyncEngine
@@ -18,6 +20,7 @@ struct ChannelListView: View {
         self.engine = engine
         _model = State(initialValue: ChannelListModel(store: store, selfPubkey: selfPubkey))
         _presence = State(initialValue: PresenceModel(store: engine.presenceStore))
+        _directory = State(initialValue: EntityDirectoryModel(store: store))
     }
 
     var body: some View {
@@ -89,8 +92,28 @@ struct ChannelListView: View {
         // injected once here so every pushed timeline and thread resolves `#`-tokens
         // through the same source. Rebuilt only when the channel set changes.
         .environment(\.channelNameMap, ChannelNameMap(channels: model.channels))
+        // The app-wide name/avatar/conversation resolver and the single clock behind
+        // relative timestamps. Injected once here, above every pushed timeline,
+        // thread, and sheet, so all of them name an identity identically (§4) and
+        // age their timestamps off one tick (§7/§9).
+        .environment(\.entityNames, entityNames)
+        .environment(\.relativeTimeTicker, ticker)
         .task { await model.run() }
         .task { await presence.run() }
+        .task { await directory.run() }
+        .task { await ticker.run() }
+    }
+
+    /// The resolver for this pass of the body: the live directory snapshot composed
+    /// with the live channel list. Rebuilt only when one of those changes, and the
+    /// rebuild is proportional to the identities that have *no* name (the ones whose
+    /// short form has to be computed), not to the roster.
+    private var entityNames: EntityNames {
+        EntityNames(
+            snapshot: directory.snapshot,
+            channels: model.channels,
+            selfPubkey: environment.selfPubkeyHex
+        )
     }
 
     @ViewBuilder

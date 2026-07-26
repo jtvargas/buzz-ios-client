@@ -5,6 +5,7 @@ import SwiftUI
 /// privacy/settings context, and the live member roster.
 struct ChannelDetailsView: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.entityNames) private var names
     @State private var model: ChannelDetailsModel
     @State private var presence: PresenceModel
     private let channel: ChannelListRow
@@ -26,12 +27,6 @@ struct ChannelDetailsView: View {
                 Section("Settings") {
                     LabeledContent("Visibility", value: channel.isPrivate ? "Private" : "Public")
                     LabeledContent("Members", value: "\(model.members.count)")
-                    LabeledContent("Channel ID") {
-                        Text(channel.id)
-                            .font(.caption.monospaced())
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
                 }
 
                 Section("Members") {
@@ -42,12 +37,32 @@ struct ChannelDetailsView: View {
                             .foregroundStyle(.secondary)
                     } else {
                         ForEach(model.members, id: \.pubkey) { member in
-                            MemberRow(member: member, isOnline: presence.isOnline(member.pubkey))
+                            MemberRow(
+                                pubkey: member.pubkey,
+                                name: names.name(for: member.pubkey),
+                                picture: names.picture(for: member.pubkey) ?? member.picture
+                                    .flatMap(URL.init(string:)),
+                                initials: names.initials(for: member.pubkey),
+                                role: member.role,
+                                isOnline: presence.isOnline(member.pubkey)
+                            )
                         }
                     }
                 }
+
+                // The group id is a developer detail, not something a reader should
+                // meet in the ordinary UI — it stays, labelled for what it is.
+                Section("Developer") {
+                    LabeledContent("Channel ID") {
+                        Text(channel.id)
+                            .font(.caption.monospaced())
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .textSelection(.enabled)
+                    }
+                }
             }
-            .navigationTitle(displayName)
+            .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
@@ -59,9 +74,10 @@ struct ChannelDetailsView: View {
         .task { await presence.run() }
     }
 
-    private var displayName: String {
-        if let name = channel.name, !name.isEmpty { return name }
-        return channel.id
+    /// The conversation's own title — a channel's name, or the peer's name when this
+    /// two-person roster is a direct message. Never the group id.
+    private var title: String {
+        names.conversation(for: channel).title
     }
 
     private var topic: String {
@@ -70,22 +86,23 @@ struct ChannelDetailsView: View {
     }
 }
 
+/// One roster row, named and pictured through the shared directory rather than from
+/// the roster's own raw fields, so a member reads the same here as in the timeline.
 private struct MemberRow: View {
-    let member: MemberProfile
+    let pubkey: String
+    let name: String
+    let picture: URL?
+    let initials: String
+    let role: String?
     let isOnline: Bool
 
     var body: some View {
         HStack(spacing: 10) {
-            AvatarView(
-                url: member.picture.flatMap(URL.init(string:)),
-                seed: member.pubkey,
-                initial: String(displayName.prefix(1)).uppercased(),
-                size: 32
-            )
+            AvatarView(url: picture, seed: pubkey, monogram: initials, size: 32)
             VStack(alignment: .leading, spacing: 1) {
-                Text(displayName)
+                Text(name)
                     .font(.body.weight(.medium))
-                if let role = member.role, !role.isEmpty {
+                if let role, !role.isEmpty {
                     Text(role.capitalized)
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -96,12 +113,5 @@ private struct MemberRow: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityValue(isOnline ? "Online" : "Offline")
-    }
-
-    private var displayName: String {
-        guard let name = member.displayName, !name.isEmpty else {
-            return String(member.pubkey.prefix(8))
-        }
-        return name
     }
 }

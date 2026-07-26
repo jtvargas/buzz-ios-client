@@ -126,7 +126,7 @@ struct TimelineRowView: View {
     /// carries the presence signal VoiceOver reads through the row's accessibility
     /// value, so the avatar itself stays decorative.
     private var avatar: some View {
-        AvatarView(url: authorPictureURL, seed: row.pubkey, initial: authorInitial, size: 36)
+        AvatarView(url: authorPictureURL, seed: row.pubkey, monogram: authorInitial, size: 36)
             .overlay(alignment: .bottomTrailing) {
                 if isAuthorOnline {
                     Circle()

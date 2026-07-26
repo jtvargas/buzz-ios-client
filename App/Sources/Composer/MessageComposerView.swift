@@ -115,7 +115,7 @@ private struct MentionAutocompletePanel: View {
                             AvatarView(
                                 url: candidate.picture.flatMap(URL.init(string:)),
                                 seed: candidate.pubkey,
-                                initial: String(candidate.displayName.prefix(1)).uppercased(),
+                                monogram: EntityNames.initials(from: candidate.displayName),
                                 size: 32
                             )
                             VStack(alignment: .leading, spacing: 1) {
