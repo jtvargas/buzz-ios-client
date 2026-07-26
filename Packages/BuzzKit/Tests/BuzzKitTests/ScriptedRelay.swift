@@ -174,6 +174,19 @@ enum EngineFrames {
         #"["OK","\#(eventID)",\#(accepted ? "true" : "false"),"\#(message)"]"#
     }
 
+    /// An `OK` frame whose message is properly JSON-escaped rather than interpolated
+    /// raw. A command kind's answer is itself JSON carried inside a JSON string, so
+    /// its quotes must survive the nesting; ``ok(_:_:_:)`` would produce an
+    /// undecodable frame.
+    static func okEncoding(_ eventID: String, _ accepted: Bool, _ message: String) -> String {
+        guard let data = try? JSONSerialization.data(withJSONObject: ["OK", eventID, accepted, message]),
+              let frame = String(bytes: data, encoding: .utf8)
+        else {
+            return ok(eventID, accepted)
+        }
+        return frame
+    }
+
     static func eose(_ subscriptionID: String) -> String {
         #"["EOSE","\#(subscriptionID)"]"#
     }
@@ -219,8 +232,15 @@ func decodeREQ(_ frame: String) -> (id: String, filters: [Filter])? {
 
 /// The event id of an `["EVENT", {event}]` publish frame, or `nil` otherwise.
 func publishedEventID(_ frame: String) -> String? {
+    publishedEvent(frame)?.id
+}
+
+/// The whole event inside an `["EVENT", {event}]` publish frame, or `nil` otherwise.
+/// A frame's `kind`, tags, and `created_at` are all assertable this way, which the
+/// command kinds need — their correctness is in the tag set, not the id.
+func publishedEvent(_ frame: String) -> NostrEvent? {
     guard case let .event(event) = try? JSONDecoder().decode(ClientMessage.self, from: Data(frame.utf8)) else {
         return nil
     }
-    return event.id
+    return event
 }

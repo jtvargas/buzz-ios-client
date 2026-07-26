@@ -155,6 +155,19 @@ enum Frames {
         #"["OK","\#(eventID)",\#(accepted ? "true" : "false"),"\#(message)"]"#
     }
 
+    /// An `OK` frame whose message is properly JSON-escaped rather than interpolated
+    /// raw. A command kind's answer is itself JSON carried inside a JSON string, so
+    /// its quotes must survive the nesting; ``ok(_:_:_:)`` would produce an
+    /// undecodable frame.
+    static func okEncoding(_ eventID: String, _ accepted: Bool, _ message: String) -> String {
+        guard let data = try? JSONSerialization.data(withJSONObject: ["OK", eventID, accepted, message]),
+              let frame = String(bytes: data, encoding: .utf8)
+        else {
+            return ok(eventID, accepted)
+        }
+        return frame
+    }
+
     static func eose(_ subscriptionID: String) -> String {
         #"["EOSE","\#(subscriptionID)"]"#
     }
