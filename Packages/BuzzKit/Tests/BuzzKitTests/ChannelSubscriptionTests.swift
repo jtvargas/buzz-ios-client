@@ -47,12 +47,22 @@ struct ChannelSubscriptionTests {
         #expect(channelReq.tagQueries["h"] == ["room"])
         #expect(channelReq.since == harness.nowSeconds - 5)
 
-        // The global REQ: a `#h`-less content filter of only metadata + presence, plus
-        // the membership filter — and none of the channel kinds (the scoping invariant).
+        // The global REQ: a `#h`-less live filter of only presence, a separate
+        // profile-metadata filter, plus the membership filter — and none of the channel
+        // kinds (the scoping invariant).
         let global = await globalREQFilters(on: socket)
-        let content = try #require(globalContentFilter(in: global))
-        #expect(content.kinds == [.metadata, .presence])
+        let content = try #require(globalPresenceFilter(in: global))
+        #expect(content.kinds == [.presence])
         #expect(content.tagQueries["h"] == nil)
+
+        // Metadata rides its own filter with no `since`. A profile is written once and
+        // then sits there, so the live window that is right for presence matches no
+        // profile at all — which is how the client came to show short npubs and initials
+        // in place of every name and avatar.
+        let profiles = try #require(globalProfileFilter(in: global))
+        #expect(profiles.kinds == [.metadata])
+        #expect(profiles.since == nil)
+        #expect(profiles.tagQueries["h"] == nil)
         let deadKinds: [EventKind] = [
             .channelMessage, .reaction, .deletion, .groupDeleteEvent, .richMessage, .messageEdit, .typing
         ]
