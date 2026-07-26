@@ -7,8 +7,17 @@ import Foundation
 /// and persisted in `UserDefaults`; it is not a secret, so `UserDefaults` is the
 /// right home. The key never touches this — it lives only in the Keychain.
 enum RelayEndpoint {
-    /// The prefilled relay for JT's Pi over Tailscale (spec §Identity gate).
-    static let defaultURLString = "ws://100.111.202.55:3004"
+    /// The prefilled relay: the owner's Pi over Tailscale, reached through the TLS
+    /// endpoint Tailscale serves.
+    ///
+    /// It is `wss://…ts.net` and not the plain `ws://<tailnet-ip>:3004` it used to be,
+    /// because that address no longer connects at all — measured 2026-07-26, the plaintext
+    /// port refuses the WebSocket handshake outright (`NSURLErrorDomain -1011`), and NIP-42
+    /// rejects it separately because the URL the client authenticates against has to match
+    /// the one the relay advertises. A prefill that cannot connect is worse than no
+    /// prefill: the URL is only editable during onboarding, so a fresh install that
+    /// accepted the default had no way back out of it.
+    static let defaultURLString = "wss://homelab.tail4bc643.ts.net"
 
     private static let storageKey = "relay.websocketURL"
 

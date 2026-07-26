@@ -4,28 +4,43 @@ import SwiftUI
 /// title and, under it, one quiet line of context — a channel's member count, or the
 /// parent channel a thread hangs off.
 ///
-/// # Why it is a leading toolbar item and not the navigation title
+/// # Why it is not a toolbar item
 ///
-/// `.principal` centres its content and offers no way to pull it to the leading edge,
-/// so §4's "left-aligned" cannot be expressed there. A `.topBarLeading` item lands
-/// immediately after the back chevron, which is where a conversation's name sits in
-/// every client this is measured against.
+/// It was a `ToolbarItem(placement: .topBarLeading)`, and on a device that produced "a
+/// little bubble, not an actual header": a navigation bar sizes an item to its ideal
+/// width and then *compresses* it when the bar wants the space back, and a two-line pill
+/// has nowhere to go — so the title was squeezed to a few characters rather than
+/// truncated at a readable width. The assumption that compression would let
+/// `lineLimit(1)` truncate was carried as an unverified note; it does not.
 ///
-/// # Why there is no fallback branch
+/// So the pill lives in the conversation's own chrome instead, attached by
+/// ``ConversationScaffold`` to the top safe area, where it has the whole width of the
+/// surface. The navigation bar keeps only what it is good at — the back chevron and the
+/// swipe-back gesture it owns.
 ///
-/// The deployment target is iOS 26, where `glassEffect` is unconditionally available.
-/// A `if #available` branch with a translucent `Material` behind it would be code that
-/// can never run, and the one thing worse than an untested fallback is an unreachable
-/// one. If the floor ever drops below 26 this is the file that needs the branch.
+/// # What the width buys
 ///
-/// # Why the arrow is gone
+/// Both lines, at every text size. The old pill dropped its subtitle above `.large` and
+/// clamped its remaining line at `.accessibility1`, because two lines of Dynamic Type do
+/// not fit a 44pt navigation bar. Out of the bar there is no 44pt ceiling, and the reason
+/// to clamp went with it — measured in the harness, this pill is 46pt at `.large`, 61 at
+/// `.xxxLarge`, 70 at AX1, 95 at AX3 and 124 at AX5, which is smaller than a single
+/// two-line message row at the same size. Chrome that stays under one row's height is
+/// proportionate to what the reader asked for, so nothing here is clamped and the member
+/// count survives for the readers most likely to want it.
 ///
-/// A chevron promises a menu. The channel header opens a details *sheet* and the thread
-/// header does nothing at all, so neither earns one — §4's rule. The channel's tap
-/// survives without it: the pill is a control, and the pressed dim says so.
+/// A pill this wide is also what makes `lineLimit(1)` honest: a long channel name is
+/// truncated at the trailing end with its identifying leading characters intact — about
+/// forty of them at `.large`, against the handful the navigation bar left room for.
+///
+/// # Why there is no fallback branch, and no arrow
+///
+/// The deployment target is iOS 26, where `glassEffect` is unconditionally available; an
+/// `if #available` branch here would be code that can never run. And a chevron promises a
+/// menu: the channel header opens a details *sheet* and the thread header does nothing at
+/// all, so neither earns one. The channel's tap survives without it — the caller wraps
+/// the pill in a button whose pressed dim says it is a control.
 struct ConversationHeaderPill: View {
-    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
-
     /// The conversation's name — a channel's, a DM peer's, or the literal `Thread`.
     let title: String
     /// The line beneath it, absent when there is nothing true to put there (a roster
@@ -33,17 +48,17 @@ struct ConversationHeaderPill: View {
     var subtitle: String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        VStack(alignment: .leading, spacing: 1) {
             Text(title)
                 .font(.headline)
                 .foregroundStyle(.primary)
-                // A 200-character channel name is somebody else's choice. Truncating
-                // is not clipping: the leading characters — the part that identifies
-                // the conversation — stay readable at any width, and the pill keeps
-                // its shape instead of growing until the bar drops it.
+                // A 200-character channel name is somebody else's choice. Truncating is
+                // not clipping: the leading characters — the part that identifies the
+                // conversation — stay readable, and at this width that is most of the
+                // name rather than the handful a navigation bar left room for.
                 .lineLimit(1)
                 .truncationMode(.tail)
-            if let subtitle, Self.showsSubtitle(at: dynamicTypeSize) {
+            if let subtitle {
                 Text(subtitle)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
@@ -51,44 +66,15 @@ struct ConversationHeaderPill: View {
                     .truncationMode(.tail)
             }
         }
-        // No explicit width cap: a toolbar item is sized to its content and compressed
-        // when the bar runs out of room, and compression is what makes the `lineLimit`
-        // above truncate. Pinning a `maxWidth` here instead left short names sitting in
-        // an over-wide capsule.
-        .padding(.horizontal, 12)
-        // Four, not the eight the horizontal inset would suggest, and the arithmetic is
-        // the reader's text size and not only the default one. A navigation bar is 44pt.
-        // At the default size a `.headline` line (~20pt) over a `.caption2` one (~13pt)
-        // plus this padding is ~42 — it fits, but only just, and both lines scale: at
-        // xLarge the same stack is ~46, and at AX3 the pill is roughly 68pt in a 44pt bar.
-        // Hence the two rules above and below — one line above the default size, and a
-        // ceiling on how far that line grows.
-        .padding(.vertical, 4)
-        // Clamped rather than allowed to grow: the bar's height is not ours to change, so
-        // past this the pill would be taller than the thing holding it. This is also what
-        // the system's own inline navigation title does at the accessibility sizes, where
-        // the full name is reachable by other means — here, the details sheet this pill
-        // opens, and the VoiceOver label the caller attaches to it.
-        .dynamicTypeSize(...Self.maximumTypeSize)
+        // Wider than it is tall, because the shape is a capsule: with the horizontal
+        // inset any narrower, a two-line title sits inside the end caps' curve.
+        .padding(.horizontal, 14)
+        .padding(.vertical, 6)
         .glassEffect(.regular, in: .capsule)
+        // No `maxWidth`: the capsule is sized to its content and stops growing at the
+        // width the header row gives it, so a short name keeps a short pill instead of
+        // sitting in an over-wide one.
     }
-
-    /// Whether the pill draws its second line at `size`.
-    ///
-    /// Only at or below the default. Two lines and the vertical padding already come to
-    /// ~42pt of a 44pt bar at the default size, and both lines grow with Dynamic Type — so
-    /// one step up is already over the bar. The subtitle is the line that goes, because it
-    /// is the quiet one and because everything it says (a member count, a peer's NIP-05
-    /// identifier) is in the details sheet the pill opens.
-    static func showsSubtitle(at size: DynamicTypeSize) -> Bool {
-        size <= .large
-    }
-
-    /// The largest text size the pill's own content scales to.
-    ///
-    /// A `.headline` at this size is a ~34pt line, which with the padding is the most a
-    /// 44pt navigation bar can hold.
-    static let maximumTypeSize: DynamicTypeSize = .accessibility1
 
     /// `12 members` for a channel's second line, or nothing while the roster is still
     /// arriving.

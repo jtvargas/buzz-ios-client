@@ -143,3 +143,38 @@ at the bottom" means.
   whole class of first-responder bug. It was deliberately not taken in this pass: it
   fills available space rather than growing to fit, so the composer's six-line growth
   needs re-solving first. Worth a spike once the scaffold is stable.
+
+## Amendment (Part 1b, device pass)
+
+Three findings from the owner's device pass amend the above rather than replace it.
+
+**The heading is part of the shell, not of the navigation bar.** It was a
+`ToolbarItem(placement: .topBarLeading)`, on the unverified assumption that the bar would
+compress the item so `lineLimit(1)` truncated. It does not: the bar squeezes a two-line
+item to a stub, and the reported symptom was "a little bubble, not an actual header".
+`ConversationScaffold` now owns a `header` slot attached with
+`safeAreaBar(edge: .top, alignment: .leading)`, inset by `MessageRowMetrics.rowLeading` so
+the heading, the avatars and the day separators all start on one line. The navigation bar
+keeps only the back chevron and the swipe-back gesture that comes with it. Out of a 44pt
+bar there is no reason left to drop the subtitle or clamp Dynamic Type, and both are gone.
+
+**`safeAreaBar` tracks a keyboard that appears; it does not discover one already up.** The
+34 → 345 → 34 measurement above holds only while the surface stays in the window. Measured
+in the same style of harness (`~/.buzz/.scratch/navharness`): pushing a thread over a
+focused composer makes UIKit force-resign the composer's first responder as the channel's
+hosting view leaves the window, and **restore** it on the way back — a responder change
+SwiftUI never asked for and never hears about. The keyboard returns, the root bottom inset
+stays 34, and the composer is laid out behind the keyboard. That is the third reported
+defect, and it is why `ConversationKeyboardRelease` resigns the responder in
+`viewWillDisappear`, the last moment the view is still in its window: after that, UIKit's
+restoration is the thing raising the keyboard, and nothing SwiftUI-side can undo it.
+`onDisappear` and clearing the focus flag were both measured and are both too late.
+
+**"UIKit reports only user-initiated changes" was too generous to UIKit.** It also resigns
+and restores on window changes, which is the mechanism above. And the focus binding must
+read the flag *live* — a `Bool` captured in `body` and closed over is a snapshot, and
+`updateUIView` runs on layout passes too, so a layout pass between a write and the next
+body re-applied the stale value and re-raised the keyboard mid-transition.
+
+The `TextEditor` spike noted above would delete this class of bug outright, and this pass is
+one more argument for taking it.
