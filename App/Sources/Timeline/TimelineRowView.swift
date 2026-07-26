@@ -41,6 +41,8 @@ struct TimelineRowView: View {
     /// `private` is file-scoped.
     @Environment(\.entityNames) var names
     @Environment(\.openURL) private var openURL
+    /// The stack's own navigation, for a pressed `#`-channel or internal message link.
+    @Environment(\.openConversation) private var openConversation
     @State private var arbitration = RowTapArbitration()
 
     /// The avatar's point size, and so the width the content column is indented by, at
@@ -132,12 +134,22 @@ struct TimelineRowView: View {
         .onTapGesture {
             scheduleRowTap()
         }
-        // AttributedString links are controls inside the otherwise tappable row.
-        // Mark their gesture before handing the URL back to the app environment so
-        // opening a link never also pushes the message's thread.
+        // Every interactive range of a message — mention, channel, link, email,
+        // internal link — is a link run, because that is the only run of a `Text` a
+        // reader can press (see ``RichTextTarget``). They all arrive here. Marking the
+        // gesture first is what keeps pressing one from also pushing the thread.
         .environment(\.openURL, OpenURLAction { url in
             claimTap()
-            openURL(url)
+            switch RichTextRoute(url: url) {
+            case let .profile(pubkey):
+                onOpenProfile?(pubkey)
+            case let .conversation(channelID):
+                openConversation?(channelID)
+            case let .external(url):
+                openURL(url)
+            case .none:
+                openURL(url)
+            }
             return .handled
         })
         .accessibilityAction(named: "Open thread") {

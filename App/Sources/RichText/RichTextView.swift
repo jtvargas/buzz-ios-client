@@ -10,18 +10,54 @@ enum RichTextRenderMode {
 }
 
 /// The one app-wide message renderer. Consumes a parsed, entity-resolved
-/// ``RichMessage`` and lays out each block, mapping ``MentionAttribute`` /
-/// ``ChannelAttribute`` runs to accent + weight (see ``RichTextStyle``) so mentions
-/// and channels look and behave identically on every surface. Replaces the Phase-3
-/// `MessageContentView`.
+/// ``RichMessage`` and lays out each block, so a mention, a channel reference, a link
+/// and an email look and behave identically on every surface — channel, thread, and
+/// direct message alike. Replaces the Phase-3 `MessageContentView`.
 ///
-/// Each inline is one `Text(attributedString)` — free Dynamic Type, wrapping, and
-/// VoiceOver, and unit-testable as data. Text selection is deliberately not enabled
-/// here: the message body's tap opens the thread (a later workstream), and Copy
-/// lives in the long-press menu.
+/// # How an interactive range works
+///
+/// Three parts, and each is where it is for a measured reason:
+///
+/// - ``RichTextStyle`` gives an entity run the accent, the weight, and the `link`
+///   carrying its target. A `link` is the only run of a SwiftUI `Text` a reader can
+///   press — a custom attribute is inert, and a gesture of ours costs either the
+///   row's own tap or the message list's scrolling (see ``RichTextTarget``).
+/// - ``RichTextInline`` builds the `Text` as concatenated segments, marking the
+///   interactive ones, because a custom `AttributedString` attribute never reaches
+///   `Text.Layout` and only `Text.customAttribute(_:)` does.
+/// - ``RichTextEntityRenderer`` draws the rounded tint behind them, because
+///   `AttributedString.backgroundColor` is a bare rectangle with no radius or
+///   padding.
+///
+/// Everything a `Text` gives for free is still the system's: Dynamic Type, wrapping,
+/// emphasis, and VoiceOver, which reads the message as one sentence. Text selection
+/// is deliberately not enabled — the body's own tap opens the thread, and Copy lives
+/// in the long-press menu.
 struct RichTextView: View {
+    @Environment(\.colorScheme) private var colorScheme
+    /// Whatever the surface installed — the row's arbitrating handler in a timeline,
+    /// the system's otherwise. Read here so this view can flash the pill on the way
+    /// through without having to know what happens next.
+    @Environment(\.openURL) private var openURL
+
+    /// The interactive range currently flashing, by target URL string.
+    @State private var flashing: String?
+    /// Distinguishes one flash from the next, so a second tap's timer cannot clear
+    /// the highlight the first one is still showing.
+    @State private var flashToken = 0
+
     let message: RichMessage
     var mode: RichTextRenderMode = .full
+
+    /// How long a pressed pill stays lit.
+    ///
+    /// Feedback on activation rather than on touch-down, and that is a measured
+    /// decision rather than a shortcut: a touch-down highlight needs a gesture, and
+    /// both places it can go cost something a reader would notice. On the text, a
+    /// `DragGesture(minimumDistance: 0)` swallows the row's own tap, so plain message
+    /// text stops opening the thread. On the row, beside the row's tap, the message
+    /// list stops scrolling. Both verified in a harness before this was written.
+    static let flashDuration: Duration = .milliseconds(220)
 
     /// Renders an already-parsed, already-resolved message.
     init(_ message: RichMessage, mode: RichTextRenderMode = .full) {
@@ -41,6 +77,24 @@ struct RichTextView: View {
         case .snippet: snippet
         }
     }
+
+    /// Lights the pressed pill, then hands the URL on to whoever the surface put in
+    /// the environment.
+    ///
+    /// Installed *inside* the surface's own handler rather than instead of it: the
+    /// row's `OpenURLAction` is what claims the tap so a link never also opens the
+    /// thread, and this one only adds the flash on the way past.
+    private func flash(_ url: URL) {
+        flashToken += 1
+        let token = flashToken
+        withAnimation(.easeOut(duration: 0.08)) { flashing = url.absoluteString }
+        Task { @MainActor in
+            try? await Task.sleep(for: Self.flashDuration)
+            guard flashToken == token else { return }
+            withAnimation(.easeOut(duration: 0.18)) { flashing = nil }
+        }
+        openURL(url)
+    }
 }
 
 // MARK: - Layout
@@ -53,8 +107,19 @@ private extension RichTextView {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        // One renderer for the whole message rather than one per block: it applies to
+        // every `Text` in the subtree, and a block with no interactive range simply
+        // has nothing for it to fill.
+        .textRenderer(RichTextEntityRenderer(flashing: flashing, dark: colorScheme == .dark))
+        .environment(\.openURL, OpenURLAction { url in
+            flash(url)
+            return .handled
+        })
     }
 
+    /// A one-line preview. Deliberately *not* interactive: the snippet sits inside a
+    /// sidebar row that is itself a control, so a tappable range in it would be a
+    /// second target competing for the same tap.
     var snippet: some View {
         Text(RichTextStyle.styled(message.flattenedInline(), base: .body))
             .font(.body)
@@ -66,13 +131,13 @@ private extension RichTextView {
     func blockView(_ block: RichBlock) -> some View {
         switch block {
         case let .paragraph(text):
-            Text(RichTextStyle.styled(text, base: .body))
+            RichTextInline.text(text, base: .body)
                 .font(.body)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
         case let .heading(level, text):
             let font = Self.headingFont(level)
-            Text(RichTextStyle.styled(text, base: font))
+            RichTextInline.text(text, base: font)
                 .font(font)
                 .fontWeight(.semibold)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -82,7 +147,7 @@ private extension RichTextView {
                 RoundedRectangle(cornerRadius: 1.5)
                     .fill(Color.secondary.opacity(0.5))
                     .frame(width: 3)
-                Text(RichTextStyle.styled(text, base: .body))
+                RichTextInline.text(text, base: .body)
                     .font(.body)
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -164,7 +229,7 @@ private struct RichListRow: View {
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .frame(minWidth: 16, alignment: .trailing)
-            Text(RichTextStyle.styled(content, base: .body))
+            RichTextInline.text(content, base: .body)
                 .font(.body)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }

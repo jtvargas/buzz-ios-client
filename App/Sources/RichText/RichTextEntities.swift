@@ -19,31 +19,7 @@ enum RichTextEntities {
     /// Resolves entities across every inline in `blocks`, recursing into nested list
     /// items. Code blocks pass through untouched.
     static func resolve(_ blocks: [RichBlock], with resolver: MentionResolver) -> [RichBlock] {
-        blocks.map { resolve($0, resolver) }
-    }
-
-    private static func resolve(_ block: RichBlock, _ resolver: MentionResolver) -> RichBlock {
-        switch block {
-        case let .paragraph(text):
-            return .paragraph(apply(text, resolver))
-        case let .heading(level, text):
-            return .heading(level: level, apply(text, resolver))
-        case let .quote(text):
-            return .quote(apply(text, resolver))
-        case .code:
-            return block // code is never entity-parsed
-        case let .bulletList(items):
-            return .bulletList(items.map { resolveItem($0, resolver) })
-        case let .orderedList(start, items):
-            return .orderedList(start: start, items.map { resolveItem($0, resolver) })
-        }
-    }
-
-    private static func resolveItem(_ item: RichListItem, _ resolver: MentionResolver) -> RichListItem {
-        RichListItem(
-            content: apply(item.content, resolver),
-            children: item.children.map { resolve($0, resolver) }
-        )
+        blocks.mapInlines { apply($0, resolver) }
     }
 
     // MARK: - Inline scan
@@ -55,11 +31,15 @@ enum RichTextEntities {
         var output = input
         let characters = output.characters
 
-        let codeRanges = output.runs
-            .filter { $0.inlinePresentationIntent?.contains(.code) == true }
+        // Code is never entity-parsed, and neither is anything already carrying a
+        // link: `https://host/#anchor` and `name@host` are one range with one
+        // meaning, and scanning inside them would light up a second, wrong token on
+        // top of the link the reader is actually pressing.
+        let skipped = output.runs
+            .filter { $0.inlinePresentationIntent?.contains(.code) == true || $0.link != nil }
             .map(\.range)
-        func inCode(_ index: AttributedString.Index) -> Bool {
-            codeRanges.contains { $0.contains(index) }
+        func isSkipped(_ index: AttributedString.Index) -> Bool {
+            skipped.contains { $0.contains(index) }
         }
 
         var mentions: [(Range<AttributedString.Index>, MentionToken)] = []
@@ -68,7 +48,7 @@ enum RichTextEntities {
         var cursor = characters.startIndex
         while cursor < characters.endIndex {
             let char = characters[cursor]
-            if char == "@" || char == "#", leadingBoundaryOK(characters, at: cursor), !inCode(cursor) {
+            if char == "@" || char == "#", leadingBoundaryOK(characters, at: cursor), !isSkipped(cursor) {
                 if char == "@", let hit = scanMention(characters, from: cursor, resolver) {
                     mentions.append((hit.range, hit.token))
                     cursor = hit.range.upperBound
