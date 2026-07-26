@@ -3,10 +3,24 @@ import UIKit
 
 /// UIKit's attributed editor bridged into SwiftUI so an inserted mention can be
 /// visibly styled and edited as one atomic unit.
+///
+/// # One source of truth for focus
+///
+/// SwiftUI owns focus. UIKit reports only *user-initiated* changes (a tap, or the
+/// keyboard's dismiss key) and applies whatever SwiftUI asks for, synchronously,
+/// inside a reconciliation flag so the delegate callbacks cannot write back into
+/// observed state during SwiftUI's own update pass. There is no `DispatchQueue.main.async`
+/// anywhere here: a deferred `becomeFirstResponder` racing a synchronous
+/// `resignFirstResponder` is what let `isFocused` and `isFirstResponder` disagree for
+/// a frame, and it detaches the change from SwiftUI's transaction so the keyboard
+/// animation and the layout animation run on different clocks.
 struct TokenTextView: UIViewRepresentable {
     @Binding var document: MentionDraft
     @Binding var isFocused: Bool
     let placeholder: String
+
+    /// How tall the composer grows before it scrolls its own text.
+    static let maxVisibleLines: CGFloat = 6
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -18,62 +32,108 @@ struct TokenTextView: UIViewRepresentable {
         view.adjustsFontForContentSizeCategory = true
         view.textContainerInset = UIEdgeInsets(top: 9, left: 11, bottom: 9, right: 11)
         view.textContainer.lineFragmentPadding = 0
-        view.isScrollEnabled = false
+        // Permanently scrollable, with no toggle. A `UITextView` *is* a `UIScrollView`,
+        // and with `isScrollEnabled == false` its `panGestureRecognizer` is inert, so a
+        // drag that starts in the composer is delivered to the enclosing message list
+        // instead — the composer dragging the conversation. Keeping the recognizer live
+        // means the innermost one always claims a drag that starts here, in the short
+        // state as well as the tall one, and the height clamp in `sizeThatFits` is what
+        // keeps a short composer from having anything to scroll.
+        view.isScrollEnabled = true
+        // So a composer shorter than the clamp cannot rubber-band against nothing.
         view.alwaysBounceVertical = false
+        // Only visible once there is overflow, which is exactly when it means something.
+        view.showsVerticalScrollIndicator = true
         view.contentInsetAdjustmentBehavior = .never
-        view.keyboardDismissMode = .interactive
+        // `.interactive` would let a drag *inside the composer* dismiss the keyboard,
+        // and a cancelled interactive dismissal leaves UIKit and SwiftUI disagreeing
+        // about the final keyboard frame. `.none` is UIKit's documented default; the
+        // message list owns keyboard dismissal, not the text view.
+        view.keyboardDismissMode = .none
         view.accessibilityLabel = placeholder
         context.coordinator.render(document, in: view, selection: 0)
         return view
     }
 
     func updateUIView(_ view: UITextView, context: Context) {
-        context.coordinator.parent = self
-        if context.coordinator.renderedDocument != document {
-            let selection = min(view.selectedRange.location, (document.text as NSString).length)
-            context.coordinator.render(document, in: view, selection: selection)
+        let coordinator = context.coordinator
+        coordinator.parent = self
+        if coordinator.renderedDocument != document {
+            // The text view's own `selectedRange` still describes the string it last
+            // rendered, so it is only a fallback. The draft carries where the caret
+            // belongs after the edit that produced it.
+            let stale = min(view.selectedRange.location, (document.text as NSString).length)
+            coordinator.render(document, in: view, selection: document.preferredCursor ?? stale)
         }
+        // Before the view is in a window, `becomeFirstResponder` and
+        // `resignFirstResponder` fail *silently*: the call returns without changing
+        // anything and without telling anyone. Applying focus then is how the two
+        // states start disagreeing, so nothing is applied until there is a window.
+        guard view.window != nil else { return }
         if isFocused, !view.isFirstResponder {
-            DispatchQueue.main.async { [weak view, weak coordinator = context.coordinator] in
-                guard let view, let coordinator, coordinator.parent.isFocused,
-                      !view.isFirstResponder else { return }
-                view.becomeFirstResponder()
-            }
+            coordinator.reconcilingFocus { _ = view.becomeFirstResponder() }
         } else if !isFocused, view.isFirstResponder {
-            view.resignFirstResponder()
+            coordinator.reconcilingFocus { _ = view.resignFirstResponder() }
         }
     }
 
+    /// Pure: it measures and clamps, and mutates nothing.
+    ///
+    /// SwiftUI may call this several times in one layout pass with different
+    /// proposals, so a UIKit mutation here (the old scroll toggle) both changed
+    /// behaviour as a side effect of measurement and could flip back and forth within
+    /// a single pass.
     func sizeThatFits(
         _ proposal: ProposedViewSize,
         uiView: UITextView,
         context _: Context
     ) -> CGSize? {
         guard let width = proposal.width else { return nil }
-        let measured = uiView.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude))
         let lineHeight = UIFont.preferredFont(forTextStyle: .body).lineHeight
-        let minimum = lineHeight + 18
-        let maximum = lineHeight * 6 + 18
-        // Keep the mode stable at the six-line boundary. Without hysteresis,
-        // UITextView can report the clamped height after scrolling turns on and
-        // flip scrolling off again in the next layout pass.
-        let shouldScroll = uiView.isScrollEnabled
-            ? measured.height >= maximum - 0.5
-            : measured.height > maximum + 0.5
-        if uiView.isScrollEnabled != shouldScroll {
-            uiView.isScrollEnabled = shouldScroll
-            uiView.alwaysBounceVertical = shouldScroll
-        }
-        return CGSize(width: width, height: min(max(measured.height, minimum), maximum))
+        let chrome = uiView.textContainerInset.top + uiView.textContainerInset.bottom
+        let measured = uiView
+            .sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude))
+            .height
+        return CGSize(
+            width: width,
+            height: Self.clampedHeight(measured: measured, lineHeight: lineHeight, chrome: chrome)
+        )
+    }
+
+    /// Clamps a measured text height into the one-to-six-line band.
+    ///
+    /// `measured` already includes the text container's vertical insets, so both
+    /// bounds add `chrome` too. Split out and pure so the arithmetic — the growth
+    /// floor and the six-line ceiling that hands over to scrolling — is testable
+    /// without a view host.
+    static func clampedHeight(measured: CGFloat, lineHeight: CGFloat, chrome: CGFloat) -> CGFloat {
+        min(max(measured, lineHeight + chrome), lineHeight * maxVisibleLines + chrome)
     }
 
     final class Coordinator: NSObject, UITextViewDelegate {
         var parent: TokenTextView
         private(set) var renderedDocument: MentionDraft?
         private var pendingNativeDocument: MentionDraft?
+        /// True only while a SwiftUI-requested responder change is being applied.
+        private var isReconcilingFocus = false
 
         init(_ parent: TokenTextView) {
             self.parent = parent
+        }
+
+        /// Applies a first-responder change SwiftUI asked for.
+        ///
+        /// The flag suppresses the delegate write-back — UIKit is reporting a change
+        /// SwiftUI already knows about, and writing observed state back during
+        /// SwiftUI's update pass is what made the two disagree. The transaction keeps
+        /// the change out of any ambient animation, so the responder change rides the
+        /// keyboard's own clock instead of starting a second one.
+        func reconcilingFocus(_ body: () -> Void) {
+            isReconcilingFocus = true
+            defer { isReconcilingFocus = false }
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction, body)
         }
 
         func textView(
@@ -119,11 +179,13 @@ struct TokenTextView: UIViewRepresentable {
         }
 
         func textViewDidBeginEditing(_: UITextView) {
-            if !parent.isFocused { parent.isFocused = true }
+            guard !isReconcilingFocus else { return }
+            parent.isFocused = true
         }
 
         func textViewDidEndEditing(_: UITextView) {
-            if parent.isFocused { parent.isFocused = false }
+            guard !isReconcilingFocus else { return }
+            parent.isFocused = false
         }
 
         func render(_ document: MentionDraft, in view: UITextView, selection: Int) {
@@ -151,11 +213,13 @@ struct TokenTextView: UIViewRepresentable {
             if fullRange.length > 0 {
                 storage.setAttributes(baseAttributes, range: fullRange)
             }
+            // People and channels tint identically: both are resolved references, and
+            // a reader should not have to learn two visual languages for them.
             for token in document.tokens where NSMaxRange(token.range) <= storage.length {
                 storage.addAttributes([
                     .foregroundColor: UIColor.tintColor,
                     .font: mentionFont,
-                    Self.mentionPubkey: token.pubkey,
+                    Self.mentionEntity: token.entityID,
                 ], range: token.range)
             }
             storage.endEditing()
@@ -174,6 +238,6 @@ struct TokenTextView: UIViewRepresentable {
             return UIFont.systemFont(ofSize: baseFont.pointSize, weight: .semibold)
         }
 
-        private static let mentionPubkey = NSAttributedString.Key("HiveMentionPubkey")
+        private static let mentionEntity = NSAttributedString.Key("HiveMentionEntity")
     }
 }
