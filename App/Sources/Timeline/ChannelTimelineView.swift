@@ -93,6 +93,9 @@ struct ChannelTimelineView: View {
         }
         .defaultScrollAnchor(.bottom)
         .scrollDismissesKeyboard(.interactively)
+        .simultaneousGesture(TapGesture().onEnded {
+            model.mentionAutocomplete.dismissComposer()
+        })
         .overlay {
             if model.hasLoaded, model.rows.isEmpty {
                 ContentUnavailableView(

@@ -269,6 +269,7 @@ public actor SyncEngine {
         liveSubscription = try await subscriptions.register(
             filters: [
                 contentFilter(),
+                agentDirectoryFilter(),
                 membershipFilter(selfPubkeyHex: pubkey),
                 readStateFilter(selfPubkeyHex: pubkey),
             ],

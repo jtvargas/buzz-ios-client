@@ -43,6 +43,16 @@ struct RebuildAgreementTests {
             try relay.event(.groupMetadata, #"{"name":"Old"}"#, tags: [["d", "room-1"]], at: 900),
             try author.event(.metadata, #"{"display_name":"Newer"}"#, at: 2000),
             try author.event(.metadata, #"{"display_name":"Older"}"#, at: 900),
+            try agent.event(
+                .agentProfile,
+                #"{"display_name":"Agent New","respond_to":"anyone","channel_ids":["room-1"]}"#,
+                at: 2000
+            ),
+            try agent.event(
+                .agentProfile,
+                #"{"display_name":"Agent Old","respond_to":"owner-only","channel_ids":[]}"#,
+                at: 900
+            ),
             try relay.event(.groupMembers, "", tags: [["d", "room-1"], ["p", "alice", "admin"]], at: 2000),
             try relay.event(.groupMembers, "", tags: [["d", "room-1"], ["p", "bob"]], at: 900),
             try relay.event(.threadSummary, #"{"n":9}"#, tags: [["d", root.id]], at: 2000),

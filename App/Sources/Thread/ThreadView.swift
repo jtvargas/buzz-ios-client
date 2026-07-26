@@ -64,6 +64,9 @@ struct ThreadView: View {
         }
         .defaultScrollAnchor(.bottom)
         .scrollDismissesKeyboard(.interactively)
+        .simultaneousGesture(TapGesture().onEnded {
+            model.mentionAutocomplete.dismissComposer()
+        })
         .overlay {
             if model.hasLoaded, model.rows.isEmpty {
                 ContentUnavailableView(
@@ -81,40 +84,15 @@ struct ThreadView: View {
 /// so this composer does not publish its own typing.
 private struct ThreadComposerView: View {
     @Bindable var model: ThreadModel
-    @FocusState private var isFocused: Bool
-
-    private var canSend: Bool {
-        !model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
 
     var body: some View {
-        GlassEffectContainer(spacing: 8) {
-            HStack(alignment: .bottom, spacing: 8) {
-                TextField("Reply", text: $model.draft, axis: .vertical)
-                    .textFieldStyle(.plain)
-                    .lineLimit(1 ... 5)
-                    .focused($isFocused)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 10)
-                    .glassEffect(.regular, in: .capsule)
-
-                Button {
-                    model.sendReply()
-                    isFocused = false
-                } label: {
-                    Image(systemName: "arrow.up")
-                        .font(.body.weight(.semibold))
-                        .padding(6)
-                }
-                .buttonStyle(.glassProminent)
-                .clipShape(.circle)
-                .disabled(!canSend)
-                .accessibilityLabel("Send reply")
-            }
-            .padding(.horizontal)
-            .padding(.vertical, 8)
-        }
-        .animation(.default, value: canSend)
+        MessageComposerView(
+            document: $model.mentionDraft,
+            autocomplete: model.mentionAutocomplete,
+            placeholder: "Reply",
+            sendAccessibilityLabel: "Send reply",
+            onSend: model.sendReply
+        )
         .alert(
             "Reply not sent",
             isPresented: Binding(

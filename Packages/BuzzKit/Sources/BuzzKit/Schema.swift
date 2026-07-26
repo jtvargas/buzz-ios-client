@@ -35,7 +35,9 @@ enum Schema {
     /// target rather than only its first, and `channel_member` gains a
     /// `source_event_id` column so a same-`created_at` roster tie resolves by event
     /// id identically in live ingest and an ordered replay.
-    static let projectionVersion = 3
+    /// Version 4 adds the persisted Buzz agent directory (kind 10100), used by
+    /// composer autocomplete to include eligible non-member agents.
+    static let projectionVersion = 4
 
     /// The `meta` key under which the applied projection version is recorded.
     static let projectionVersionKey = "projection_version"
@@ -249,6 +251,18 @@ enum Schema {
             created_at      INTEGER NOT NULL
         )
         """)
+
+        try db.execute(sql: """
+        CREATE TABLE agent_directory (
+            pubkey               TEXT PRIMARY KEY NOT NULL,
+            display_name         TEXT,
+            respond_to           TEXT,
+            respond_to_allowlist TEXT NOT NULL,
+            channel_ids          TEXT NOT NULL,
+            source_event_id      TEXT NOT NULL,
+            created_at           INTEGER NOT NULL
+        )
+        """)
     }
 
     /// Engagement projections that hang off a target message: threading, reactions,
@@ -367,7 +381,7 @@ enum Schema {
     /// keys bind them).
     static let projectionTables = [
         "thread_summary", "rich_content", "edit", "deletion", "event_owner",
-        "reaction", "thread", "profile", "channel_member", "channel",
+        "reaction", "thread", "agent_directory", "profile", "channel_member", "channel",
     ]
 
     static func dropProjectionTables(_ db: Database) throws {

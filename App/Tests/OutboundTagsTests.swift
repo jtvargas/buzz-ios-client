@@ -7,6 +7,18 @@ import Testing
 /// correct" means the store threads the sent event exactly as intended.
 @Suite("Outbound tags")
 struct OutboundTagsTests {
+    @Test("message mention tags are normalized, deduplicated, sender-excluded, and capped")
+    func mentionTags() {
+        let sender = String(repeating: "f", count: 64)
+        let first = String(repeating: "A", count: 64)
+        let tags = OutboundTags.message(
+            channel: "room-1",
+            mentioning: [first, first.lowercased(), sender],
+            sender: sender
+        )
+        #expect(tags == [["h", "room-1"], ["p", first.lowercased()]])
+    }
+
     private func signed(_ kind: EventKind, tags: [[String]]) throws -> NostrEvent {
         try Fixture().event(kind, "x", tags: tags)
     }

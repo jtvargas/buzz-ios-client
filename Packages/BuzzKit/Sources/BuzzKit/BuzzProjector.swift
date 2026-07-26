@@ -56,7 +56,7 @@ struct BuzzProjector: EventProjecting {
         default:
             // Everything else needs no projection; the timeline reads the log
             // directly.
-            break
+            try Self.projectAdditional(event, into: db)
         }
     }
 

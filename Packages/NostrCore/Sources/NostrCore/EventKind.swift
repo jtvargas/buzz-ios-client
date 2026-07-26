@@ -55,6 +55,12 @@ public struct EventKind: RawRepresentable, Hashable, Sendable, ExpressibleByInte
     public static let groupJoinRequest: EventKind = 9021
     public static let groupLeaveRequest: EventKind = 9022
 
+    // MARK: - Buzz agent directory
+
+    /// Relay-published agent profile used by Buzz clients to decide which agents
+    /// are eligible for mention autocomplete.
+    public static let agentProfile: EventKind = 10100
+
     // MARK: - Relay membership administration (NIP-43 / NIP-WP)
 
     public static let relayAddMember: EventKind = 9030
