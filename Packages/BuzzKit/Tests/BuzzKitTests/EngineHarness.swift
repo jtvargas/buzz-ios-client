@@ -169,7 +169,13 @@ func channelContentFilter(in filters: [Filter], channel: String) -> Filter? {
 }
 
 /// The narrowed global content filter (metadata + presence, `#h`-less).
-func globalContentFilter(in filters: [Filter]) -> Filter? {
+/// The global live filter — presence, `#h`-less, `since`-windowed.
+func globalPresenceFilter(in filters: [Filter]) -> Filter? {
+    filters.first { $0.kinds?.contains(.presence) == true && $0.tagQueries["h"] == nil }
+}
+
+/// The profile-metadata filter, which must ride the global REQ *without* a `since`.
+func globalProfileFilter(in filters: [Filter]) -> Filter? {
     filters.first { $0.kinds?.contains(.metadata) == true && $0.tagQueries["h"] == nil }
 }
 
