@@ -2,8 +2,25 @@ import ImageIO
 import SwiftUI
 import UIKit
 
-/// A circular avatar that downsamples remote artwork to its display size before
-/// decoding, with a stable monogram fallback.
+/// The shape an avatar is clipped to: Slack's rounded square for people, agents, and
+/// channels, and a circle where a round badge still reads better (a large profile
+/// header).
+enum AvatarShape: Hashable, Sendable {
+    case roundedSquare
+    case circle
+
+    /// The corner radius at a given point size. The ratio is Slack's — square enough
+    /// to be recognisably not-a-circle, round enough not to look sharp at 28pt.
+    func cornerRadius(for size: CGFloat) -> CGFloat {
+        switch self {
+        case .roundedSquare: max(4, size * 0.24)
+        case .circle: size / 2
+        }
+    }
+}
+
+/// An avatar that downsamples remote artwork to its display size before decoding,
+/// with a stable monogram fallback.
 ///
 /// # Why not a bare `AsyncImage`
 ///
@@ -20,10 +37,13 @@ struct AvatarView: View {
     /// A stable seed for the monogram colour — a channel id or a pubkey — so a given
     /// subject keeps the same tint across launches.
     let seed: String
-    /// The letter shown when there is no artwork.
-    let initial: String
+    /// The initials shown when there is no artwork — one or two letters from
+    /// ``EntityNames/initials(for:)``, or `?` when nothing is known.
+    let monogram: String
     /// The avatar's point size.
     var size: CGFloat = 44
+    /// The clip shape; Slack's rounded square by default.
+    var shape: AvatarShape = .roundedSquare
 
     @State private var image: UIImage?
     @Environment(\.displayScale) private var displayScale
@@ -35,11 +55,13 @@ struct AvatarView: View {
                     .resizable()
                     .scaledToFill()
             } else {
-                monogram
+                monogramTile
             }
         }
+        // The frame is fixed before the artwork exists, so a picture arriving swaps
+        // pixels without moving a single row (spec §7: no layout shift on load).
         .frame(width: size, height: size)
-        .clipShape(.circle)
+        .clipShape(.rect(cornerRadius: shape.cornerRadius(for: size)))
         // Reload when the artwork or the pixel size it must be decoded to changes.
         .task(id: TaskKey(url: url, pixels: pixelSize)) {
             await load()
@@ -63,14 +85,15 @@ struct AvatarView: View {
         }
     }
 
-    private var monogram: some View {
-        Circle()
+    private var monogramTile: some View {
+        Rectangle()
             .fill(Color(hue: Self.hue(for: seed), saturation: 0.5, brightness: 0.8).gradient)
             .overlay {
-                Text(initial)
-                    .font(.system(size: size * 0.42, weight: .semibold))
+                Text(monogram)
+                    .font(.system(size: size * (monogram.count > 1 ? 0.34 : 0.42), weight: .semibold))
                     .foregroundStyle(.white)
                     .minimumScaleFactor(0.5)
+                    .lineLimit(1)
             }
     }
 

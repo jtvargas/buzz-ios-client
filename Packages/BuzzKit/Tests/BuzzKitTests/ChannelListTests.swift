@@ -53,6 +53,7 @@ struct ChannelListTests {
             #expect(empty.lastMessageID == nil)
             #expect(empty.lastMessageSnippet == nil)
             #expect(empty.lastMessageAuthor == nil)
+            #expect(empty.lastMessageAuthorPubkey == nil)
         }
     }
 
@@ -81,6 +82,13 @@ struct ChannelListTests {
 
         #expect(known.lastMessageAuthor == "Alice")
         #expect(unknown.lastMessageAuthor == anon.pubkey)
+
+        // The key comes back either way, so a caller that wants to resolve the author
+        // through its own name chain never has to guess whether the column above holds a
+        // name or a key — telling those apart by shape mis-reads a display name that
+        // happens to be 64 hex characters.
+        #expect(known.lastMessageAuthorPubkey == named.pubkey)
+        #expect(unknown.lastMessageAuthorPubkey == anon.pubkey)
     }
 
     // MARK: - Deletion authority

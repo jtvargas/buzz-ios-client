@@ -122,8 +122,15 @@ enum RichTextEntities {
         return nil
     }
 
-    /// Scans a `#`-channel at `at`: a single token that starts with a word character
-    /// and may include hyphens (channel ids are slug-like).
+    /// Scans a `#`-channel at `at`, trying the longest resolving name span first — the
+    /// same treatment ``scanMention`` gives a person's name, and for the same reason.
+    ///
+    /// A channel's *name* is whatever its metadata says, and the composer inserts that
+    /// name verbatim. Scanning a single slug-like run therefore broke the invariant the
+    /// completion rests on: `#Design Review` was scanned as `Design`, which either
+    /// rendered as plain text or — worse — resolved to a *different* channel that
+    /// happened to be called `Design`. Spans are tried longest-first so the whole name
+    /// wins whenever it resolves.
     private static func scanChannel(
         _ chars: AttributedString.CharacterView,
         from at: AttributedString.Index,
@@ -132,11 +139,26 @@ enum RichTextEntities {
         let nameStart = chars.index(after: at)
         guard nameStart < chars.endIndex, isWordChar(chars[nameStart]) else { return nil }
 
+        // Gather up to `maxMentionWords` hyphen/word runs separated by a single space.
+        var wordEnds: [AttributedString.Index] = []
         var cursor = nameStart
-        while cursor < chars.endIndex, isChannelChar(chars[cursor]) { cursor = chars.index(after: cursor) }
-        let name = String(chars[nameStart ..< cursor])
-        guard let id = resolver.channel(forName: name) else { return nil }
-        return (at ..< cursor, ChannelToken(channelID: id))
+        while wordEnds.count < maxMentionWords {
+            while cursor < chars.endIndex, isChannelChar(chars[cursor]) { cursor = chars.index(after: cursor) }
+            wordEnds.append(cursor)
+            guard cursor < chars.endIndex, chars[cursor] == " " else { break }
+            let afterSpace = chars.index(after: cursor)
+            guard afterSpace < chars.endIndex, isWordChar(chars[afterSpace]) else { break }
+            cursor = afterSpace
+        }
+
+        for count in stride(from: wordEnds.count, through: 1, by: -1) {
+            let end = wordEnds[count - 1]
+            let name = String(chars[nameStart ..< end])
+            if let id = resolver.channel(forName: name) {
+                return (at ..< end, ChannelToken(channelID: id))
+            }
+        }
+        return nil
     }
 
     // MARK: - Character classes

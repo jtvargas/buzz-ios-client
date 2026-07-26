@@ -92,6 +92,44 @@ struct RichTextEntityTests {
         #expect(RichTextProbe.channelRuns(inline).isEmpty)
     }
 
+    @Test("a multi-word channel name resolves whole, through the production name map")
+    func multiWordChannelResolves() {
+        // The composer inserts a channel's metadata name verbatim, so the stated invariant
+        // of the feature is that a name which completes there renders as a link here. A
+        // scanner that consumed one slug-like run broke it: `#Design Review` was scanned as
+        // `Design`, which resolved to nothing and rendered as plain text.
+        let resolver = MessageMentionResolver(
+            mentions: [],
+            channels: ChannelNameMap([(name: "Design Review", id: "CH_REVIEW")]),
+            selfPubkey: nil
+        )
+        let inline = RichTextProbe.inline(of: resolved("see #Design Review now", resolver)[0])
+        #expect(RichTextProbe.channelRuns(inline).first?.text == "#Design Review")
+        #expect(RichTextProbe.firstChannel(inline)?.channelID == "CH_REVIEW")
+    }
+
+    @Test("a shorter channel name living beside a longer one does not steal its reference")
+    func shorterChannelNameDoesNotStealTheReference() {
+        // The worse half of the same defect: with a `Design` channel in the map, the
+        // truncated scan *did* resolve — to a different channel than the author picked.
+        // Spans are tried longest-first, so the whole name wins whenever it resolves.
+        let resolver = MessageMentionResolver(
+            mentions: [],
+            channels: ChannelNameMap([
+                (name: "Design", id: "CH_DESIGN"),
+                (name: "Design Review", id: "CH_REVIEW"),
+            ]),
+            selfPubkey: nil
+        )
+        let inline = RichTextProbe.inline(of: resolved("see #Design Review now", resolver)[0])
+        #expect(RichTextProbe.channelRuns(inline).first?.text == "#Design Review")
+        #expect(RichTextProbe.firstChannel(inline)?.channelID == "CH_REVIEW")
+
+        // And the shorter name still resolves on its own, so nothing was traded away.
+        let alone = RichTextProbe.inline(of: resolved("see #Design now", resolver)[0])
+        #expect(RichTextProbe.firstChannel(alone)?.channelID == "CH_DESIGN")
+    }
+
     // MARK: - Code is never entity-parsed
 
     @Test("a fenced code block is never entity-parsed")

@@ -32,6 +32,16 @@ public struct ChannelListRow: Sendable, Hashable, Identifiable {
     /// one is known, otherwise the raw pubkey. Truncation and npub formatting are
     /// the UI's call, exactly as with the snippet.
     public let lastMessageAuthor: String?
+    /// The newest visible message author's public key, always — whether or not a display
+    /// name was found for it.
+    ///
+    /// Carried beside ``lastMessageAuthor`` rather than folded into it because a UI that
+    /// wants to resolve the author through its own name chain needs the key, and
+    /// recovering it from the collapsed column means guessing from shape: "64 hex
+    /// characters, therefore a key" is wrong for a display name that happens to look like
+    /// one, and the caller then renders a stranger's identifier. `nil` only for a channel
+    /// with no visible message.
+    public let lastMessageAuthorPubkey: String?
     /// How many top-level messages by *other* people are newer than this channel's
     /// read frontier — the NIP-RS unread count. Own posts never count, thread replies
     /// never count (they carry their own thread badges), and a channel no blob has
@@ -49,6 +59,7 @@ public struct ChannelListRow: Sendable, Hashable, Identifiable {
         lastMessageID: String? = nil,
         lastMessageSnippet: String?,
         lastMessageAuthor: String?,
+        lastMessageAuthorPubkey: String? = nil,
         unreadCount: Int = 0
     ) {
         self.id = id
@@ -60,6 +71,7 @@ public struct ChannelListRow: Sendable, Hashable, Identifiable {
         self.lastMessageID = lastMessageID
         self.lastMessageSnippet = lastMessageSnippet
         self.lastMessageAuthor = lastMessageAuthor
+        self.lastMessageAuthorPubkey = lastMessageAuthorPubkey
         self.unreadCount = unreadCount
     }
 
@@ -208,6 +220,7 @@ extension BuzzEventStore {
             lastMessageID: row["last_message_id"],
             lastMessageSnippet: row["last_message_snippet"],
             lastMessageAuthor: author,
+            lastMessageAuthorPubkey: authorPubkey,
             unreadCount: row["unread_count"] ?? 0
         )
     }
