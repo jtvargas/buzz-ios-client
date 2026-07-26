@@ -36,6 +36,11 @@ import SwiftUI
 /// inset, and no `ToolbarItem(placement: .keyboard)` — each of those double-counts
 /// with SwiftUI's own keyboard avoidance and is the mechanism behind a keyboard-sized
 /// strip left behind after dismissal.
+///
+/// ``keyboardDismissPadding(_:)`` below is not an exception to that rule: it reads no
+/// keyboard height and insets nothing. It tells UIKit that the band the bar occupies is
+/// part of the dismissal gesture, which is otherwise dead until the touch reaches the
+/// keyboard itself. Measured either way — see ``ConversationKeyboardDismissPadding``.
 struct ConversationScaffold<Content: View, Bar: View, Accessory: View>: View {
     /// Whether the newest row is in view. The owner freezes its rendered tail while
     /// this is `false`, so an arriving message cannot move the reader's place.
@@ -114,6 +119,10 @@ struct ConversationScaffold<Content: View, Bar: View, Accessory: View>: View {
             }
             .onChange(of: jumpToken) { jump(using: proxy) }
         }
+        // The bar's own height, so the list and the composer are one drag surface: a
+        // downward drag takes the keyboard from the moment it reaches the composer,
+        // rather than only once it reaches the keyboard.
+        .keyboardDismissPadding(barHeight)
         .releasesKeyboardWhenLeavingScreen(then: onLeavingScreen)
         // No app-drawn back swipe. Both surfaces keep the system navigation bar, so the
         // interactive pop is UIKit's own — including the drag that carries the previous
