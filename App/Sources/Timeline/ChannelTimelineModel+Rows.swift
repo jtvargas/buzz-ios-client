@@ -38,6 +38,21 @@ extension ChannelTimelineModel {
         (try? store.mentions(for: ids)) ?? [:]
     }
 
+    /// The faces to preview under a threaded row, empty when it has no thread — the
+    /// reply-preview strip's participants (§6).
+    func participants(for id: String) -> [String] {
+        replyParticipants[id]?.pubkeys ?? []
+    }
+
+    /// Reads thread participants for `ids` off the main actor, capped at exactly the
+    /// number of faces ``RepliesButton`` draws so the query can never fetch one the
+    /// strip drops. `store` is immutable, so this is safe to call from the `nonisolated`
+    /// observation loop.
+    nonisolated func fetchThreadParticipants(for ids: [String]) -> [String: ThreadParticipants] {
+        let limit = MessageRowMetrics.replyPreviewAvatars
+        return (try? store.threadParticipants(for: ids, limit: limit)) ?? [:]
+    }
+
     /// Sends a reaction on a message through the durable send path — an ordinary
     /// persisted kind-7, not an ephemeral.
     func react(_ emoji: String, on targetID: String) {

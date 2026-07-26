@@ -21,7 +21,17 @@ struct ChannelListView: View {
     @State private var presence: PresenceModel
     @State private var directory: EntityDirectoryModel
     @State private var ticker = RelativeTimeTicker()
+    @State private var router: DirectMessageRouter
     @State private var showAccount = false
+    /// The pushed conversations. An explicit path — rather than the implicit one
+    /// `NavigationLink(value:)` drives — because opening a direct message has to push
+    /// programmatically from a sheet that is already dismissing.
+    ///
+    /// Typed, and not a `NavigationPath`: `NavigationPath` cannot be read back, so
+    /// "is this conversation already on the stack?" is not a question it can answer, and
+    /// the answer is what stops a DM opened from inside itself stacking on itself
+    /// (see ``ConversationRoute/pushed(onto:)``).
+    @State private var path: [ConversationRoute] = []
 
     // Expansion persists across launches, one `UserDefaults` flag per section. The keys
     // come from ``SidebarSection/expansionStorageKey`` so the view and the tests that
@@ -42,6 +52,7 @@ struct ChannelListView: View {
         _model = State(initialValue: ChannelListModel(store: store, selfPubkey: selfPubkey))
         _presence = State(initialValue: PresenceModel(store: engine.presenceStore))
         _directory = State(initialValue: EntityDirectoryModel(store: store))
+        _router = State(initialValue: DirectMessageRouter(opener: engine))
     }
 
     var body: some View {
@@ -51,15 +62,16 @@ struct ChannelListView: View {
         let names = entityNames
         let channelNames = ChannelNameMap(channels: model.channels)
 
-        NavigationStack {
+        NavigationStack(path: $path) {
             sidebar(names: names, channelNames: channelNames)
                 .navigationTitle("Messages")
-                .navigationDestination(for: ChannelListRow.self) { channel in
+                .navigationDestination(for: ConversationRoute.self) { route in
                     ChannelTimelineView(
-                        channel: channel,
+                        channel: route.channel,
                         store: store,
                         engine: engine,
-                        selfPubkey: environment.selfPubkeyHex
+                        selfPubkey: environment.selfPubkeyHex,
+                        knownPeer: route.knownPeer
                     )
                 }
                 .toolbar {
@@ -89,6 +101,36 @@ struct ChannelListView: View {
         // age their timestamps off one tick (§7/§9).
         .environment(\.entityNames, names)
         .environment(\.relativeTimeTicker, ticker)
+        // Injected here, above the destination, because the sheet that *starts* a direct
+        // message lives inside a pushed conversation while the navigation that *finishes*
+        // it belongs to this stack.
+        .environment(\.directMessageRouter, router)
+        // The router hands back an opened conversation once; this is the one place that
+        // turns it into a push, and it clears the value so an unrelated body pass cannot
+        // re-push the same conversation.
+        .onChange(of: router.pendingConversation) { _, opened in
+            guard let opened else { return }
+            router.pendingConversation = nil
+            let route = ConversationRoute(
+                channel: conversationRow(for: opened.channelID),
+                // The peer the relay named, carried only until the roster lands: it is
+                // what lets a never-synced DM show the person's name instead of the
+                // untitled placeholder.
+                knownPeer: opened.peer
+            )
+            path = route.pushed(onto: path)
+        }
+        .alert(
+            "Could not open the conversation",
+            isPresented: Binding(
+                get: { router.failure != nil },
+                set: { if !$0 { router.failure = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) { router.failure = nil }
+        } message: {
+            Text(router.failure ?? "")
+        }
         .task { await model.run() }
         .task { await presence.run() }
         .task { await directory.run() }
@@ -132,7 +174,9 @@ private extension ChannelListView {
 
     func rows(of section: SidebarSectionContent) -> some View {
         ForEach(section.rows) { row in
-            NavigationLink(value: row.channel) {
+            // No peer hint from here: a conversation reached from the sidebar is one the
+            // channel list already knows, so its roster is in hand.
+            NavigationLink(value: ConversationRoute(channel: row.channel)) {
                 ChannelRowView(row: row, presence: presence)
             }
             .listRowInsets(Self.rowInsets)
@@ -174,6 +218,34 @@ private extension ChannelListView {
         )
     }
 
+    /// The row to push for a channel the router just opened.
+    ///
+    /// The live list first, so one conversation is one row value wherever it was reached
+    /// from. A freshly created DM may not be in that list yet: the relay publishes a
+    /// channel's metadata *after* it commits the channel, so the id is authoritative
+    /// before the name is. Rather than block navigation on a read-back that can lose that
+    /// race, this synthesises the minimum row the destination needs — everything a reader
+    /// sees is resolved by ``EntityNames``, from the roster once there is one and from the
+    /// route's `knownPeer` until then.
+    ///
+    /// Keeping one instance of a conversation on the stack is
+    /// ``ConversationRoute/pushed(onto:)``'s job, not this one's: two calls here can
+    /// legitimately answer with the same row, and it is the push that decides what that
+    /// means.
+    func conversationRow(for channelID: String) -> ChannelListRow {
+        if let existing = model.channels.first(where: { $0.id == channelID }) { return existing }
+        return ChannelListRow(
+            id: channelID,
+            name: nil,
+            about: nil,
+            picture: nil,
+            isPrivate: true,
+            lastMessageAt: nil,
+            lastMessageSnippet: nil,
+            lastMessageAuthor: nil
+        )
+    }
+
     /// The sections and rows for this pass, resolved once for the whole list.
     ///
     /// Deliberately does **not** read the presence roster: presence is consulted inside
@@ -195,5 +267,40 @@ private extension ChannelListView {
         case .directMessages: $directMessagesExpanded
         case .agents: $agentsExpanded
         }
+    }
+}
+
+/// One pushed conversation: the row its timeline renders, and — when the push came from
+/// opening a direct message — the peer the relay said it is with.
+///
+/// A route type rather than the bare ``BuzzKit/ChannelListRow`` the sidebar pushes,
+/// because the two ways into a conversation know different things about it. From the
+/// sidebar the roster is already read, so the row is the whole story. From a profile
+/// sheet's Message action the channel is seconds old and its roster is still in flight, so
+/// the peer travels with the push (see ``OpenedConversation``).
+struct ConversationRoute: Hashable {
+    let channel: ChannelListRow
+    /// The peer this conversation was just opened with, or `nil` when the roster is the
+    /// only thing that should name it.
+    var knownPeer: String?
+}
+
+extension ConversationRoute {
+    /// `path` with this conversation opened: exactly one instance of it, on top.
+    ///
+    /// Pure so the rule is tested rather than driven through a navigation stack.
+    ///
+    /// A plain append is wrong here because the tap that opens a conversation is reachable
+    /// from *inside* that same conversation: the peer's face is on every row of a DM, and
+    /// their profile sheet offers Message. Appending there pushed a second copy of the
+    /// conversation onto the first, so backing out of a DM went through an identical DM.
+    /// Already-on-top is left completely alone rather than replaced, because re-assigning
+    /// the same conversation as a *different* element value is a pop-and-push the reader
+    /// would watch happen.
+    func pushed(onto path: [ConversationRoute]) -> [ConversationRoute] {
+        guard path.last?.channel.id != channel.id else { return path }
+        var updated = path.filter { $0.channel.id != channel.id }
+        updated.append(self)
+        return updated
     }
 }

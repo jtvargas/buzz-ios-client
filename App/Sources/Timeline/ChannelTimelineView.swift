@@ -17,12 +17,18 @@ struct ChannelTimelineView: View {
     @State private var typing: ChannelTypingModel
     @State private var openedThread: ThreadRoute?
     @State private var showsChannelDetails = false
+    /// Whose profile is open, if anyone's — set by a tap on a row's avatar or name.
+    @State private var profilePeer: ProfilePeer?
     @Environment(\.entityNames) private var names
     private let channel: ChannelListRow
     private let channelID: String
     private let store: BuzzEventStore
     private let engine: SyncEngine
     private let selfPubkey: String?
+    /// The peer this conversation was opened with, when it was reached by opening a direct
+    /// message rather than from the sidebar. Only ever consulted while the roster has
+    /// nothing to say — see ``EntityNames/conversation(for:knownPeer:)``.
+    private let knownPeer: String?
 
     /// Reserved for the top-of-history sentinel. Constant, and present whenever an
     /// older page may exist: a spinner that appears and disappears is itself a content
@@ -30,12 +36,19 @@ struct ChannelTimelineView: View {
     /// per page loaded.
     private static let topSentinelHeight: CGFloat = 44
 
-    init(channel: ChannelListRow, store: BuzzEventStore, engine: SyncEngine, selfPubkey: String?) {
+    init(
+        channel: ChannelListRow,
+        store: BuzzEventStore,
+        engine: SyncEngine,
+        selfPubkey: String?,
+        knownPeer: String? = nil
+    ) {
         self.channel = channel
         channelID = channel.id
         self.store = store
         self.engine = engine
         self.selfPubkey = selfPubkey
+        self.knownPeer = knownPeer
         let presenceStore = engine.presenceStore
         _model = State(initialValue: ChannelTimelineModel(
             channel: channel.id,
@@ -93,6 +106,9 @@ struct ChannelTimelineView: View {
                 presenceStore: engine.presenceStore
             )
         }
+        // The same modifier a thread uses, so the two surfaces cannot present a
+        // different profile sheet for the same tap.
+        .profileSheet(peer: $profilePeer, presence: presence)
         .navigationDestination(item: $openedThread) { route in
             ThreadView(
                 root: route.root,
@@ -106,19 +122,25 @@ struct ChannelTimelineView: View {
         .task { await presence.run() }
     }
 
-    /// The conversation's own title: a channel's name, or the peer's when this
-    /// two-person roster is a direct message. Computed rather than captured in `init`
-    /// because the resolver arrives from the environment — and because capturing it
-    /// there is what let a DM read as its group name and an unnamed channel render its
-    /// whole group id (§4).
-    private var title: String {
-        names.conversation(for: channel).title
+    /// How this conversation presents itself — a channel, or the person on the other
+    /// end of a two-member roster. Computed rather than captured in `init` because the
+    /// resolver arrives from the environment — and because capturing it there is what let
+    /// a DM read as its group name and an unnamed channel render its whole group id (§4).
+    ///
+    /// `knownPeer` covers exactly one gap: a DM opened seconds ago whose membership has not
+    /// been projected yet, where the roster cannot classify the conversation and the header
+    /// would otherwise read `Untitled conversation`. The roster wins the moment it lands.
+    private var conversation: ConversationIdentity {
+        names.conversation(for: channel, knownPeer: knownPeer)
     }
 
     // MARK: - List
 
     private var list: some View {
-        LazyVStack(spacing: 0) {
+        // 12pt between messages, as the list's own spacing rather than as padding on
+        // each row: one number owns the rhythm, and a row's height stays its content's
+        // height. See ``MessageRowMetrics``.
+        LazyVStack(spacing: MessageRowMetrics.betweenMessages) {
             topSentinel
             // Day separators are items, not row headers, so the channel, a thread, and
             // a DM cannot each grow their own copy of the grouping rule. Grouped once
@@ -159,16 +181,17 @@ struct ChannelTimelineView: View {
             isAuthorOnline: presence.isOnline(row.pubkey),
             reactions: model.reactions(for: row.id),
             mentions: model.mentions(for: row.id),
+            replyParticipants: model.participants(for: row.id),
             selfPubkey: selfPubkey,
             isOwn: model.isOwn(row),
             onRetry: { model.retry($0) },
             onReact: { model.react($0, on: row.id) },
             onToggleReaction: { model.toggleReaction($0, on: row.id) },
             onDelete: { model.delete($0) },
-            onOpenThread: row.isDeleted ? nil : { open(thread: row) }
+            onOpenThread: row.isDeleted ? nil : { open(thread: row) },
+            onOpenProfile: { profilePeer = ProfilePeer(pubkey: $0) }
         )
         .padding(.horizontal)
-        .padding(.vertical, 4)
     }
 
     /// What floats over the list just above the composer: the held-back arrivals
@@ -205,23 +228,44 @@ struct ChannelTimelineView: View {
         }
     }
 
+    /// The header: a left-aligned glass pill carrying the conversation's name with its
+    /// member count beneath, opening the details sheet on tap (§4).
+    ///
+    /// `.topBarLeading`, not `.principal`, because `.principal` centres its content and
+    /// offers no way to pull it to the leading edge. The dropdown arrow is gone — the tap
+    /// stays, and a sheet is not a menu, so a chevron promising one was the wrong
+    /// affordance for it. What tells a reader this is a control now is the same pressed
+    /// dim the row's avatar and name use.
     private var titleItem: some ToolbarContent {
-        ToolbarItem(placement: .principal) {
+        ToolbarItem(placement: .topBarLeading) {
+            // Resolved once for the pill's two lines and its label, rather than three
+            // times through the directory on every toolbar pass.
+            let identity = conversation
             Button {
                 showsChannelDetails = true
             } label: {
-                HStack(spacing: 5) {
-                    Text(title)
-                        .font(.headline)
-                        .foregroundStyle(.primary)
-                    Image(systemName: "chevron.down")
-                        .font(.caption2.weight(.bold))
-                        .foregroundStyle(.secondary)
-                }
+                ConversationHeaderPill(title: identity.title, subtitle: subtitle(for: identity))
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Channel details for \(title)")
+            .buttonStyle(PressFeedbackButtonStyle())
+            .accessibilityLabel(identity.title)
+            .accessibilityHint("Double tap to show conversation details")
         }
+    }
+
+    /// The header's second line: a channel's member count, or a direct peer's own quiet
+    /// label.
+    ///
+    /// `2 members` under a person's name is a category error — a direct message *is* a
+    /// two-member roster, so the number is a restatement of the fact that this is a DM.
+    /// The peer's NIP-05 identifier (or "Agent") is what a reader does not already know,
+    /// and it comes from the same ``EntityNames`` the sidebar and the details sheet read.
+    /// The roster arrives asynchronously, so both branches may legitimately have nothing
+    /// to say yet, and the pill then draws one line.
+    private func subtitle(for conversation: ConversationIdentity) -> String? {
+        if let peer = conversation.peer {
+            return names.secondaryLabel(for: peer)
+        }
+        return ConversationHeaderPill.memberCount(names.members(of: channelID).count)
     }
 
     /// The scaffold's "the top of history is near" report. It arrives as a level

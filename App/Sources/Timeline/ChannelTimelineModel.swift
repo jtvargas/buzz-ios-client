@@ -41,6 +41,11 @@ final class ChannelTimelineModel {
     /// message's own `p` tags. Re-read on the same observation as the rows, so a
     /// mentioned user's profile landing updates the rendered name live (WS-1 #9).
     private(set) var mentionRefs: [String: MentionRefList] = [:]
+    /// The distinct repliers behind each threaded row's reply preview, keyed by the
+    /// thread's root id. Re-read on the same observation as the rows, so a face appears
+    /// the moment the reply that put it there is ingested — and read for the whole page
+    /// at once (see ``threadedRowIDs``) rather than a query per row.
+    private(set) var replyParticipants: [String: ThreadParticipants] = [:]
     private(set) var hasLoaded = false
     /// Whether an older page may still exist before the oldest loaded row.
     private(set) var hasMoreOlder = false
@@ -198,6 +203,17 @@ final class ChannelTimelineModel {
         let ids = Array(loaded.keys)
         applyReactions(fetchReactions(for: ids))
         applyMentions(fetchMentions(for: ids))
+        applyThreadParticipants(fetchThreadParticipants(for: threadedRowIDs))
+    }
+
+    /// The loaded rows that advertise a thread — the only ids the participants read has
+    /// anything to return for.
+    ///
+    /// Narrowed rather than passing the whole page: a channel where one message in twenty
+    /// has replies would otherwise send fifty ids into an `IN` list to get two rows back,
+    /// on every commit.
+    var threadedRowIDs: [String] {
+        loaded.values.filter(\.hasThread).map(\.id)
     }
 
     // MARK: - Live observation
@@ -220,6 +236,12 @@ final class ChannelTimelineModel {
                 await applyReactions(groups)
                 let mentions = fetchMentions(for: ids)
                 await applyMentions(mentions)
+                // Only the threaded rows, and only after the merge that decided which
+                // rows those are — a reply landing is exactly the commit that turns a
+                // plain row into a threaded one.
+                let roots = await threadedRowIDs
+                let participants = fetchThreadParticipants(for: roots)
+                await applyThreadParticipants(participants)
             }
         } catch {
             // Ends on cancellation or teardown; last snapshot stays on screen.
@@ -330,6 +352,7 @@ final class ChannelTimelineModel {
         let ids = Array(loaded.keys)
         applyReactions(fetchReactions(for: ids))
         applyMentions(fetchMentions(for: ids))
+        applyThreadParticipants(fetchThreadParticipants(for: threadedRowIDs))
     }
 
     /// Re-derives everything downstream of the loaded set: the pagination cursor from
@@ -368,5 +391,9 @@ final class ChannelTimelineModel {
 
     func applyMentions(_ mentions: [String: MentionRefList]) {
         mentionRefs = mentions
+    }
+
+    func applyThreadParticipants(_ participants: [String: ThreadParticipants]) {
+        replyParticipants = participants
     }
 }

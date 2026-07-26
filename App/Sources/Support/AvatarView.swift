@@ -1,4 +1,3 @@
-import ImageIO
 import SwiftUI
 import UIKit
 
@@ -31,6 +30,29 @@ enum AvatarShape: Hashable, Sendable {
 /// to the exact pixel size the display needs, off the main thread, and caches the
 /// result — so a row that scrolls away and back reuses a small bitmap rather than
 /// re-decoding a large one. That is the avatar half of the scroll-performance pass.
+///
+/// # How it avoids flicker
+///
+/// Three rules, each load-bearing:
+///
+/// 1. **State is keyed by identity — the *subject*, not the resolution.** The decoded
+///    image is stored with the request it answered, and drawn only while that request's
+///    URL is still the one this view is showing. `@State` survives a view whose inputs
+///    change, so a row reused for another author would otherwise keep drawing the previous
+///    author's face until the new one arrived. The target pixel size is deliberately *not*
+///    part of that test: it is derived from a `@ScaledMetric`, so one Dynamic Type step
+///    changes it for every avatar on screen at once, and refusing the bitmap in hand there
+///    blanked the whole list to monograms until a full round of decodes came back. A good
+///    bitmap of the right subject at the wrong resolution is drawn while the new size
+///    decodes — free, because the frame is fixed and the content is `.scaledToFill()`.
+/// 2. **A cached image is drawn in the first frame.** `.task` runs after the frame it is
+///    attached to, so state alone always costs one frame of monogram. The synchronous
+///    cache peek in ``body`` closes that gap for artwork already in memory, which while
+///    scrolling is nearly all of it.
+/// 3. **The swap is not animated.** The frame is fixed independently of the content, so
+///    an image arriving replaces pixels without moving anything; letting an ancestor's
+///    implicit animation cross-fade that replacement is the one way it reads as a
+///    flicker rather than as a load.
 struct AvatarView: View {
     /// The artwork URL, or `nil` to show the monogram.
     let url: URL?
@@ -44,13 +66,16 @@ struct AvatarView: View {
     var size: CGFloat = 44
     /// The clip shape; Slack's rounded square by default.
     var shape: AvatarShape = .roundedSquare
+    /// The loader to resolve artwork through. Defaults to the shared one; injectable so a
+    /// preview or a test can supply its own cache and session.
+    var loader: AvatarLoader = .shared
 
-    @State private var image: UIImage?
+    @State private var resolved: Resolved?
     @Environment(\.displayScale) private var displayScale
 
     var body: some View {
         Group {
-            if let image {
+            if let image = displayedImage {
                 Image(uiImage: image)
                     .resizable()
                     .scaledToFill()
@@ -62,27 +87,94 @@ struct AvatarView: View {
         // pixels without moving a single row (spec §7: no layout shift on load).
         .frame(width: size, height: size)
         .clipShape(.rect(cornerRadius: shape.cornerRadius(for: size)))
+        // Monogram and image occupy the same box, so there is nothing to animate between
+        // them. Clearing the transaction's animation keeps an enclosing `withAnimation`
+        // (a list insert, a sheet presentation) from cross-fading the swap into a blink.
+        .transaction { $0.animation = nil }
         // Reload when the artwork or the pixel size it must be decoded to changes.
-        .task(id: TaskKey(url: url, pixels: pixelSize)) {
-            await load()
-        }
+        .task(id: request) { await load() }
         .accessibilityHidden(true)
     }
 
-    /// The pixel size the artwork should be decoded to — points × display scale.
-    private var pixelSize: CGFloat { size * displayScale }
+    /// The identity of one load: a change in either field means a fresh decode.
+    ///
+    /// Internal rather than private, with ``Resolved``, so ``drawn(resolved:request:cached:)``
+    /// can be exercised without a view host — the ordering it encodes is the whole
+    /// no-flicker contract.
+    struct Request: Equatable {
+        let url: URL?
+        let pixelSize: CGFloat
+    }
+
+    /// A decoded image together with the request it answered.
+    struct Resolved {
+        let request: Request
+        let image: UIImage
+    }
+
+    private var request: Request {
+        Request(url: url, pixelSize: size * displayScale)
+    }
+
+    /// The image to draw right now, or `nil` for the monogram.
+    ///
+    /// Three sources, in falling order of exactness, and the ordering is the whole logic:
+    ///
+    /// 1. resolved state for this exact request — the common case while nothing changes;
+    /// 2. the loader's cache at the current pixel size, read synchronously. That is a pure
+    ///    read of a thread-safe cache and cannot itself invalidate the view: if it hits,
+    ///    the artwork is drawn a frame earlier than `.task` could manage;
+    /// 3. resolved state for the *same subject at another resolution*, which is what a
+    ///    Dynamic Type change leaves behind. Redrawing it costs nothing — the frame is
+    ///    fixed and the content is `.scaledToFill()` — and it is the difference between a
+    ///    text-size change re-rendering the list and blanking it to monograms first.
+    ///
+    /// A resolved image for a *different* URL is never drawn at any point in that chain: it
+    /// belongs to a subject this view is no longer showing, which is the one thing the
+    /// identity check exists to refuse.
+    private var displayedImage: UIImage? {
+        Self.drawn(resolved: resolved, request: request) { url, pixelSize in
+            loader.cachedImage(for: url, pixelSize: pixelSize)
+        }
+    }
+
+    /// The rule behind ``displayedImage``, as a pure function of the three inputs.
+    ///
+    /// `cached` is a closure rather than a value because it must not be consulted when
+    /// resolved state already answers exactly — for a `data:` avatar that lookup digests
+    /// the whole URI, on the main actor, inside `body`.
+    ///
+    /// `nonisolated` because it is a pure function of its arguments: a `View`'s conformance
+    /// puts the type on the main actor, which this rule has no need of and which would
+    /// otherwise make `cached` a value the caller has to send across an isolation boundary.
+    nonisolated static func drawn(
+        resolved: Resolved?,
+        request: Request,
+        cached: (URL, CGFloat) -> UIImage?
+    ) -> UIImage? {
+        guard let url = request.url else { return nil }
+        let sameSubject = resolved.flatMap { $0.request.url == url ? $0 : nil }
+        if let sameSubject, sameSubject.request.pixelSize == request.pixelSize {
+            return sameSubject.image
+        }
+        return cached(url, request.pixelSize) ?? sameSubject?.image
+    }
 
     private func load() async {
-        guard let url else {
-            image = nil
+        let request = request
+        guard let url = request.url else {
+            // Guarded because `@State` cannot compare a non-`Equatable` value: assigning
+            // `nil` over `nil` would still invalidate the view.
+            if resolved != nil { resolved = nil }
             return
         }
-        let decoded = await AvatarLoader.shared.image(for: url, pixelSize: pixelSize)
-        // The `.task(id:)` was cancelled if the row was reused for another subject; only
-        // apply when this task is still the current one.
-        if !Task.isCancelled {
-            image = decoded
-        }
+        let image = await loader.image(for: url, pixelSize: request.pixelSize)
+        // The `.task(id:)` was cancelled if this view moved on to another subject; only
+        // apply when this task is still the current one. The identity carried in
+        // ``Resolved`` is the belt to this braces — it also covers the frame between the
+        // inputs changing and `.task` restarting.
+        guard !Task.isCancelled, let image else { return }
+        resolved = Resolved(request: request, image: image)
     }
 
     private var monogramTile: some View {
@@ -102,74 +194,5 @@ struct AvatarView: View {
     static func hue(for seed: String) -> Double {
         let sum = seed.utf8.reduce(0) { $0 &+ Int($1) }
         return Double(sum % 360) / 360
-    }
-
-    /// The identity of one load: a change in either field means a fresh decode.
-    private struct TaskKey: Equatable {
-        let url: URL?
-        let pixels: CGFloat
-    }
-}
-
-/// Loads, downsamples, caches, and de-duplicates avatar image requests.
-///
-/// An actor so the cache and the in-flight table are mutated without a lock, and so a
-/// burst of rows asking for the same URL while scrolling shares one network+decode
-/// rather than starting a request each. Decoding runs on the actor's executor (off the
-/// main thread), which also serialises decodes into a steady trickle instead of a
-/// thundering herd on first paint.
-actor AvatarLoader {
-    static let shared = AvatarLoader()
-
-    /// Keyed by URL and target pixel size, so the same artwork at two sizes caches
-    /// separately and a re-request at the same size is a hit. `NSCache` evicts under
-    /// memory pressure on its own.
-    private let cache = NSCache<NSString, UIImage>()
-    private var inFlight: [String: Task<UIImage?, Never>] = [:]
-
-    private let session: URLSession
-
-    init(session: URLSession = .shared) {
-        self.session = session
-        cache.countLimit = 256
-    }
-
-    /// The downsampled avatar for `url` at `pixelSize`, from cache when present,
-    /// otherwise fetched and decoded once even under concurrent callers.
-    func image(for url: URL, pixelSize: CGFloat) async -> UIImage? {
-        let key = "\(url.absoluteString)|\(Int(pixelSize.rounded()))"
-        if let cached = cache.object(forKey: key as NSString) { return cached }
-        if let existing = inFlight[key] { return await existing.value }
-
-        let session = session
-        let task = Task<UIImage?, Never> {
-            guard let (data, _) = try? await session.data(from: url) else { return nil }
-            return Self.downsample(data, maxPixelSize: pixelSize)
-        }
-        inFlight[key] = task
-        let image = await task.value
-        inFlight[key] = nil
-        if let image { cache.setObject(image, forKey: key as NSString) }
-        return image
-    }
-
-    /// Decodes `data` straight to a thumbnail no larger than `maxPixelSize` on its
-    /// longest edge, so a large source never becomes a large in-memory bitmap. `nil`
-    /// for data ImageIO cannot read.
-    nonisolated static func downsample(_ data: Data, maxPixelSize: CGFloat) -> UIImage? {
-        let sourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
-        guard let source = CGImageSourceCreateWithData(data as CFData, sourceOptions) else {
-            return nil
-        }
-        let options = [
-            kCGImageSourceCreateThumbnailFromImageAlways: true,
-            kCGImageSourceCreateThumbnailWithTransform: true,
-            kCGImageSourceShouldCacheImmediately: true,
-            kCGImageSourceThumbnailMaxPixelSize: max(1, maxPixelSize),
-        ] as CFDictionary
-        guard let thumbnail = CGImageSourceCreateThumbnailAtIndex(source, 0, options) else {
-            return nil
-        }
-        return UIImage(cgImage: thumbnail)
     }
 }

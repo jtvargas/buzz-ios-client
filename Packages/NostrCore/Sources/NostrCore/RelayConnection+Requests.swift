@@ -11,6 +11,32 @@ extension RelayConnection {
     /// caller's retry policy can act. A disconnect fails the publish with
     /// ``RelayConnectionError/connectionLost`` — the outbox owns the resend.
     public func publish(_ event: NostrEvent, timeout: Duration? = nil) async throws {
+        _ = try await publishAwaitingResponse(event, timeout: timeout)
+    }
+
+    /// Publishes an event and returns the *message text* of the relay's `OK`.
+    ///
+    /// Identical to ``publish(_:timeout:)`` in every respect — the same
+    /// relay-signed-kind guard, the same refusal of a second in-flight publish of
+    /// one event id, the same `duplicate:`-is-success classification, the same
+    /// watchdog, the same `connectionLost` on a drop — and in fact its
+    /// implementation; only the return value differs.
+    ///
+    /// # Why the message matters
+    ///
+    /// NIP-01 treats the fourth `OK` field as human-readable, so the durable send
+    /// path discards it. Buzz's *command* kinds do not: the relay answers them with
+    /// a machine-readable payload in exactly that field
+    /// (`"response:{…json…}"`), and it is the only place the result appears — a
+    /// command's outcome is never fanned out as an event. A caller of a command kind
+    /// therefore needs the text, and getting it must not cost the outbox its
+    /// `Void`-returning contract.
+    ///
+    /// The returned string is the raw message, including any `duplicate: …` prefix
+    /// on the success-by-classification path: distinguishing "the relay processed my
+    /// command" from "the relay recognised this event id and did nothing" is the
+    /// caller's job, and it needs the text to do it.
+    public func publishAwaitingResponse(_ event: NostrEvent, timeout: Duration? = nil) async throws -> String {
         guard !event.kind.isRelaySigned else {
             throw RelayConnectionError.publishRejected(.restricted("kind \(event.kind) is signed by the relay"))
         }
@@ -29,7 +55,7 @@ extension RelayConnection {
         }
         defer { timeoutTask.cancel() }
 
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+        return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<String, Error>) in
             pendingPublishes[event.id] = continuation
             Task { [weak self] in
                 guard let self else { return }
@@ -55,12 +81,14 @@ extension RelayConnection {
     func resolvePublish(_ eventID: String, accepted: Bool, message: String) {
         guard let continuation = pendingPublishes.removeValue(forKey: eventID) else { return }
         if accepted {
-            continuation.resume()
+            continuation.resume(returning: message)
             return
         }
         let reason = OKReason(message: message)
         if reason.disposition == .alreadyAccepted {
-            continuation.resume()
+            // Success by classification. The raw message travels with it so a
+            // command caller can tell an actioned publish from a deduped one.
+            continuation.resume(returning: message)
         } else {
             continuation.resume(throwing: RelayConnectionError.publishRejected(reason))
         }

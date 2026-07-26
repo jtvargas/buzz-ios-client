@@ -251,6 +251,45 @@ struct EntityNamesTests {
         #expect(timeline.identity == sidebar.identity)
     }
 
+    @Test("a just-opened DM names itself from the peer the relay named, until its roster lands")
+    func knownPeerNamesAnUnprojectedDirectMessage() {
+        let row = channel("dm-new", isPrivate: true)
+        let entities = [
+            DirectoryEntity(pubkey: me, profileName: "Me"),
+            DirectoryEntity(pubkey: peer, profileName: "Ada"),
+            DirectoryEntity(pubkey: agent, profileName: "Third"),
+        ]
+        // No roster: the relay commits a channel's membership *after* it answers the open
+        // command, so a read taken the moment the reply lands legitimately has nothing.
+        let resolver = names(entities: entities, channels: [row], selfPubkey: me)
+
+        // Without the peer this is the defect — an unnamed channel, so the untitled
+        // placeholder stands where the name of the person just messaged belongs.
+        #expect(resolver.conversation(for: row).kind == .channel)
+        #expect(resolver.conversation(for: row).title == EntityNames.untitledChannel)
+
+        let hinted = resolver.conversation(for: row, knownPeer: peer)
+        #expect(hinted.kind == .direct)
+        #expect(hinted.title == "Ada")
+        #expect(hinted.peer == peer)
+        // And the monogram's tint follows the person, so the DM looks the same here as it
+        // will once the sidebar has the row.
+        #expect(hinted.avatarSeed == peer)
+
+        // A landed roster is an answer, and an answer wins: a hint cannot turn a channel
+        // somebody else's membership event describes into a direct message.
+        let projected = names(
+            entities: entities,
+            rosters: ["dm-new": [me, peer, agent]],
+            channels: [row],
+            selfPubkey: me
+        )
+        #expect(projected.conversation(for: row, knownPeer: peer).kind == .channel)
+        // Nor does the hint survive a keyless session, which has no "other" member.
+        #expect(names(entities: entities, channels: [row])
+            .conversation(for: row, knownPeer: peer).kind == .channel)
+    }
+
     @Test("secondary labels prefer NIP-05 and name an agent otherwise")
     func secondaryLabels() {
         let resolver = names(entities: [
