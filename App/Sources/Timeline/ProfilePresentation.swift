@@ -17,11 +17,10 @@ extension View {
     /// One modifier rather than a `.sheet` per surface: the channel timeline and a
     /// thread both open the same sheet from the same two taps (an avatar and a sender's
     /// name), and a second copy of this call is a second place for the two to drift —
-    /// most obviously over `onMessage`, which is deliberately `nil` here. Opening or
-    /// creating the direct message is a separate workstream, and
-    /// ``ProfileSheetView`` already hides the action rather than offering one that
-    /// does nothing; a stub that dismissed and went nowhere would have to be found and
-    /// removed later, in however many surfaces had grown one.
+    /// most obviously over `onMessage`, which is wired here, once, to whichever
+    /// ``DirectMessageRouter`` the environment carries. Every surface that adopts this
+    /// modifier therefore offers the Message action, or none of them does; and the surface
+    /// that finishes the navigation is the one holding the router, not the one that asked.
     ///
     /// `presence` is passed down rather than observed inside the sheet so the sheet
     /// cannot become a second source of truth for who is online — the row's dot and the

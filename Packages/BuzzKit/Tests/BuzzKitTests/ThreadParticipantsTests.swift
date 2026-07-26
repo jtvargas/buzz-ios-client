@@ -121,6 +121,41 @@ struct ThreadParticipantsTests {
         #expect(Array(participants) == repliers.prefix(previewLimit).map(\.pubkey))
     }
 
+    @Test("breaks a same-second tie by pubkey, including at the limit that drops a face")
+    func sameSecondTiesBreakByPubkey() async throws {
+        let database = TempDatabase()
+        defer { database.remove() }
+        let store = try database.open()
+        let opener = try Fixture()
+        // Five people whose replies all carry the *same* `created_at`. Nostr timestamps are
+        // whole seconds, so this is not a contrivance: five clients answering a message in
+        // the same second is one busy thread. With nothing but `first_at` to order by, which
+        // face is leftmost — and, at the cap, which is dropped — would be SQLite's grouping
+        // order, so the strip would reshuffle between two reads of an unchanged database.
+        let repliers = try (0 ..< 5).map { _ in try Fixture() }
+        let sorted = repliers.map(\.pubkey).sorted()
+
+        let root = try opener.message("root", at: 1000)
+        var batch = [root]
+        for replier in repliers {
+            batch.append(try reply(replier, to: root, at: 1001))
+        }
+        _ = try await store.ingest(batch: batch, phase: .backfill)
+
+        // Asked for more than there are: the whole set, in pubkey order.
+        let all = try #require(try store.threadParticipants(for: [root.id], limit: 10)[root.id])
+        #expect(Array(all) == sorted)
+
+        // And at the cap the *decision* the tie-break makes: the last pubkey is the one
+        // dropped, deterministically, rather than whichever row the grouping happened to
+        // hand back last.
+        let capped = try #require(
+            try store.threadParticipants(for: [root.id], limit: previewLimit)[root.id]
+        )
+        #expect(Array(capped) == Array(sorted.prefix(previewLimit)))
+        #expect(!capped.contains(sorted[previewLimit]))
+    }
+
     @Test("drops a deleted reply's author, matching the reply tally's authority")
     func deletedReplyDropsItsAuthor() async throws {
         let database = TempDatabase()

@@ -25,6 +25,10 @@ struct ChannelTimelineView: View {
     private let store: BuzzEventStore
     private let engine: SyncEngine
     private let selfPubkey: String?
+    /// The peer this conversation was opened with, when it was reached by opening a direct
+    /// message rather than from the sidebar. Only ever consulted while the roster has
+    /// nothing to say — see ``EntityNames/conversation(for:knownPeer:)``.
+    private let knownPeer: String?
 
     /// Reserved for the top-of-history sentinel. Constant, and present whenever an
     /// older page may exist: a spinner that appears and disappears is itself a content
@@ -32,12 +36,19 @@ struct ChannelTimelineView: View {
     /// per page loaded.
     private static let topSentinelHeight: CGFloat = 44
 
-    init(channel: ChannelListRow, store: BuzzEventStore, engine: SyncEngine, selfPubkey: String?) {
+    init(
+        channel: ChannelListRow,
+        store: BuzzEventStore,
+        engine: SyncEngine,
+        selfPubkey: String?,
+        knownPeer: String? = nil
+    ) {
         self.channel = channel
         channelID = channel.id
         self.store = store
         self.engine = engine
         self.selfPubkey = selfPubkey
+        self.knownPeer = knownPeer
         let presenceStore = engine.presenceStore
         _model = State(initialValue: ChannelTimelineModel(
             channel: channel.id,
@@ -115,8 +126,12 @@ struct ChannelTimelineView: View {
     /// end of a two-member roster. Computed rather than captured in `init` because the
     /// resolver arrives from the environment — and because capturing it there is what let
     /// a DM read as its group name and an unnamed channel render its whole group id (§4).
+    ///
+    /// `knownPeer` covers exactly one gap: a DM opened seconds ago whose membership has not
+    /// been projected yet, where the roster cannot classify the conversation and the header
+    /// would otherwise read `Untitled conversation`. The roster wins the moment it lands.
     private var conversation: ConversationIdentity {
-        names.conversation(for: channel)
+        names.conversation(for: channel, knownPeer: knownPeer)
     }
 
     // MARK: - List

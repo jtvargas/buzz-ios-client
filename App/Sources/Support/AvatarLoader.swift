@@ -8,11 +8,13 @@ import UIKit
 /// burst of rows asking for the same artwork while scrolling shares one fetch and one
 /// decode rather than starting a request each.
 ///
-/// The actor is only a *coordinator*. The two expensive things happen off it:
+/// The actor is only a *coordinator*. Every expensive step happens off it:
 ///
-/// - Fetch and decode run in ``fetch(_:thumbnail:pixelSize:session:)``, a `nonisolated`
-///   `async` function, so Swift hops it to the concurrent executor (SE-0338) instead of
-///   holding this actor for the length of a network round trip and an ImageIO decode.
+/// - Fetching, parsing a `data:` URI, and decoding all run inside
+///   ``resolve(_:thumbnail:pixelSize:session:)``, a `nonisolated` `async` function, so
+///   Swift hops it to the concurrent executor (SE-0338) instead of holding this actor for
+///   the length of a network round trip, a percent-decode of the whole payload, and an
+///   ImageIO or Core Graphics raster.
 /// - Cache *hits* never reach the actor at all — see ``cachedImage(for:pixelSize:)``.
 actor AvatarLoader {
     static let shared = AvatarLoader()
@@ -56,7 +58,11 @@ actor AvatarLoader {
     /// What one attempt produced: an image, or the reason there is not one.
     enum Outcome: Sendable {
         case image(UIImage)
-        case failed(AvatarFailureCache.Reason)
+        /// No image, and the URL that actually produced that answer — which for relay
+        /// media is the *thumbnail* whenever one was tried. Carried so the failure is
+        /// remembered against the thing that failed rather than against the original it
+        /// was derived from, which is fetched at other sizes and may be perfectly good.
+        case failed(AvatarFailureCache.Reason, url: URL)
 
         /// The image, if there is one. Failures are filed by whichever caller started the
         /// attempt, so a caller that merely joined one in flight needs only this.
@@ -81,31 +87,48 @@ actor AvatarLoader {
     /// fetched and decoded once even under concurrent callers, and `nil` when there is no
     /// image to be had.
     func image(for url: URL, pixelSize: CGFloat) async -> UIImage? {
+        // Resolved once and threaded through: for a `data:` URI this digests the payload,
+        // and the two questions below and the cache key all want the same answer.
         let identity = Self.identity(of: url)
         let key = Self.cacheKey(identity: identity, pixelSize: pixelSize)
         if let cached = cache.image(forKey: key) { return cached }
+
+        // Derived here rather than inside the attempt because the negative cache is keyed
+        // by attempted URL, so knowing which URLs this request would try is what makes the
+        // suppression question answerable.
+        let thumbnail = RelayMediaURL.thumbnail(for: url, pixelSize: pixelSize)
         // A source that just failed is not asked for again until its entry ages out, so a
         // row scrolling in and out of a list cannot turn one 404 into a request per pass.
-        if failures.isSuppressed(identity) { return nil }
+        if isSuppressed(identity, thumbnail: thumbnail) { return nil }
 
-        // `data:` URIs carry their own bytes: no session, and no in-flight entry either,
-        // since the decode does not suspend and this actor already serialises, so a second
-        // caller cannot arrive mid-decode — it arrives to a populated cache.
-        if let dataURI = DataURI(url: url) {
-            return apply(Self.decode(dataURI, pixelSize: pixelSize), identity: identity, key: key)
-        }
-
+        // One entry per (source, size), which a `data:` URI needs as much as a fetch does:
+        // its parse and raster now happen off this actor, so there is a suspension point
+        // for a second caller to arrive in rather than a serialised decode they queue
+        // behind.
         if let existing = inFlight[key] { return await existing.value.succeeded }
 
         let session = session
-        let thumbnail = RelayMediaURL.thumbnail(for: url, pixelSize: pixelSize)
         let task = Task<Outcome, Never> {
-            await Self.fetch(url, thumbnail: thumbnail, pixelSize: pixelSize, session: session)
+            await Self.resolve(url, thumbnail: thumbnail, pixelSize: pixelSize, session: session)
         }
         inFlight[key] = task
         let outcome = await task.value
         inFlight[key] = nil
-        return apply(outcome, identity: identity, key: key)
+        return apply(outcome, key: key)
+    }
+
+    /// Whether a request should be skipped because a URL it would attempt has just failed.
+    ///
+    /// Both candidates are consulted, because either can be the one that failed: a
+    /// thumbnail that answered with a non-image body suppresses the sizes that would fetch
+    /// *that thumbnail*, and leaves the original askable at a size where the thumbnail
+    /// would never be derived at all.
+    ///
+    /// The original arrives already identified — see ``image(for:pixelSize:)`` — while a
+    /// thumbnail is always relay `https://` media, whose identity is its own URL string.
+    private func isSuppressed(_ identity: String, thumbnail: URL?) -> Bool {
+        if let thumbnail, failures.isSuppressed(Self.identity(of: thumbnail)) { return true }
+        return failures.isSuppressed(identity)
     }
 
     /// Forgets every remembered failure, so suppressed sources are retried on their next
@@ -114,14 +137,15 @@ actor AvatarLoader {
         failures.removeAll()
     }
 
-    /// Files an outcome: cache the image, or remember the failure.
-    private func apply(_ outcome: Outcome, identity: String, key: String) -> UIImage? {
+    /// Files an outcome: cache the image, or remember the failure against the URL that
+    /// produced it.
+    private func apply(_ outcome: Outcome, key: String) -> UIImage? {
         switch outcome {
         case let .image(image):
             cache.insert(image, forKey: key)
             return image
-        case let .failed(reason):
-            failures.record(identity, reason: reason)
+        case let .failed(reason, url):
+            failures.record(Self.identity(of: url), reason: reason)
             return nil
         }
     }
@@ -139,9 +163,28 @@ extension AvatarLoader {
     /// collision-free in practice, and stable across launches.
     nonisolated static func identity(of url: URL) -> String {
         guard url.scheme?.lowercased() == "data" else { return url.absoluteString }
-        let digest = SHA256.hash(data: Data(url.absoluteString.utf8))
-        return "data:" + digest.map { String(format: "%02x", $0) }.joined()
+        return "data:" + hexadecimal(SHA256.hash(data: Data(url.absoluteString.utf8)))
     }
+
+    /// Lowercase hexadecimal for a digest, written out as one pass over its bytes.
+    ///
+    /// `map { String(format: "%02x", $0) }.joined()` is the idiomatic spelling and is
+    /// measurably the expensive half of ``identity(of:)`` — thirty-two `String(format:)`
+    /// calls, each parsing a format string and allocating, then an array and a join, for
+    /// ~0.2 ms regardless of how large the payload being digested was. This runs on the
+    /// main actor inside a view's `body` (``cachedImage(for:pixelSize:)``) on every pass
+    /// for a `data:` avatar that is not in the cache, so it is worth not spending.
+    private nonisolated static func hexadecimal(_ digest: SHA256.Digest) -> String {
+        var text = ""
+        text.reserveCapacity(SHA256.Digest.byteCount * 2)
+        for byte in digest {
+            text.append(Self.hexDigits[Int(byte >> 4)])
+            text.append(Self.hexDigits[Int(byte & 0x0F)])
+        }
+        return text
+    }
+
+    private nonisolated static let hexDigits: [Character] = Array("0123456789abcdef")
 
     /// The cache key for one source at one target size, so the same artwork at 34 pt and
     /// at 96 pt caches as two entries rather than colliding into one.
@@ -151,6 +194,36 @@ extension AvatarLoader {
 
     nonisolated static func cacheKey(identity: String, pixelSize: CGFloat) -> String {
         "\(identity)|\(Int(pixelSize.rounded()))"
+    }
+}
+
+// MARK: - Resolving
+
+extension AvatarLoader {
+    /// The image `url` resolves to: a `data:` URI's own payload, or a fetch of the relay's
+    /// thumbnail falling back to the original.
+    ///
+    /// `nonisolated` *and* `async`, so a call from the actor hops to the concurrent
+    /// executor (SE-0338) rather than running on the loader. That is what the `data:`
+    /// branch needs as much as the network one: ``DataURI/init(url:)`` percent-decodes or
+    /// base64-decodes every byte of a payload that may run to
+    /// ``DataURI/maximumEncodedByteCount``, and the decode after it is an ImageIO or Core
+    /// Graphics raster. Both are bounded, neither is cheap, and on the actor either one is
+    /// a head-of-line block for every other avatar on screen.
+    nonisolated static func resolve(
+        _ url: URL,
+        thumbnail: URL?,
+        pixelSize: CGFloat,
+        session: URLSession
+    ) async -> Outcome {
+        if let dataURI = DataURI(url: url) {
+            guard let image = decode(dataURI, pixelSize: pixelSize) else {
+                // The URI *is* the source, so it is also the URL the failure belongs to.
+                return .failed(.undecodable, url: url)
+            }
+            return .image(image)
+        }
+        return await fetch(url, thumbnail: thumbnail, pixelSize: pixelSize, session: session)
     }
 }
 
@@ -173,7 +246,10 @@ extension AvatarLoader {
             // Blobs uploaded before the relay generated thumbnails have none, so a missing
             // thumbnail falls through to the original. Only this case does, and only here:
             // the original is fetched directly, never re-derived, so there is no loop.
-            case .failed(.notFound): break
+            // Nothing is filed for it either — the outcome returned below is what gets
+            // remembered, and a thumbnail 404 on the way to a good original is not a
+            // failure of anything.
+            case .failed(.notFound, _): break
             case .image, .failed: return outcome
             }
         }
@@ -186,16 +262,16 @@ extension AvatarLoader {
         session: URLSession
     ) async -> Outcome {
         guard let (data, response) = try? await session.data(from: url) else {
-            return .failed(.transport)
+            return .failed(.transport, url: url)
         }
         if let http = response as? HTTPURLResponse, !(200 ... 299).contains(http.statusCode) {
             // Only "gone" is treated as settled. A 5xx or a 403 gets the short transport
             // lifetime, because both plausibly change without the blob changing.
             let isGone = http.statusCode == 404 || http.statusCode == 410
-            return .failed(isGone ? .notFound : .transport)
+            return .failed(isGone ? .notFound : .transport, url: url)
         }
         guard let image = downsample(data, maxPixelSize: pixelSize) else {
-            return .failed(.undecodable)
+            return .failed(.undecodable, url: url)
         }
         return .image(image)
     }
@@ -210,15 +286,16 @@ extension AvatarLoader {
     /// `image/svg+xml` — which ImageIO cannot read at all, since it ships no SVG decoder.
     /// A raster mediatype whose bytes turn out to be XML is retried as SVG, because a
     /// mislabelled payload is likelier than a raster ImageIO genuinely cannot open.
-    nonisolated static func decode(_ dataURI: DataURI, pixelSize: CGFloat) -> Outcome {
-        let decoded: UIImage? = if dataURI.isSVG {
-            SVGAvatarRenderer.image(svg: dataURI.data, pixelSize: pixelSize)
-        } else {
-            downsample(dataURI.data, maxPixelSize: pixelSize)
-                ?? mislabelledSVG(dataURI.data, pixelSize: pixelSize)
+    ///
+    /// `nil` for a payload nothing here can read. Deliberately not an ``Outcome``: a
+    /// decoder has no opinion about *which URL* failed, and that is the whole content of
+    /// the failure case — ``resolve(_:thumbnail:pixelSize:session:)`` adds it.
+    nonisolated static func decode(_ dataURI: DataURI, pixelSize: CGFloat) -> UIImage? {
+        if dataURI.isSVG {
+            return SVGAvatarRenderer.image(svg: dataURI.data, pixelSize: pixelSize)
         }
-        guard let decoded else { return .failed(.undecodable) }
-        return .image(decoded)
+        return downsample(dataURI.data, maxPixelSize: pixelSize)
+            ?? mislabelledSVG(dataURI.data, pixelSize: pixelSize)
     }
 
     /// The last resort for a payload whose mediatype claims a raster ImageIO could not

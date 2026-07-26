@@ -41,7 +41,7 @@ struct TimelineRowView: View {
     /// `private` is file-scoped.
     @Environment(\.entityNames) var names
     @Environment(\.openURL) private var openURL
-    @State private var suppressNextRowTap = false
+    @State private var arbitration = RowTapArbitration()
 
     /// The avatar's point size, and so the width the content column is indented by, at
     /// this reader's text size. Scaled against `.subheadline` — the name beside it — so
@@ -98,7 +98,11 @@ struct TimelineRowView: View {
                         },
                         onReact: { emoji in
                             performControlAction { onReact(emoji) }
-                        }
+                        },
+                        // The palette *opening* is the event to arbitrate, not the emoji
+                        // chosen from it: the tap that opens it is the same tap the row
+                        // would read as "open the thread".
+                        onOpenPalette: { claimTap() }
                     )
                 }
                 if row.hasThread, let onOpenThread {
@@ -112,7 +116,9 @@ struct TimelineRowView: View {
                     )
                 }
                 if case let .failed(reason) = row.delivery {
-                    RetryStrip(reason: reason) { onRetry(row.id) }
+                    RetryStrip(reason: reason) {
+                        performControlAction { onRetry(row.id) }
+                    }
                 }
             }
         }
@@ -131,7 +137,7 @@ struct TimelineRowView: View {
         // Mark their gesture before handing the URL back to the app environment so
         // opening a link never also pushes the message's thread.
         .environment(\.openURL, OpenURLAction { url in
-            suppressRowTapBriefly()
+            claimTap()
             openURL(url)
             return .handled
         })
@@ -166,14 +172,29 @@ struct TimelineRowView: View {
     // MARK: - Tap arbitration
 
     /// Opens the thread on the *next* main-actor turn, so any control the same tap also
-    /// landed on — a link, a reaction chip, the reply preview, the avatar, the name —
-    /// has already set the suppression flag by the time this runs. Adding the two
-    /// identity controls therefore needed no new arbitration: they go through
-    /// ``performControlAction(_:)`` like every other control on the row.
+    /// landed on has already claimed it by the time this runs.
+    ///
+    /// The controls that claim a tap, and how each one does it:
+    ///
+    /// - the avatar and the sender's name, the reaction chips, and the reply preview are
+    ///   `Button`s whose actions run through ``performControlAction(_:)``;
+    /// - a link inside the message body claims it in the `OpenURLAction` below, which is
+    ///   the only hook a tappable run of `AttributedString` offers;
+    /// - the failed-send strip's Retry claims it the same way the chips do — its closure
+    ///   used to be passed straight through, so retrying a send that is not in the store
+    ///   also pushed a thread for it;
+    /// - the add-reaction pill is a `Menu`, which has *no* about-to-open hook at all, so
+    ///   ``AddReactionButton`` carries a `simultaneousGesture` tap instead. That composes
+    ///   with the menu's own recogniser rather than replacing it, so the palette still
+    ///   opens; and it is effective exactly where the problem is, because the tap it
+    ///   observes is the same touch-up the row's own tap gesture completes on.
+    ///
+    /// Anything added to the row that is a control has to join that list. There is no
+    /// mechanism here that notices one by itself.
     private func scheduleRowTap() {
         guard !row.isDeleted, let onOpenThread else { return }
         DispatchQueue.main.async {
-            guard !suppressNextRowTap else { return }
+            guard !arbitration.suppressesRowTap() else { return }
             onOpenThread()
         }
     }
@@ -181,15 +202,15 @@ struct TimelineRowView: View {
     /// Internal for the same reason ``avatarSize`` is: the avatar and the name are
     /// controls, and they live in the identity file.
     func performControlAction(_ action: () -> Void) {
-        suppressRowTapBriefly()
+        claimTap()
         action()
     }
 
-    private func suppressRowTapBriefly() {
-        suppressNextRowTap = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-            suppressNextRowTap = false
-        }
+    /// Claims the current tap without running anything, for a control whose action is not
+    /// this row's to run — the add-reaction pill, where the thing being opened is a menu
+    /// and the emoji it eventually reports is a separate event.
+    func claimTap() {
+        arbitration.controlDidAct()
     }
 
     // MARK: - Content
@@ -266,5 +287,37 @@ struct TimelineRowView: View {
                 Label("Delete", systemImage: "trash")
             }
         }
+    }
+}
+
+// MARK: - Tap arbitration
+
+/// Whether a tap that has already landed on one of a message row's own controls should
+/// also be allowed to open the row's thread.
+///
+/// A deadline rather than a flag with a timer behind it. Both express "for a moment after a
+/// control acts", but a flag needs a second scheduled block to clear it, and two controls
+/// acting inside the same window then leave one block clearing a suppression the other had
+/// just set. A deadline has nothing to keep in step — and it makes the rule a value, so the
+/// ordering it exists to enforce is unit-tested instead of eyeballed on a device.
+struct RowTapArbitration {
+    /// How long a control's action keeps the row's own tap from firing.
+    ///
+    /// One main-actor turn would be enough for the gestures that complete together, which
+    /// is the common case; a tenth of a second also covers a control whose action lands a
+    /// frame or two late, and is far short of the interval between two deliberate taps.
+    static let window: TimeInterval = 0.1
+
+    private var suppressedUntil: Date?
+
+    /// Records that a control on the row has just handled this tap.
+    mutating func controlDidAct(now: Date = .now) {
+        suppressedUntil = now.addingTimeInterval(Self.window)
+    }
+
+    /// Whether the row's deferred tap should be dropped.
+    func suppressesRowTap(now: Date = .now) -> Bool {
+        guard let suppressedUntil else { return false }
+        return suppressedUntil > now
     }
 }

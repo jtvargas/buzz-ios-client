@@ -127,6 +127,37 @@ extension AvatarLoaderTests {
         #expect(await loader.image(for: url, pixelSize: 108) == nil)
         #expect(StubAvatarProtocol.requestedPaths(host: host) == afterFirst)
     }
+
+    @Test("a bad thumbnail is remembered as the thumbnail, not as the blob it came from")
+    func failureIsKeyedToTheURLAttempted() async throws {
+        let host = "bad-thumb" + StubAvatarProtocol.hostSuffix
+        StubAvatarProtocol.register(
+            host: host,
+            responses: [
+                // The thumbnail answers with a body no decoder can read; the original is a
+                // perfectly good image.
+                Self.thumbnailPath: Data(#"{"error":"conversion failed"}"#.utf8),
+                Self.originalPath: AvatarRenderingTests.pngData(size: 512),
+            ]
+        )
+        let loader = Self.makeLoader()
+        let url = Self.url(host: "bad-thumb")
+
+        #expect(await loader.image(for: url, pixelSize: 108) == nil)
+        #expect(StubAvatarProtocol.requestedPaths(host: host) == [Self.thumbnailPath])
+
+        // At a size *above* the thumbnail's own resolution the thumbnail is never derived,
+        // so nothing about it can be a reason to skip the original. Keyed to the original
+        // instead, one bad thumbnail suppressed a good blob at every size for ten minutes.
+        let large = await loader.image(for: url, pixelSize: 400)
+        #expect(large != nil)
+        #expect(StubAvatarProtocol.requestedPaths(host: host) == [Self.thumbnailPath, Self.originalPath])
+
+        // The storm this suppression exists to stop is still stopped: at a size that *would*
+        // use the thumbnail, the request is skipped rather than repeated.
+        #expect(await loader.image(for: url, pixelSize: 108) == nil)
+        #expect(StubAvatarProtocol.requestedPaths(host: host) == [Self.thumbnailPath, Self.originalPath])
+    }
 }
 
 // MARK: - Data URIs
@@ -156,33 +187,63 @@ extension AvatarLoaderTests {
     func decodesRasterAndRejectsGarbage() throws {
         let png = AvatarRenderingTests.pngData(size: 256).base64EncodedString()
         let raster = try #require(DataURI(string: "data:image/png;base64,\(png)"))
-        guard case let .image(image) = AvatarLoader.decode(raster, pixelSize: 108) else {
-            Issue.record("a real PNG data URI should decode")
-            return
-        }
+        let image = try #require(AvatarLoader.decode(raster, pixelSize: 108))
         #expect(image.size == CGSize(width: 108, height: 108))
 
         let svg = try #require(DataURI(string: AvatarSourceTests.ownerAvatar))
-        guard case .image = AvatarLoader.decode(svg, pixelSize: 108) else {
-            Issue.record("the owner's SVG avatar should render")
-            return
-        }
+        #expect(AvatarLoader.decode(svg, pixelSize: 108) != nil)
 
         // A mediatype that lies about raster bytes still renders, because the payload
         // sniffs as XML.
         let mislabelled = try #require(DataURI(string: "data:image/png,%3Csvg%20viewBox%3D" +
             "%220%200%208%208%22%3E%3Crect%20width%3D%228%22%20height%3D%228%22%20" +
             "fill%3D%22%23000%22%2F%3E%3C%2Fsvg%3E"))
-        guard case .image = AvatarLoader.decode(mislabelled, pixelSize: 32) else {
-            Issue.record("a mislabelled SVG payload should still render")
-            return
-        }
+        #expect(AvatarLoader.decode(mislabelled, pixelSize: 32) != nil)
 
+        // Eight bytes of 'A' are not an image and do not sniff as XML.
         let broken = try #require(DataURI(string: "data:image/png;base64,QUFBQUFBQUE="))
-        guard case .failed(.undecodable) = AvatarLoader.decode(broken, pixelSize: 108) else {
-            Issue.record("eight bytes of 'A' are not an image and do not sniff as XML")
+        #expect(AvatarLoader.decode(broken, pixelSize: 108) == nil)
+    }
+
+    @Test("a data URI resolves through the same off-actor path a fetch does")
+    func resolvesDataURIWithoutASession() async throws {
+        let host = "resolve-inline" + StubAvatarProtocol.hostSuffix
+        StubAvatarProtocol.register(host: host, responses: [:])
+        let url = try #require(URL(string: AvatarSourceTests.ownerAvatar))
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [StubAvatarProtocol.self]
+
+        // One entry point for both kinds of source, and it is `nonisolated async` — which is
+        // what keeps a four-megabyte URI's percent-decode and raster off the loader, where it
+        // was a head-of-line block for every other avatar on screen.
+        let outcome = await AvatarLoader.resolve(
+            url,
+            thumbnail: nil,
+            pixelSize: 108,
+            session: URLSession(configuration: configuration)
+        )
+        guard case let .image(image) = outcome else {
+            Issue.record("the owner's inline avatar should resolve to an image")
             return
         }
+        #expect(image.size == CGSize(width: 108, height: 108))
+        #expect(StubAvatarProtocol.requestedPaths(host: host).isEmpty)
+
+        // A payload nothing can read fails against the URI itself, which is the only URL
+        // there was to attempt.
+        let brokenURL = try #require(URL(string: "data:image/png;base64,QUFBQUFBQUE="))
+        let failure = await AvatarLoader.resolve(
+            brokenURL,
+            thumbnail: nil,
+            pixelSize: 108,
+            session: URLSession(configuration: configuration)
+        )
+        guard case let .failed(reason, url: attempted) = failure else {
+            Issue.record("expected a failure, got \(failure)")
+            return
+        }
+        #expect(reason == .undecodable)
+        #expect(attempted == brokenURL)
     }
 
     @Test("the XML sniff only fires for documents that open like one")

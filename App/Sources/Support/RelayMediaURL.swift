@@ -19,7 +19,15 @@ enum RelayMediaURL {
     /// JPEG. Aspect ratio is preserved, so this is the same "longest edge" quantity
     /// ``AvatarLoader/downsample(_:maxPixelSize:)`` asks ImageIO for, and a request at or
     /// below it is a downsample rather than an upscale. Every avatar the app draws today
-    /// fits: the largest is the 96-pt profile header, 288 px on a 3× screen.
+    /// fits: the largest is the 96-pt profile header, 288 px on a 3× screen, which
+    /// `AvatarSourceTests` pins to the two size constants rather than to this comment.
+    ///
+    /// The bound this compares against is the thumbnail's *declared* longest edge, not the
+    /// resolution of the blob behind it. So a source that is itself smaller than 320 px is
+    /// outside what the guard can reason about: whether its thumbnail is that same small
+    /// size or an upscale to 320 is the generator's business, and not something measured
+    /// here. Both answers are inside the same information the original carries, which is
+    /// why this is a note and not a second condition.
     static let thumbnailMaximumPixelSize: CGFloat = 320
 
     /// The thumbnail URL for `url`, or `nil` when `url` is not a relay media URL.
@@ -32,9 +40,14 @@ enum RelayMediaURL {
     /// from matching itself: the stem of `<hex>.thumb.jpg` is `<hex>.thumb`, which is not
     /// 64 hex characters, so there is no `…thumb.thumb.jpg` to derive.
     static func thumbnail(for url: URL) -> URL? {
-        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false),
-              let scheme = components.scheme?.lowercased(),
-              scheme == "http" || scheme == "https"
+        // The scheme is read off the URL *before* anything re-parses it. A `data:` URI is a
+        // URL too, and one carrying an inline avatar can be megabytes long, so building
+        // `URLComponents` from it merely to discover it has no `/media/` path would be work
+        // proportional to the whole payload — paid on the loader's actor, which is exactly
+        // where this pipeline is not allowed to spend anything.
+        guard let scheme = url.scheme?.lowercased(),
+              scheme == "http" || scheme == "https",
+              var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
         else { return nil }
 
         let path = components.path

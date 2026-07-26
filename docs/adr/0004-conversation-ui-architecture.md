@@ -36,8 +36,25 @@ conversation identity. Its fallback chain is fixed:
 > kind-0 profile display name → agent directory (kind 10100) name → NIP-05 username
 > (local part, or the domain for the `_` root form) → `npub1abcdefg…wxyz`
 
-A full 64-character key and a channel group id never render in ordinary UI. The single
-exception is the channel-details **Developer** section, which exists to be technical.
+A full 64-character key and a channel group id never render in ordinary UI. There are
+exactly two exceptions, both of them places whose purpose *is* the identifier:
+
+- the channel-details **Developer** section, which exists to be technical;
+- the **profile sheet's key row** (`ProfileSheetView`), which is the thing someone
+  opened that sheet to copy — a client that shows a person's key nowhere cannot hand it
+  to another client, and asking a reader to find it in a Developer section under a
+  channel is not the same affordance.
+
+Both are labelled, monospaced, and truncated in the middle so they read as technical
+values rather than as names. The profile sheet renders and copies the **`npub1…` form**,
+not the hex: hex is the protocol's spelling, npub is the one other Nostr clients accept,
+so a hex string would have been the wrong answer to the only question the row exists to
+answer. The truncation is display-only — the whole npub goes to the pasteboard.
+
+This is an exception for identifiers people are meant to exchange, and it does not
+weaken the rule anywhere else: a name, a channel title, a mention, and a sidebar row
+still never render a full identifier, and the fallback chain above remains the only way
+they are named.
 
 **2. One DM derivation.** `EntityNames.directPeer(in:)` — roster count exactly two
 *and* the local identity among them — is the only implementation of the product rule.

@@ -43,6 +43,33 @@ extension AvatarRasterTests {
             viewBox: CGRect(x: 0, y: 0, width: 8, height: 8),
             pixelSize: 0
         ) == nil)
+        #expect(SVGAvatarRenderer.Geometry(
+            viewBox: CGRect(x: CGFloat.nan, y: 0, width: 8, height: 8),
+            pixelSize: 108
+        ) == nil)
+
+        // And the boxes whose *derived* values are the non-finite ones, which the checks on
+        // the declared edges cannot see: every edge here is finite and positive, and the
+        // scale they divide into is not.
+        #expect(SVGAvatarRenderer.Geometry(
+            viewBox: CGRect(x: 0, y: 0, width: 1e-308, height: 1e-308),
+            pixelSize: 108
+        ) == nil)
+        #expect(SVGAvatarRenderer.Geometry(
+            viewBox: CGRect(x: 0, y: 0, width: 1e-308, height: 5e-324),
+            pixelSize: 108
+        ) == nil)
+    }
+
+    @Test("a subnormal viewBox resolves to nil rather than reaching the renderer")
+    func refusesSubnormalViewBox() {
+        // End to end, because the parse accepts this document — `1e-308` is finite and
+        // greater than zero, so it satisfies the viewBox grammar — and the geometry is the
+        // only thing between it and `UIGraphicsImageRenderer` being handed a CGSize of
+        // infinities.
+        let source = ##"<svg viewBox="0 0 1e-308 1e-308"><rect width="1" height="1" fill="#000"/></svg>"##
+        #expect(SVGAvatarDocument(data: Data(source.utf8)) != nil)
+        #expect(SVGAvatarRenderer.image(svg: Data(source.utf8), pixelSize: 108) == nil)
     }
 
     @Test("text-anchor moves the run across its own advance width")

@@ -35,10 +35,16 @@ enum AvatarShape: Hashable, Sendable {
 ///
 /// Three rules, each load-bearing:
 ///
-/// 1. **State is keyed by identity.** The decoded image is stored *with* the request it
-///    answered, and drawn only when that request is still the current one. `@State`
-///    survives a view whose inputs change, so a row reused for another author would
-///    otherwise keep drawing the previous author's face until the new one arrived.
+/// 1. **State is keyed by identity — the *subject*, not the resolution.** The decoded
+///    image is stored with the request it answered, and drawn only while that request's
+///    URL is still the one this view is showing. `@State` survives a view whose inputs
+///    change, so a row reused for another author would otherwise keep drawing the previous
+///    author's face until the new one arrived. The target pixel size is deliberately *not*
+///    part of that test: it is derived from a `@ScaledMetric`, so one Dynamic Type step
+///    changes it for every avatar on screen at once, and refusing the bitmap in hand there
+///    blanked the whole list to monograms until a full round of decodes came back. A good
+///    bitmap of the right subject at the wrong resolution is drawn while the new size
+///    decodes — free, because the frame is fixed and the content is `.scaledToFill()`.
 /// 2. **A cached image is drawn in the first frame.** `.task` runs after the frame it is
 ///    attached to, so state alone always costs one frame of monogram. The synchronous
 ///    cache peek in ``body`` closes that gap for artwork already in memory, which while
@@ -91,13 +97,17 @@ struct AvatarView: View {
     }
 
     /// The identity of one load: a change in either field means a fresh decode.
-    private struct Request: Equatable {
+    ///
+    /// Internal rather than private, with ``Resolved``, so ``drawn(resolved:request:cached:)``
+    /// can be exercised without a view host — the ordering it encodes is the whole
+    /// no-flicker contract.
+    struct Request: Equatable {
         let url: URL?
         let pixelSize: CGFloat
     }
 
     /// A decoded image together with the request it answered.
-    private struct Resolved {
+    struct Resolved {
         let request: Request
         let image: UIImage
     }
@@ -108,16 +118,46 @@ struct AvatarView: View {
 
     /// The image to draw right now, or `nil` for the monogram.
     ///
-    /// Resolved state wins, but only for the *current* request — a stale one belongs to a
-    /// subject this view is no longer showing. Otherwise the loader's cache is consulted
-    /// synchronously, which is a pure read of a thread-safe cache and cannot itself
-    /// invalidate the view: if it hits, the artwork is drawn a frame earlier than `.task`
-    /// could manage; if it misses, the monogram shows and `.task` fills it in.
+    /// Three sources, in falling order of exactness, and the ordering is the whole logic:
+    ///
+    /// 1. resolved state for this exact request — the common case while nothing changes;
+    /// 2. the loader's cache at the current pixel size, read synchronously. That is a pure
+    ///    read of a thread-safe cache and cannot itself invalidate the view: if it hits,
+    ///    the artwork is drawn a frame earlier than `.task` could manage;
+    /// 3. resolved state for the *same subject at another resolution*, which is what a
+    ///    Dynamic Type change leaves behind. Redrawing it costs nothing — the frame is
+    ///    fixed and the content is `.scaledToFill()` — and it is the difference between a
+    ///    text-size change re-rendering the list and blanking it to monograms first.
+    ///
+    /// A resolved image for a *different* URL is never drawn at any point in that chain: it
+    /// belongs to a subject this view is no longer showing, which is the one thing the
+    /// identity check exists to refuse.
     private var displayedImage: UIImage? {
-        let request = request
-        if let resolved, resolved.request == request { return resolved.image }
+        Self.drawn(resolved: resolved, request: request) { url, pixelSize in
+            loader.cachedImage(for: url, pixelSize: pixelSize)
+        }
+    }
+
+    /// The rule behind ``displayedImage``, as a pure function of the three inputs.
+    ///
+    /// `cached` is a closure rather than a value because it must not be consulted when
+    /// resolved state already answers exactly — for a `data:` avatar that lookup digests
+    /// the whole URI, on the main actor, inside `body`.
+    ///
+    /// `nonisolated` because it is a pure function of its arguments: a `View`'s conformance
+    /// puts the type on the main actor, which this rule has no need of and which would
+    /// otherwise make `cached` a value the caller has to send across an isolation boundary.
+    nonisolated static func drawn(
+        resolved: Resolved?,
+        request: Request,
+        cached: (URL, CGFloat) -> UIImage?
+    ) -> UIImage? {
         guard let url = request.url else { return nil }
-        return loader.cachedImage(for: url, pixelSize: request.pixelSize)
+        let sameSubject = resolved.flatMap { $0.request.url == url ? $0 : nil }
+        if let sameSubject, sameSubject.request.pixelSize == request.pixelSize {
+            return sameSubject.image
+        }
+        return cached(url, request.pixelSize) ?? sameSubject?.image
     }
 
     private func load() async {
