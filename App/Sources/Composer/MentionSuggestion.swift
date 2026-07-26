@@ -14,6 +14,17 @@ enum MentionKind: Character, Hashable, Sendable, CaseIterable {
 
     /// The character that opens this kind of token.
     var trigger: Character { rawValue }
+
+    /// The kind a single UTF-16 unit opens, or `nil` if it opens nothing.
+    ///
+    /// Detection scans UTF-16 units, because that is the coordinate space UIKit's text
+    /// system reports ranges and selections in. Going through ``rawValue`` keeps the
+    /// trigger characters defined in exactly one place; a lone surrogate is no trigger,
+    /// since every trigger is ASCII.
+    init?(utf16Unit unit: unichar) {
+        guard let scalar = UnicodeScalar(unit) else { return nil }
+        self.init(rawValue: Character(scalar))
+    }
 }
 
 /// One row the suggestion panel can show, and everything the insertion path needs
