@@ -25,9 +25,10 @@ import SwiftUI
 ///
 /// A conversation's heading is chrome, not content: it must not scroll away with the
 /// messages, and it must not be compressed by something else's layout. A navigation-bar
-/// item is compressed — that is the "unreadable bubble" the header used to be. The first
-/// item of the scroll content would scroll away. So it is attached with
-/// `safeAreaBar(edge: .top)`, the mirror of the composer's own attachment: it stays put,
+/// item is compressed — that is the "unreadable bubble" the header used to be, and it is why
+/// the surfaces hide the system bar and ``ConversationHeaderRow`` draws the back button
+/// itself. The first item of the scroll content would scroll away. So the header is attached
+/// with `safeAreaBar(edge: .top)`, the mirror of the composer's own attachment: it stays put,
 /// and by the same documented behaviour the bottom bar relies on — a safe-area inset plus
 /// "the edge effect of any scroll views affected by the inset safe area" — it insets the
 /// *scrollable* content, so the oldest message is reachable rather than stranded under it.
@@ -98,6 +99,10 @@ struct ConversationScaffold<Content: View, Header: View, Bar: View, Accessory: V
                 .padding(.bottom, barHeight + 6)
         }
         .releasesKeyboardWhenLeavingScreen(then: onLeavingScreen)
+        // Both surfaces hide the system navigation bar so the header can be one row of
+        // capsules, and a hidden bar stops UIKit's pop gesture recognising — measured, and
+        // invisible in the recogniser's own properties. This puts the swipe back.
+        .conversationBackSwipe()
     }
 
     private var scroll: some View {
@@ -143,14 +148,11 @@ struct ConversationScaffold<Content: View, Header: View, Bar: View, Accessory: V
                 position.scrollTo(edge: .bottom)
             }
         }
-        // Leading-aligned by the bar itself rather than by a `Spacer` in the header, so
-        // the pill keeps its content width and only the pill is tappable. The inset is the
-        // message row's own, which is what puts the heading on the same vertical line as
-        // the avatars and the day separators beneath it.
-        .safeAreaBar(edge: .top, alignment: .leading) {
+        // No alignment or inset of its own: the header is a full-width row that owns its
+        // margins, because the trailing capsule has to reach the trailing edge while the
+        // pill hugs its content.
+        .safeAreaBar(edge: .top) {
             header
-                .padding(.horizontal, MessageRowMetrics.rowLeading)
-                .padding(.vertical, 4)
         }
         .safeAreaBar(edge: .bottom) {
             bar

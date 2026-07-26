@@ -86,7 +86,7 @@ struct ChannelTimelineView: View {
         ) {
             list
         } header: {
-            headerPill
+            header
         } bar: {
             // One bottom bar, not two insets: stacked safe-area insets place the
             // last-applied one closest to the screen edge, which would put the typing
@@ -99,11 +99,11 @@ struct ChannelTimelineView: View {
             accessory
         }
         .overlay { emptyState }
-        // An empty inline title, and no item of our own: the bar is here for the back
-        // chevron and the swipe-back gesture that comes with it, and the conversation's
-        // name is in the surface's own chrome where it has room to be read.
-        .navigationTitle("")
-        .navigationBarTitleDisplayMode(.inline)
+        // The system bar is hidden and ``ConversationHeaderRow`` takes its place, back
+        // chevron included — a 44pt bar cannot hold the two-line heading the owner asked
+        // for at back-button level. The swipe-back gesture belongs to the navigation stack
+        // rather than to the bar and survives this; that is measured, not assumed.
+        .toolbar(.hidden, for: .navigationBar)
         .sheet(isPresented: $showsChannelDetails) {
             ChannelDetailsView(
                 channel: channel,
@@ -236,26 +236,30 @@ struct ChannelTimelineView: View {
         }
     }
 
-    /// The header: a left-aligned glass pill carrying the conversation's name with its
-    /// member count beneath, opening the details sheet on tap (§4).
+    /// The header: the back chevron, a glass pill carrying the conversation's name with its
+    /// member count beneath, and the trailing glyph group (§4).
     ///
-    /// It sits in the scaffold's top bar rather than in the navigation bar, which is what
-    /// gives it the width to be read — see ``ConversationHeaderPill``. The dropdown arrow
-    /// is gone: a sheet is not a menu, so a chevron promising one was the wrong
-    /// affordance. What tells a reader this is a control is the same pressed dim the row's
-    /// avatar and name use.
-    private var headerPill: some View {
-        // Resolved once for the pill's two lines and its label, rather than three times
+    /// The pill opens the details sheet on tap. The dropdown arrow is gone: a sheet is not a
+    /// menu, so a chevron promising one was the wrong affordance. What tells a reader this is
+    /// a control is the same pressed dim the row's avatar and name use.
+    private var header: some View {
+        // Resolved once for the pill's two lines and its label, rather than four times
         // through the directory on every pass.
         let identity = conversation
-        return Button {
-            showsChannelDetails = true
-        } label: {
-            ConversationHeaderPill(title: identity.title, subtitle: subtitle(for: identity))
+        return ConversationHeaderRow {
+            Button {
+                showsChannelDetails = true
+            } label: {
+                ConversationHeaderPill(
+                    symbol: ConversationHeaderPill.symbol(for: identity.kind),
+                    title: identity.title,
+                    subtitle: subtitle(for: identity)
+                )
+            }
+            .buttonStyle(PressFeedbackButtonStyle())
+            .accessibilityLabel(identity.title)
+            .accessibilityHint("Double tap to show conversation details")
         }
-        .buttonStyle(PressFeedbackButtonStyle())
-        .accessibilityLabel(identity.title)
-        .accessibilityHint("Double tap to show conversation details")
     }
 
     /// The header's second line: a channel's member count, or a direct peer's own quiet
