@@ -11,6 +11,12 @@ import Observation
 /// `store.thread(root:)` returns them. The observation re-reads the whole thread on
 /// every relevant commit, so a live reply, a withdrawal, or a `pending → sent`
 /// transition updates in place rather than appending a duplicate.
+///
+/// The thread reads its own rows synchronously in `init` for the same reason the
+/// channel timeline does: the bottom anchor is resolved once, against the first
+/// layout, so it must have the real content height by then. It shares the channel's
+/// tail freeze and day grouping too — a reply arriving while someone reads a long
+/// thread moves their place exactly as a channel message does.
 @MainActor
 @Observable
 final class ThreadModel {
@@ -19,7 +25,12 @@ final class ThreadModel {
     /// The channel the thread lives in, for the reply's `h` scope and send routing.
     let channel: String
 
+    /// The rows to render: the whole thread, or everything up to the frozen boundary
+    /// while the reader is away from the bottom.
     private(set) var rows: [TimelineRow] = []
+    /// ``rows`` with day separators interleaved, computed once per rows change. The
+    /// separator above the thread's own opener is suppressed — see ``items(for:root:)``.
+    private(set) var items: [ConversationItem] = []
     /// Surviving reaction groups per row, re-read on the same observation as `rows`.
     private(set) var reactionGroups: [String: [ReactionGroup]] = [:]
     /// The users each row mentions, keyed by message id, re-read on the same
@@ -38,11 +49,41 @@ final class ThreadModel {
     /// ceiling); the view shows it and the draft text is preserved.
     var sendError: String?
 
+    // MARK: - Scroll position
+
+    /// Whether the newest reply is in view. Written by ``ConversationScaffold`` from
+    /// scroll geometry; leaving the bottom freezes the rendered tail so an arriving
+    /// reply cannot move the reader's place, and returning releases it.
+    var isAtBottom = true {
+        didSet {
+            guard isAtBottom != oldValue else { return }
+            if isAtBottom { tail.release() } else { tail.freeze(at: rows.last) }
+            rebuild()
+        }
+    }
+
+    /// How many replies the frozen tail is holding back.
+    private(set) var heldBackCount = 0
+
+    /// Bumped to ask the scaffold to scroll to the newest reply.
+    private(set) var jumpToken = 0
+
+    /// Releases the frozen tail and asks the view to scroll to the newest reply.
+    func jumpToLatest() {
+        isAtBottom = true
+        jumpToken += 1
+    }
+
     private let store: BuzzEventStore
     private let sender: any MessageSending
     private let opener: any ThreadOpening
     /// The local identity's hex pubkey, for own-reaction highlighting and delete.
     let selfPubkey: String?
+
+    /// Every row the thread holds, ascending, whether or not it is being rendered.
+    private var loaded: [TimelineRow] = []
+    /// The boundary behind which arrivals are held while the reader reads.
+    private var tail = TimelineTail()
 
     init(
         root: String,
@@ -63,6 +104,17 @@ final class ThreadModel {
             store: store,
             selfPubkey: selfPubkey
         )
+        // Whatever the store already holds, before the first layout. A local read; the
+        // relay fetch and the observation both still run and merge on top.
+        prime()
+    }
+
+    /// Reads the thread and its per-row reactions and mentions synchronously, so the
+    /// scroll view's initial bottom anchor resolves against real content.
+    private func prime() {
+        let ids = apply(fetchThread())
+        applyReactions(fetchReactions(for: ids))
+        applyMentions(fetchMentions(for: ids))
     }
 
     // MARK: - Open + observe
@@ -72,12 +124,11 @@ final class ThreadModel {
     /// with SwiftUI's `.task`.
     ///
     /// Observation and the one-shot fetch run concurrently — the fetch never gates
-    /// the first render. Gating it did: the thread laid out empty and only filled
-    /// after a relay round-trip, so ``ThreadView``'s `.defaultScrollAnchor(.bottom)`
-    /// anchored against empty content and left a gap under the newest message. Read
-    /// first, the observation's initial emission renders the opener (and any already
-    /// ingested replies) on the first frame — exactly as the channel timeline does —
-    /// and the fetch's replies merge in live as they land.
+    /// the first render. Gating it did: the thread laid out empty and only filled after
+    /// a relay round-trip, so the scaffold's bottom anchor resolved against empty
+    /// content and left a gap under the newest message. `init` now reads the store
+    /// before any of this, so even the observation's first emission is not the thread's
+    /// first content; the fetch's replies merge in live as they land.
     ///
     /// The one-shot fetch still pulls replies that live fan-out may not have
     /// delivered; the observation re-reads on the commit that ingest raises, so no
@@ -118,9 +169,33 @@ final class ThreadModel {
 
     @discardableResult
     private func apply(_ thread: [TimelineRow]) -> [String] {
-        rows = thread
+        loaded = thread
+        rebuild()
         hasLoaded = true
         return thread.map(\.id)
+    }
+
+    /// Re-derives the rendered rows and their grouped items from the loaded thread.
+    private func rebuild() {
+        let split = tail.split(loaded)
+        rows = split.rendered
+        heldBackCount = split.heldBack
+        items = Self.items(for: split.rendered, root: root)
+    }
+
+    /// The thread's rendered items, with the separator above its own opener removed.
+    ///
+    /// A thread starts at its opener — the reader arrived by tapping it — so a `Today`
+    /// hairline above the very first row labels a boundary that is not there. Only the
+    /// leading separator is dropped, and only when the opener really is the first row:
+    /// a reply that somehow predates its root (relay clock skew) leaves a genuine day
+    /// boundary in place.
+    static func items(for rows: [TimelineRow], root: String) -> [ConversationItem] {
+        let grouped = ConversationGrouping.items(for: rows)
+        guard case .day? = grouped.first,
+              grouped.dropFirst().first?.message?.id == root
+        else { return grouped }
+        return Array(grouped.dropFirst())
     }
 
     // MARK: - Reply
@@ -135,6 +210,8 @@ final class ThreadModel {
         guard !text.isEmpty else { return }
         mentionDraft = MentionDraft()
         sendError = nil
+        // Your own reply always brings you down to it.
+        jumpToLatest()
 
         let channel = self.channel
         let root = self.root

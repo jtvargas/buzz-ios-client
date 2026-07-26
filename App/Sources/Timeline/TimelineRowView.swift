@@ -2,10 +2,23 @@ import BuzzKit
 import SwiftUI
 import UIKit
 
-/// One timeline message: author, relative time, content (markdown with a plain
+/// One timeline message, in Slack's hierarchy: a rounded-square avatar, the author's
+/// name in bold with the time beside it, then the content (markdown with a plain
 /// fallback, or a "message deleted" placeholder), reaction chips, a "N replies"
 /// affordance, and the delivery treatment — `.pending` dimmed, `.failed` carrying a
 /// tap-to-retry strip, `.sent` plain.
+///
+/// # Where the name and the time come from
+///
+/// The name, artwork, and monogram are resolved through the injected
+/// ``EntityNames``, not from the row's own joined profile columns, so one person reads
+/// identically here, in the sidebar, and inside a mention — and a name that lands
+/// after the message did updates every surface at once. The row's own `authorName`
+/// stays as the fallback for someone the directory has never seen (a member who left).
+///
+/// The timestamp is a ``MessageTimestampView`` leaf: it, and nothing else in the row,
+/// observes the shared 15-second clock, so an ageing `3 min ago` re-evaluates one
+/// `Text` instead of the message.
 ///
 /// A long-press menu offers a quick-reaction palette and Copy, plus Retry/Delete on
 /// an own pending or failed row. The same row renders in the channel timeline and
@@ -13,6 +26,7 @@ import UIKit
 /// message can be opened, and omitted inside the thread it already shows.
 struct TimelineRowView: View {
     @Environment(\.channelNameMap) private var channelNameMap
+    @Environment(\.entityNames) private var names
     @Environment(\.openURL) private var openURL
     @State private var suppressNextRowTap = false
 
@@ -39,11 +53,15 @@ struct TimelineRowView: View {
     /// Open this message's thread; absent when already inside a thread.
     var onOpenThread: (() -> Void)?
 
+    /// The avatar's point size — also the width the content column is indented by, so
+    /// every row's text starts on the same vertical line.
+    private static let avatarSize: CGFloat = 36
+
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
             avatar
             VStack(alignment: .leading, spacing: 4) {
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: 2) {
                     header
                     content
                 }
@@ -77,6 +95,9 @@ struct TimelineRowView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .opacity(row.delivery == .pending ? 0.5 : 1)
+        // Both animations are scoped to a value on *this* row, never ambient: a
+        // pending→sent handover fades, and nothing here can catch the enclosing list
+        // inserting a row into a bottom-anchored scroll view.
         .animation(.default, value: row.delivery)
         .animation(.default, value: isAuthorOnline)
         .contentShape(.rect)
@@ -97,7 +118,7 @@ struct TimelineRowView: View {
         .contextMenu {
             menuItems
         } preview: {
-            MessagePreview(row: row, bodyText: bodyText, resolver: resolver)
+            MessagePreview(row: row, authorName: authorName, bodyText: bodyText, resolver: resolver)
         }
     }
 
@@ -121,29 +142,57 @@ struct TimelineRowView: View {
         }
     }
 
-    /// The author's avatar with a presence badge — the downsampled artwork (or a
-    /// monogram) and a green dot at its corner when the author is online. The badge
-    /// carries the presence signal VoiceOver reads through the row's accessibility
-    /// value, so the avatar itself stays decorative.
-    private var avatar: some View {
-        AvatarView(url: authorPictureURL, seed: row.pubkey, monogram: authorInitial, size: 36)
-            .overlay(alignment: .bottomTrailing) {
-                if isAuthorOnline {
-                    Circle()
-                        .fill(Color.green)
-                        .frame(width: 11, height: 11)
-                        .overlay(Circle().strokeBorder(Color(.systemBackground), lineWidth: 2))
-                }
-            }
+    // MARK: - Identity
+
+    /// The author's human-readable name: the directory's answer first, so it matches
+    /// every other surface, then the profile name the row itself carries for an
+    /// identity the directory has no entry for. `nil` when nobody knows one.
+    private var authorHumanName: String? {
+        if let resolved = names.humanName(for: row.pubkey) { return resolved }
+        guard let joined = row.authorName, !joined.isEmpty else { return nil }
+        return joined
     }
 
+    /// The name to render — never a raw key: a short `npub1abcdefg…wxyz` is the floor.
+    private var authorName: String {
+        authorHumanName ?? names.shortIdentifier(for: row.pubkey)
+    }
+
+    /// Up to two initials for the monogram, always taken from the name actually shown
+    /// so the two cannot disagree.
+    private var authorInitials: String {
+        EntityNames.initials(from: authorHumanName)
+    }
+
+    /// The directory's artwork, falling back to whatever the message's own joined
+    /// profile row carried.
     private var authorPictureURL: URL? {
+        if let resolved = names.picture(for: row.pubkey) { return resolved }
         guard let picture = row.authorPicture, !picture.isEmpty else { return nil }
         return URL(string: picture)
     }
 
-    private var authorInitial: String {
-        row.displayName.first.map { String($0).uppercased() } ?? "#"
+    /// The author's avatar with a presence badge — Slack's rounded square (the shape
+    /// ``AvatarView`` already defaults to), downsampled artwork or a monogram, and a
+    /// green dot at its corner when the author is online. The frame is fixed before
+    /// the artwork exists, so a picture arriving never moves a row. The badge carries
+    /// the presence signal VoiceOver reads through the row's accessibility value, so
+    /// the avatar itself stays decorative.
+    private var avatar: some View {
+        AvatarView(
+            url: authorPictureURL,
+            seed: row.pubkey,
+            monogram: authorInitials,
+            size: Self.avatarSize
+        )
+        .overlay(alignment: .bottomTrailing) {
+            if isAuthorOnline {
+                Circle()
+                    .fill(Color.green)
+                    .frame(width: 11, height: 11)
+                    .overlay(Circle().strokeBorder(Color(.systemBackground), lineWidth: 2))
+            }
+        }
     }
 
     /// The status VoiceOver announces after the message: presence, whether it was
@@ -152,21 +201,23 @@ struct TimelineRowView: View {
         MessageAccessibility.status(isOnline: isAuthorOnline, isEdited: row.isEdited, delivery: row.delivery)
     }
 
+    /// Name in bold with the time immediately beside it, Slack's arrangement — the
+    /// time reads as part of the attribution rather than as a right-aligned column.
     private var header: some View {
         HStack(spacing: 6) {
-            Text(row.displayName)
-                .font(.subheadline.weight(.semibold))
+            Text(authorName)
+                .font(.subheadline.weight(.bold))
+                .foregroundStyle(.primary)
                 .lineLimit(1)
+            MessageTimestampView(date: row.date)
+                .fixedSize()
             if row.isReply {
                 Image(systemName: "arrowshape.turn.up.left")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .accessibilityLabel("Reply")
             }
-            Spacer(minLength: 4)
-            Text(row.date, format: .relative(presentation: .numeric))
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            Spacer(minLength: 0)
         }
     }
 
@@ -228,131 +279,5 @@ struct TimelineRowView: View {
                 Label("Delete", systemImage: "trash")
             }
         }
-    }
-}
-
-/// A tight preview for the long-press menu: the author and message content sized to
-/// their content. Supplying it makes the lift a compact rounded card instead of the
-/// default full-width row snapshot, which read as a large square bubble.
-private struct MessagePreview: View {
-    let row: TimelineRow
-    let bodyText: String
-    let resolver: MessageMentionResolver
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(row.displayName)
-                .font(.subheadline.weight(.semibold))
-            if row.isDeleted {
-                Text("message deleted")
-                    .font(.body)
-                    .italic()
-                    .foregroundStyle(.secondary)
-            } else {
-                RichTextView(text: bodyText, resolver: resolver)
-            }
-        }
-        .padding(12)
-        .frame(maxWidth: 320, alignment: .leading)
-    }
-}
-
-/// The "N replies" affordance under a message that has a thread.
-private struct RepliesButton: View {
-    let count: Int
-    let lastReplyAt: Date?
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 8) {
-                Text(count == 1 ? "1 reply" : "\(count) replies")
-                    .fontWeight(.semibold)
-                    .foregroundStyle(.tint)
-                if let lastReplyAt {
-                    Text(ThreadSummaryDateFormatter.label(for: lastReplyAt))
-                        .foregroundStyle(.secondary)
-                }
-                Spacer(minLength: 0)
-            }
-            .font(.caption)
-            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-            .contentShape(.rect)
-        }
-        .buttonStyle(ThreadSummaryButtonStyle())
-        .accessibilityHint("Double tap to open the thread")
-    }
-}
-
-/// Slack's compact relative-day timestamp used beside the reply count.
-enum ThreadSummaryDateFormatter {
-    static func label(
-        for date: Date,
-        relativeTo now: Date = Date(),
-        calendar: Calendar = .autoupdatingCurrent,
-        locale: Locale = .autoupdatingCurrent
-    ) -> String {
-        let today = calendar.startOfDay(for: now)
-        let day = calendar.startOfDay(for: date)
-        let prefix: String
-        if day == today {
-            prefix = "Today"
-        } else if day == calendar.date(byAdding: .day, value: -1, to: today) {
-            prefix = "Yesterday"
-        } else {
-            let formatter = DateFormatter()
-            formatter.locale = locale
-            formatter.calendar = calendar
-            formatter.timeZone = calendar.timeZone
-            formatter.setLocalizedDateFormatFromTemplate("MMM d")
-            prefix = formatter.string(from: date)
-        }
-        let timeFormatter = DateFormatter()
-        timeFormatter.locale = locale
-        timeFormatter.calendar = calendar
-        timeFormatter.timeZone = calendar.timeZone
-        timeFormatter.dateStyle = .none
-        timeFormatter.timeStyle = .short
-        let time = timeFormatter.string(from: date)
-        return "\(prefix) at \(time)"
-    }
-}
-
-private struct ThreadSummaryButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .padding(.horizontal, 8)
-            .background(
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(Color.secondary.opacity(configuration.isPressed ? 0.12 : 0))
-            )
-            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
-    }
-}
-
-/// The "not delivered" strip on a failed send: the reason when the relay gave one,
-/// and a retry action that re-queues the message.
-private struct RetryStrip: View {
-    let reason: String?
-    let onRetry: () -> Void
-
-    var body: some View {
-        Button(action: onRetry) {
-            HStack(spacing: 6) {
-                Image(systemName: "exclamationmark.circle.fill")
-                Text(label)
-                    .font(.caption)
-            }
-            .foregroundStyle(.red)
-        }
-        .buttonStyle(.plain)
-        .accessibilityHint("Double tap to retry sending")
-    }
-
-    private var label: String {
-        if let reason, !reason.isEmpty {
-            return "Not delivered (\(reason)) — tap to retry"
-        }
-        return "Not delivered — tap to retry"
     }
 }

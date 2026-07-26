@@ -5,21 +5,32 @@ import NostrCore
 import Observation
 
 /// Drives ``ChannelTimelineView`` for one channel: a live head observation, keyset
-/// pagination of older history, and the send / retry calls.
+/// pagination of older history, the rendered tail's freeze while the reader is not at
+/// the bottom, and the send / retry calls.
 ///
 /// Rows are held ascending (oldest first) so the view can anchor to the bottom and
 /// render newest-last. The live observation re-reads the newest page on every
 /// relevant commit; older pages are loaded on demand and merged by id, so an edit,
 /// a deletion, or a `pending → sent` transition updates the *same* row in place
 /// rather than appearing twice.
+///
+/// Page one is read synchronously in `init` — see ``primeFirstPage()`` — so the first
+/// layout has real content to anchor against instead of an empty stack.
 @MainActor
 @Observable
 final class ChannelTimelineModel {
     let channel: String
 
-    /// The loaded messages, ascending by `(createdAt, id)` — the total order the
+    /// The messages to render, ascending by `(createdAt, id)` — the total order the
     /// keyset query pages on, so "newest" means the same thing here and in the DB.
+    /// The *rendered* set: while the reader is away from the bottom it stops at the
+    /// frozen boundary and later arrivals are counted in ``heldBackCount`` instead.
+    /// Pagination reads the full loaded set, never this.
     private(set) var rows: [TimelineRow] = []
+    /// ``rows`` with day separators interleaved — computed once per rows change
+    /// rather than per render pass, since a list touches its items several times in
+    /// one layout.
+    private(set) var items: [ConversationItem] = []
     /// Surviving reaction groups for each loaded row, keyed by message id. Re-read
     /// on the same observation as the rows, so a react, a withdrawal, or a peer's
     /// reaction updates the chips live without a second pipeline.
@@ -30,7 +41,7 @@ final class ChannelTimelineModel {
     private(set) var mentionRefs: [String: MentionRefList] = [:]
     private(set) var hasLoaded = false
     /// Whether an older page may still exist before the oldest loaded row.
-    private(set) var hasMoreOlder = true
+    private(set) var hasMoreOlder = false
     private(set) var isLoadingOlder = false
 
     /// The composer's wire text plus identity-bearing selected mention tokens.
@@ -44,13 +55,48 @@ final class ChannelTimelineModel {
     /// ceiling); the view shows it and the draft text is preserved.
     var sendError: String?
 
+    // MARK: - Scroll position
+
+    /// Whether the newest row is in view. Written by ``ConversationScaffold`` from
+    /// scroll geometry; leaving the bottom freezes the rendered tail so an arriving
+    /// message cannot move the reader's place, and returning releases it.
+    var isAtBottom = true {
+        didSet {
+            guard isAtBottom != oldValue else { return }
+            if isAtBottom { tail.release() } else { tail.freeze(at: rows.last) }
+            rebuild()
+        }
+    }
+
+    /// How many arrivals the frozen tail is holding back — the count behind the
+    /// "N new messages" affordance, and `0` whenever nothing is held.
+    private(set) var heldBackCount = 0
+
+    /// Bumped to ask the scaffold to scroll to the newest row: an own send, or the
+    /// reader tapping the "N new messages" pill.
+    private(set) var jumpToken = 0
+
+    /// Releases the frozen tail, renders everything loaded, and asks the view to
+    /// scroll to the newest row.
+    ///
+    /// The freeze is exactly the inverse of ``isAtBottom``, so setting that releases
+    /// it — asserted, not waited for. The scaffold's geometry callback confirms the
+    /// position a frame later and re-freezes if the scroll did not land.
+    func jumpToLatest() {
+        isAtBottom = true
+        jumpToken += 1
+    }
+
     /// The `before` cursor most recently handed to `store.timeline(before:)`. A
     /// test seam: it is exactly the keyset position paged from, proving pagination
     /// never falls back to offset paging (spec §Step 1 tests).
     private(set) var lastOlderCursor: TimelineCursor?
 
-    private let store: BuzzEventStore
-    private let sender: any MessageSending
+    /// Internal rather than private because the per-row reads and actions live in
+    /// `ChannelTimelineModel+Rows.swift`; Swift's `private` is file-scoped, and one
+    /// 470-line model file is worse than a two-file split with two collaborators.
+    let store: BuzzEventStore
+    let sender: any MessageSending
     private let typing: any EphemeralPublishing
     /// Marks the channel read as messages come into view (mark-on-view). `nil` in
     /// tests that do not exercise read state.
@@ -74,8 +120,16 @@ final class ChannelTimelineModel {
     /// Loaded rows keyed by id, so a re-read of the head merges into — rather than
     /// duplicates — rows an older page already holds.
     private var loaded: [String: TimelineRow] = [:]
-    /// The oldest loaded row's cursor, the basis of the next older page.
+    /// The oldest loaded row's cursor, the basis of the next older page. Tracks the
+    /// *full* loaded set, so a frozen tail never affects where pagination resumes.
     private var earliest: TimelineCursor?
+    /// The newest loaded row's `created_at`, whether or not it is being rendered.
+    private var latestLoadedAt: Int64 = 0
+    /// Set once an older page comes back short: history is exhausted before the
+    /// oldest loaded row, and no later head re-read may re-open it.
+    private var hasExhaustedOlder = false
+    /// The boundary behind which arrivals are held while the reader reads history.
+    private var tail = TimelineTail()
 
     /// The newest message `created_at` this view has already marked read, so a scroll
     /// back through older history (which never changes the newest row) re-marks
@@ -107,6 +161,20 @@ final class ChannelTimelineModel {
             store: store,
             selfPubkey: selfPubkey
         )
+        primeFirstPage()
+    }
+
+    /// Reads page one, its reactions, and its mentions synchronously, so the first
+    /// layout of the scroll view has the real content height to anchor against.
+    ///
+    /// Three local reads on the concurrent reader; no relay round trip, no `await`,
+    /// and nothing here can fail loudly — an unreadable store simply leaves the
+    /// surface in the state the observation will fill a moment later.
+    private func primeFirstPage() {
+        mergeHead(fetch(before: nil))
+        let ids = Array(loaded.keys)
+        applyReactions(fetchReactions(for: ids))
+        applyMentions(fetchMentions(for: ids))
     }
 
     // MARK: - Live observation
@@ -136,19 +204,20 @@ final class ChannelTimelineModel {
         }
     }
 
-    /// Marks the channel read up to the newest loaded message, once per advance —
-    /// mark-on-view. Fires the moment the channel opens (the first head snapshot) and
-    /// again whenever a newer message arrives while the view is up; a scroll back
-    /// through older history leaves the newest row unchanged, so it re-marks nothing
-    /// and never spams the outbox. Fire-and-forget so the observation loop never blocks
-    /// on the publish, and grow-only on the engine side so a redundant call is a no-op.
+    /// Marks the channel read up to the newest *loaded* message, once per advance —
+    /// mark-on-view. Fires the moment the channel opens and again whenever a newer
+    /// message arrives while the view is up; a scroll back through older history
+    /// leaves the newest row unchanged, so it re-marks nothing. The newest *loaded*
+    /// row rather than the newest rendered one: the frozen tail is a rendering
+    /// decision, and read state is a channel frontier shared with every other device.
+    ///
+    /// Fire-and-forget so the observation loop never blocks on the publish, and
+    /// grow-only on the engine side so a redundant call is a no-op.
     private func markReadIfNeeded() {
-        guard let readStateMarking,
-              let newest = rows.last?.createdAt,
-              newest > lastMarkedReadAt
-        else { return }
-        lastMarkedReadAt = newest
+        guard let readStateMarking, latestLoadedAt > lastMarkedReadAt else { return }
+        lastMarkedReadAt = latestLoadedAt
         let channel = self.channel
+        let newest = latestLoadedAt
         Task { await readStateMarking.markRead(channel: channel, upTo: newest) }
     }
 
@@ -162,14 +231,15 @@ final class ChannelTimelineModel {
     /// so the caller can re-read reactions for exactly what is on screen.
     @discardableResult
     private func mergeHead(_ head: [TimelineRow]) -> [String] {
-        let firstSnapshot = !hasLoaded
         for row in head { loaded[row.id] = row }
         rebuild()
         hasLoaded = true
-        // The head is the newest page; a full page means older history may exist.
-        // Decided only on the first snapshot — later head re-reads are new messages
-        // at the top, which never re-open the tail.
-        if firstSnapshot {
+        // A full head page means older history may exist. Re-derived on every head
+        // re-read, not only the first, because a channel opened before its backfill
+        // lands starts with a short head and must still offer pagination once the
+        // backfill fills it — but never re-opened once an older page came back short,
+        // the one durable proof that history is exhausted.
+        if !hasExhaustedOlder {
             hasMoreOlder = head.count >= pageSize
         }
         return Array(loaded.keys)
@@ -179,7 +249,9 @@ final class ChannelTimelineModel {
 
     /// Loads the page immediately older than the oldest loaded row, via the
     /// `(createdAt, id)` keyset cursor — never an offset. Idempotent while a load
-    /// is in flight and once history is exhausted.
+    /// is in flight and once history is exhausted, because the scaffold reports the
+    /// top threshold as a level rather than an edge and can report it repeatedly
+    /// across one load.
     func loadOlder() async {
         guard hasMoreOlder, !isLoadingOlder, let cursor = earliest else { return }
         isLoadingOlder = true
@@ -189,7 +261,10 @@ final class ChannelTimelineModel {
         let older = fetch(before: cursor)
         for row in older { loaded[row.id] = row }
         rebuild()
-        if older.count < pageSize { hasMoreOlder = false }
+        if older.count < pageSize {
+            hasExhaustedOlder = true
+            hasMoreOlder = false
+        }
         // Bring in the older rows' reactions and mentions immediately rather than
         // waiting on the next commit signal, so a scroll back never shows chip-less
         // or unresolved history.
@@ -198,11 +273,20 @@ final class ChannelTimelineModel {
         applyMentions(fetchMentions(for: ids))
     }
 
+    /// Re-derives everything downstream of the loaded set: the pagination cursor and
+    /// the read frontier from the *full* set, then the rendered rows and their
+    /// grouped items from whatever the tail lets through.
     private func rebuild() {
-        rows = loaded.values.sorted { lhs, rhs in
+        let ordered = loaded.values.sorted { lhs, rhs in
             lhs.createdAt != rhs.createdAt ? lhs.createdAt < rhs.createdAt : lhs.id < rhs.id
         }
-        earliest = rows.first.map(TimelineCursor.init(row:))
+        earliest = ordered.first.map(TimelineCursor.init(row:))
+        latestLoadedAt = ordered.last?.createdAt ?? 0
+
+        let split = tail.split(ordered)
+        rows = split.rendered
+        heldBackCount = split.heldBack
+        items = ConversationGrouping.items(for: split.rendered)
     }
 
     // MARK: - Send / retry
@@ -217,6 +301,9 @@ final class ChannelTimelineModel {
         guard !text.isEmpty else { return }
         mentionDraft = MentionDraft()
         sendError = nil
+        // Your own message always brings you down: nothing you just wrote may land
+        // behind a frozen tail where you cannot see it.
+        jumpToLatest()
 
         let channel = self.channel
         let sender = self.sender
@@ -284,86 +371,17 @@ final class ChannelTimelineModel {
             "Couldn't send that message."
         }
     }
-}
 
-// MARK: - Reactions & row actions
+    // MARK: - Applying reads
 
-extension ChannelTimelineModel {
-    /// The reaction groups to render under a row, empty when it has none.
-    func reactions(for id: String) -> [ReactionGroup] { reactionGroups[id] ?? [] }
-
-    /// Whether a row is the local identity's own send — the gate on the delete
-    /// affordance for a pending or failed row.
-    func isOwn(_ row: TimelineRow) -> Bool {
-        guard let selfPubkey else { return false }
-        return row.pubkey == selfPubkey
-    }
-
-    /// Reads reactions for `ids` off the main actor. `store` and `selfPubkey` are
-    /// immutable, so this is safe to call from the `nonisolated` observation loop.
-    nonisolated func fetchReactions(for ids: [String]) -> [String: [ReactionGroup]] {
-        (try? store.reactions(for: ids, selfPubkey: selfPubkey)) ?? [:]
-    }
+    // Both setters live here rather than beside their readers because `private(set)`
+    // is file-scoped: only this file may write them.
 
     func applyReactions(_ groups: [String: [ReactionGroup]]) {
         reactionGroups = groups
     }
 
-    /// The users a row mentions, empty when it mentions none — handed to the row's
-    /// resolver so `@`-tokens resolve from the message's own data.
-    func mentions(for id: String) -> [MentionRef] {
-        mentionRefs[id].map { Array($0) } ?? []
-    }
-
-    /// Reads mentions for `ids` off the main actor. `store` is immutable, so this is
-    /// safe to call from the `nonisolated` observation loop.
-    nonisolated func fetchMentions(for ids: [String]) -> [String: MentionRefList] {
-        (try? store.mentions(for: ids)) ?? [:]
-    }
-
     func applyMentions(_ mentions: [String: MentionRefList]) {
         mentionRefs = mentions
-    }
-
-    /// Sends a reaction on a message through the durable send path — an ordinary
-    /// persisted kind-7, not an ephemeral.
-    func react(_ emoji: String, on targetID: String) {
-        let channel = self.channel
-        let sender = self.sender
-        Task {
-            try? await sender.enqueue(
-                kind: .reaction,
-                content: emoji,
-                in: channel,
-                tags: OutboundTags.reaction(target: targetID),
-                maxContentBytes: OutboxPolicy.maxContentBytes
-            )
-        }
-    }
-
-    /// Toggles a chip: withdraws the local identity's own reaction (a kind-5 naming
-    /// it) when it is highlighted, otherwise adds that emoji.
-    func toggleReaction(_ group: ReactionGroup, on targetID: String) {
-        guard group.reactedBySelf, let reactionID = group.selfReactionID else {
-            react(group.emoji, on: targetID)
-            return
-        }
-        let channel = self.channel
-        let sender = self.sender
-        Task {
-            try? await sender.enqueue(
-                kind: .deletion,
-                content: "",
-                in: channel,
-                tags: OutboundTags.withdrawal(reactionID: reactionID),
-                maxContentBytes: OutboxPolicy.maxContentBytes
-            )
-        }
-    }
-
-    /// Drops an own pending or failed row — the context-menu "delete".
-    func delete(_ eventID: String) {
-        let sender = self.sender
-        Task { try? await sender.discard(eventID) }
     }
 }
