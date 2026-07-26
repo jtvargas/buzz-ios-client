@@ -33,8 +33,13 @@ final class ChannelTimelineModel {
     private(set) var hasMoreOlder = true
     private(set) var isLoadingOlder = false
 
-    /// The composer's text. Bound by the view; cleared optimistically on send.
-    var draft: String = ""
+    /// The composer's wire text plus identity-bearing selected mention tokens.
+    var mentionDraft = MentionDraft()
+    var draft: String {
+        get { mentionDraft.text }
+        set { mentionDraft = MentionDraft(text: newValue) }
+    }
+    let mentionAutocomplete: MentionAutocompleteModel
     /// Set when a send is refused before it leaves the device (over the 64 KiB
     /// ceiling); the view shows it and the draft text is preserved.
     var sendError: String?
@@ -97,6 +102,11 @@ final class ChannelTimelineModel {
         self.pageSize = pageSize
         self.typingThrottle = typingThrottle
         self.clock = clock
+        mentionAutocomplete = MentionAutocompleteModel(
+            channel: channel,
+            store: store,
+            selfPubkey: selfPubkey
+        )
     }
 
     // MARK: - Live observation
@@ -202,24 +212,31 @@ final class ChannelTimelineModel {
     /// outbox row commits, long before the relay's OK. An over-ceiling message
     /// throws before it is queued — the text is restored and surfaced.
     func send() {
-        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        let document = mentionDraft
+        let text = document.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
-        draft = ""
+        mentionDraft = MentionDraft()
         sendError = nil
 
         let channel = self.channel
         let sender = self.sender
+        let mentionPubkeys = document.mentionedPubkeys(sender: selfPubkey)
+        let selfPubkey = self.selfPubkey
         Task { [weak self] in
             do {
                 try await sender.enqueue(
                     kind: .channelMessage,
                     content: text,
                     in: channel,
-                    tags: [["h", channel]],
+                    tags: OutboundTags.message(
+                        channel: channel,
+                        mentioning: mentionPubkeys,
+                        sender: selfPubkey
+                    ),
                     maxContentBytes: OutboxPolicy.maxContentBytes
                 )
             } catch let error as OutboxError {
-                await self?.restore(draft: text, error: error)
+                self?.restore(document: document, error: error)
             } catch {
                 // A transient send failure leaves the row queued in the outbox for
                 // the next drain; nothing to surface and nothing to restore.
@@ -253,9 +270,9 @@ final class ChannelTimelineModel {
         Task { await typing.publishEphemeral(kind: .typing, content: "", tags: [["h", channel]]) }
     }
 
-    private func restore(draft text: String, error: OutboxError) {
+    private func restore(document: MentionDraft, error: OutboxError) {
         // Preserve whatever the user has since typed, only restoring if untouched.
-        if draft.isEmpty { draft = text }
+        if mentionDraft.text.isEmpty { mentionDraft = document }
         sendError = Self.describe(error)
     }
 

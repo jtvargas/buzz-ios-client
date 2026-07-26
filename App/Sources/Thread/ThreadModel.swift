@@ -27,8 +27,13 @@ final class ThreadModel {
     private(set) var mentionRefs: [String: MentionRefList] = [:]
     private(set) var hasLoaded = false
 
-    /// The reply composer's text. Cleared optimistically on send.
-    var draft: String = ""
+    /// The reply composer's wire text plus identity-bearing selected mentions.
+    var mentionDraft = MentionDraft()
+    var draft: String {
+        get { mentionDraft.text }
+        set { mentionDraft = MentionDraft(text: newValue) }
+    }
+    let mentionAutocomplete: MentionAutocompleteModel
     /// Set when a reply is refused before it leaves the device (over the 64 KiB
     /// ceiling); the view shows it and the draft text is preserved.
     var sendError: String?
@@ -53,6 +58,11 @@ final class ThreadModel {
         self.sender = sender
         self.opener = opener
         self.selfPubkey = selfPubkey
+        mentionAutocomplete = MentionAutocompleteModel(
+            channel: channel,
+            store: store,
+            selfPubkey: selfPubkey
+        )
     }
 
     // MARK: - Open + observe
@@ -120,33 +130,42 @@ final class ThreadModel {
     /// commits. An over-ceiling reply throws before it is queued — the text is
     /// restored and surfaced.
     func sendReply() {
-        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        let document = mentionDraft
+        let text = document.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
-        draft = ""
+        mentionDraft = MentionDraft()
         sendError = nil
 
         let channel = self.channel
         let root = self.root
         let sender = self.sender
+        let mentionPubkeys = document.mentionedPubkeys(sender: selfPubkey)
+        let selfPubkey = self.selfPubkey
         Task { [weak self] in
             do {
                 try await sender.enqueue(
                     kind: .channelMessage,
                     content: text,
                     in: channel,
-                    tags: OutboundTags.reply(channel: channel, root: root, parent: root),
+                    tags: OutboundTags.reply(
+                        channel: channel,
+                        root: root,
+                        parent: root,
+                        mentioning: mentionPubkeys,
+                        sender: selfPubkey
+                    ),
                     maxContentBytes: OutboxPolicy.maxContentBytes
                 )
             } catch let error as OutboxError {
-                await self?.restore(draft: text, error: error)
+                self?.restore(document: document, error: error)
             } catch {
                 // A transient send failure leaves the reply queued for the next drain.
             }
         }
     }
 
-    private func restore(draft text: String, error: OutboxError) {
-        if draft.isEmpty { draft = text }
+    private func restore(document: MentionDraft, error: OutboxError) {
+        if mentionDraft.text.isEmpty { mentionDraft = document }
         sendError = Self.describe(error)
     }
 

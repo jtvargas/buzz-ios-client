@@ -26,6 +26,13 @@ extension SyncEngine {
         )
     }
 
+    /// The persisted Buzz agent directory. Unlike presence/profile live traffic,
+    /// this must not carry a recent `since`: an unchanged agent definition may be
+    /// older than the live window but is still required for autocomplete.
+    func agentDirectoryFilter() -> Filter {
+        Filter(kinds: [.agentProfile], limit: 100)
+    }
+
     /// The membership filter: relay-signed add/remove notifications scoped to the
     /// authenticated identity, as the relay requires for these p-gated kinds.
     func membershipFilter(selfPubkeyHex: String) -> Filter {

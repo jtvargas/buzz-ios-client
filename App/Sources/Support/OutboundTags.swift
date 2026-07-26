@@ -10,6 +10,15 @@ import NostrCore
 /// logic is unit-testable on its own, round-tripped through
 /// ``NostrCore/NostrEvent/threadReference``.
 enum OutboundTags {
+    /// A channel message's scope plus normalized mention identities.
+    static func message(
+        channel: String,
+        mentioning pubkeys: [String],
+        sender: String?
+    ) -> [[String]] {
+        addingMentions(pubkeys, sender: sender, to: [["h", channel]])
+    }
+
     /// NIP-10 marked `e` tags for a thread reply, plus the channel `h` scope.
     ///
     /// - A direct reply to the thread head (`parent == root`) carries a single
@@ -20,7 +29,13 @@ enum OutboundTags {
     /// The resolver (and the projector that reads it) take the last `reply` marker
     /// as the parent and the `root` marker as the root, so these two shapes place a
     /// reply in its thread identically to every other client.
-    static func reply(channel: String, root: String, parent: String) -> [[String]] {
+    static func reply(
+        channel: String,
+        root: String,
+        parent: String,
+        mentioning pubkeys: [String] = [],
+        sender: String? = nil
+    ) -> [[String]] {
         var tags: [[String]] = [["h", channel]]
         if parent == root {
             tags.append(["e", root, "", "reply"])
@@ -28,7 +43,7 @@ enum OutboundTags {
             tags.append(["e", root, "", "root"])
             tags.append(["e", parent, "", "reply"])
         }
-        return tags
+        return addingMentions(pubkeys, sender: sender, to: tags)
     }
 
     /// A NIP-25 reaction's tags: a single `e` referencing the target message. The
@@ -44,5 +59,22 @@ enum OutboundTags {
     /// authority (its own author) makes it take effect.
     static func withdrawal(reactionID: String) -> [[String]] {
         [["e", reactionID]]
+    }
+
+    private static func addingMentions(
+        _ pubkeys: [String],
+        sender: String?,
+        to base: [[String]]
+    ) -> [[String]] {
+        let sender = sender?.lowercased()
+        var seen = Set<String>()
+        var tags = base
+        for pubkey in pubkeys {
+            let normalized = pubkey.lowercased()
+            guard normalized != sender, seen.insert(normalized).inserted else { continue }
+            tags.append(["p", normalized])
+            if seen.count == 50 { break }
+        }
+        return tags
     }
 }
