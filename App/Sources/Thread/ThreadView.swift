@@ -28,7 +28,13 @@ struct ThreadView: View {
     }
 
     var body: some View {
-        ConversationScaffold(
+        // The thread is read here rather than in `init` (see `primeIfNeeded()`): a `body`
+        // runs before layout, so the bottom anchor still resolves against real content,
+        // while the view structs SwiftUI initialises and discards on every commit cost an
+        // allocation instead of three blocking store reads on the main actor.
+        model.primeIfNeeded()
+
+        return ConversationScaffold(
             // Hand-written rather than `$model.isAtBottom`, which would write the
             // model reference back into `State` on every scroll threshold crossing.
             isAtBottom: Binding(get: { model.isAtBottom }, set: { model.isAtBottom = $0 }),

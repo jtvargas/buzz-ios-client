@@ -160,6 +160,9 @@ func waitUntil(_ condition: @escaping @MainActor () async -> Bool) async {
 /// a yield only re-enqueues the spinning task on the cooperative main executor —
 /// it never gives the main thread back to libdispatch, so a yield-spin starves the
 /// very delivery the condition is waiting to observe and the wait never ends.
-private func parkBriefly() async {
+///
+/// Internal rather than private so a test asserting that something *does not* happen can
+/// give the work that would have done it a real chance to run first.
+func parkBriefly() async {
     try? await Task.sleep(for: .milliseconds(1))
 }

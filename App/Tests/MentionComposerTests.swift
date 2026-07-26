@@ -37,6 +37,11 @@ struct MentionComposerTests {
         #expect(mention.kind == .user)
         #expect(MentionDraft(text: "mail@test").trailingMention() == nil)
         #expect(MentionDraft(text: "done @ada  next").trailingMention() == nil)
+        // A tab ends a token exactly as a newline does. Both arrive from a hardware
+        // keyboard and from a paste, and a token that swallowed one would offer to
+        // complete a query spanning two fields of pasted text.
+        #expect(MentionDraft(text: "hey @ad\tmore").trailingMention() == nil)
+        #expect(MentionDraft(text: "hey @ad\t").trailingMention() == nil)
     }
 
     @Test("detects a trailing channel token and stops at a double space")
@@ -71,9 +76,93 @@ struct MentionComposerTests {
         #expect(reversed.kind == .user)
         #expect(reversed.query == "ad")
     }
+}
 
-    // MARK: - Insertion
+// MARK: - Suppression over inserted tokens
 
+/// An already-inserted token is never re-completed, and the test is a *range* test
+/// because both of the ways the old anchor-to-the-token's-start check was wrong were
+/// reachable — and selecting from either panel rewrote a finished token, silently
+/// swapping which person the message tags.
+///
+/// Its own extension for SwiftLint's type-body length, not because it is a separate
+/// concern from the insertion group below it.
+extension MentionComposerTests {
+    @Test("a trigger inside an inserted token never reopens completion")
+    func triggerInsideTokenIsNotACompletion() throws {
+        // A display name may itself contain a trigger. Anchoring suppression to a token's
+        // *start* left this one's inner `@` looking like a fresh token, so the panel
+        // offered to complete `Acme` — and selecting from it rewrote the whole token,
+        // silently changing which person the message tags.
+        var draft = MentionDraft(text: "hi @a")
+        draft.insert(candidate("Ada @Acme"), replacing: try #require(draft.trailingMention()).range)
+        #expect(draft.text == "hi @Ada @Acme ")
+        #expect(draft.trailingMention() == nil)
+
+        // The spaced spelling of the same name is stopped one rule earlier — a query may
+        // not *begin* with a space, which is what keeps `# Heading` a heading — so it is
+        // the unspaced form above that the range test is load-bearing for.
+        var spaced = MentionDraft(text: "hi @a")
+        spaced.insert(candidate("Ada @ Acme"), replacing: try #require(spaced.trailingMention()).range)
+        #expect(spaced.text == "hi @Ada @ Acme ")
+        #expect(spaced.trailingMention() == nil)
+
+        // And a channel whose name carries a `#`, where the inner trigger is followed by
+        // a word: the same defect on the reference side of the feature.
+        var reference = MentionDraft(text: "see #d")
+        reference.insert(
+            channel("design #2", id: "room-9"),
+            replacing: try #require(reference.trailingMention()).range
+        )
+        #expect(reference.text == "see #design #2 ")
+        #expect(reference.trailingMention() == nil)
+    }
+
+    @Test("one more typed word after a completed mention does not reopen it")
+    func typingPastATokenIsNotACompletion() throws {
+        var draft = MentionDraft(text: "hi @a")
+        draft.insert(candidate(), replacing: try #require(draft.trailingMention()).range)
+        #expect(draft.text == "hi @Ada Lovelace ")
+
+        // Suppression used to also require the text after the token to be whitespace, so
+        // the first word typed past a finished `@Ada Lovelace` re-opened the panel on the
+        // query `Ada Lovelace ships` — and selecting rewrote the finished token.
+        draft.replaceCharacters(
+            in: NSRange(location: (draft.text as NSString).length, length: 0),
+            with: "ships"
+        )
+        #expect(draft.text == "hi @Ada Lovelace ships")
+        #expect(draft.trailingMention() == nil)
+
+        // A *new* trigger after it still completes: suppression is about the token's own
+        // range, not about there being a token anywhere.
+        draft.replaceCharacters(
+            in: NSRange(location: (draft.text as NSString).length, length: 0),
+            with: " @bo"
+        )
+        let next = try #require(draft.trailingMention())
+        #expect(next.query == "bo")
+        #expect(next.kind == .user)
+    }
+
+    @Test("an insertion over an out-of-bounds range adds no token")
+    func outOfBoundsInsertionAddsNoToken() {
+        var draft = MentionDraft(text: "hi")
+        let caret = draft.insert(candidate(), replacing: NSRange(location: 99, length: 3))
+
+        // `replaceCharacters` refuses the range and leaves the text alone. Appending a
+        // token anyway would claim a label the text does not contain and — for a person —
+        // tag someone the message never names.
+        #expect(draft.text == "hi")
+        #expect(draft.tokens.isEmpty)
+        #expect(draft.mentionedPubkeys(sender: nil).isEmpty)
+        #expect(caret == 2)
+    }
+}
+
+// MARK: - Insertion, the live index, and the send path
+
+extension MentionComposerTests {
     @Test("insertion styles one identity and backspace removes the whole token")
     func atomicDeletion() throws {
         var draft = MentionDraft(text: "hello @ad")

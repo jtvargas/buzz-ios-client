@@ -169,15 +169,86 @@ struct EntityNamesTests {
         #expect(keyless.conversation(for: "dm-1").kind == .channel)
     }
 
-    @Test("an unnamed channel shows a short id, never its whole group id")
+    @Test("an unnamed channel reads as a human string, never any part of its group id")
     func unnamedChannel() {
         let id = "e2fb859e-3b29-408b-ae28-f9cd56c00af5"
         let resolver = names(entities: [], channels: [channel(id)])
         let conversation = resolver.conversation(for: id)
         #expect(conversation.kind == .channel)
-        #expect(conversation.title == "e2fb859e")
-        #expect(!conversation.title.contains(id))
-        #expect(resolver.channelName(for: id) == "e2fb859e")
+        // Eight characters of a group id is still a group id, and this one answer is the
+        // sidebar title, the conversation's nav title, the details title, and a thread's
+        // subtitle — most visibly for a DM group another client created with no metadata
+        // name, which rendered as `#e2fb859e` in all four.
+        #expect(conversation.title == "Untitled conversation")
+        #expect(!conversation.title.contains("e2fb859e"))
+        #expect(resolver.channelName(for: id) == "Untitled conversation")
+        // A whitespace-only metadata name is not a name either — it would render blank.
+        #expect(names(entities: [], channels: [channel(id, name: "   ")]).channelName(for: id)
+            == "Untitled conversation")
+        // A channel the resolver has never heard of resolves the same way, rather than
+        // echoing back part of the id it was asked about.
+        #expect(names(entities: []).channelName(for: id) == "Untitled conversation")
+    }
+
+    @Test("a mention gains the directory's own name as a second alias")
+    func aliasedMentionRefs() {
+        let resolver = names(entities: [
+            DirectoryEntity(pubkey: agent, agentName: "Jarvis", isAgent: true),
+            DirectoryEntity(pubkey: peer, profileName: "Ada"),
+        ])
+
+        // BuzzKit resolves a ref's name from the `profile` projection alone and falls back
+        // to eight characters of the key. The directory knows the agent's name, so both
+        // spellings register and a message's `@`-scan can match whichever was authored.
+        let merged = resolver.aliased([
+            MentionRef(pubkey: agent, displayName: String(agent.prefix(8))),
+            MentionRef(pubkey: peer, displayName: "Ada"),
+        ])
+        #expect(merged.map(\.displayName) == [String(agent.prefix(8)), "Ada", "Jarvis"])
+        // Originals first, so the store's authored `p`-tag order still wins a name
+        // collision; an alias that repeats a name already registered is dropped.
+        #expect(merged.prefix(2).map(\.pubkey) == [agent, peer])
+        #expect(resolver.aliased([]).isEmpty)
+    }
+
+    @Test("a profile-less mention resolves identically in the timeline and the sidebar")
+    func profilelessMentionResolvesOnEverySurface() throws {
+        let rows = [channel("general", name: "General")]
+        let resolver = names(
+            entities: [
+                DirectoryEntity(pubkey: me, profileName: "Me"),
+                DirectoryEntity(pubkey: agent, agentName: "Jarvis", isAgent: true),
+            ],
+            rosters: ["general": [me, agent, peer]],
+            channels: rows,
+            selfPubkey: me
+        )
+        // What the store hands over for an agent with no kind-0 profile: a "name" that is
+        // really a key prefix. The message itself was authored as `@Jarvis`.
+        let stored = [MentionRef(pubkey: agent, displayName: String(agent.prefix(8)))]
+
+        // Straight from those refs — what every surface used to build from — the authored
+        // token matches nothing and renders as plain text.
+        let unaliased = MessageMentionResolver(mentions: stored, channels: .empty, selfPubkey: me)
+        #expect(unaliased.mention(forName: "Jarvis") == nil)
+
+        // The resolver a timeline row builds, and the one the sidebar row carries, now go
+        // through the same ``EntityNames/aliased(_:)``.
+        let timeline = MessageMentionResolver(
+            mentions: resolver.aliased(stored), channels: .empty, selfPubkey: me
+        )
+        let sidebar = try #require(
+            SidebarContent.build(
+                channels: rows,
+                names: resolver,
+                channelNames: .empty,
+                mentions: { _ in stored }
+            ).sections.first?.rows.first?.previewResolver
+        )
+        #expect(timeline.mention(forName: "Jarvis")?.pubkey == agent)
+        #expect(sidebar.mention(forName: "Jarvis")?.pubkey == agent)
+        // Identical, not merely both non-nil: one aliasing means one answer everywhere.
+        #expect(timeline.identity == sidebar.identity)
     }
 
     @Test("secondary labels prefer NIP-05 and name an agent otherwise")

@@ -46,6 +46,7 @@ struct SidebarSectionsTests {
         isPrivate: Bool = false,
         lastMessageAt: Int64? = nil,
         author: String? = nil,
+        authorPubkey: String? = nil,
         snippet: String? = nil,
         unreadCount: Int = 0
     ) -> ChannelListRow {
@@ -59,6 +60,7 @@ struct SidebarSectionsTests {
             lastMessageID: lastMessageAt == nil ? nil : "msg-\(id)",
             lastMessageSnippet: snippet,
             lastMessageAuthor: author,
+            lastMessageAuthorPubkey: authorPubkey,
             unreadCount: unreadCount
         )
     }
@@ -274,30 +276,36 @@ extension SidebarSectionsTests {
 // MARK: - Names in the preview
 
 extension SidebarSectionsTests {
-    @Test("the preview's author prefix is never a raw key")
+    @Test("the preview's author prefix is never a raw key, and never a guess about one")
     func authorPrefixResolvesThroughTheDirectory() {
         let resolver = names(entities: [
             DirectoryEntity(pubkey: agent, agentName: "Jarvis", isAgent: true),
             DirectoryEntity(pubkey: peer, nip05: "ada@buzz.dev"),
         ])
 
-        // A display name the store already resolved passes through untouched.
-        #expect(SidebarContent.authorLabel("Ada Lovelace", names: resolver) == "Ada Lovelace")
-        // The raw-key fallback resolves through the directory, which reaches the agent
-        // name and the NIP-05 username a profile-only projection cannot.
-        #expect(SidebarContent.authorLabel(agent, names: resolver) == "Jarvis")
-        #expect(SidebarContent.authorLabel(peer, names: resolver) == "ada")
-        // Nothing known: a short npub, never the 64-character key.
-        let unknown = SidebarContent.authorLabel(other, names: resolver)
+        // The directory answers first, reaching the agent name and the NIP-05 username a
+        // profile-only projection cannot. `channelList` has no name for either, so the
+        // label it carries is the key.
+        #expect(SidebarContent.authorLabel(agent, pubkey: agent, names: resolver) == "Jarvis")
+        #expect(SidebarContent.authorLabel(peer, pubkey: peer, names: resolver) == "ada")
+        // A display name the store resolved for someone the directory has no entry for
+        // (a member who left) is the best name anyone has, so it passes through.
+        #expect(
+            SidebarContent.authorLabel("Ada Lovelace", pubkey: other, names: resolver)
+                == "Ada Lovelace"
+        )
+        // Nothing known anywhere: a short npub, never the 64-character key.
+        let unknown = SidebarContent.authorLabel(other, pubkey: other, names: resolver)
         #expect(unknown?.hasPrefix("npub1") == true)
         #expect(unknown?.contains(other) == false)
+        // Carrying the key is what makes "name or key?" an equality instead of a shape
+        // test. A display name that happens to be 64 hex characters was detected as a key
+        // and rendered as a plausible `npub1…` belonging to somebody else.
+        let hexName = String(repeating: "ab", count: 32)
+        #expect(SidebarContent.authorLabel(hexName, pubkey: other, names: resolver) == hexName)
         // No author to name at all.
-        #expect(SidebarContent.authorLabel(nil, names: resolver) == nil)
-        #expect(SidebarContent.authorLabel("   ", names: resolver) == nil)
-
-        #expect(SidebarContent.isHexKey(other))
-        #expect(SidebarContent.isHexKey("Ada Lovelace") == false)
-        #expect(SidebarContent.isHexKey(String(repeating: "z", count: 64)) == false)
+        #expect(SidebarContent.authorLabel(nil, pubkey: nil, names: resolver) == nil)
+        #expect(SidebarContent.authorLabel("   ", pubkey: nil, names: resolver) == nil)
     }
 
     @Test("a row carries a resolved title, author prefix, and roster with no view work left")
@@ -308,6 +316,7 @@ extension SidebarSectionsTests {
             isPrivate: true,
             lastMessageAt: 4_000,
             author: agent,
+            authorPubkey: agent,
             snippet: "shipping now",
             unreadCount: 1
         )]
@@ -342,26 +351,9 @@ extension SidebarSectionsTests {
         #expect(build(rows, names: resolver).sections[0].rows[0].snippet == nil)
     }
 
-    @Test("mention refs gain the directory's own name as a second alias")
-    func mentionRefsMergeDirectoryNames() {
-        let resolver = names(entities: [
-            DirectoryEntity(pubkey: agent, agentName: "Jarvis", isAgent: true),
-            DirectoryEntity(pubkey: peer, profileName: "Ada"),
-        ])
-
-        // BuzzKit fell back to `pubkey.prefix(8)`; the directory knows the agent's name,
-        // so both spellings register and the preview's `@`-scan can match either.
-        let merged = SidebarContent.mentionRefs(
-            [
-                MentionRef(pubkey: agent, displayName: String(agent.prefix(8))),
-                MentionRef(pubkey: peer, displayName: "Ada"),
-            ],
-            names: resolver
-        )
-        #expect(merged.map(\.displayName) == [String(agent.prefix(8)), "Ada", "Jarvis"])
-        // Originals come first, so the store's authored order still wins a collision.
-        #expect(merged.prefix(2).map(\.pubkey) == [agent, peer])
-    }
+    // The preview's mention aliasing is no longer the sidebar's own: it lives on
+    // ``EntityNames`` and is asserted there, along with the cross-surface agreement it
+    // exists for — see `EntityNamesTests.profilelessMentionResolvesOnEverySurface`.
 }
 
 // MARK: - Persisted expansion

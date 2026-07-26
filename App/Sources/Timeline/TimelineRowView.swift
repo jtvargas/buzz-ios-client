@@ -149,7 +149,12 @@ struct TimelineRowView: View {
     /// identity the directory has no entry for. `nil` when nobody knows one.
     private var authorHumanName: String? {
         if let resolved = names.humanName(for: row.pubkey) { return resolved }
-        guard let joined = row.authorName, !joined.isEmpty else { return nil }
+        // Trimmed, matching `DirectorySnapshot`'s own normaliser: a profile whose
+        // `display_name` is `"   "` is non-empty and passed straight through, rendering a
+        // blank bold name where a person's should be — and giving the monogram nothing to
+        // take initials from either.
+        guard let joined = row.authorName?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !joined.isEmpty else { return nil }
         return joined
     }
 
@@ -245,8 +250,18 @@ struct TimelineRowView: View {
 
     /// The per-message resolver: mentions from this row's own `p`-tag refs, channels
     /// from the app-wide injected map, self from the local identity.
+    ///
+    /// The refs go through ``EntityNames/aliased(_:)`` first. BuzzKit resolves a ref's name
+    /// from the `profile` projection alone and falls back to eight characters of the key,
+    /// so a mentioned user with no kind-0 profile rendered either a tinted key prefix or —
+    /// when the token was authored against an agent-directory or NIP-05 name — nothing at
+    /// all. The sidebar's preview goes through the same call, so all three surfaces agree.
     private var resolver: MessageMentionResolver {
-        MessageMentionResolver(mentions: mentions, channels: channelNameMap, selfPubkey: selfPubkey)
+        MessageMentionResolver(
+            mentions: names.aliased(mentions),
+            channels: channelNameMap,
+            selfPubkey: selfPubkey
+        )
     }
 
     /// The long-press menu: a quick-reaction palette and Copy on any live message,

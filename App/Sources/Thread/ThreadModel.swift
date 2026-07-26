@@ -12,11 +12,11 @@ import Observation
 /// every relevant commit, so a live reply, a withdrawal, or a `pending → sent`
 /// transition updates in place rather than appending a duplicate.
 ///
-/// The thread reads its own rows synchronously in `init` for the same reason the
-/// channel timeline does: the bottom anchor is resolved once, against the first
-/// layout, so it must have the real content height by then. It shares the channel's
-/// tail freeze and day grouping too — a reply arriving while someone reads a long
-/// thread moves their place exactly as a channel message does.
+/// The thread reads its own rows synchronously on the first `body` pass, for the same
+/// reason the channel timeline does — see ``primeIfNeeded()``: the bottom anchor is
+/// resolved once, against the first layout, so it must have the real content height by
+/// then. It shares the channel's tail freeze and day grouping too — a reply arriving
+/// while someone reads a long thread moves their place exactly as a channel message does.
 @MainActor
 @Observable
 final class ThreadModel {
@@ -57,7 +57,10 @@ final class ThreadModel {
     var isAtBottom = true {
         didSet {
             guard isAtBottom != oldValue else { return }
-            if isAtBottom { tail.release() } else { tail.freeze(at: rows.last) }
+            // `rows` is the whole thread here: leaving the bottom means the tail was
+            // released, so the rendered set and the loaded set are the same list, and it
+            // carries the boundary second's own membership.
+            if isAtBottom { tail.release() } else { tail.freeze(at: rows.last, among: rows) }
             rebuild()
         }
     }
@@ -85,6 +88,10 @@ final class ThreadModel {
     /// The boundary behind which arrivals are held while the reader reads.
     private var tail = TimelineTail()
 
+    /// Whether ``primeIfNeeded()`` has already read the thread. Not observable: nothing
+    /// reads it, and it is written from inside a `body`.
+    @ObservationIgnored private var hasPrimed = false
+
     init(
         root: String,
         channel: String,
@@ -104,14 +111,22 @@ final class ThreadModel {
             store: store,
             selfPubkey: selfPubkey
         )
-        // Whatever the store already holds, before the first layout. A local read; the
-        // relay fetch and the observation both still run and merge on top.
-        prime()
     }
 
-    /// Reads the thread and its per-row reactions and mentions synchronously, so the
-    /// scroll view's initial bottom anchor resolves against real content.
-    private func prime() {
+    /// Reads the thread and its per-row reactions and mentions synchronously — once, so
+    /// the scroll view's initial bottom anchor resolves against real content. Whatever
+    /// the store already holds; the relay fetch and the observation both still run and
+    /// merge on top.
+    ///
+    /// Called from the top of ``ThreadView``'s `body`, not from `init`, for the reason
+    /// ``ChannelTimelineModel/primeIfNeeded()`` records: `State(initialValue:)` evaluates
+    /// its argument on every re-initialisation of the view struct, so a pushed thread was
+    /// constructing a throwaway model — and running three blocking store reads on the
+    /// main actor — on every database commit. `body` still runs before layout, so the
+    /// pre-layout content guarantee is unchanged.
+    func primeIfNeeded() {
+        guard !hasPrimed else { return }
+        hasPrimed = true
         let ids = apply(fetchThread())
         applyReactions(fetchReactions(for: ids))
         applyMentions(fetchMentions(for: ids))
@@ -177,6 +192,14 @@ final class ThreadModel {
 
     /// Re-derives the rendered rows and their grouped items from the loaded thread.
     private func rebuild() {
+        // A thread opened before its own opener had landed had no row to freeze at, so a
+        // reader who left the bottom of it armed nothing — and `isAtBottom` has no
+        // `false → false` transition to recover on. The first content to appear while they
+        // are still away becomes the boundary: it renders, and later replies are held.
+        if !isAtBottom, !tail.isFrozen, let newest = loaded.last {
+            tail.freeze(at: newest, among: loaded)
+        }
+
         let split = tail.split(loaded)
         rows = split.rendered
         heldBackCount = split.heldBack
@@ -210,8 +233,6 @@ final class ThreadModel {
         guard !text.isEmpty else { return }
         mentionDraft = MentionDraft()
         sendError = nil
-        // Your own reply always brings you down to it.
-        jumpToLatest()
 
         let channel = self.channel
         let root = self.root
@@ -233,12 +254,25 @@ final class ThreadModel {
                     ),
                     maxContentBytes: OutboxPolicy.maxContentBytes
                 )
+                // Only once the reply is really queued: an over-ceiling reply throws
+                // before anything is enqueued, and a reader up the thread must not be
+                // yanked to the bottom for a reply that never left the device.
+                self?.jumpToLatestIfNeeded()
             } catch let error as OutboxError {
                 self?.restore(document: document, error: error)
             } catch {
                 // A transient send failure leaves the reply queued for the next drain.
             }
         }
+    }
+
+    /// Brings an own reply into view — but only when it would otherwise land somewhere
+    /// its author cannot see it. Already at the bottom with nothing held back, the author
+    /// is looking straight at where it will appear, and re-anchoring interrupts a scroll
+    /// in progress for no gain.
+    private func jumpToLatestIfNeeded() {
+        guard !isAtBottom || heldBackCount > 0 else { return }
+        jumpToLatest()
     }
 
     private func restore(document: MentionDraft, error: OutboxError) {

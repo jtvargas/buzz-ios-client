@@ -54,7 +54,14 @@ struct ChannelTimelineView: View {
     }
 
     var body: some View {
-        ConversationScaffold(
+        // Page one is read here rather than in `init` (see `primeIfNeeded()`): a `body`
+        // runs before layout, so the bottom anchor still resolves against real content,
+        // while a view struct SwiftUI initialises and discards — which is every one of
+        // them but the first, on every commit — costs an allocation instead of three
+        // blocking store reads on the main actor.
+        model.primeIfNeeded()
+
+        return ConversationScaffold(
             // A hand-written binding rather than `$model.isAtBottom`: a binding
             // projected through `State` of an observable class writes the reference
             // back into `State` on every set, which would invalidate this whole view
@@ -129,15 +136,19 @@ struct ChannelTimelineView: View {
         .dismissesSuggestionsOnScroll(model.mentionAutocomplete)
     }
 
-    /// The fixed slot at the top of history: always ``topSentinelHeight`` tall while
-    /// an older page may exist, with only the spinner's opacity tracking the load.
+    /// The fixed slot at the top of history: always ``topSentinelHeight`` tall, and
+    /// spinning, for exactly as long as an older page may exist.
+    ///
+    /// It stands for "there is more above", not for "a load is in flight". Binding its
+    /// opacity to `isLoadingOlder` looked like the honest thing and was in fact dead:
+    /// `loadOlder()` has no suspension point, so the flag is set and cleared inside one
+    /// MainActor turn and no frame is ever drawn with it `true`. The model keeps the flag
+    /// as its re-entrancy guard, where it does real work.
     @ViewBuilder
     private var topSentinel: some View {
         if model.hasMoreOlder {
             ProgressView()
                 .frame(height: Self.topSentinelHeight)
-                .opacity(model.isLoadingOlder ? 1 : 0)
-                .animation(.easeInOut(duration: 0.15), value: model.isLoadingOlder)
                 .accessibilityHidden(true)
         }
     }

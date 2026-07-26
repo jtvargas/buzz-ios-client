@@ -67,8 +67,8 @@ struct ThreadModelTests {
         #expect(model.hasLoaded)
     }
 
-    @Test("the thread is on screen before any observation fires")
-    func primesInInit() async throws {
+    @Test("the thread is on screen on the first body pass, before any observation fires")
+    func primesOnFirstBodyPass() async throws {
         let temp = TempStore()
         defer { temp.remove() }
         let store = try temp.open()
@@ -80,16 +80,26 @@ struct ThreadModelTests {
         )
         _ = try await store.ingest(batch: [root, reply], phase: .backfill)
 
-        // No `run()`, so neither the observation nor the one-shot fetch has happened:
-        // this is exactly what the scroll view's initial bottom anchor is measured
-        // against.
+        // No `run()`, so neither the observation nor the one-shot fetch has happened.
+        // `primeIfNeeded()` is what the view's `body` calls, and a `body` runs before
+        // layout, so this is exactly what the scroll view's initial bottom anchor is
+        // measured against — while constructing the model stays free, because SwiftUI
+        // initialises and discards this view's struct on every commit.
         let model = ThreadModel(
             root: root.id, channel: "room-1", store: store,
             sender: StubSender(), opener: BlockingThreadOpener(), selfPubkey: author.pubkey
         )
+        #expect(!model.hasLoaded)
+        #expect(model.rows.isEmpty)
+
+        model.primeIfNeeded()
         #expect(model.hasLoaded)
         #expect(model.rows.map(\.content) == ["root", "reply"])
         #expect(shape(model.items) == ["root", "reply"])
+
+        // Idempotent: the view's `body` runs many times, and only the first may read.
+        model.primeIfNeeded()
+        #expect(model.rows.map(\.content) == ["root", "reply"])
     }
 
     @Test("no day separator above the thread's own opener; later days still separate")
@@ -114,6 +124,7 @@ struct ThreadModelTests {
             root: root.id, channel: "room-1", store: store,
             sender: StubSender(), opener: BlockingThreadOpener(), selfPubkey: author.pubkey
         )
+        model.primeIfNeeded()
         // A thread opens *at* its opener, so a hairline above it labels a boundary the
         // reader never crossed — but a reply on a later day still gets one.
         #expect(shape(model.items) == ["root", "sameDay", "day", "laterDay"])
