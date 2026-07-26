@@ -12,6 +12,8 @@ enum ReactionPalette {
 /// palette. Tapping a chip toggles that reaction (add, or withdraw an own one);
 /// chips scale-and-fade in and out so a reaction never snaps the layout.
 struct ReactionChipsView: View {
+    private static let chipHeight: CGFloat = 28
+
     let groups: [ReactionGroup]
     /// Toggle an existing chip: add that emoji, or withdraw an own reaction.
     let onTap: (ReactionGroup) -> Void
@@ -21,10 +23,10 @@ struct ReactionChipsView: View {
     var body: some View {
         FlowLayout(spacing: 6) {
             ForEach(groups) { group in
-                ReactionChip(group: group) { onTap(group) }
+                ReactionChip(group: group, height: Self.chipHeight) { onTap(group) }
                     .transition(.scale(scale: 0.6).combined(with: .opacity))
             }
-            AddReactionButton(onReact: onReact)
+            AddReactionButton(height: Self.chipHeight, onReact: onReact)
         }
         // A gentle spring on the chip set: additions and withdrawals ease in place
         // rather than jumping, and the add pill slides as chips reflow around it.
@@ -35,21 +37,20 @@ struct ReactionChipsView: View {
 /// One reaction chip. Highlighted when the local identity is among the reactors.
 private struct ReactionChip: View {
     let group: ReactionGroup
+    let height: CGFloat
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
             HStack(spacing: 4) {
                 Text(group.emoji)
-                if group.count > 1 {
-                    Text("\(group.count)")
-                        .font(.caption2.weight(.semibold))
-                        .monospacedDigit()
-                        .foregroundStyle(.secondary)
-                }
+                Text("\(group.count)")
+                    .font(.caption2.weight(.semibold))
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
             }
             .padding(.horizontal, 8)
-            .padding(.vertical, 4)
+            .frame(height: height)
             .background(
                 Capsule().fill(
                     group.reactedBySelf ? Color.accentColor.opacity(0.18) : Color.secondary.opacity(0.12)
@@ -79,6 +80,7 @@ private struct ReactionChip: View {
 /// small plus, opening the quick-reaction palette on tap. Sits at the end of the
 /// reaction row so a message can always be reacted to without the long-press menu.
 private struct AddReactionButton: View {
+    let height: CGFloat
     let onReact: (String) -> Void
 
     var body: some View {
@@ -97,7 +99,7 @@ private struct AddReactionButton: View {
             .font(.caption)
             .foregroundStyle(.secondary)
             .padding(.horizontal, 8)
-            .padding(.vertical, 4)
+            .frame(height: height)
             .background(Capsule().fill(Color.secondary.opacity(0.12)))
             .overlay(Capsule().strokeBorder(Color.secondary.opacity(0.25), lineWidth: 1))
             .contentShape(.capsule)

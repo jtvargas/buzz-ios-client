@@ -13,6 +13,12 @@ struct ChannelListModelTests {
         let store = try temp.open()
         let relay = try Fixture()
         let author = try Fixture()
+        let message = try author.event(
+            .channelMessage,
+            "hello there",
+            tags: [["h", "general"], ["p", relay.pubkey]],
+            at: 1_000
+        )
 
         let model = ChannelListModel(store: store)
         let run = Task { await model.run() }
@@ -21,7 +27,7 @@ struct ChannelListModelTests {
         // The model streams the change in — nothing calls a refresh.
         _ = try await store.ingest(batch: [
             try relay.channelMetadata("general", name: "General", picture: "https://x/pic", at: 500),
-            try author.message("hello there", in: "general", at: 1_000),
+            message,
         ], phase: .backfill)
 
         await waitUntil { model.channels.first?.lastMessageSnippet == "hello there" }
@@ -30,6 +36,8 @@ struct ChannelListModelTests {
         #expect(channel.id == "general")
         #expect(channel.name == "General")
         #expect(channel.picture == "https://x/pic")
+        #expect(channel.lastMessageID == message.id)
+        #expect(model.mentions(for: channel).map(\.pubkey) == [relay.pubkey])
         // No kind-0 profile for the author, so the row falls back to the raw pubkey.
         #expect(channel.lastMessageAuthor == author.pubkey)
         #expect(model.channels.count == 1)

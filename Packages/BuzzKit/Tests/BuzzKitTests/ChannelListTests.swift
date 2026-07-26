@@ -50,6 +50,7 @@ struct ChannelListTests {
         #expect(empties.map(\.id) == ["aaa-empty", "zzz-empty"])
         for empty in empties {
             #expect(empty.lastMessageAt == nil)
+            #expect(empty.lastMessageID == nil)
             #expect(empty.lastMessageSnippet == nil)
             #expect(empty.lastMessageAuthor == nil)
         }
@@ -133,6 +134,7 @@ struct ChannelListTests {
         let optimistic = try #require(try store.channelList().first)
         #expect(optimistic.lastMessageSnippet == "optimistic")
         #expect(optimistic.lastMessageAt == 2000)
+        #expect(optimistic.lastMessageID == pending.id)
 
         // The relay echoes it back into the log while the outbox row still exists.
         // The log copy must win and the outbox copy must be excluded, not summed
@@ -144,6 +146,7 @@ struct ChannelListTests {
         #expect(settled.count == 1)
         #expect(settled.first?.lastMessageSnippet == "optimistic")
         #expect(settled.first?.lastMessageAt == 2000)
+        #expect(settled.first?.lastMessageID == pending.id)
     }
 
     // MARK: - Live observation

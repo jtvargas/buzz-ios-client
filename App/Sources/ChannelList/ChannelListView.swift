@@ -8,6 +8,7 @@ struct ChannelListView: View {
     @Environment(AppEnvironment.self) private var environment
 
     @State private var model: ChannelListModel
+    @State private var presence: PresenceModel
     @State private var showAccount = false
     private let store: BuzzEventStore
     private let engine: SyncEngine
@@ -16,6 +17,7 @@ struct ChannelListView: View {
         self.store = store
         self.engine = engine
         _model = State(initialValue: ChannelListModel(store: store, selfPubkey: selfPubkey))
+        _presence = State(initialValue: PresenceModel(store: engine.presenceStore))
     }
 
     var body: some View {
@@ -24,12 +26,37 @@ struct ChannelListView: View {
                 if model.channels.isEmpty {
                     emptyState
                 } else {
-                    List(model.channels) { channel in
-                        NavigationLink(value: channel) {
-                            ChannelRowView(channel: channel)
+                    List {
+                        Section {
+                            ForEach(model.channels) { channel in
+                                NavigationLink(value: channel) {
+                                    ChannelRowView(
+                                        channel: channel,
+                                        mentions: model.mentions(for: channel),
+                                        selfPubkey: environment.selfPubkeyHex,
+                                        hasOnlineMember: model.hasOnlineMember(
+                                            in: channel.id,
+                                            online: presence.online
+                                        )
+                                    )
+                                }
+                                .buttonStyle(.plain)
+                                .listRowInsets(EdgeInsets(
+                                    top: 4,
+                                    leading: 12,
+                                    bottom: 4,
+                                    trailing: 12
+                                ))
+                                .listRowSeparator(.hidden)
+                                .listRowBackground(Color.clear)
+                            }
+                        } header: {
+                            Text("Your channels")
                         }
                     }
                     .listStyle(.plain)
+                    .scrollContentBackground(.hidden)
+                    .background(Color(.systemGroupedBackground))
                 }
             }
             .navigationTitle("Channels")
@@ -63,6 +90,7 @@ struct ChannelListView: View {
         // through the same source. Rebuilt only when the channel set changes.
         .environment(\.channelNameMap, ChannelNameMap(channels: model.channels))
         .task { await model.run() }
+        .task { await presence.run() }
     }
 
     @ViewBuilder

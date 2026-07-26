@@ -12,6 +12,8 @@ struct ChannelTimelineView: View {
     @State private var presence: PresenceModel
     @State private var typing: ChannelTypingModel
     @State private var openedThread: ThreadRoute?
+    @State private var showsChannelDetails = false
+    private let channel: ChannelListRow
     private let title: String
     private let channelID: String
     private let store: BuzzEventStore
@@ -19,6 +21,7 @@ struct ChannelTimelineView: View {
     private let selfPubkey: String?
 
     init(channel: ChannelListRow, store: BuzzEventStore, engine: SyncEngine, selfPubkey: String?) {
+        self.channel = channel
         title = (channel.name?.isEmpty == false) ? channel.name! : channel.id
         channelID = channel.id
         self.store = store
@@ -47,8 +50,33 @@ struct ChannelTimelineView: View {
             TypingIndicatorView(model: typing, nameFor: authorName)
             ComposerView(model: model)
         }
-        .navigationTitle(title)
+        .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .principal) {
+                Button {
+                    showsChannelDetails = true
+                } label: {
+                    HStack(spacing: 5) {
+                        Text(title)
+                            .font(.headline)
+                            .foregroundStyle(.primary)
+                        Image(systemName: "chevron.down")
+                            .font(.caption2.weight(.bold))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Channel details for \(title)")
+            }
+        }
+        .sheet(isPresented: $showsChannelDetails) {
+            ChannelDetailsView(
+                channel: channel,
+                store: store,
+                presenceStore: engine.presenceStore
+            )
+        }
         .navigationDestination(item: $openedThread) { route in
             ThreadView(
                 root: route.root,
@@ -83,7 +111,7 @@ struct ChannelTimelineView: View {
                         onReact: { model.react($0, on: row.id) },
                         onToggleReaction: { model.toggleReaction($0, on: row.id) },
                         onDelete: { model.delete($0) },
-                        onOpenThread: row.hasThread ? { open(thread: row) } : nil
+                        onOpenThread: row.isDeleted ? nil : { open(thread: row) }
                     )
                     .padding(.horizontal)
                     .padding(.vertical, 4)

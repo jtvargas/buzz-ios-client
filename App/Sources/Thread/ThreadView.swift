@@ -6,6 +6,7 @@ import SwiftUI
 /// live from the store; opening fetches the thread's replies once so it fills even
 /// before live fan-out catches up.
 struct ThreadView: View {
+    @Environment(\.dismiss) private var dismiss
     @State private var model: ThreadModel
     private let title: String
 
@@ -26,8 +27,26 @@ struct ThreadView: View {
             messages
             ThreadComposerView(model: model)
         }
-        .navigationTitle(title)
+        .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .principal) {
+                Button {
+                    dismiss()
+                } label: {
+                    VStack(spacing: 0) {
+                        Text("Thread")
+                            .font(.headline)
+                            .foregroundStyle(.primary)
+                        Text("#\(title)")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Back to \(title)")
+            }
+        }
         .task { await model.run() }
     }
 

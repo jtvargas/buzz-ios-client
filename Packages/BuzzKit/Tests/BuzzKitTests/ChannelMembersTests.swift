@@ -96,6 +96,30 @@ struct ChannelMembersTests {
         #expect(try store.channelMembers("room-2").map(\.pubkey) == [inRoom2.pubkey])
     }
 
+    @Test("batch roster read groups every member without per-channel queries")
+    func batchRosterRead() async throws {
+        let database = TempDatabase()
+        defer { database.remove() }
+        let store = try database.open()
+        let relay = try Fixture()
+        let shared = try Fixture()
+        let room1Only = try Fixture()
+
+        _ = try await store.ingest(batch: [
+            try roster(relay, channel: "room-1", members: [
+                (shared.pubkey, nil),
+                (room1Only.pubkey, nil),
+            ], at: 1_000),
+            try roster(relay, channel: "room-2", members: [
+                (shared.pubkey, nil),
+            ], at: 1_000),
+        ], phase: .backfill)
+
+        let rosters = try store.channelMemberPubkeysByChannel()
+        #expect(rosters["room-1"] == Set([shared.pubkey, room1Only.pubkey]))
+        #expect(rosters["room-2"] == Set([shared.pubkey]))
+    }
+
     @Test("returns an empty roster for a channel with no members")
     func unknownChannelIsEmpty() async throws {
         let database = TempDatabase()

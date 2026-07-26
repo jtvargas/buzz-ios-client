@@ -22,6 +22,9 @@ public struct ChannelListRow: Sendable, Hashable, Identifiable {
     /// When the newest visible message landed, or `nil` for a channel with none.
     /// The list orders on this, newest first, with the messageless channels last.
     public let lastMessageAt: Int64?
+    /// The newest visible message's event id, used to resolve its own mention tags
+    /// when the shared rich-text renderer draws the channel-list preview.
+    public let lastMessageID: String?
     /// The newest visible message's raw content. The list UI truncates it; keeping
     /// it whole here means the row carries the same text the timeline would show.
     public let lastMessageSnippet: String?
@@ -43,6 +46,7 @@ public struct ChannelListRow: Sendable, Hashable, Identifiable {
         picture: String?,
         isPrivate: Bool,
         lastMessageAt: Int64?,
+        lastMessageID: String? = nil,
         lastMessageSnippet: String?,
         lastMessageAuthor: String?,
         unreadCount: Int = 0
@@ -53,6 +57,7 @@ public struct ChannelListRow: Sendable, Hashable, Identifiable {
         self.picture = picture
         self.isPrivate = isPrivate
         self.lastMessageAt = lastMessageAt
+        self.lastMessageID = lastMessageID
         self.lastMessageSnippet = lastMessageSnippet
         self.lastMessageAuthor = lastMessageAuthor
         self.unreadCount = unreadCount
@@ -164,6 +169,7 @@ extension BuzzEventStore {
                c.about         AS about,
                c.picture       AS picture,
                c.is_private    AS is_private,
+               n.msg_id        AS last_message_id,
                n.created_at    AS last_message_at,
                n.content       AS last_message_snippet,
                n.pubkey        AS author_pubkey,
@@ -199,6 +205,7 @@ extension BuzzEventStore {
             picture: row["picture"],
             isPrivate: row["is_private"] ?? false,
             lastMessageAt: row["last_message_at"],
+            lastMessageID: row["last_message_id"],
             lastMessageSnippet: row["last_message_snippet"],
             lastMessageAuthor: author,
             unreadCount: row["unread_count"] ?? 0
