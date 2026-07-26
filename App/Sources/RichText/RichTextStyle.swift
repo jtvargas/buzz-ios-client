@@ -30,6 +30,18 @@ enum RichTextStyle {
     /// starts colliding with the line above in a wrapped paragraph.
     static let pillPadding = CGSize(width: 4, height: 1.5)
 
+    /// The clear space kept between a pill's edge and the text beside it.
+    ///
+    /// Padding alone cannot produce it: growing the fill past the glyphs does not move
+    /// the glyphs, so the pill simply grew *over* its neighbour — a mention sat flush
+    /// against the `(` or the word before it. The gap has to come from layout advance,
+    /// which is what ``pillAdvance`` inserts.
+    static let pillGap: CGFloat = 3
+
+    /// The advance inserted immediately before and immediately after an interactive
+    /// range: enough to clear the pill's own padding *and* leave ``pillGap`` of space.
+    static var pillAdvance: CGFloat { pillPadding.width + pillGap }
+
     /// The pill's corner radius, on the small side so a one-word mention does not
     /// read as a capsule button.
     static let pillCornerRadius: CGFloat = 6
@@ -88,6 +100,31 @@ enum RichTextStyle {
                 output[range].font = base.weight(linkWeight)
                 if !interactive { output[range].link = nil }
             }
+        }
+        return interactive ? spaced(output) : output
+    }
+
+    /// Holds every pill off the text beside it, by adding ``pillAdvance`` of kerning
+    /// before an interactive range and after its last character.
+    ///
+    /// Kerning rather than padding, and that is measured: a run's typographic bounds
+    /// are what the renderer fills, and growing that fill does not push the glyphs
+    /// around it — so the only way to open real space beside a pill is to add advance.
+    /// The trailing kern lands *inside* the run's bounds (also measured), which is why
+    /// the last character is marked with the advance it carries and
+    /// ``RichTextEntityRenderer`` takes that width back out of the fill.
+    ///
+    /// Applied per *segment*, never per run: `@**Ada** Lovelace` is three runs of one
+    /// pill, and kerning each one's last character would open gaps inside the mention.
+    private static func spaced(_ attributed: AttributedString) -> AttributedString {
+        var output = attributed
+        for segment in RichTextSegments.segments(of: attributed) where segment.link != nil {
+            if segment.range.lowerBound > output.startIndex {
+                let before = output.index(beforeCharacter: segment.range.lowerBound)
+                output[before ..< segment.range.lowerBound].kern = pillAdvance
+            }
+            let last = output.index(beforeCharacter: segment.range.upperBound)
+            output[last ..< segment.range.upperBound].kern = pillAdvance
         }
         return output
     }

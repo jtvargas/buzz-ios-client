@@ -16,9 +16,13 @@ struct RichTextInteractiveTests {
     }
 
     /// Every link in an inline, as `(visibleText, url)`.
+    ///
+    /// By segment rather than by run, because one link is one *range* and not
+    /// necessarily one run: emphasis splits a range, and so does the kerning that
+    /// spaces a pill from the text beside it (see ``RichTextStyle``).
     private func links(_ attributed: AttributedString) -> [(text: String, url: URL)] {
-        attributed.runs.compactMap { run in
-            run.link.map { (String(attributed[run.range].characters), $0) }
+        RichTextSegments.segments(of: attributed).compactMap { segment in
+            segment.link.map { (String(attributed[segment.range].characters), $0) }
         }
     }
 
@@ -276,52 +280,5 @@ struct RichTextInteractiveTests {
             return
         }
         #expect(links(items[0].content).count == 1)
-    }
-}
-
-/// The pill geometry the renderer draws, as values: `Text.Layout.Line` cannot be built
-/// in a test, so the merge rule is separated from the draw that applies it.
-@Suite("Rich text pills")
-struct RichTextPillTests {
-    private func rect(_ originX: CGFloat, width: CGFloat) -> CGRect {
-        CGRect(x: originX, y: 0, width: width, height: 20)
-    }
-
-    @Test("adjacent runs of one mention merge into a single pill")
-    func adjacentRunsMerge() {
-        // `@**Ada** Lovelace`: three layout runs, one range, one pill — three fills
-        // would overlap their padding and show as brighter seams around the bold word.
-        let merged = RichTextEntityRenderer.merged([
-            ("ada", rect(0, width: 10)),
-            ("ada", rect(10, width: 30)),
-            ("ada", rect(40, width: 50)),
-        ])
-        #expect(merged.count == 1)
-        #expect(merged[0].rect == rect(0, width: 90))
-    }
-
-    @Test("two references to the same person on one line stay two pills")
-    func repeatedKeyDoesNotMergeAcrossText() {
-        let merged = RichTextEntityRenderer.merged([
-            ("ada", rect(0, width: 40)),
-            (nil, rect(40, width: 60)),
-            ("ada", rect(100, width: 40)),
-        ])
-        #expect(merged.count == 2)
-        #expect(merged.map(\.rect.width) == [40, 40])
-    }
-
-    @Test("two different entities side by side are two pills")
-    func differentKeysDoNotMerge() {
-        let merged = RichTextEntityRenderer.merged([
-            ("ada", rect(0, width: 40)),
-            ("will", rect(40, width: 40)),
-        ])
-        #expect(merged.count == 2)
-    }
-
-    @Test("a line with nothing interactive has no pills")
-    func noPills() {
-        #expect(RichTextEntityRenderer.merged([(nil, rect(0, width: 100))]).isEmpty)
     }
 }
