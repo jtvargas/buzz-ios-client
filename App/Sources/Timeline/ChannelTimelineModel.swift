@@ -26,7 +26,7 @@ final class ChannelTimelineModel {
     /// The messages to render, ascending by `(createdAt, id)` — the total order the
     /// keyset query pages on, so "newest" means the same thing here and in the DB.
     /// The *rendered* set: while the reader is away from the bottom it stops at the
-    /// frozen boundary and later arrivals are counted in ``heldBackCount`` instead.
+    /// frozen boundary and later arrivals are counted in ``jump`` instead.
     /// Pagination reads the full loaded set, never this.
     private(set) var rows: [TimelineRow] = []
     /// ``rows`` with day separators interleaved — computed once per rows change
@@ -78,25 +78,18 @@ final class ChannelTimelineModel {
         }
     }
 
-    /// How many arrivals the frozen tail is holding back — the count behind the
-    /// "N new messages" affordance, and `0` whenever nothing is held.
-    private(set) var heldBackCount = 0
+    /// What the affordances above the composer show: how many arrivals the freeze holds
+    /// back, which one to land on, and whether the newest row is far enough below to
+    /// offer a way back. Held apart from the rows on purpose — see ``ConversationJumpState``.
+    let jump = ConversationJumpState()
 
-    /// Bumped to ask the scaffold to scroll to the newest row: the reader tapping the
-    /// "N new messages" pill, or an own send that would otherwise land out of sight —
-    /// see ``jumpToLatestIfNeeded()``.
-    private(set) var jumpToken = 0
-
-    /// Releases the frozen tail, renders everything loaded, and asks the view to
-    /// scroll to the newest row.
-    ///
-    /// The freeze is exactly the inverse of ``isAtBottom``, so setting that releases
-    /// it — asserted, not waited for. The scaffold's geometry callback confirms the
-    /// position a frame later and re-freezes if the scroll did not land.
-    func jumpToLatest() {
-        isAtBottom = true
-        jumpToken += 1
-    }
+    /// Bumped to ask the scaffold to scroll: the reader tapping one of the affordances,
+    /// or an own send that would otherwise land out of sight. Settable across the module
+    /// rather than `private(set)` for the reason the collaborators below are internal —
+    /// the jumps that bump it are in `ChannelTimelineModel+Jump.swift`.
+    var jumpToken = 0
+    /// Where that bump lands.
+    var jumpTarget: ConversationJumpTarget = .bottom
 
     /// The `before` cursor most recently handed to `store.timeline(before:)`. A
     /// test seam: it is exactly the keyset position paged from, proving pagination
@@ -140,7 +133,8 @@ final class ChannelTimelineModel {
     /// oldest loaded row, and no later head re-read may re-open it.
     private var hasExhaustedOlder = false
     /// The boundary behind which arrivals are held while the reader reads history.
-    private var tail = TimelineTail()
+    /// Internal because the jump that releases it lives beside this file.
+    var tail = TimelineTail()
 
     /// Whether ``primeIfNeeded()`` has already read page one. Not observable: nothing
     /// reads it, and it is written from inside a `body`.
@@ -287,13 +281,14 @@ final class ChannelTimelineModel {
         prune(against: head)
         for row in head { loaded[row.id] = row }
         rebuild()
-        hasLoaded = true
+        // Guarded like the rest: written on every commit, read in the timeline's `body`.
+        if !hasLoaded { hasLoaded = true }
         // A full head page means older history may exist. Re-derived on every head
         // re-read, not only the first, because a channel opened before its backfill
         // lands starts with a short head and must still offer pagination once the
         // backfill fills it — but never re-opened once an older page came back short,
         // the one durable proof that history is exhausted.
-        if !hasExhaustedOlder {
+        if !hasExhaustedOlder, hasMoreOlder != (head.count >= pageSize) {
             hasMoreOlder = head.count >= pageSize
         }
         return Array(loaded.keys)
@@ -358,7 +353,7 @@ final class ChannelTimelineModel {
     /// Re-derives everything downstream of the loaded set: the pagination cursor from
     /// the *full* set, then the rendered rows, their grouped items, and the read
     /// frontier from whatever the tail lets through.
-    private func rebuild() {
+    func rebuild() {
         let ordered = loaded.values.sorted { lhs, rhs in
             lhs.createdAt != rhs.createdAt ? lhs.createdAt < rhs.createdAt : lhs.id < rhs.id
         }
@@ -374,26 +369,32 @@ final class ChannelTimelineModel {
         }
 
         let split = tail.split(ordered)
-        rows = split.rendered
-        heldBackCount = split.heldBack
-        items = ConversationGrouping.items(for: split.rendered)
+        // Written only when they change. An `@Observable` property notifies on every set,
+        // equal or not — so an arrival held behind the freeze, which renders exactly what
+        // was already rendered, would still invalidate the list it was held back from.
+        if rows != split.rendered { rows = split.rendered }
+        let grouped = ConversationGrouping.items(for: split.rendered)
+        if items != grouped { items = grouped }
+        jump.hold(count: split.held.count, firstID: split.held.first?.id)
         markReadIfNeeded()
     }
 
     // MARK: - Applying reads
 
     // Both setters live here rather than beside their readers because `private(set)`
-    // is file-scoped: only this file may write them.
+    // is file-scoped: only this file may write them. Each guards against writing back an
+    // equal value, for the reason ``rebuild()`` records — all three are re-read on every
+    // commit the store raises, including commits that change nothing a reader can see.
 
     func applyReactions(_ groups: [String: [ReactionGroup]]) {
-        reactionGroups = groups
+        if reactionGroups != groups { reactionGroups = groups }
     }
 
     func applyMentions(_ mentions: [String: MentionRefList]) {
-        mentionRefs = mentions
+        if mentionRefs != mentions { mentionRefs = mentions }
     }
 
     func applyThreadParticipants(_ participants: [String: ThreadParticipants]) {
-        replyParticipants = participants
+        if replyParticipants != participants { replyParticipants = participants }
     }
 }

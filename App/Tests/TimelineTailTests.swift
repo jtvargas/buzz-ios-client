@@ -27,7 +27,7 @@ struct TimelineTailTests {
         // The reader scrolls up. Nothing is held back yet — the freeze is a boundary,
         // not a filter.
         model.isAtBottom = false
-        #expect(model.heldBackCount == 0)
+        #expect(model.jump.unreadCount == 0)
         #expect(model.rows.count == 2)
 
         _ = try await store.ingest(batch: [
@@ -36,7 +36,7 @@ struct TimelineTailTests {
 
         // The arrival is counted, not rendered: the content height does not change, so
         // nothing under the reader moves.
-        await waitUntil { model.heldBackCount == 1 }
+        await waitUntil { model.jump.unreadCount == 1 }
         #expect(model.rows.map(\.content) == ["one", "two"])
         #expect(shape(model.items) == ["day", "one", "two"])
 
@@ -44,12 +44,12 @@ struct TimelineTailTests {
         _ = try await store.ingest(batch: [
             try author.message("four", in: "room-1", at: 1_003),
         ], phase: .live)
-        await waitUntil { model.heldBackCount == 2 }
+        await waitUntil { model.jump.unreadCount == 2 }
         #expect(model.rows.count == 2)
 
         // Asking for them releases the boundary in one step and asks the view to move.
         model.jumpToLatest()
-        #expect(model.heldBackCount == 0)
+        #expect(model.jump.unreadCount == 0)
         #expect(model.rows.map(\.content) == ["one", "two", "three", "four"])
         #expect(shape(model.items) == ["day", "one", "two", "three", "four"])
         #expect(model.isAtBottom)
@@ -75,12 +75,12 @@ struct TimelineTailTests {
         _ = try await store.ingest(batch: [
             try author.message("two", in: "room-1", at: 1_001),
         ], phase: .live)
-        await waitUntil { model.heldBackCount == 1 }
+        await waitUntil { model.jump.unreadCount == 1 }
 
         // The scaffold reports the newest row back in view; no token is needed because
         // the reader is already there.
         model.isAtBottom = true
-        #expect(model.heldBackCount == 0)
+        #expect(model.jump.unreadCount == 0)
         #expect(model.rows.map(\.content) == ["one", "two"])
         #expect(model.jumpToken == 0)
     }
@@ -108,7 +108,7 @@ struct TimelineTailTests {
         // of history for a message that never left the device is worse than not moving.
         await waitUntil { await sender.sent.count == 1 }
         await waitUntil { model.isAtBottom }
-        #expect(model.heldBackCount == 0)
+        #expect(model.jump.unreadCount == 0)
         #expect(model.jumpToken == 1)
     }
 
@@ -126,7 +126,7 @@ struct TimelineTailTests {
         let model = ChannelTimelineModel(channel: "room-1", store: store, sender: sender)
         model.primeIfNeeded()
         #expect(model.isAtBottom)
-        #expect(model.heldBackCount == 0)
+        #expect(model.jump.unreadCount == 0)
 
         model.draft = "mine"
         model.send()
@@ -162,7 +162,7 @@ struct TimelineTailTests {
         ], phase: .live)
 
         await waitUntil { model.rows.count == 1 }
-        #expect(model.heldBackCount == 0)
+        #expect(model.jump.unreadCount == 0)
 
         // The *second* arrival is where an unarmed boundary used to leak: `isAtBottom` is
         // already `false` and has no `false → false` transition left to freeze on, so
@@ -172,7 +172,7 @@ struct TimelineTailTests {
             try author.message("second", in: "room-1", at: 1_001),
         ], phase: .live)
 
-        await waitUntil { model.heldBackCount == 1 }
+        await waitUntil { model.jump.unreadCount == 1 }
         #expect(model.rows.map(\.content) == ["first"])
 
         // And it is a boundary, not a filter: asking for it renders both.
@@ -191,7 +191,7 @@ struct TimelineTailTests {
         tail.freeze(at: lowerID, among: [lowerID])
         var split = tail.split([lowerID, higherID])
         #expect(split.rendered.map(\.id) == ["aaa"])
-        #expect(split.heldBack == 1)
+        #expect(split.held.count == 1)
 
         // Boundary `bbb`, arrival `aaa`: the mirror, and the one that leaked. Compared as
         // a keyset position the arrival is *older* than the boundary, so it rendered —
@@ -200,14 +200,14 @@ struct TimelineTailTests {
         tail.freeze(at: higherID, among: [higherID])
         split = tail.split([lowerID, higherID])
         #expect(split.rendered.map(\.id) == ["bbb"])
-        #expect(split.heldBack == 1)
+        #expect(split.held.count == 1)
 
         // A row that was already on screen when the freeze was taken keeps rendering
         // whichever way its id sorts: the boundary asks about existence, not order.
         tail.freeze(at: higherID, among: [lowerID, higherID])
-        #expect(tail.split([lowerID, higherID]).heldBack == 0)
+        #expect(tail.split([lowerID, higherID]).held.isEmpty)
 
         tail.release()
-        #expect(tail.split([lowerID, higherID]).heldBack == 0)
+        #expect(tail.split([lowerID, higherID]).held.isEmpty)
     }
 }

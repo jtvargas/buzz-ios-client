@@ -168,11 +168,11 @@ struct ThreadModelTests {
             ),
         ], phase: .live)
 
-        await waitUntil { model.heldBackCount == 1 }
+        await waitUntil { model.jump.unreadCount == 1 }
         #expect(model.rows.map(\.content) == ["root"])
 
         model.jumpToLatest()
-        #expect(model.heldBackCount == 0)
+        #expect(model.jump.unreadCount == 0)
         #expect(model.rows.map(\.content) == ["root", "late"])
         #expect(model.jumpToken == 1)
     }

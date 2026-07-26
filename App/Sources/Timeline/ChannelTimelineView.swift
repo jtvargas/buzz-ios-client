@@ -80,7 +80,13 @@ struct ChannelTimelineView: View {
             // back into `State` on every set, which would invalidate this whole view
             // on each scroll threshold crossing.
             isAtBottom: Binding(get: { model.isAtBottom }, set: { model.isAtBottom = $0 }),
+            // The pill's own state, so this crossing reaches the pill and not the list.
+            isFarFromBottom: Binding(
+                get: { model.jump.isFarFromBottom },
+                set: { model.jump.isFarFromBottom = $0 }
+            ),
             jumpToken: model.jumpToken,
+            jumpTarget: model.jumpTarget,
             onReachedTop: loadOlderPage,
             onLeavingScreen: releaseComposer
         ) {
@@ -195,27 +201,26 @@ struct ChannelTimelineView: View {
         .padding(.horizontal, MessageRowMetrics.rowLeading)
     }
 
-    /// What floats over the list just above the composer: the held-back arrivals
-    /// affordance, and the mention suggestion panel.
+    /// What floats over the list just above the composer: the jump affordances, and the
+    /// mention suggestion panel.
     private var accessory: some View {
         // A local `Bindable` rather than `$model`, for the same reason the `isAtBottom`
         // binding is hand-written above.
         @Bindable var model = model
         return VStack(spacing: 8) {
-            if model.heldBackCount > 0 {
-                NewMessagesPill(count: model.heldBackCount) {
-                    model.jumpToLatest()
-                }
-                .transition(.scale(scale: 0.9).combined(with: .opacity))
-            }
+            // `model.jump` is a `let`, so reading it here registers no dependency: the
+            // count is read inside ``ConversationJumpControls``, and an arrival that
+            // moves it invalidates that view alone rather than this body and its list.
+            ConversationJumpControls(
+                state: model.jump,
+                onJumpToNew: { model.jumpToNewMessages() },
+                onJumpToLatest: { model.jumpToLatest() }
+            )
             MentionSuggestionsView(
                 document: $model.mentionDraft,
                 autocomplete: model.mentionAutocomplete
             )
         }
-        // Scoped to the pill's presence, never to the list's content: an ambient
-        // animation here would animate row insertion in a bottom-anchored list.
-        .animation(.smooth(duration: 0.2), value: model.heldBackCount > 0)
     }
 
     @ViewBuilder

@@ -59,7 +59,7 @@ extension ChannelTimelineModel {
     /// author is looking straight at the place it is about to appear, and re-anchoring
     /// there interrupts a scroll in progress for no gain.
     func jumpToLatestIfNeeded() {
-        guard !isAtBottom || heldBackCount > 0 else { return }
+        guard !isAtBottom || jump.unreadCount > 0 else { return }
         jumpToLatest()
     }
 

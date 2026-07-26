@@ -65,15 +65,33 @@ final class ThreadModel {
         }
     }
 
-    /// How many replies the frozen tail is holding back.
-    private(set) var heldBackCount = 0
+    /// What the affordances above the reply composer show: how many replies the freeze
+    /// is holding back, which one to land on, and whether the newest reply is far enough
+    /// below to offer a way back. The channel timeline's own, so a thread cannot grow a
+    /// second set of rules — see ``ConversationJumpState``.
+    let jump = ConversationJumpState()
 
-    /// Bumped to ask the scaffold to scroll to the newest reply.
+    /// Bumped to ask the scaffold to scroll.
     private(set) var jumpToken = 0
+    /// Where the next bump of ``jumpToken`` lands.
+    private(set) var jumpTarget: ConversationJumpTarget = .bottom
 
     /// Releases the frozen tail and asks the view to scroll to the newest reply.
     func jumpToLatest() {
         isAtBottom = true
+        jumpTarget = .bottom
+        jumpToken += 1
+    }
+
+    /// Renders the held-back replies and lands the reader on the *first* of them —
+    /// where reading resumes, rather than at the bottom past everything the pill just
+    /// announced. See ``ChannelTimelineModel/jumpToNewMessages()`` for why the reader is
+    /// left away from the bottom, and what re-arms behind them.
+    func jumpToNewMessages() {
+        guard let target = jump.firstUnreadID else { return jumpToLatest() }
+        tail.release()
+        rebuild()
+        jumpTarget = .message(target)
         jumpToken += 1
     }
 
@@ -186,7 +204,8 @@ final class ThreadModel {
     private func apply(_ thread: [TimelineRow]) -> [String] {
         loaded = thread
         rebuild()
-        hasLoaded = true
+        // Guarded like the rest — see ``ChannelTimelineModel/mergeHead(_:)``.
+        if !hasLoaded { hasLoaded = true }
         return thread.map(\.id)
     }
 
@@ -201,9 +220,13 @@ final class ThreadModel {
         }
 
         let split = tail.split(loaded)
-        rows = split.rendered
-        heldBackCount = split.heldBack
-        items = Self.items(for: split.rendered, root: root)
+        // Equal values are not written back, for the reason
+        // ``ChannelTimelineModel/rebuild()`` records: an arrival held behind the freeze
+        // must move the pill's count and nothing else.
+        if rows != split.rendered { rows = split.rendered }
+        let grouped = Self.items(for: split.rendered, root: root)
+        if items != grouped { items = grouped }
+        jump.hold(count: split.held.count, firstID: split.held.first?.id)
     }
 
     /// The thread's rendered items, with the separator above its own opener removed.
@@ -271,7 +294,7 @@ final class ThreadModel {
     /// is looking straight at where it will appear, and re-anchoring interrupts a scroll
     /// in progress for no gain.
     private func jumpToLatestIfNeeded() {
-        guard !isAtBottom || heldBackCount > 0 else { return }
+        guard !isAtBottom || jump.unreadCount > 0 else { return }
         jumpToLatest()
     }
 
@@ -307,7 +330,7 @@ extension ThreadModel {
     }
 
     func applyReactions(_ groups: [String: [ReactionGroup]]) {
-        reactionGroups = groups
+        if reactionGroups != groups { reactionGroups = groups }
     }
 
     /// The users a row mentions, empty when it mentions none — handed to the row's
@@ -321,7 +344,7 @@ extension ThreadModel {
     }
 
     func applyMentions(_ mentions: [String: MentionRefList]) {
-        mentionRefs = mentions
+        if mentionRefs != mentions { mentionRefs = mentions }
     }
 
     /// Sends a reaction on a message in the thread through the durable send path.
