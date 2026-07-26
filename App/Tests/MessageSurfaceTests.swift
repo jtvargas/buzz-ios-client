@@ -133,47 +133,39 @@ struct MessageSurfaceTests {
     func memberCountLine() {
         // Nothing rather than "0 members": an empty roster is the directory read not
         // having landed yet, and stating it as a fact reports a loading state as truth.
-        #expect(ConversationHeaderPill.memberCount(0) == nil)
-        #expect(ConversationHeaderPill.memberCount(1) == "1 member")
-        #expect(ConversationHeaderPill.memberCount(2) == "2 members")
-        #expect(ConversationHeaderPill.memberCount(12) == "12 members")
+        #expect(ConversationTitleBar.memberCount(0) == nil)
+        #expect(ConversationTitleBar.memberCount(1) == "1 member")
+        #expect(ConversationTitleBar.memberCount(2) == "2 members")
+        #expect(ConversationTitleBar.memberCount(12) == "12 members")
     }
 
-    @Test("the header drops its decoration before it drops the conversation's name")
-    func headerYieldsDecorationFirst() {
-        // The row's width is the screen's and does not scale, so something has to give at the
-        // accessibility sizes. The trailing glyphs are the only thing in the row that does
-        // nothing, so they go first — measured at AX5, keeping them left the pill about 115pt,
-        // which is the `#` and no name at all.
-        typealias Row = ConversationHeaderRow<EmptyView>
-        #expect(Row.showsAccessoryGlyphs(at: .large))
-        #expect(Row.showsAccessoryGlyphs(at: .xxxLarge))
-        #expect(Row.showsAccessoryGlyphs(at: .accessibility1) == false)
-        #expect(Row.showsAccessoryGlyphs(at: .accessibility5) == false)
-        // And what survives is still capped, because past this the name is a few characters
-        // however much is dropped around it.
-        #expect(Row.maximumTypeSize == .accessibility1)
+    @Test("the heading's text column stays inside what the bar can give it")
+    func headingKeepsOutOfTheOverflowMenu() {
+        // A toolbar item that does not fit is not truncated — it is moved into the `…`
+        // overflow menu, so the whole heading disappears instead of the name shortening.
+        // Bounding the text column is what stops that, and the reserve is chrome the screen
+        // does not scale: the back button, the bar's margins, the glyph, the capsule's
+        // padding. Measured on the iOS 26 simulator, a 66-character name collapses at a
+        // 250pt column on a 402pt device and survives 245.
+        #expect(ConversationTitleBar.labelWidth(forSurfaceWidth: 402) <= 245)
+        #expect(ConversationTitleBar.labelWidth(forSurfaceWidth: 440) <= 245 + 38)
+        // The reserve is a constant, so a wider surface buys the name exactly its extra width.
+        let narrow = ConversationTitleBar.labelWidth(forSurfaceWidth: 402)
+        #expect(ConversationTitleBar.labelWidth(forSurfaceWidth: 440) - narrow == 38)
+        // And a narrow device floors rather than going to nothing: 375 less the reserve is
+        // under the floor, and a heading of two characters would be worse than one that
+        // truncates.
+        #expect(ConversationTitleBar.labelWidth(forSurfaceWidth: 375) >= 190)
+        #expect(ConversationTitleBar.labelWidth(forSurfaceWidth: 0) >= 190)
     }
 
     @Test("only a channel is marked with a hash")
     func headerSymbolPerKind() {
         // A `#` in front of a person's name would be a category error, and the absence of the
         // mark is how a direct message reads as a person rather than as a room.
-        #expect(ConversationHeaderPill.symbol(for: .channel) == "number")
-        #expect(ConversationHeaderPill.symbol(for: .direct) == nil)
-        #expect(ConversationHeaderPill.symbol(for: .agent) == nil)
-    }
-
-    @Test("the back swipe commits on distance or on a flick")
-    func backSwipeCommitBand() {
-        // Two ways to go back, because a short fast flick is the common one and a slow
-        // deliberate drag is the other. Neither alone covers both.
-        #expect(ConversationBackSwipe.commits(translationX: 80, velocityX: 0))
-        #expect(ConversationBackSwipe.commits(translationX: 5, velocityX: 900))
-        // A small slow drag is someone changing their mind, and must not pop.
-        #expect(ConversationBackSwipe.commits(translationX: 12, velocityX: 40) == false)
-        // A leftward drag is not a back swipe however fast it is.
-        #expect(ConversationBackSwipe.commits(translationX: -200, velocityX: -900) == false)
+        #expect(ConversationTitleBar.symbol(for: .channel) == "number")
+        #expect(ConversationTitleBar.symbol(for: .direct) == nil)
+        #expect(ConversationTitleBar.symbol(for: .agent) == nil)
     }
 
     @Test("the day separator starts where an avatar starts, not where message text does")

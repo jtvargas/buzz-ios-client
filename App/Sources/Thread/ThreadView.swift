@@ -47,18 +47,13 @@ struct ThreadView: View {
             onLeavingScreen: releaseComposer
         ) {
             list
-        } header: {
-            header
         } bar: {
             ThreadComposerView(model: model)
         } accessory: {
             accessory
         }
         .overlay { emptyState }
-        // Hidden for the same reason the channel hides it, and it matters more here: this is
-        // the surface a reader arrives at *by* pushing, so the back affordance in the row has
-        // to be the real one.
-        .toolbar(.hidden, for: .navigationBar)
+        .conversationTitle(title: "Thread", subtitle: context)
         .profileSheet(peer: $profilePeer, presence: presence)
         .task { await model.run() }
         .task { await presence.run() }
@@ -161,26 +156,12 @@ struct ThreadView: View {
 
     /// The line under "Thread": `#channel` for a channel, and a plain name for a direct
     /// message, where a `#` would be a category error.
+    ///
+    /// The heading is not a control here. It used to dismiss on tap, which duplicated the
+    /// back button with no affordance saying so; the system chevron beside it is the way
+    /// out, along with the swipe it brings back.
     private var context: String {
         conversation.isDirect ? conversation.title : "#\(conversation.title)"
-    }
-
-    /// The header: `Thread` over the conversation it hangs off, in the same row and the same
-    /// glass pill the channel uses (§4).
-    ///
-    /// The pill is not a control. It used to dismiss on tap, which duplicated the back
-    /// chevron with no affordance saying so — and §4's rule that a header only advertises an
-    /// action when it has one cuts the same way for a hidden one. The chevron beside it is
-    /// the way out, and now that the row draws it rather than the system bar it is the
-    /// *only* way out other than the swipe.
-    ///
-    /// No glyph: `#` marks a channel, and this pill's own first line already says what it is.
-    private var header: some View {
-        ConversationHeaderRow {
-            ConversationHeaderPill(title: "Thread", subtitle: context)
-                .accessibilityElement(children: .combine)
-                .accessibilityLabel("Thread in \(conversation.title)")
-        }
     }
 
     /// The scaffold's "this surface is leaving the screen" report. A reply composer's
