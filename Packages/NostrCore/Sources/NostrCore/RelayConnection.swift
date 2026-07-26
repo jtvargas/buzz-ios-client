@@ -128,7 +128,8 @@ public actor RelayConnection {
 
     // MARK: - In-flight requests
 
-    var pendingPublishes: [String: CheckedContinuation<Void, Error>] = [:]
+    /// Keyed by event id, resolving with the `OK` text (see ``publishAwaitingResponse(_:timeout:)``).
+    var pendingPublishes: [String: CheckedContinuation<String, Error>] = [:]
     var oneShotQueries: [String: PendingQuery] = [:]
     var nextSubscriptionID = 0
 

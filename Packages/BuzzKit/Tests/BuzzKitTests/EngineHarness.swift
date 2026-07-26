@@ -277,6 +277,23 @@ func awaitPublish(on relay: ScriptedRelay, excluding excluded: String) async -> 
     }
 }
 
+/// Spins until the client has published an EVENT whose id is not already in `seen`,
+/// returning the whole event. A retry path that re-signs cannot have its next id
+/// predicted, and an assertion on a command's tags needs more than the id.
+func awaitPublishedEvent(on relay: ScriptedRelay, excluding seen: Set<String> = []) async -> NostrEvent {
+    while true {
+        for frame in await relay.frames() {
+            if let event = publishedEvent(frame), !seen.contains(event.id) { return event }
+        }
+        await Task.yield()
+    }
+}
+
+/// Every event the client has published on `relay` so far, in wire order.
+func publishedEvents(on relay: ScriptedRelay) async -> [NostrEvent] {
+    await relay.frames().compactMap(publishedEvent)
+}
+
 /// Spins until `condition` holds, yielding between checks — for coordinating on
 /// engine or store state a stream does not expose directly.
 func waitUntil(_ condition: @escaping @Sendable () async -> Bool) async {

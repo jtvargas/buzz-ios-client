@@ -91,6 +91,22 @@ public struct EventKind: RawRepresentable, Hashable, Sendable, ExpressibleByInte
     public static let richMessage: EventKind = 40002
     public static let messageEdit: EventKind = 40003
 
+    // MARK: - Buzz channel commands
+
+    /// Open-or-create a direct-message channel.
+    ///
+    /// A *command* kind: the client publishes it and the relay answers in the `OK`
+    /// message rather than by fanning out an event, so its result is read through
+    /// ``RelayConnection/publishAwaitingResponse(_:timeout:)``. Idempotent
+    /// server-side on a hash of the participant set, which is why one event both
+    /// opens an existing DM and creates a missing one — and why the client must not
+    /// search for an existing DM first.
+    ///
+    /// In the regular (stored, non-addressable) range, so it must never carry a `d`
+    /// tag: that would invoke NIP-33 replace semantics on a command and the relay
+    /// would answer `Duplicate` with no payload.
+    public static let directMessageOpen: EventKind = 41010
+
     // MARK: - Addressable application state
 
     public static let readState: EventKind = 30078

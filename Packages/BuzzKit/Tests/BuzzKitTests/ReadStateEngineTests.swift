@@ -171,11 +171,4 @@ struct ReadStateEngineTests {
     }
 }
 
-/// The full ``NostrEvent`` inside an `["EVENT", {event}]` publish frame, or `nil`
-/// otherwise — the tag-level analog of ``publishedEventID(_:)``.
-func publishedEvent(_ frame: String) -> NostrEvent? {
-    guard case let .event(event) = try? JSONDecoder().decode(ClientMessage.self, from: Data(frame.utf8)) else {
-        return nil
-    }
-    return event
-}
+// `publishedEvent(_:)` lives with the other client-frame parsers in `ScriptedRelay`.
