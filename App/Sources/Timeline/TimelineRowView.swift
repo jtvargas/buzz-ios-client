@@ -12,11 +12,19 @@ import UIKit
 /// inside a thread; `onOpenThread` is supplied only in the channel, where a threaded
 /// message can be opened, and omitted inside the thread it already shows.
 struct TimelineRowView: View {
+    @Environment(\.channelNameMap) private var channelNameMap
+
     let row: TimelineRow
     /// Whether this message's author is present in the workspace (S-5 presence).
     var isAuthorOnline: Bool = false
     /// The surviving reaction groups for this row (S-2), own reaction highlighted.
     var reactions: [ReactionGroup] = []
+    /// The users this message mentions, resolved to names from its own `p` tags —
+    /// so a mention renders identically wherever the row appears (WS-1 #9).
+    var mentions: [MentionRef] = []
+    /// The local identity's hex pubkey, for self-mention emphasis. `nil` degrades to
+    /// no self-emphasis (keyless fallback).
+    var selfPubkey: String?
     /// Whether this is the local identity's own send, gating Delete/Retry in the menu.
     var isOwn: Bool = false
     let onRetry: (String) -> Void
@@ -63,7 +71,7 @@ struct TimelineRowView: View {
         .contextMenu {
             menuItems
         } preview: {
-            MessagePreview(row: row)
+            MessagePreview(row: row, bodyText: bodyText, resolver: resolver)
         }
     }
 
@@ -123,16 +131,25 @@ struct TimelineRowView: View {
                 .font(.body)
                 .italic()
                 .foregroundStyle(.secondary)
-        } else if let rich = row.richContent, !rich.isEmpty {
-            // Kind-40002 rich content is CommonMark markdown: render it as laid-out
-            // blocks (headings, lists, code, quotes), falling back per-block to plain
-            // text. Absent on relays that do not implement it — the plain branch below.
-            MessageContentView(markdown: rich)
         } else {
-            Text(Self.rendered(row.content))
-                .font(.body)
-                .textSelection(.enabled)
+            // One engine for both kind-40002 rich markdown and plain kind-9 content:
+            // block layout, safe links, and resolved @mention / #channel tokens, so a
+            // message renders identically on every surface (WS-1 #7/#9).
+            RichTextView(text: bodyText, resolver: resolver)
         }
+    }
+
+    /// The content to render: the kind-40002 rich markdown when present, otherwise
+    /// the plain kind-9 body. Both flow through the same engine.
+    private var bodyText: String {
+        if let rich = row.richContent, !rich.isEmpty { return rich }
+        return row.content
+    }
+
+    /// The per-message resolver: mentions from this row's own `p`-tag refs, channels
+    /// from the app-wide injected map, self from the local identity.
+    private var resolver: MessageMentionResolver {
+        MessageMentionResolver(mentions: mentions, channels: channelNameMap, selfPubkey: selfPubkey)
     }
 
     /// The long-press menu: a quick-reaction palette and Copy on any live message,
@@ -166,15 +183,6 @@ struct TimelineRowView: View {
             }
         }
     }
-
-    /// Renders a plain (kind-9) message's content as inline markdown — bold, italic,
-    /// code spans, and *safe* links — preserving newlines and falling back to the raw
-    /// text when it is not valid markdown. Shares ``MessageContent/inline(_:)`` with the
-    /// rich renderer, so link sanitisation (only http/https/mailto stay tappable)
-    /// applies to every message, not only kind-40002 rich content.
-    static func rendered(_ content: String) -> AttributedString {
-        MessageContent.inline(content)
-    }
 }
 
 /// A tight preview for the long-press menu: the author and message content sized to
@@ -182,6 +190,8 @@ struct TimelineRowView: View {
 /// default full-width row snapshot, which read as a large square bubble.
 private struct MessagePreview: View {
     let row: TimelineRow
+    let bodyText: String
+    let resolver: MessageMentionResolver
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -193,8 +203,7 @@ private struct MessagePreview: View {
                     .italic()
                     .foregroundStyle(.secondary)
             } else {
-                Text(TimelineRowView.rendered(row.content))
-                    .font(.body)
+                RichTextView(text: bodyText, resolver: resolver)
             }
         }
         .padding(12)

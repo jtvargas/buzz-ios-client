@@ -22,6 +22,9 @@ final class ThreadModel {
     private(set) var rows: [TimelineRow] = []
     /// Surviving reaction groups per row, re-read on the same observation as `rows`.
     private(set) var reactionGroups: [String: [ReactionGroup]] = [:]
+    /// The users each row mentions, keyed by message id, re-read on the same
+    /// observation as `rows` so `@`-tokens resolve from each message's own `p` tags.
+    private(set) var mentionRefs: [String: MentionRefList] = [:]
     private(set) var hasLoaded = false
 
     /// The reply composer's text. Cleared optimistically on send.
@@ -89,6 +92,8 @@ final class ThreadModel {
                 let ids = await apply(thread)
                 let groups = fetchReactions(for: ids)
                 await applyReactions(groups)
+                let mentions = fetchMentions(for: ids)
+                await applyMentions(mentions)
             }
         } catch {
             // Ends on cancellation or teardown; last snapshot stays on screen.
@@ -173,6 +178,20 @@ extension ThreadModel {
 
     func applyReactions(_ groups: [String: [ReactionGroup]]) {
         reactionGroups = groups
+    }
+
+    /// The users a row mentions, empty when it mentions none — handed to the row's
+    /// resolver so `@`-tokens resolve from the message's own data.
+    func mentions(for id: String) -> [MentionRef] {
+        mentionRefs[id].map { Array($0) } ?? []
+    }
+
+    nonisolated func fetchMentions(for ids: [String]) -> [String: MentionRefList] {
+        (try? store.mentions(for: ids)) ?? [:]
+    }
+
+    func applyMentions(_ mentions: [String: MentionRefList]) {
+        mentionRefs = mentions
     }
 
     /// Sends a reaction on a message in the thread through the durable send path.

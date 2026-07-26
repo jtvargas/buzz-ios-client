@@ -42,6 +42,8 @@ struct ThreadView: View {
                         TimelineRowView(
                             row: row,
                             reactions: model.reactions(for: row.id),
+                            mentions: model.mentions(for: row.id),
+                            selfPubkey: model.selfPubkey,
                             isOwn: model.isOwn(row),
                             onRetry: { model.retry($0) },
                             onReact: { model.react($0, on: row.id) },

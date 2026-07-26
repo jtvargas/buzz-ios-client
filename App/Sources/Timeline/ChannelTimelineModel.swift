@@ -24,6 +24,10 @@ final class ChannelTimelineModel {
     /// on the same observation as the rows, so a react, a withdrawal, or a peer's
     /// reaction updates the chips live without a second pipeline.
     private(set) var reactionGroups: [String: [ReactionGroup]] = [:]
+    /// The users each loaded row mentions, keyed by message id, resolved from each
+    /// message's own `p` tags. Re-read on the same observation as the rows, so a
+    /// mentioned user's profile landing updates the rendered name live (WS-1 #9).
+    private(set) var mentionRefs: [String: MentionRefList] = [:]
     private(set) var hasLoaded = false
     /// Whether an older page may still exist before the oldest loaded row.
     private(set) var hasMoreOlder = true
@@ -109,10 +113,13 @@ final class ChannelTimelineModel {
                 // Viewing the channel marks it read up to the newest message — on open
                 // (the first snapshot) and on each newer arrival while it is on screen.
                 await markReadIfNeeded()
-                // Same signal, same reader, off the main actor: re-read reactions for
-                // every loaded row so the chips track the timeline exactly.
+                // Same signal, same reader, off the main actor: re-read reactions and
+                // mentions for every loaded row so chips and @-tokens track the
+                // timeline exactly.
                 let groups = fetchReactions(for: ids)
                 await applyReactions(groups)
+                let mentions = fetchMentions(for: ids)
+                await applyMentions(mentions)
             }
         } catch {
             // Ends on cancellation or teardown; last snapshot stays on screen.
@@ -173,9 +180,12 @@ final class ChannelTimelineModel {
         for row in older { loaded[row.id] = row }
         rebuild()
         if older.count < pageSize { hasMoreOlder = false }
-        // Bring in the older rows' reactions immediately rather than waiting on the
-        // next commit signal, so a scroll back never shows chip-less history.
-        applyReactions(fetchReactions(for: Array(loaded.keys)))
+        // Bring in the older rows' reactions and mentions immediately rather than
+        // waiting on the next commit signal, so a scroll back never shows chip-less
+        // or unresolved history.
+        let ids = Array(loaded.keys)
+        applyReactions(fetchReactions(for: ids))
+        applyMentions(fetchMentions(for: ids))
     }
 
     private func rebuild() {
@@ -280,6 +290,22 @@ extension ChannelTimelineModel {
 
     func applyReactions(_ groups: [String: [ReactionGroup]]) {
         reactionGroups = groups
+    }
+
+    /// The users a row mentions, empty when it mentions none — handed to the row's
+    /// resolver so `@`-tokens resolve from the message's own data.
+    func mentions(for id: String) -> [MentionRef] {
+        mentionRefs[id].map { Array($0) } ?? []
+    }
+
+    /// Reads mentions for `ids` off the main actor. `store` is immutable, so this is
+    /// safe to call from the `nonisolated` observation loop.
+    nonisolated func fetchMentions(for ids: [String]) -> [String: MentionRefList] {
+        (try? store.mentions(for: ids)) ?? [:]
+    }
+
+    func applyMentions(_ mentions: [String: MentionRefList]) {
+        mentionRefs = mentions
     }
 
     /// Sends a reaction on a message through the durable send path — an ordinary
