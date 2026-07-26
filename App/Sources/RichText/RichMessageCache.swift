@@ -1,10 +1,15 @@
 import Foundation
 
 extension RichMessage {
-    /// Parses `text` into blocks and resolves its entities against `resolver`. The
-    /// full pipeline, done as one value transform: parse (pure) → entity pass (pure).
+    /// Parses `text` into blocks, links what it contains, and resolves its entities
+    /// against `resolver`. The full pipeline, done as one value transform: parse
+    /// (pure) → autolink (pure) → entity pass (pure).
+    ///
+    /// Autolinking runs *before* the entity pass, not after, so a detected URL or
+    /// email is already a link by the time `@`/`#` are scanned — which is what stops
+    /// `https://host/#anchor` resolving an anchor as a channel reference.
     static func make(_ text: String, resolver: MentionResolver) -> RichMessage {
-        let blocks = RichTextParser.parse(text)
+        let blocks = RichTextParser.parse(text).mapInlines(RichTextAutolink.apply)
         let resolved = RichTextEntities.resolve(blocks, with: resolver)
         return RichMessage(blocks: resolved)
     }

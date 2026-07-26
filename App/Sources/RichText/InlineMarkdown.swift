@@ -20,7 +20,9 @@ import Foundation
 /// which this engine generalises and replaces.
 enum InlineMarkdown {
     /// The link schemes a message may make tappable. Everything else renders as
-    /// plain text, never as a link.
+    /// plain text, never as a link. See ``RichTextTarget/isAllowedAuthoredLink(_:)``
+    /// — `hive-entity:` is deliberately *not* among them, so an authored link can
+    /// never impersonate a resolved mention.
     static let allowedLinkSchemes: Set<String> = ["http", "https", "mailto"]
 
     /// Parses `text`'s inline markdown, preserving whitespace, with unsafe links
@@ -42,10 +44,7 @@ enum InlineMarkdown {
     private static func sanitizeLinks(_ attributed: inout AttributedString) {
         let disallowed = attributed.runs.compactMap { run -> Range<AttributedString.Index>? in
             guard let url = run.link else { return nil }
-            guard let scheme = url.scheme?.lowercased(), allowedLinkSchemes.contains(scheme) else {
-                return run.range
-            }
-            return nil
+            return RichTextTarget.isAllowedAuthoredLink(url) ? nil : run.range
         }
         for range in disallowed {
             attributed[range].link = nil

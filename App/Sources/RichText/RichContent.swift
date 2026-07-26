@@ -56,3 +56,40 @@ struct RichMessage: Equatable, Sendable {
 
     var isEmpty: Bool { blocks.isEmpty }
 }
+
+extension [RichBlock] {
+    /// Applies `transform` to every inline in the tree, recursing into nested list
+    /// items and leaving code blocks untouched.
+    ///
+    /// The walk the post-markdown passes share — autolinking and entity resolution
+    /// visit exactly the same inlines for exactly the same reason (a fenced code
+    /// block is raw text and an inline is a parsed `AttributedString`), and a second
+    /// copy of it is a second place for the two to disagree about where a list item's
+    /// children live.
+    func mapInlines(_ transform: (AttributedString) -> AttributedString) -> [RichBlock] {
+        map { block in
+            switch block {
+            case let .paragraph(text):
+                .paragraph(transform(text))
+            case let .heading(level, text):
+                .heading(level: level, transform(text))
+            case let .quote(text):
+                .quote(transform(text))
+            case .code:
+                block // code is never inline-parsed
+            case let .bulletList(items):
+                .bulletList(items.map { $0.mapInlines(transform) })
+            case let .orderedList(start, items):
+                .orderedList(start: start, items.map { $0.mapInlines(transform) })
+            }
+        }
+    }
+}
+
+extension RichListItem {
+    /// This item with `transform` applied to its own content and, recursively, to
+    /// every inline of the lists nested under it.
+    func mapInlines(_ transform: (AttributedString) -> AttributedString) -> RichListItem {
+        RichListItem(content: transform(content), children: children.mapInlines(transform))
+    }
+}

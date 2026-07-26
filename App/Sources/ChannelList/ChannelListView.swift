@@ -105,6 +105,15 @@ struct ChannelListView: View {
         // message lives inside a pushed conversation while the navigation that *finishes*
         // it belongs to this stack.
         .environment(\.directMessageRouter, router)
+        // Pressing a `#`-channel reference inside a message navigates to it. Injected
+        // here for the same reason as the router above: the press happens in a pushed
+        // timeline, the push belongs to this stack. Already-open conversations are left
+        // alone by ``ConversationRoute/pushed(onto:)``, so pressing a reference to the
+        // channel you are reading does nothing rather than stacking it on itself.
+        .environment(\.openConversation, OpenConversationAction { channelID in
+            let route = ConversationRoute(channel: conversationRow(for: channelID))
+            path = route.pushed(onto: path)
+        })
         // The router hands back an opened conversation once; this is the one place that
         // turns it into a push, and it clears the value so an unrelated body pass cannot
         // re-push the same conversation.
