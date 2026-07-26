@@ -27,8 +27,33 @@ extension View {
     /// cannot become a second source of truth for who is online — the row's dot and the
     /// sheet's dot are read from the same model.
     func profileSheet(peer: Binding<ProfilePeer?>, presence: PresenceModel) -> some View {
-        sheet(item: peer) { target in
-            ProfileSheetView(pubkey: target.pubkey, presence: presence, onMessage: nil)
+        modifier(ProfileSheetModifier(peer: peer, presence: presence))
+    }
+}
+
+/// Presents the sheet and hands its Message action to the app's router.
+///
+/// A modifier rather than a closure argument at each call site: the router arrives from
+/// the environment, and a `View` extension cannot read the environment. Keeping the
+/// lookup here means the channel timeline and a thread both get the action — or both get
+/// no action, if no router was injected — without either of them knowing the router
+/// exists.
+private struct ProfileSheetModifier: ViewModifier {
+    @Environment(\.directMessageRouter) private var router
+
+    @Binding var peer: ProfilePeer?
+    let presence: PresenceModel
+
+    func body(content: Content) -> some View {
+        content.sheet(item: $peer) { target in
+            ProfileSheetView(
+                pubkey: target.pubkey,
+                presence: presence,
+                // `nil` when no router is injected, which is what makes
+                // ``ProfileSheetView`` hide the action instead of offering one that
+                // cannot work.
+                onMessage: router.map { router in { router.open(with: $0) } }
+            )
         }
     }
 }

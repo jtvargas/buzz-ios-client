@@ -21,7 +21,12 @@ struct ChannelListView: View {
     @State private var presence: PresenceModel
     @State private var directory: EntityDirectoryModel
     @State private var ticker = RelativeTimeTicker()
+    @State private var router: DirectMessageRouter
     @State private var showAccount = false
+    /// The pushed conversations. An explicit path — rather than the implicit one
+    /// `NavigationLink(value:)` drives — because opening a direct message has to push
+    /// programmatically from a sheet that is already dismissing.
+    @State private var path = NavigationPath()
 
     // Expansion persists across launches, one `UserDefaults` flag per section. The keys
     // come from ``SidebarSection/expansionStorageKey`` so the view and the tests that
@@ -42,6 +47,7 @@ struct ChannelListView: View {
         _model = State(initialValue: ChannelListModel(store: store, selfPubkey: selfPubkey))
         _presence = State(initialValue: PresenceModel(store: engine.presenceStore))
         _directory = State(initialValue: EntityDirectoryModel(store: store))
+        _router = State(initialValue: DirectMessageRouter(opener: engine))
     }
 
     var body: some View {
@@ -51,7 +57,7 @@ struct ChannelListView: View {
         let names = entityNames
         let channelNames = ChannelNameMap(channels: model.channels)
 
-        NavigationStack {
+        NavigationStack(path: $path) {
             sidebar(names: names, channelNames: channelNames)
                 .navigationTitle("Messages")
                 .navigationDestination(for: ChannelListRow.self) { channel in
@@ -89,6 +95,29 @@ struct ChannelListView: View {
         // age their timestamps off one tick (§7/§9).
         .environment(\.entityNames, names)
         .environment(\.relativeTimeTicker, ticker)
+        // Injected here, above the destination, because the sheet that *starts* a direct
+        // message lives inside a pushed conversation while the navigation that *finishes*
+        // it belongs to this stack.
+        .environment(\.directMessageRouter, router)
+        // The router hands back a channel id once; this is the one place that turns it
+        // into a push, and it clears the value so an unrelated body pass cannot re-push
+        // the same conversation.
+        .onChange(of: router.pendingChannelID) { _, channelID in
+            guard let channelID else { return }
+            router.pendingChannelID = nil
+            path.append(conversationRow(for: channelID))
+        }
+        .alert(
+            "Could not open the conversation",
+            isPresented: Binding(
+                get: { router.failure != nil },
+                set: { if !$0 { router.failure = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) { router.failure = nil }
+        } message: {
+            Text(router.failure ?? "")
+        }
         .task { await model.run() }
         .task { await presence.run() }
         .task { await directory.run() }
@@ -171,6 +200,30 @@ private extension ChannelListView {
             snapshot: directory.snapshot,
             channels: model.channels,
             selfPubkey: environment.selfPubkeyHex
+        )
+    }
+
+    /// The row to push for a channel the router just opened.
+    ///
+    /// The live list first — pushing the row the sidebar already holds keeps one identity
+    /// for one conversation, so navigating to a DM twice does not stack two destinations.
+    /// A freshly created DM may not be in that list yet: the relay publishes a channel's
+    /// metadata *after* it commits the channel, so the id is authoritative before the
+    /// name is. Rather than block navigation on a read-back that can lose that race, this
+    /// synthesises the minimum row the destination needs — everything a reader sees is
+    /// resolved from the roster by ``EntityNames`` anyway, which for a two-member DM is
+    /// the peer's own name.
+    func conversationRow(for channelID: String) -> ChannelListRow {
+        if let existing = model.channels.first(where: { $0.id == channelID }) { return existing }
+        return ChannelListRow(
+            id: channelID,
+            name: nil,
+            about: nil,
+            picture: nil,
+            isPrivate: true,
+            lastMessageAt: nil,
+            lastMessageSnippet: nil,
+            lastMessageAuthor: nil
         )
     }
 
