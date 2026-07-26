@@ -55,9 +55,22 @@ struct SVGAvatarDocument: Equatable, Sendable {
     /// The most instructions kept from one document. Bounds render time no matter what
     /// the payload claims to contain.
     static let maximumElementCount = 64
-    /// The most characters drawn from one `<text>` run. An avatar glyph is one grapheme;
-    /// the rest is truncated rather than rejected, so a padded payload still renders.
+    /// The most Unicode *scalars* drawn from one `<text>` run. An avatar glyph is one or
+    /// two scalars; the rest is truncated rather than rejected, so a padded payload still
+    /// renders.
+    ///
+    /// Scalars and not `Character`s: a base character plus any number of combining marks
+    /// is a single grapheme cluster, so a cap counted in `Character`s is not a cap on the
+    /// text Core Text is asked to shape.
     static let maximumTextLength = 32
+    /// The most bytes of character data accumulated for one `<text>` element before the
+    /// rest is dropped unread.
+    ///
+    /// Denominated in UTF-8 bytes because that is the one length a parser can measure in
+    /// constant time (see ``Collector/PendingText``). Four bytes per drawn scalar is the
+    /// UTF-8 maximum, and the fixed slack on top leaves room for the whitespace a
+    /// pretty-printed document puts inside the element.
+    static let maximumTextByteCount = maximumTextLength * 4 + 64
     /// The largest `font-size`, as a multiple of the viewBox's longest edge. Clamped
     /// rather than rejected so an over-eager template still draws something.
     static let maximumFontSizeRatio: CGFloat = 4
@@ -83,10 +96,14 @@ extension SVGAvatarDocument {
         parser.shouldResolveExternalEntities = false
         parser.externalEntityResolvingPolicy = .never
         parser.delegate = collector
-        // `XMLParser.delegate` is an unowned reference, so ARC is free to release
-        // `collector` the instant after the assignment — its last use — and hand the
-        // parser a dangling delegate. Extending the lifetime across `parse()` is what
-        // makes this safe.
+        // `XMLParser.delegate` is an unowned reference, so nothing the parser holds keeps
+        // the collector alive. What keeps it alive across `parse()` is the *guard* below
+        // reading its properties: that, and not the delegate assignment, is the
+        // collector's last use, so ARC cannot release it early as this initialiser stands.
+        // `withExtendedLifetime` states that requirement at the line it applies to rather
+        // than leaving it to be inferred from the code after it — a later edit that moved
+        // the reads into a helper called before `parse()` would otherwise hand the parser
+        // a dangling delegate with nothing here to say so.
         let parsed = withExtendedLifetime(collector) { parser.parse() }
 
         guard parsed, let viewBox = collector.viewBox, !collector.elements.isEmpty else {

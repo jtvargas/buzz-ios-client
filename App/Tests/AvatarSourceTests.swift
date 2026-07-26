@@ -1,10 +1,12 @@
+import CryptoKit
 import Foundation
 @testable import Hive
 import Testing
+import UIKit
 
-/// The three pure decisions the avatar pipeline makes before any pixels exist: what a
-/// `data:` URI contains, whether the relay has a cheaper copy of a blob, and whether a
-/// source is worth asking for again.
+/// The pure decisions the avatar pipeline makes around the pixels: what a `data:` URI
+/// contains, whether the relay has a cheaper copy of a blob, whether a source is worth
+/// asking for again, and which of the images in hand a view draws right now.
 @Suite("Avatar sources")
 struct AvatarSourceTests {
     /// The workspace owner's real avatar, copied verbatim from the relay. Percent-encoded
@@ -136,6 +138,18 @@ extension AvatarSourceTests {
         let thumbnail = try #require(RelayMediaURL.thumbnail(for: Self.mediaURL))
         #expect(thumbnail.absoluteString == "https://homelab.example.net/media/" +
             "d30e51a434671057056169000e6c181056fc4c63232056eeda5cc7094189828e.thumb.jpg")
+    }
+
+    @Test("every avatar the app draws is inside the thumbnail's own resolution")
+    func avatarSizesFitTheThumbnail() {
+        // The rationale for preferring the thumbnail is that no avatar the app draws needs
+        // more resolution than it has. That is an argument about two size constants, so it
+        // is asserted against them rather than restated in a comment: raising either past
+        // this bound inverts the rationale, and would do it silently.
+        let largest = max(MessageRowMetrics.avatarSize, ProfileSheetView.avatarSize)
+        #expect(largest == 96)
+        #expect(largest * 3 <= RelayMediaURL.thumbnailMaximumPixelSize)
+        #expect(RelayMediaURL.thumbnail(for: Self.mediaURL, pixelSize: largest * 3) != nil)
     }
 
     @Test("the thumbnail is used up to its own resolution and no further")
@@ -280,5 +294,73 @@ extension AvatarSourceTests {
         #expect(identity != dataURL.absoluteString)
         // Stable, so the same avatar hits the same entry on every pass.
         #expect(AvatarLoader.identity(of: dataURL) == identity)
+
+        // The digest is spelled out by hand — `String(format: "%02x")` thirty-two times was
+        // the measured cost of this call, and it is paid on the main actor inside `body`.
+        // The idiomatic spelling is the oracle for the hand-written one.
+        let expected = SHA256.hash(data: Data(dataURL.absoluteString.utf8))
+            .map { String(format: "%02x", $0) }
+            .joined()
+        #expect(identity == "data:" + expected)
+    }
+}
+
+// MARK: - What is drawn
+
+extension AvatarSourceTests {
+    private static func request(_ url: String?, _ pixelSize: CGFloat) -> AvatarView.Request {
+        AvatarView.Request(url: url.flatMap(URL.init(string:)), pixelSize: pixelSize)
+    }
+
+    private static func tile(_ color: UIColor) -> UIImage {
+        UIGraphicsImageRenderer(size: CGSize(width: 4, height: 4)).image { context in
+            color.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 4, height: 4))
+        }
+    }
+
+    @Test("a text-size change keeps the picture on screen, but a new subject never does")
+    func drawnKeepsTheSubjectAcrossAResize() {
+        let subject = "https://host.net/media/\(String(repeating: "a", count: 64)).png"
+        let other = "https://host.net/media/\(String(repeating: "b", count: 64)).png"
+        let resolvedImage = Self.tile(.systemRed)
+        let cachedImage = Self.tile(.systemBlue)
+        let resolved = AvatarView.Resolved(request: Self.request(subject, 102), image: resolvedImage)
+
+        // Computed outside the `#expect`s: a closure that counts its own calls is not
+        // `Sendable`, and the macro's expansion sends what it is handed.
+        var peeks = 0
+        let peeking: (URL, CGFloat) -> UIImage? = { _, _ in
+            peeks += 1
+            return cachedImage
+        }
+        let empty: (URL, CGFloat) -> UIImage? = { _, _ in nil }
+
+        // The exact request: resolved state answers, and the cache is not even consulted —
+        // for a `data:` avatar that lookup digests the whole URI on the main actor.
+        let exact = AvatarView.drawn(resolved: resolved, request: Self.request(subject, 102), cached: peeking)
+        #expect(exact === resolvedImage)
+        #expect(peeks == 0)
+
+        // One Dynamic Type step changes the pixel size of every avatar on screen at once,
+        // because it is derived from a `@ScaledMetric`. The cache answers for the new size
+        // when it can…
+        let resized = AvatarView.drawn(resolved: resolved, request: Self.request(subject, 153), cached: peeking)
+        #expect(resized === cachedImage)
+        #expect(peeks == 1)
+        // …and when it cannot, the bitmap in hand is drawn while the new size decodes. The
+        // frame is fixed and the content is `.scaledToFill()`, so redrawing it at another
+        // resolution costs nothing — and refusing to was a whole list of monograms until a
+        // full round of decodes came back.
+        let resizedCold = AvatarView.drawn(resolved: resolved, request: Self.request(subject, 153), cached: empty)
+        #expect(resizedCold === resolvedImage)
+
+        // A different subject is the one thing the identity check must refuse: a row reused
+        // for another author draws its monogram, never the previous author's face.
+        let stale = AvatarView.drawn(resolved: resolved, request: Self.request(other, 102), cached: empty)
+        #expect(stale == nil)
+        // And no artwork at all is the monogram, whatever is still resolved.
+        let artless = AvatarView.drawn(resolved: resolved, request: Self.request(nil, 102), cached: peeking)
+        #expect(artless == nil)
     }
 }

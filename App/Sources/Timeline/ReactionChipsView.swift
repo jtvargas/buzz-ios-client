@@ -19,6 +19,10 @@ struct ReactionChipsView: View {
     let onTap: (ReactionGroup) -> Void
     /// Add a fresh reaction with the chosen emoji from the add-reaction palette.
     let onReact: (String) -> Void
+    /// Raised as the palette is opened, before any emoji has been chosen — the hook an
+    /// enclosing row uses to claim the tap that opened it. Defaults to nothing, for a
+    /// surface with no competing gesture to arbitrate against.
+    var onOpenPalette: () -> Void = {}
 
     var body: some View {
         FlowLayout(spacing: 6) {
@@ -26,7 +30,7 @@ struct ReactionChipsView: View {
                 ReactionChip(group: group, height: Self.chipHeight) { onTap(group) }
                     .transition(.scale(scale: 0.6).combined(with: .opacity))
             }
-            AddReactionButton(height: Self.chipHeight, onReact: onReact)
+            AddReactionButton(height: Self.chipHeight, onReact: onReact, onOpen: onOpenPalette)
         }
         // A gentle spring on the chip set: additions and withdrawals ease in place
         // rather than jumping, and the add pill slides as chips reflow around it.
@@ -79,9 +83,24 @@ private struct ReactionChip: View {
 /// The compact "add reaction" pill: a capsule the size of a chip, a smiley with a
 /// small plus, opening the quick-reaction palette on tap. Sits at the end of the
 /// reaction row so a message can always be reacted to without the long-press menu.
+///
+/// # Why the tap is observed with a gesture
+///
+/// A `Menu` exposes no "about to open" callback: the only closure it offers is each item's
+/// action, which runs after an emoji has been chosen and never at all if the palette is
+/// dismissed. So the tap that opens the palette is invisible to the enclosing row, which
+/// reads that same tap as "open the thread" — the palette opened *and* the thread pushed.
+///
+/// `simultaneousGesture` is the fix because it adds a recogniser alongside the ones the
+/// menu defines rather than in front of them: the tap is still delivered to the menu, and
+/// `onOpen` runs on the same touch-up the row's own tap gesture completes on, which is
+/// precisely the moment the row is deciding. A `TapGesture` and not a zero-distance drag,
+/// because a drag recogniser here would compete with the message list's scrolling.
 private struct AddReactionButton: View {
     let height: CGFloat
     let onReact: (String) -> Void
+    /// Raised as the palette opens, so an enclosing row can claim this tap.
+    let onOpen: () -> Void
 
     var body: some View {
         Menu {
@@ -104,6 +123,7 @@ private struct AddReactionButton: View {
             .overlay(Capsule().strokeBorder(Color.secondary.opacity(0.25), lineWidth: 1))
             .contentShape(.capsule)
         }
+        .simultaneousGesture(TapGesture().onEnded { onOpen() })
         .accessibilityLabel("Add reaction")
         .accessibilityHint("Double tap to choose an emoji")
     }

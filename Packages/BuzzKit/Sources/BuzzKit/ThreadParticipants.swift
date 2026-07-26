@@ -53,8 +53,9 @@ public extension BuzzEventStore {
     ///
     /// # Which replies count
     ///
-    /// Exactly the ones ``TimelineRow/replyCount`` counts, so the faces and the number
-    /// beside them can never disagree:
+    /// Exactly the ones ``TimelineRow/replyCount`` counts, from the same projection and
+    /// through the same deletion authority — so for any one state of the database the faces
+    /// and the number beside them agree:
     ///
     /// - a reply whose author (or that author's verified NIP-OA owner, or the relay)
     ///   has deleted it contributes no participant, through the *same* read-time
@@ -67,10 +68,22 @@ public extension BuzzEventStore {
     /// The root's own author is a participant only if they replied. Someone who opened
     /// a thread and said nothing else in it has not participated in it.
     ///
-    /// Synchronous and `nonisolated` so it runs on the concurrent reader off the actor,
-    /// and so `ValueObservation` can track the `thread`, `deletion`, and `event_owner`
-    /// tables it reads — the same discipline as the timeline, reaction, and mention
-    /// reads, so a face appears the moment the reply that put it there is ingested.
+    /// They can still be briefly out of step *on screen*, and that is an app-side property
+    /// rather than this read's: the rows and the participants are two reads published on
+    /// two different main-actor hops, so a reply's arrival can render a row whose count has
+    /// moved a hop before its faces do (`MessageSurfaceTests` documents the skew and waits
+    /// on the later of the two). Nothing here can close that window; what this guarantees
+    /// is that the two reads never disagree about the *same* database state.
+    ///
+    /// Synchronous and `nonisolated` so it runs on the concurrent reader off the actor.
+    /// It is safe to call from inside a `ValueObservation` for the same reason the
+    /// timeline, reaction, and mention reads are — but note what the app's observation
+    /// actually tracks: `DatabaseSignal` tracks `event`, `outbox`, and `read_state`, not
+    /// the `thread`, `deletion`, and `event_owner` tables read here. A face appears the
+    /// moment its reply is ingested because every write to those three projections happens
+    /// in the same transaction as the `event` row it was projected from, so the tracked
+    /// region moves with them. An observation built over these tables *alone* would be a
+    /// different, narrower thing than what the app has.
     nonisolated func threadParticipants(
         for rootIDs: [String],
         limit: Int

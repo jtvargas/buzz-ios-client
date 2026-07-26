@@ -36,13 +36,19 @@ extension SyncEngine: DirectMessageOpening {}
 @MainActor
 @Observable
 final class DirectMessageRouter {
-    /// The channel to navigate to, once. Whoever consumes it clears it — leaving it set
-    /// would re-push the same conversation on the next unrelated body pass.
-    var pendingChannelID: String?
-    /// The peer whose open is in flight, so a sheet or row can show progress and a
-    /// second tap on the same person is ignored rather than queued.
-    private(set) var openingPeer: String?
-    /// A failed open, for the surface that shows it. Cleared when acknowledged.
+    /// The conversation to navigate to, once. Whoever consumes it clears it — leaving it
+    /// set would re-push the same conversation on the next unrelated body pass.
+    var pendingConversation: OpenedConversation?
+    /// The peers whose opens are in flight, so a sheet or row can show progress and a
+    /// second tap on the *same* person is ignored rather than queued.
+    ///
+    /// A set and not one peer: the guard's job is to stop a double tap becoming two
+    /// navigations, and a single slot made every *other* person's Message action dead
+    /// until the first open answered — silently, because the sheet has already dismissed
+    /// by then, and for as long as a slow relay took to reply.
+    private(set) var openingPeers: Set<String> = []
+    /// A failed open, for the surface that shows it. Cleared when acknowledged, and on the
+    /// next success.
     var failure: String?
 
     private let opener: any DirectMessageOpening
@@ -51,21 +57,29 @@ final class DirectMessageRouter {
         self.opener = opener
     }
 
-    var isOpening: Bool { openingPeer != nil }
+    /// Whether any open is in flight — for a global affordance such as a spinner.
+    var isOpening: Bool { !openingPeers.isEmpty }
+
+    /// Whether `peer`'s own open is in flight, which is what a per-person control asks.
+    func isOpening(_ peer: String) -> Bool { openingPeers.contains(peer) }
 
     /// Starts the open. Fire-and-forget by design: the caller is a button in a sheet
     /// that is already dismissing, so there is nothing left to await it.
     func open(with peer: String) {
-        guard openingPeer == nil else { return }
-        openingPeer = peer
+        guard openingPeers.insert(peer).inserted else { return }
         Task { [weak self] in
             guard let self else { return }
             do {
                 let channelID = try await opener.openDirectMessage(with: peer)
-                openingPeer = nil
-                pendingChannelID = channelID
+                openingPeers.remove(peer)
+                // Cleared on success, not only when acknowledged: an unacknowledged
+                // failure from an earlier attempt otherwise keeps asking to be presented,
+                // and would surface as an alert on whatever surface happened to be up
+                // when the navigation that succeeded landed.
+                failure = nil
+                pendingConversation = OpenedConversation(channelID: channelID, peer: peer)
             } catch {
-                openingPeer = nil
+                openingPeers.remove(peer)
                 failure = Self.message(for: error)
             }
         }
@@ -100,6 +114,21 @@ final class DirectMessageRouter {
             return "No connection to the relay. Try again once it reconnects."
         }
     }
+}
+
+/// A conversation the relay has just opened, and the person it is with.
+///
+/// The peer is carried beside the id because the relay answers with the channel *before*
+/// its roster is readable: the open command commits the channel and publishes its
+/// membership afterwards, and the projection the app reads rosters from may legitimately
+/// have nothing yet. Without the peer the pushed conversation classifies as a channel with
+/// no metadata name and titles itself `Untitled conversation` — for a DM whose peer the
+/// tap that opened it named explicitly. It is a hint with a lifetime: whatever the roster
+/// says once it lands wins.
+struct OpenedConversation: Equatable, Hashable {
+    let channelID: String
+    /// The peer this conversation was opened with, hex.
+    let peer: String
 }
 
 extension EnvironmentValues {

@@ -225,6 +225,55 @@ extension AvatarRenderingTests {
         }
         #expect(clamped.fontSize == SVGAvatarDocument.maximumFontSizeRatio * 8)
     }
+
+    @Test("a run of combining marks is bounded, though it is a single Character long")
+    func boundsCombiningMarks() throws {
+        // One base character and forty thousand combining acute accents: a bounded-looking
+        // payload — well inside the byte cap, one element, and `text.count == 1` — that a
+        // cap counted in `Character`s cannot see at all. It truncated nothing, and asking a
+        // growing string for its `count` once per parser chunk made the guard itself
+        // quadratic in the payload: 1.27 s of measured CPU for a 260 KB document.
+        let padding = String(repeating: "\u{0301}", count: 40_000)
+        #expect(padding.count == 1) // the premise: forty thousand scalars, one grapheme
+        let source = #"<svg viewBox="0 0 8 8"><text>x"# + padding + "</text></svg>"
+        #expect(Data(source.utf8).count < SVGAvatarDocument.maximumByteCount)
+
+        let document = try #require(SVGAvatarDocument(data: Data(source.utf8)))
+        guard case let .text(run) = document.elements[0] else {
+            Issue.record("expected text, got \(document.elements[0])")
+            return
+        }
+        // Truncated by scalar, which is the quantity Core Text has to shape. Asserted on the
+        // scalars for the same reason the cap counts them: `hasPrefix("x")` is a grapheme
+        // comparison, and the base character with its accents on is not the letter `x`.
+        #expect(run.text.unicodeScalars.count == SVGAvatarDocument.maximumTextLength)
+        #expect(run.text.unicodeScalars.first == "x")
+        // And it is still one grapheme cluster, which is exactly why counting those was
+        // the wrong bound.
+        #expect(run.text.count == 1)
+    }
+
+    @Test("a nested <svg> inside <defs> cannot establish the coordinate system")
+    func suppressedRootDoesNotSetTheViewBox() {
+        // The only `viewBox` in the document is inside a definition, so there is no
+        // coordinate system for the rect after it to be expressed in and nothing is drawn —
+        // rather than the rect being measured against a box that describes a template
+        // nobody referenced.
+        let hidden = #"<svg><defs><svg viewBox="0 0 8 8"/></defs>"# +
+            ##"<rect width="8" height="8" fill="#000"/></svg>"##
+        #expect(SVGAvatarDocument(data: Data(hidden.utf8)) == nil)
+
+        // A real root still wins, and a later nested one still does not replace it.
+        let source = #"<svg viewBox="0 0 100 100"><defs><svg viewBox="0 0 8 8"/></defs>"# +
+            ##"<rect width="50%" height="50%" fill="#000"/></svg>"##
+        let document = SVGAvatarDocument(data: Data(source.utf8))
+        #expect(document?.viewBox == CGRect(x: 0, y: 0, width: 100, height: 100))
+        #expect(document?.elements == [.rectangle(
+            frame: CGRect(x: 0, y: 0, width: 50, height: 50),
+            corner: .zero,
+            fill: SVGColor(red: 0, green: 0, blue: 0, alpha: 1)
+        )])
+    }
 }
 
 // MARK: - Paint

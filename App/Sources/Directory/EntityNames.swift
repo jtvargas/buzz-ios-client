@@ -120,8 +120,31 @@ struct EntityNames: Equatable, Sendable {
         conversation(for: row, id: row.id)
     }
 
-    private func conversation(for row: ChannelListRow?, id: String) -> ConversationIdentity {
-        if let peer = directPeer(in: id) {
+    /// The same resolution, told who the conversation is with by a caller that already
+    /// knows — used only where the roster cannot answer yet.
+    ///
+    /// The relay's DM open command replies with the channel id and commits the channel's
+    /// membership *afterwards*, so a roster read taken the moment the reply lands can
+    /// legitimately be empty (`SyncEngineDirectMessageTests` documents that read-back).
+    /// ``directPeer(in:)`` then finds no two-member roster, the conversation classifies as
+    /// a channel, and — having no metadata name either — titles itself
+    /// ``untitledChannel``: a placeholder standing where the name of a person the tap
+    /// explicitly named should be.
+    ///
+    /// The hint is consulted *after* the roster and only when the roster is silent, so it
+    /// can never override the product rule — it fills the gap before the rule has anything
+    /// to say. It also stays a caller's fact rather than a second derivation: the only
+    /// thing allowed to produce a peer is ``directPeer(in:)`` or an answer from the relay.
+    func conversation(for row: ChannelListRow, knownPeer: String?) -> ConversationIdentity {
+        conversation(for: row, id: row.id, knownPeer: knownPeer)
+    }
+
+    private func conversation(
+        for row: ChannelListRow?,
+        id: String,
+        knownPeer: String? = nil
+    ) -> ConversationIdentity {
+        if let peer = directPeer(in: id) ?? unprojectedPeer(in: id, hint: knownPeer) {
             return ConversationIdentity(
                 channelID: id,
                 kind: isAgent(peer) ? .agent : .direct,
@@ -141,6 +164,23 @@ struct EntityNames: Equatable, Sendable {
             initials: Self.initials(from: row?.name),
             isPrivate: row?.isPrivate ?? false
         )
+    }
+
+    /// A caller's peer hint, but only while the roster cannot answer for itself.
+    ///
+    /// "Cannot answer" is a roster of fewer than two people: a conversation with somebody
+    /// has at least two members in it, so anything smaller is a membership read that has not
+    /// finished rather than a fact about the channel. Two or more *is* an answer, and then
+    /// ``directPeer(in:)`` has already given it — a hint is not allowed to contradict the
+    /// product rule, only to stand in before the rule has anything to apply.
+    ///
+    /// A keyless session refuses the hint too, for the same reason it reads every
+    /// conversation as a channel: with no local identity there is no "other" member.
+    private func unprojectedPeer(in channel: String, hint: String?) -> String? {
+        guard let hint, selfPubkey != nil, snapshot.members(of: channel).count < 2 else {
+            return nil
+        }
+        return hint.lowercased()
     }
 
     /// The other member of a two-person roster that includes the local identity —

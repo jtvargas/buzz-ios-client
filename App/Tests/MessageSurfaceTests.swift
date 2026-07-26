@@ -4,14 +4,17 @@ import Foundation
 import NostrCore
 import Testing
 
-/// The parts of the Slack-parity message pass that are logic rather than appearance:
-/// the reply-preview participants arriving on the timeline's own observation, and the
-/// conversation header's member-count line.
+/// The parts of the Slack-parity message pass that are logic rather than appearance: the
+/// reply-preview participants arriving on the timeline's own observation, the conversation
+/// header's two lines, the row's tap arbitration, and the identifier the profile sheet
+/// hands to the pasteboard.
 ///
 /// Deliberately not here: anything about how a row *looks*. Avatar size, the gutter a
 /// day separator aligns to, the pressed dim on the name, and Liquid Glass rendering are
 /// all layout and material questions that a unit test can only restate as the constants
-/// it is asserting against. They are on the owner's device pass instead.
+/// it is asserting against. They are on the owner's device pass instead — as is whether a
+/// gesture *fires*, which is why the arbitration below is tested as the value it is rather
+/// than through a view host.
 @MainActor
 @Suite("Message surface reads", .timeLimit(.minutes(1)))
 struct MessageSurfaceTests {
@@ -129,5 +132,72 @@ struct MessageSurfaceTests {
         #expect(ConversationHeaderPill.memberCount(1) == "1 member")
         #expect(ConversationHeaderPill.memberCount(2) == "2 members")
         #expect(ConversationHeaderPill.memberCount(12) == "12 members")
+    }
+
+    @Test("the header keeps its second line only at the sizes a 44pt bar can hold it")
+    func headerSubtitleThreshold() {
+        // Two lines plus the pill's padding is ~42pt of a 44pt navigation bar at the default
+        // text size, and *both* lines scale — so one step up already overflows the bar, and
+        // at AX3 the two-line pill is around 68pt. The subtitle is what goes: it is the
+        // quiet line, and everything it says is in the details sheet the pill opens.
+        #expect(ConversationHeaderPill.showsSubtitle(at: .large))
+        #expect(ConversationHeaderPill.showsSubtitle(at: .small))
+        #expect(ConversationHeaderPill.showsSubtitle(at: .xLarge) == false)
+        #expect(ConversationHeaderPill.showsSubtitle(at: .accessibility3) == false)
+        // The remaining line is capped too, so it cannot grow past the bar on its own.
+        #expect(ConversationHeaderPill.maximumTypeSize < .accessibility2)
+    }
+
+    @Test("a control's action claims the tap for one window, and the row's tap for no longer")
+    func rowTapArbitration() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        var arbitration = RowTapArbitration()
+
+        // A tap on the message itself: nothing has claimed it, so the thread opens.
+        #expect(arbitration.suppressesRowTap(now: now) == false)
+
+        // A tap that landed on one of the row's controls — a chip, a link, Retry, or the
+        // add-reaction pill's palette — is claimed, and the row's deferred tap on the next
+        // main-actor turn must find it claimed.
+        arbitration.controlDidAct(now: now)
+        #expect(arbitration.suppressesRowTap(now: now))
+        #expect(arbitration.suppressesRowTap(now: now + RowTapArbitration.window / 2))
+        // And the claim expires, so the next deliberate tap on the message still works.
+        #expect(arbitration.suppressesRowTap(now: now + RowTapArbitration.window) == false)
+        #expect(arbitration.suppressesRowTap(now: now + 1) == false)
+
+        // Two controls acting inside one window leave the later deadline standing, which is
+        // what a flag with a timer behind it could not promise: the first one's reset would
+        // land inside the second one's window.
+        arbitration.controlDidAct(now: now)
+        arbitration.controlDidAct(now: now + RowTapArbitration.window / 2)
+        #expect(arbitration.suppressesRowTap(now: now + RowTapArbitration.window))
+    }
+
+    @Test("the profile sheet shows and copies the npub, truncated only for display")
+    func profileKeyIsAnNpub() throws {
+        let pubkey = String(repeating: "2b", count: 32)
+        let key = ProfileSheetView.displayKey(for: pubkey)
+
+        // The npub is what another client's "add a contact" field takes, so it is what the
+        // one row whose whole purpose is to be copied has to carry.
+        #expect(key.hasPrefix("npub1"))
+        #expect(key != pubkey)
+        let raw = try #require(Hex.decode(pubkey))
+        #expect(key == NIP19.encodePublicKey(raw))
+        // Case-insensitive on the way in, so an upper-case key from the wire still encodes.
+        #expect(ProfileSheetView.displayKey(for: pubkey.uppercased()) == key)
+
+        // The whole thing goes to the pasteboard; only the label is elided, and both ends
+        // stay visible because they are the part people compare.
+        let shown = ProfileSheetView.middleTruncated(key)
+        #expect(shown.hasPrefix(String(key.prefix(12))))
+        #expect(shown.hasSuffix(String(key.suffix(12))))
+        #expect(shown.count == 25)
+        #expect(shown != key)
+        // Anything that is not a 32-byte key has no bech32 form, so it is shown as it is
+        // rather than not at all.
+        #expect(ProfileSheetView.displayKey(for: "not-a-key") == "not-a-key")
+        #expect(ProfileSheetView.middleTruncated("short") == "short")
     }
 }

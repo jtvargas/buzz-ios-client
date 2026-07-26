@@ -60,12 +60,23 @@ enum SVGAvatarRenderer {
             else { return nil }
 
             let scale = pixelSize / max(viewBox.width, viewBox.height)
+            let width = (viewBox.width * scale).rounded()
+            let height = (viewBox.height * scale).rounded()
+            // The derived values are checked as well as the declared ones, because a box
+            // can be finite and positive on every edge and still imply a scale that is
+            // not: `viewBox="0 0 1e-308 1e-308"` passes every test above and divides into
+            // an infinite scale, and an infinite scale multiplies back into an infinite
+            // size. `max(1, …)` cannot be relied on to catch that — Swift's `max` returns
+            // its first argument for a NaN second one, quietly turning a NaN edge into a
+            // 1-pixel one — so the products are inspected before they are clamped, and
+            // `UIGraphicsImageRenderer` is never handed a non-finite size.
+            guard scale.isFinite, scale > 0, width.isFinite, height.isFinite else {
+                return nil
+            }
+
             self.scale = scale
             self.origin = viewBox.origin
-            self.size = CGSize(
-                width: max(1, (viewBox.width * scale).rounded()),
-                height: max(1, (viewBox.height * scale).rounded())
-            )
+            self.size = CGSize(width: max(1, width), height: max(1, height))
         }
     }
 }

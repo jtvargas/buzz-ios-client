@@ -24,6 +24,8 @@ import SwiftUI
 /// header does nothing at all, so neither earns one — §4's rule. The channel's tap
 /// survives without it: the pill is a control, and the pressed dim says so.
 struct ConversationHeaderPill: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
     /// The conversation's name — a channel's, a DM peer's, or the literal `Thread`.
     let title: String
     /// The line beneath it, absent when there is nothing true to put there (a roster
@@ -41,7 +43,7 @@ struct ConversationHeaderPill: View {
                 // its shape instead of growing until the bar drops it.
                 .lineLimit(1)
                 .truncationMode(.tail)
-            if let subtitle {
+            if let subtitle, Self.showsSubtitle(at: dynamicTypeSize) {
                 Text(subtitle)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
@@ -54,12 +56,39 @@ struct ConversationHeaderPill: View {
         // above truncate. Pinning a `maxWidth` here instead left short names sitting in
         // an over-wide capsule.
         .padding(.horizontal, 12)
-        // Four, not the eight the horizontal inset would suggest: a `.headline` line
-        // (~22pt) over a `.caption2` one (~13pt) is already 35pt, and a navigation bar
-        // is 44 — anything more generous and the pill is taller than the bar holding it.
+        // Four, not the eight the horizontal inset would suggest, and the arithmetic is
+        // the reader's text size and not only the default one. A navigation bar is 44pt.
+        // At the default size a `.headline` line (~20pt) over a `.caption2` one (~13pt)
+        // plus this padding is ~42 — it fits, but only just, and both lines scale: at
+        // xLarge the same stack is ~46, and at AX3 the pill is roughly 68pt in a 44pt bar.
+        // Hence the two rules above and below — one line above the default size, and a
+        // ceiling on how far that line grows.
         .padding(.vertical, 4)
+        // Clamped rather than allowed to grow: the bar's height is not ours to change, so
+        // past this the pill would be taller than the thing holding it. This is also what
+        // the system's own inline navigation title does at the accessibility sizes, where
+        // the full name is reachable by other means — here, the details sheet this pill
+        // opens, and the VoiceOver label the caller attaches to it.
+        .dynamicTypeSize(...Self.maximumTypeSize)
         .glassEffect(.regular, in: .capsule)
     }
+
+    /// Whether the pill draws its second line at `size`.
+    ///
+    /// Only at or below the default. Two lines and the vertical padding already come to
+    /// ~42pt of a 44pt bar at the default size, and both lines grow with Dynamic Type — so
+    /// one step up is already over the bar. The subtitle is the line that goes, because it
+    /// is the quiet one and because everything it says (a member count, a peer's NIP-05
+    /// identifier) is in the details sheet the pill opens.
+    static func showsSubtitle(at size: DynamicTypeSize) -> Bool {
+        size <= .large
+    }
+
+    /// The largest text size the pill's own content scales to.
+    ///
+    /// A `.headline` at this size is a ~34pt line, which with the padding is the most a
+    /// 44pt navigation bar can hold.
+    static let maximumTypeSize: DynamicTypeSize = .accessibility1
 
     /// `12 members` for a channel's second line, or nothing while the roster is still
     /// arriving.

@@ -9,7 +9,12 @@ extension SVGAvatarDocument {
     /// boundary and needs no `Sendable` conformance — the parse as a whole is a pure
     /// synchronous function of its input.
     final class Collector: NSObject, XMLParserDelegate {
-        /// The first root `viewBox` seen. Nested `<svg>` elements do not replace it.
+        /// The coordinate system the drawing elements are expressed in: the first
+        /// *drawable* `<svg>`'s box. A later `<svg>` does not replace it, and one inside a
+        /// `<defs>` (or any other non-rendering element) does not establish it — a
+        /// definition describes something to be referenced, so letting it decide the
+        /// viewport would let a document draw in one coordinate system and measure in
+        /// another.
         private(set) var viewBox: CGRect?
         private(set) var elements: [Element] = []
 
@@ -18,7 +23,7 @@ extension SVGAvatarDocument {
         /// character data would otherwise be mistaken for avatar text.
         private var suppressionDepth = 0
         private var pendingRun: SVGTextRun?
-        private var pendingCharacters = ""
+        private var pending = PendingText()
 
         private static let nonRendering: Set<String> = [
             "defs", "clippath", "mask", "symbol", "marker", "pattern",
@@ -42,7 +47,13 @@ extension SVGAvatarDocument {
 
             let attributes = Self.lowercasingKeys(attributeDict)
             if name == "svg" {
-                if viewBox == nil { viewBox = SVGAvatarDocument.viewBox(from: attributes) }
+                // Suppression is checked here and not only below, because the root element
+                // is the one that decides the coordinate system: an `<svg>` nested inside
+                // `<defs>` is a definition like any other, and a definition that could set
+                // the viewport would move every drawn element without being drawn itself.
+                if suppressionDepth == 0, viewBox == nil {
+                    viewBox = SVGAvatarDocument.viewBox(from: attributes)
+                }
                 return
             }
             // Elements before a usable root `viewBox` have no coordinate system to be
@@ -55,7 +66,7 @@ extension SVGAvatarDocument {
             case "ellipse": append(Self.ellipse(attributes, in: viewBox))
             case "text":
                 pendingRun = Self.textRun(attributes, in: viewBox)
-                pendingCharacters = ""
+                pending.reset()
             default: break
             }
         }
@@ -66,9 +77,9 @@ extension SVGAvatarDocument {
             // slack over the draw cap leaves room for surrounding whitespace.
             guard suppressionDepth == 0,
                   pendingRun != nil,
-                  pendingCharacters.count < SVGAvatarDocument.maximumTextLength * 4
+                  pending.byteCount < SVGAvatarDocument.maximumTextByteCount
             else { return }
-            pendingCharacters += string
+            pending.append(string)
         }
 
         func parser(
@@ -85,10 +96,16 @@ extension SVGAvatarDocument {
             guard name == "text", var run = pendingRun else { return }
             pendingRun = nil
 
-            let trimmed = pendingCharacters.trimmingCharacters(in: .whitespacesAndNewlines)
-            pendingCharacters = ""
+            let trimmed = pending.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            pending.reset()
             guard !trimmed.isEmpty else { return }
-            run.text = String(trimmed.prefix(SVGAvatarDocument.maximumTextLength))
+            // Truncated by *scalar*, not by `Character`: a base character followed by a
+            // hundred thousand combining marks is one grapheme cluster, so `prefix` over
+            // the characters view of it truncates nothing and hands Core Text the whole
+            // run to lay out. The scalar count is what bounds the shaping work.
+            run.text = String(String.UnicodeScalarView(
+                trimmed.unicodeScalars.prefix(SVGAvatarDocument.maximumTextLength)
+            ))
             append(.text(run))
         }
 
@@ -97,6 +114,37 @@ extension SVGAvatarDocument {
                 return
             }
             elements.append(element)
+        }
+    }
+}
+
+// MARK: - Character data
+
+extension SVGAvatarDocument.Collector {
+    /// The character data accumulated for the `<text>` element being parsed, with its
+    /// UTF-8 length carried alongside.
+    ///
+    /// The length is carried rather than recomputed because the cap is checked once per
+    /// `foundCharacters` callback and `XMLParser` delivers a long run of character data in
+    /// chunks of a few hundred bytes. Asking the accumulated string for its `count` there
+    /// was the whole cost: `String.count` walks the text breaking graphemes, so the guard
+    /// meant to bound the payload was itself quadratic in it — and, because grapheme
+    /// clusters are what it counted, a payload made of combining marks stayed one
+    /// `Character` long and never reached the bound at all.
+    struct PendingText {
+        private(set) var text = ""
+        /// The UTF-8 length of ``text``. Maintained incrementally, so reading it is O(1)
+        /// no matter what storage form the accumulated string is in.
+        private(set) var byteCount = 0
+
+        mutating func append(_ string: String) {
+            text += string
+            byteCount += string.utf8.count
+        }
+
+        mutating func reset() {
+            text = ""
+            byteCount = 0
         }
     }
 }
