@@ -154,16 +154,58 @@ struct EntityNames: Equatable, Sendable {
         return members.first { $0 != selfPubkey }
     }
 
-    /// The name to render for a channel — its metadata name, or a short form of its
-    /// group id when the relay has not given it one.
+    /// The name to render for a channel — its metadata name, or a human placeholder
+    /// when the relay has not given it one.
+    ///
+    /// Never any part of the group id. Eight characters of one is still a group id, and
+    /// this answer is the sidebar title, the conversation's nav title, the details title,
+    /// and a thread's subtitle — so `#a3f9b21c` was that identifier reaching the screen in
+    /// four places, most visibly for a DM group another client created with no metadata
+    /// name. The deliberate display of a group id lives in the details sheet's Developer
+    /// section, labelled for what it is.
     func channelName(for channel: String) -> String {
-        if let name = channelsByID[channel]?.name, !name.isEmpty { return name }
-        return String(channel.prefix(8))
+        let name = channelsByID[channel]?.name?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let name, !name.isEmpty { return name }
+        return Self.untitledChannel
     }
+
+    /// What an unnamed conversation is called. A phrase rather than an identifier: the
+    /// reader cannot act on a group id, and a name they can read is the only honest thing
+    /// to put where a name goes.
+    static let untitledChannel = "Untitled conversation"
 
     /// `channel`'s roster, for a member list or a DM's peer.
     func members(of channel: String) -> Set<String> {
         snapshot.members(of: channel)
+    }
+
+    // MARK: - Mentions
+
+    /// `refs` with each pubkey's *directory* name registered as a second alias.
+    ///
+    /// ``BuzzEventStore/mentions(for:)`` resolves a `MentionRef`'s name from the `profile`
+    /// projection alone and falls back to `pubkey.prefix(8)`. Every surface that renders a
+    /// message resolves its `@`-tokens against those refs, so for a mentioned user with no
+    /// kind-0 profile the token either rendered as a tinted eight-character key — a §4
+    /// leak — or, when it was authored against an agent-directory or NIP-05 name, matched
+    /// nothing and fell out as plain text. This is the fix, and it belongs here rather
+    /// than on one surface: registering the directory's answer alongside the store's gives
+    /// the scan both spellings everywhere at once.
+    ///
+    /// Originals come first, so the store's authored `p`-tag order still wins any name
+    /// collision (``MessageMentionResolver`` keeps the first registration of a key).
+    func aliased(_ refs: [MentionRef]) -> [MentionRef] {
+        var seen: Set<String> = []
+        var merged: [MentionRef] = []
+        for ref in refs where seen.insert("\(ref.pubkey)|\(ref.displayName)").inserted {
+            merged.append(ref)
+        }
+        for ref in refs {
+            let resolved = name(for: ref.pubkey)
+            guard seen.insert("\(ref.pubkey)|\(resolved)").inserted else { continue }
+            merged.append(MentionRef(pubkey: ref.pubkey, displayName: resolved))
+        }
+        return merged
     }
 
     // MARK: - Pure helpers

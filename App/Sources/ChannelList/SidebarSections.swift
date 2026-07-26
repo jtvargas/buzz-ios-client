@@ -186,9 +186,16 @@ struct SidebarContent {
                     unreadCount: channel.unreadCount,
                     mentionsSelf: mentionsSelf(refs, selfPubkey: names.selfPubkey)
                 ),
-                authorLabel: authorLabel(channel.lastMessageAuthor, names: names),
+                authorLabel: authorLabel(
+                    channel.lastMessageAuthor,
+                    pubkey: channel.lastMessageAuthorPubkey,
+                    names: names
+                ),
                 previewResolver: MessageMentionResolver(
-                    mentions: mentionRefs(refs, names: names),
+                    // The shared aliasing, not a sidebar-local copy: the timeline and a
+                    // thread build their per-message resolver through the same call, so a
+                    // profile-less mention resolves identically on all three.
+                    mentions: names.aliased(refs),
                     channels: channelNames,
                     selfPubkey: names.selfPubkey
                 ),
@@ -237,26 +244,28 @@ extension SidebarContent {
 extension SidebarContent {
     /// The author prefix for a row's preview, guaranteed human-readable.
     ///
-    /// ``ChannelListRow/lastMessageAuthor`` is *either* a kind-0 display name *or* the
-    /// raw 64-character pubkey — BuzzKit's `channelList` collapses the two into one
-    /// column and the row shape carries no separate key field. So the hex form is
-    /// detected and resolved through the shared directory, which reaches the agent
-    /// name, the NIP-05 username, and finally the short `npub1…` form that a
-    /// profile-only projection cannot. Anything else is already a name and passes
-    /// through. An absent or blank author yields `nil` and the row simply shows the
-    /// message.
-    static func authorLabel(_ author: String?, names: EntityNames) -> String? {
-        guard let author else { return nil }
-        let trimmed = author.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
-        guard isHexKey(trimmed) else { return trimmed }
-        return names.name(for: trimmed)
-    }
-
-    /// Whether a string is a 32-byte hex key — the shape `lastMessageAuthor` falls back
-    /// to when no profile name is known.
-    static func isHexKey(_ value: String) -> Bool {
-        value.count == 64 && value.allSatisfy(\.isHexDigit)
+    /// The chain is ``TimelineRowView``'s, so the same person prefixes a preview here and
+    /// heads a message there: the shared directory first — which reaches the agent name,
+    /// the NIP-05 username, and finally the short `npub1…` form that a profile-only
+    /// projection cannot — then the display name the row itself carries, for an identity
+    /// the directory has no entry for, and the short identifier as the floor.
+    ///
+    /// It takes the author's **key** as well as the label because
+    /// ``ChannelListRow/lastMessageAuthor`` is *either* a kind-0 display name *or* the raw
+    /// pubkey, and telling those apart by shape (64 hex characters) is a guess that a user
+    /// whose display name happens to be 64 hex characters loses — the row then showed them
+    /// a fabricated, plausible-looking `npub1…` for someone else. With the key in hand the
+    /// test is an equality, not a heuristic.
+    ///
+    /// An absent author with no key yields `nil` and the row simply shows the message.
+    static func authorLabel(_ author: String?, pubkey: String?, names: EntityNames) -> String? {
+        let carried = author?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard let pubkey, !pubkey.isEmpty else {
+            return carried.isEmpty ? nil : carried
+        }
+        if let human = names.humanName(for: pubkey) { return human }
+        if !carried.isEmpty, carried.lowercased() != pubkey.lowercased() { return carried }
+        return names.shortIdentifier(for: pubkey)
     }
 
     /// Whether any of a message's mentions is the local identity.
@@ -264,28 +273,5 @@ extension SidebarContent {
         guard let selfPubkey, !selfPubkey.isEmpty else { return false }
         let key = selfPubkey.lowercased()
         return refs.contains { $0.pubkey.lowercased() == key }
-    }
-
-    /// The newest message's mentions, with each pubkey's *directory* name added as a
-    /// second alias.
-    ///
-    /// BuzzKit resolves a `MentionRef`'s name from the `profile` projection alone and
-    /// falls back to `pubkey.prefix(8)`. When that fallback is what a token was
-    /// authored against, the preview's `@`-scan finds no match and an eight-character
-    /// key renders as plain text — a §4 leak. Registering the directory's answer
-    /// alongside the store's gives the scan both spellings; originals come first so
-    /// the store's authored order still wins any name collision.
-    static func mentionRefs(_ refs: [MentionRef], names: EntityNames) -> [MentionRef] {
-        var seen: Set<String> = []
-        var merged: [MentionRef] = []
-        for ref in refs where seen.insert("\(ref.pubkey)|\(ref.displayName)").inserted {
-            merged.append(ref)
-        }
-        for ref in refs {
-            let resolved = names.name(for: ref.pubkey)
-            guard seen.insert("\(ref.pubkey)|\(resolved)").inserted else { continue }
-            merged.append(MentionRef(pubkey: ref.pubkey, displayName: resolved))
-        }
-        return merged
     }
 }

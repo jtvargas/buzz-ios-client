@@ -5,8 +5,10 @@ import NostrCore
 import Observation
 
 /// Drives ``ChannelTimelineView`` for one channel: a live head observation, keyset
-/// pagination of older history, the rendered tail's freeze while the reader is not at
-/// the bottom, and the send / retry calls.
+/// pagination of older history, and the rendered tail's freeze while the reader is not
+/// at the bottom. The outbound half — send, retry, typing — lives in
+/// `ChannelTimelineModel+Sending.swift`, and the per-row reads and actions in
+/// `ChannelTimelineModel+Rows.swift`.
 ///
 /// Rows are held ascending (oldest first) so the view can anchor to the bottom and
 /// render newest-last. The live observation re-reads the newest page on every
@@ -14,8 +16,8 @@ import Observation
 /// a deletion, or a `pending → sent` transition updates the *same* row in place
 /// rather than appearing twice.
 ///
-/// Page one is read synchronously in `init` — see ``primeFirstPage()`` — so the first
-/// layout has real content to anchor against instead of an empty stack.
+/// Page one is read synchronously on the first `body` pass — see ``primeIfNeeded()`` —
+/// so the first layout has real content to anchor against instead of an empty stack.
 @MainActor
 @Observable
 final class ChannelTimelineModel {
@@ -63,7 +65,10 @@ final class ChannelTimelineModel {
     var isAtBottom = true {
         didSet {
             guard isAtBottom != oldValue else { return }
-            if isAtBottom { tail.release() } else { tail.freeze(at: rows.last) }
+            // `rows` is the whole loaded set here: leaving the bottom means the tail was
+            // released, so the rendered set and the loaded set are the same list, and it
+            // carries the boundary second's own membership.
+            if isAtBottom { tail.release() } else { tail.freeze(at: rows.last, among: rows) }
             rebuild()
         }
     }
@@ -72,8 +77,9 @@ final class ChannelTimelineModel {
     /// "N new messages" affordance, and `0` whenever nothing is held.
     private(set) var heldBackCount = 0
 
-    /// Bumped to ask the scaffold to scroll to the newest row: an own send, or the
-    /// reader tapping the "N new messages" pill.
+    /// Bumped to ask the scaffold to scroll to the newest row: the reader tapping the
+    /// "N new messages" pill, or an own send that would otherwise land out of sight —
+    /// see ``jumpToLatestIfNeeded()``.
     private(set) var jumpToken = 0
 
     /// Releases the frozen tail, renders everything loaded, and asks the view to
@@ -92,12 +98,13 @@ final class ChannelTimelineModel {
     /// never falls back to offset paging (spec §Step 1 tests).
     private(set) var lastOlderCursor: TimelineCursor?
 
-    /// Internal rather than private because the per-row reads and actions live in
-    /// `ChannelTimelineModel+Rows.swift`; Swift's `private` is file-scoped, and one
-    /// 470-line model file is worse than a two-file split with two collaborators.
+    /// Internal rather than private because the model's collaborators live beside it:
+    /// the per-row reads and actions in `ChannelTimelineModel+Rows.swift`, and the send /
+    /// retry / typing path in `ChannelTimelineModel+Sending.swift`. Swift's `private` is
+    /// file-scoped, and one 550-line model file is worse than a three-file split.
     let store: BuzzEventStore
     let sender: any MessageSending
-    private let typing: any EphemeralPublishing
+    let typing: any EphemeralPublishing
     /// Marks the channel read as messages come into view (mark-on-view). `nil` in
     /// tests that do not exercise read state.
     private let readStateMarking: (any ReadStateMarking)?
@@ -110,12 +117,13 @@ final class ChannelTimelineModel {
     /// The minimum gap between own-typing publishes while the composer has active
     /// input. Short enough that a peer's 8 s indicator never lapses mid-typing, long
     /// enough not to spam the relay on every keystroke.
-    private let typingThrottle: Duration
+    let typingThrottle: Duration
     /// The monotonic clock the throttle measures against, injected so a test drives
     /// the throttle window without real time.
-    private let clock: @Sendable () -> ContinuousClock.Instant
-    /// When own typing was last published, for the throttle.
-    private var lastTypingPublish: ContinuousClock.Instant?
+    let clock: @Sendable () -> ContinuousClock.Instant
+    /// When own typing was last published, for the throttle. Not observable: nothing
+    /// renders it, so publishing it would only invalidate readers per keystroke.
+    @ObservationIgnored var lastTypingPublish: ContinuousClock.Instant?
 
     /// Loaded rows keyed by id, so a re-read of the head merges into — rather than
     /// duplicates — rows an older page already holds.
@@ -123,18 +131,20 @@ final class ChannelTimelineModel {
     /// The oldest loaded row's cursor, the basis of the next older page. Tracks the
     /// *full* loaded set, so a frozen tail never affects where pagination resumes.
     private var earliest: TimelineCursor?
-    /// The newest loaded row's `created_at`, whether or not it is being rendered.
-    private var latestLoadedAt: Int64 = 0
     /// Set once an older page comes back short: history is exhausted before the
     /// oldest loaded row, and no later head re-read may re-open it.
     private var hasExhaustedOlder = false
     /// The boundary behind which arrivals are held while the reader reads history.
     private var tail = TimelineTail()
 
-    /// The newest message `created_at` this view has already marked read, so a scroll
-    /// back through older history (which never changes the newest row) re-marks
-    /// nothing and only a genuinely newer arrival advances the frontier.
-    private var lastMarkedReadAt: Int64 = 0
+    /// Whether ``primeIfNeeded()`` has already read page one. Not observable: nothing
+    /// reads it, and it is written from inside a `body`.
+    @ObservationIgnored private var hasPrimed = false
+
+    /// The newest rendered `created_at` this view has already marked read, so a scroll
+    /// back through older history (which never changes the newest rendered row) re-marks
+    /// nothing and only a genuinely newer *viewable* message advances the frontier.
+    @ObservationIgnored private var lastMarkedReadAt: Int64 = 0
 
     init(
         channel: String,
@@ -161,16 +171,29 @@ final class ChannelTimelineModel {
             store: store,
             selfPubkey: selfPubkey
         )
-        primeFirstPage()
     }
 
-    /// Reads page one, its reactions, and its mentions synchronously, so the first
-    /// layout of the scroll view has the real content height to anchor against.
+    /// Reads page one, its reactions, and its mentions synchronously — once.
+    ///
+    /// Called from the top of ``ChannelTimelineView``'s `body`, not from `init`.
+    /// `State(initialValue:)` evaluates its argument every time the view struct is
+    /// initialised, and a pushed destination's view struct is re-initialised whenever
+    /// the pushing view's body re-evaluates — which, for a live channel list, is on
+    /// every database commit. Priming in `init` therefore ran three blocking SQLite
+    /// reads on the main actor per commit for an object SwiftUI immediately discarded;
+    /// a discarded instance never runs a `body`, so it now costs an allocation.
+    ///
+    /// Deliberately not `.task`: that runs *after* first layout, and reading
+    /// synchronously is what lets the scroll view's bottom anchor resolve against real
+    /// content height instead of an empty stack. `body` runs before layout, so the
+    /// pre-layout guarantee is preserved.
     ///
     /// Three local reads on the concurrent reader; no relay round trip, no `await`,
     /// and nothing here can fail loudly — an unreadable store simply leaves the
     /// surface in the state the observation will fill a moment later.
-    private func primeFirstPage() {
+    func primeIfNeeded() {
+        guard !hasPrimed else { return }
+        hasPrimed = true
         mergeHead(fetch(before: nil))
         let ids = Array(loaded.keys)
         applyReactions(fetchReactions(for: ids))
@@ -187,10 +210,9 @@ final class ChannelTimelineModel {
         do {
             for try await _ in DatabaseSignal.changes(in: store.reader) {
                 let head = fetch(before: nil)
+                // Merging rebuilds the rendered set, which is also what marks the
+                // channel read up to the newest row the reader can actually see.
                 let ids = await mergeHead(head)
-                // Viewing the channel marks it read up to the newest message — on open
-                // (the first snapshot) and on each newer arrival while it is on screen.
-                await markReadIfNeeded()
                 // Same signal, same reader, off the main actor: re-read reactions and
                 // mentions for every loaded row so chips and @-tokens track the
                 // timeline exactly.
@@ -204,20 +226,29 @@ final class ChannelTimelineModel {
         }
     }
 
-    /// Marks the channel read up to the newest *loaded* message, once per advance —
+    /// Marks the channel read up to the newest *rendered* message, once per advance —
     /// mark-on-view. Fires the moment the channel opens and again whenever a newer
-    /// message arrives while the view is up; a scroll back through older history
-    /// leaves the newest row unchanged, so it re-marks nothing. The newest *loaded*
-    /// row rather than the newest rendered one: the frozen tail is a rendering
-    /// decision, and read state is a channel frontier shared with every other device.
+    /// message becomes viewable while the view is up; a scroll back through older
+    /// history leaves the newest rendered row unchanged, so it re-marks nothing.
+    ///
+    /// The newest *rendered* row, not the newest loaded one. While the tail is frozen
+    /// the reader can see nothing past the boundary, and the NIP-RS frontier is
+    /// grow-only and shared with every other device — so advancing it past held-back
+    /// arrivals is not recoverable: the pill said "3 new messages" while the sidebar row
+    /// for the same channel dropped to zero unread and un-bolded, and backing out lost
+    /// the marker everywhere.
+    ///
+    /// Called from ``rebuild()``, so it tracks the rendered set for any reason it
+    /// advances — an arrival, the channel opening, an older page, or the freeze
+    /// releasing — and the `lastMarkedReadAt` guard makes every redundant call free.
     ///
     /// Fire-and-forget so the observation loop never blocks on the publish, and
     /// grow-only on the engine side so a redundant call is a no-op.
     private func markReadIfNeeded() {
-        guard let readStateMarking, latestLoadedAt > lastMarkedReadAt else { return }
-        lastMarkedReadAt = latestLoadedAt
+        guard let readStateMarking,
+              let newest = rows.last?.createdAt, newest > lastMarkedReadAt else { return }
+        lastMarkedReadAt = newest
         let channel = self.channel
-        let newest = latestLoadedAt
         Task { await readStateMarking.markRead(channel: channel, upTo: newest) }
     }
 
@@ -231,6 +262,7 @@ final class ChannelTimelineModel {
     /// so the caller can re-read reactions for exactly what is on screen.
     @discardableResult
     private func mergeHead(_ head: [TimelineRow]) -> [String] {
+        prune(against: head)
         for row in head { loaded[row.id] = row }
         rebuild()
         hasLoaded = true
@@ -243,6 +275,28 @@ final class ChannelTimelineModel {
             hasMoreOlder = head.count >= pageSize
         }
         return Array(loaded.keys)
+    }
+
+    /// Drops loaded rows the head has stopped returning.
+    ///
+    /// The head is the newest page in the `(createdAt, id)` total order, so any loaded
+    /// row at or newer than the head's own oldest row would have to be *in* it — unless
+    /// it has stopped being visible. Merging by id alone could only ever add, so
+    /// discarding an own pending send left it on screen until the channel was reopened,
+    /// and the frozen tail then counted a row that no longer exists.
+    ///
+    /// Rows strictly older than the head's floor came from an older page and are outside
+    /// the head's window, so the head says nothing about them and they are kept.
+    ///
+    /// Only ever prunes against a head that returned something: ``fetch(before:)`` folds
+    /// a read failure into an empty page, and reading that as "the channel is empty"
+    /// would blank a timeline the store merely failed to read this once.
+    private func prune(against head: [TimelineRow]) {
+        guard let floor = head.first else { return }
+        let returned = Set(head.map(\.id))
+        loaded = loaded.filter { _, row in
+            returned.contains(row.id) || (row.createdAt, row.id) < (floor.createdAt, floor.id)
+        }
     }
 
     // MARK: - Pagination
@@ -273,103 +327,29 @@ final class ChannelTimelineModel {
         applyMentions(fetchMentions(for: ids))
     }
 
-    /// Re-derives everything downstream of the loaded set: the pagination cursor and
-    /// the read frontier from the *full* set, then the rendered rows and their
-    /// grouped items from whatever the tail lets through.
+    /// Re-derives everything downstream of the loaded set: the pagination cursor from
+    /// the *full* set, then the rendered rows, their grouped items, and the read
+    /// frontier from whatever the tail lets through.
     private func rebuild() {
         let ordered = loaded.values.sorted { lhs, rhs in
             lhs.createdAt != rhs.createdAt ? lhs.createdAt < rhs.createdAt : lhs.id < rhs.id
         }
         earliest = ordered.first.map(TimelineCursor.init(row:))
-        latestLoadedAt = ordered.last?.createdAt ?? 0
+
+        // An empty conversation has no row to freeze at, so a reader who left the bottom
+        // of one armed nothing — and `isAtBottom` has no `false → false` transition to
+        // recover on, so without this every arrival from then on moved their place. The
+        // first content to appear while they are still away becomes the boundary: it
+        // renders (there was nothing to hold it back), and everything after it is held.
+        if !isAtBottom, !tail.isFrozen, let newest = ordered.last {
+            tail.freeze(at: newest, among: ordered)
+        }
 
         let split = tail.split(ordered)
         rows = split.rendered
         heldBackCount = split.heldBack
         items = ConversationGrouping.items(for: split.rendered)
-    }
-
-    // MARK: - Send / retry
-
-    /// Sends the composer draft. Optimistic and fire-and-forget: the draft is
-    /// cleared and the pending row appears through the observation the moment the
-    /// outbox row commits, long before the relay's OK. An over-ceiling message
-    /// throws before it is queued — the text is restored and surfaced.
-    func send() {
-        let document = mentionDraft
-        let text = document.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
-        mentionDraft = MentionDraft()
-        sendError = nil
-        // Your own message always brings you down: nothing you just wrote may land
-        // behind a frozen tail where you cannot see it.
-        jumpToLatest()
-
-        let channel = self.channel
-        let sender = self.sender
-        let mentionPubkeys = document.mentionedPubkeys(sender: selfPubkey)
-        let selfPubkey = self.selfPubkey
-        Task { [weak self] in
-            do {
-                try await sender.enqueue(
-                    kind: .channelMessage,
-                    content: text,
-                    in: channel,
-                    tags: OutboundTags.message(
-                        channel: channel,
-                        mentioning: mentionPubkeys,
-                        sender: selfPubkey
-                    ),
-                    maxContentBytes: OutboxPolicy.maxContentBytes
-                )
-            } catch let error as OutboxError {
-                self?.restore(document: document, error: error)
-            } catch {
-                // A transient send failure leaves the row queued in the outbox for
-                // the next drain; nothing to surface and nothing to restore.
-            }
-        }
-    }
-
-    /// Returns a failed send to the queue and redrains — the "tap to retry" action.
-    func retry(_ eventID: String) {
-        let sender = self.sender
-        Task { try? await sender.retry(eventID) }
-    }
-
-    // MARK: - Typing
-
-    /// Publishes an own typing indicator for this channel as the composer changes,
-    /// throttled to at most one publish per ``typingThrottle`` window. Empty input
-    /// never publishes — clearing the field is not typing.
-    ///
-    /// Fire-and-forget: typing is ephemeral (S-3), so a failure is dropped. The
-    /// indicator carries the `["h", channel]` tag the relay requires for a channel-
-    /// scoped ephemeral (S-5); a non-member's typing would be rejected without it.
-    func handleTyping(_ text: String) {
-        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-        let instant = clock()
-        if let last = lastTypingPublish, instant - last < typingThrottle { return }
-        lastTypingPublish = instant
-
-        let channel = self.channel
-        let typing = self.typing
-        Task { await typing.publishEphemeral(kind: .typing, content: "", tags: [["h", channel]]) }
-    }
-
-    private func restore(document: MentionDraft, error: OutboxError) {
-        // Preserve whatever the user has since typed, only restoring if untouched.
-        if mentionDraft.text.isEmpty { mentionDraft = document }
-        sendError = Self.describe(error)
-    }
-
-    private static func describe(_ error: OutboxError) -> String {
-        switch error {
-        case let .contentTooLarge(bytes, limit):
-            "Message is too large (\(bytes) bytes; limit \(limit))."
-        case .invalidEvent, .notQueued, .encodingFailed:
-            "Couldn't send that message."
-        }
+        markReadIfNeeded()
     }
 
     // MARK: - Applying reads

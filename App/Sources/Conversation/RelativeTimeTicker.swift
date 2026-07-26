@@ -5,9 +5,14 @@ import SwiftUI
 ///
 /// A message younger than twenty minutes has to re-render its own timestamp as it
 /// ages; nothing else on the row does. So the app keeps a single coarse clock rather
-/// than a timer per row, and only the small ``MessageTimestampView`` leaves observe
-/// it — SwiftUI invalidates the views that actually read a property, so a tick
-/// re-evaluates a handful of `Text`s instead of the message list.
+/// than a timer per row, and only leaves observe it — SwiftUI invalidates the views that
+/// actually read a property, so a tick re-evaluates a handful of `Text`s instead of the
+/// message list.
+///
+/// Two kinds of leaf read it: ``MessageTimestampView``, and ``DaySeparatorView``, whose
+/// `Today` has to become `Yesterday` when the day turns under a screen that stayed open.
+/// Both are their own small views for exactly this reason — the row and the conversation
+/// they sit in must not be in the dependency.
 ///
 /// The cadence is fifteen seconds: fine enough that `now` becomes `1 min ago`
 /// promptly, coarse enough to be free.

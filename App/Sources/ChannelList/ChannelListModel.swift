@@ -59,6 +59,15 @@ final class ChannelListModel {
     }
 
     private func apply(_ rows: [ChannelListRow], mentions: [String: MentionRefList]) {
+        // The same guard ``EntityDirectoryModel/apply(_:)`` carries, and for the same
+        // reason: the observation re-fires on *every* committed transaction, so a
+        // reaction, a typing-unrelated read-state blob, or a message in a channel whose
+        // preview did not change would otherwise assign an equal list — and an equal
+        // assignment still invalidates every view reading it. This view is the sidebar
+        // and the root of the environment the whole app resolves names through, so that
+        // is a global re-render pump. Covers all three assigned properties, `hasLoaded`
+        // included, so the very first (empty) snapshot still lands.
+        guard rows != channels || mentions != mentionsByMessageID || !hasLoaded else { return }
         channels = rows
         mentionsByMessageID = mentions
         hasLoaded = true

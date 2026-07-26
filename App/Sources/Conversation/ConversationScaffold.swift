@@ -51,8 +51,17 @@ struct ConversationScaffold<Content: View, Bar: View, Accessory: View>: View {
     @State private var position = ScrollPosition(idType: String.self)
     @State private var barHeight: CGFloat = 0
 
-    /// One row of slack, so a rubber-band bounce cannot toggle `isAtBottom`.
-    private static var bottomSlack: CGFloat { 64 }
+    /// The band that counts as *at* the bottom — releasing the owner's frozen tail.
+    /// Tight, because releasing grows the content by every held row, and a
+    /// bottom-anchored list preserves distance-to-bottom across that growth: release
+    /// somewhere the reader is not, and their place is yanked away.
+    private static var atBottomSlack: CGFloat { 8 }
+    /// The band that counts as clearly *away* from the bottom — re-freezing it. Two rows
+    /// of separation from ``atBottomSlack`` is the hysteresis: a single slack value of
+    /// about one row height (which is what this was) put both edges inside a 3pt drag of
+    /// each other, so a reader sitting just outside it could flip the state, lose the
+    /// freeze, and get no re-freeze because they were still inside the band.
+    private static var awayFromBottomSlack: CGFloat { 120 }
     /// About a screen, so the older page lands before the reader reaches the end.
     private static var topTrigger: CGFloat { 800 }
 
@@ -74,16 +83,25 @@ struct ConversationScaffold<Content: View, Bar: View, Accessory: View>: View {
         }
         // Innermost, and before `safeAreaBar`: this modifier binds to the *first*
         // scroll view it finds and logs a runtime issue when more than one is in the
-        // hierarchy — the suggestion panel has its own. The projection is a pair of
-        // `Bool`s on purpose, so the action runs on a threshold crossing rather than
-        // on every scrolled frame.
+        // hierarchy — the suggestion panel has its own. The projection is three `Bool`s
+        // on purpose and never the raw distance: it keeps `Edges` cheap to compare, so
+        // the action runs on a band crossing rather than on every scrolled frame.
         .onScrollGeometryChange(for: Edges.self) { geometry in
-            Edges(
-                atBottom: geometry.contentSize.height - geometry.visibleRect.maxY <= Self.bottomSlack,
+            let distance = geometry.contentSize.height - geometry.visibleRect.maxY
+            return Edges(
+                atBottom: distance <= Self.atBottomSlack,
+                awayFromBottom: distance >= Self.awayFromBottomSlack,
                 nearTop: geometry.visibleRect.minY <= Self.topTrigger
             )
         } action: { _, edges in
-            if edges.atBottom != isAtBottom { isAtBottom = edges.atBottom }
+            // Hysteresis, not a threshold: between the two bands the current state
+            // stands. Release only where the newest row genuinely is, re-freeze only
+            // once the reader is clearly reading something else.
+            if edges.atBottom {
+                if !isAtBottom { isAtBottom = true }
+            } else if edges.awayFromBottom, isAtBottom {
+                isAtBottom = false
+            }
             if edges.nearTop { onReachedTop() }
         }
         .scrollPosition($position)
@@ -112,9 +130,12 @@ struct ConversationScaffold<Content: View, Bar: View, Accessory: View>: View {
         }
     }
 
-    /// The two crossings the scaffold reacts to.
+    /// The bands the scaffold reacts to. `atBottom` and `awayFromBottom` are the two
+    /// sides of one hysteresis loop and are deliberately both projected: the gap between
+    /// them is the region where nothing changes.
     private struct Edges: Equatable {
         let atBottom: Bool
+        let awayFromBottom: Bool
         let nearTop: Bool
     }
 }
