@@ -14,6 +14,9 @@ import SwiftUI
 /// `navigationDestination` — together with the four `.task`s that drive them. A value
 /// injected *inside* the destination does not reach the pushed view, so moving any of
 /// them down would silently cost every pushed surface its name resolution.
+///
+/// It decides about the tab bar for the whole stack rather than leaving that to each
+/// pushed view — see ``ChannelListTabBar``, which holds the measurements that put it here.
 struct ChannelListView: View {
     @Environment(AppEnvironment.self) private var environment
 
@@ -29,12 +32,18 @@ struct ChannelListView: View {
     /// stars are: this view draws the number the marks subtract from, and it is the one
     /// place above both the Threads screen and the thread views that write them.
     @State private var threadReads = ThreadReadMarks()
-    /// What this workspace is called, for the heading. Resolves after the first frame.
-    @State private var community = CommunityModel()
     @State private var showAccount = false
     /// The Threads screen, when it is pushed. A value rather than a `Bool` so it goes
     /// through `navigationDestination(item:)` like every other push in the app.
     @State private var showsThreads: ThreadsRoute?
+    /// The thread the **Threads screen** has open, hoisted out of ``ThreadsView`` to here.
+    ///
+    /// State in the wrong place, but for ``ChannelListTabBar``: this stack has to know about
+    /// every push that hides the tab bar, and a `@State` inside ``ThreadsView`` is a push it
+    /// cannot see. Only the storage moved — that screen still declares the destination. The
+    /// thread a *conversation* opens needs no such move: by then `path` is non-empty and the
+    /// bar is already hidden.
+    @State private var openedThread: ThreadRoute?
     /// Whether the Later shortcut's "not built yet" notice is showing.
     @State private var showsLaterNotice = false
     /// The pushed conversations. An explicit path — rather than the implicit one
@@ -86,7 +95,11 @@ struct ChannelListView: View {
                 // is the larger target.
                 .conversationTitle(
                     mark: .symbol(Self.communitySymbol),
-                    title: community.name,
+                    // Derived from the stored relay URL where it is used, rather than held
+                    // in a model: it is the same string on every pass and on every launch,
+                    // and an object whose only job is to hold a constant still has to be
+                    // created, injected and driven for it.
+                    title: CommunityIdentity.name(),
                     actionHint: "Double tap to show your account"
                 ) {
                     showAccount = true
@@ -120,7 +133,12 @@ struct ChannelListView: View {
                     AccountView(store: store, engine: engine, selfPubkey: environment.selfPubkeyHex)
                 }
                 .navigationDestination(item: $showsThreads) { _ in
-                    ThreadsView(store: store, engine: engine, selfPubkey: environment.selfPubkeyHex)
+                    ThreadsView(
+                        store: store,
+                        engine: engine,
+                        selfPubkey: environment.selfPubkeyHex,
+                        openedThread: $openedThread
+                    )
                 }
                 .alert("Later isn't built yet", isPresented: $showsLaterNotice) {
                     Button("OK", role: .cancel) {}
@@ -131,6 +149,9 @@ struct ChannelListView: View {
                     )
                 }
         }
+        // Declared here on the stack and by nothing below it — ``ChannelListTabBar`` holds
+        // the measurements that put it here rather than on the pushed views.
+        .toolbar(ChannelListTabBar.visibility(conversations: path, openedThread: openedThread), for: .tabBar)
         // The app-wide `#channel` name→id map, built from the live channel list and
         // injected once here so every pushed timeline and thread resolves `#`-tokens
         // through the same source. Rebuilt only when the channel set changes.
@@ -188,13 +209,15 @@ struct ChannelListView: View {
         .task { await presence.run() }
         .task { await directory.run() }
         .task { await ticker.run() }
-        .task { await community.run() }
     }
 
-    /// The mark on the home heading: a honeycomb for the workspace as a whole, which is
-    /// neither a room (`#`) nor a person (a face). Named here so a test can check the system
-    /// actually has it — a missing symbol renders as nothing at all, silently.
-    static let communitySymbol = "circle.hexagongrid"
+    /// The mark on the home heading: one cell of the honeycomb, for the workspace as a whole
+    /// — which is neither a room (`#`) nor a person (a face). Filled and singular rather than
+    /// the outlined grid it was, because the bar draws its mark small and a mesh of hairlines
+    /// at that size reads as noise where a solid shape reads as a mark. Named here so a test
+    /// can check the system actually has it — a missing symbol renders as nothing at all,
+    /// silently.
+    static let communitySymbol = "hexagon.fill"
 }
 
 // MARK: - Content
@@ -243,15 +266,14 @@ private extension ChannelListView {
             .listRowSeparator(.hidden)
     }
 
-    func count(for shortcut: HomeShortcut) -> Int? {
-        let count = switch shortcut {
+    func count(for shortcut: HomeShortcut) -> Int {
+        switch shortcut {
         // The store's unread threads, less the ones already read on this device: opening a
         // thread (or replying in it) marks it, and the mark is what strikes it off here.
         case .threads: threadReads.unseenCount(among: model.unreadThreads)
         // Nothing is saved anywhere yet, so this is the truth rather than a placeholder.
         case .later: 0
         }
-        return shortcut.showsCount(count) ? count : nil
     }
 
     func press(_ shortcut: HomeShortcut) {

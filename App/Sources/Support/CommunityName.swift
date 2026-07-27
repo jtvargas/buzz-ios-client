@@ -1,72 +1,102 @@
 import Foundation
-import Observation
 
 /// What this workspace is called — the name over the home screen.
 ///
-/// # Where a name can honestly come from
+/// # There is no community name on the server to ask for
 ///
-/// There is no community record anywhere in the app. Channels have names, people have
-/// names, the workspace has none: everything the client knows about "where am I signed in"
-/// is one relay URL. So rather than invent a label, this asks the relay what it calls
-/// itself — the NIP-11 information document it already serves at its HTTP origin, whose
-/// `name` is the operator's own answer to that question ("Buzz Relay", on JT's).
+/// This used to ask the relay, over NIP-11: the information document served at the relay's
+/// own HTTP origin carries a `name`, and the operator's answer to "what is this" looked like
+/// the one honest source. It is not one. Every Buzz relay returns the same hardcoded string
+/// — `"Buzz Relay"`, at `buzz/crates/buzz-relay/src/nip11.rs:154` — on every deployment, and
+/// does so *deliberately*: the document is served unauthenticated, so any host-scoped fact in
+/// it would turn a NIP-11 read into an oracle for enumerating the other communities on the
+/// same deployment. That is the static-input fence at `nip11.rs:308-320`, which fails the
+/// build if anyone widens the inputs, and the one host-scoped field it does allow through is
+/// the workspace icon. The pairing credential Hive imports cannot answer either: it is
+/// exactly `{relayUrl, pubkey, nsec}` (`buzz/desktop/src-tauri/src/commands/pairing.rs:99`).
 ///
-/// The fetch is best-effort and never gates a frame. A name is cached the first time one
-/// arrives, so the second launch draws it immediately and a relay that is unreachable — the
-/// tailnet one, from off the tailnet — keeps showing the last name it gave rather than
-/// flickering to a placeholder. With nothing cached, the relay's own host stands in.
+/// # So every Buzz client makes one up from the host, and this makes up the same one
+///
+/// comb reaches the same conclusion in its own words and derives from the subdomain
+/// (`comb/Comb/Identity/CommunityRegistry.swift:14-32`); the Flutter mobile client derives
+/// from the host (`Community.nameFromUrl`, `buzz/mobile/lib/shared/community/community.dart:74`);
+/// and Buzz Desktop derives from the host and then lets the owner rename it
+/// (`deriveCommunityName`, `buzz/desktop/src/features/communities/communityStorage.ts:130`).
+/// The name is a client-local label, everywhere.
+///
+/// Hive copies **Desktop's** rule specifically, because a Hive install is paired to a
+/// Desktop: the two screens are looking at the same relay, sitting on the same desk, and a
+/// phone that called it one thing while the laptop beside it called it another would be
+/// reporting a disagreement that does not exist. So the rule is copied character for
+/// character, including where it is crude — an IP-address relay yields its first octet, and
+/// `homelab.tail4bc643.ts.net` reads as the lowercase `homelab` Desktop shows — because
+/// agreeing with the screen next to it beats being cleverer on its own. Title-casing the
+/// label was tried and removed for exactly that reason: it is a nicer heading and it is a
+/// visible disagreement, which is the one thing this is here to avoid.
 enum CommunityIdentity {
-    /// The `UserDefaults` key behind the cached name. Pinned by a test, like the star and
-    /// expansion keys.
-    static let storageKey = "relay.communityName"
-
-    /// The last name the relay gave, if one ever has.
-    static func cachedName(in defaults: UserDefaults = .standard) -> String? {
-        defaults.string(forKey: storageKey).flatMap(sanitised)
-    }
-
-    /// The name shown when the relay has never answered: its own host, first label only and
-    /// capitalised — `homelab.tail4bc643.ts.net` reads as `Homelab`.
+    /// The name over the home screen, for the relay this device is signed in to.
     ///
-    /// A host is not a name, but it is *true*, which a hardcoded word would not be. The
-    /// first label is the part an operator chose; the rest is the tailnet's.
-    static func fallbackName(forRelay urlString: String) -> String {
-        guard let host = RelayEndpoint.websocketURL(from: urlString)?.host(),
-              let label = host.split(separator: ".").first,
-              !label.isEmpty
-        else { return defaultName }
-        return label.prefix(1).uppercased() + label.dropFirst()
+    /// A pure function of a string already in `UserDefaults`, so the heading has its name in
+    /// the first body pass: there is nothing to fetch, nothing to cache, and no frame where
+    /// the workspace is unnamed.
+    static func name(forRelay urlString: String = RelayEndpoint.storedURLString) -> String {
+        // The socket URL this app would actually connect on, which is the only relay it can
+        // be signed in to. Anything else is not a relay, so there is nothing true to derive
+        // from it — where Desktop rewrites `ws → http` before parsing because that is what
+        // its URL parser wants, Foundation parses `wss://` directly and the rewrite would
+        // only be ceremony.
+        guard let host = RelayEndpoint.websocketURL(from: urlString)?.host() else {
+            return defaultName
+        }
+        // Lowercased before anything is matched against it, because that is what Desktop
+        // compares: WHATWG `URL.hostname` lowercases the host during parsing, Foundation's
+        // `URL.host()` hands it back as typed. Without this, an owner who typed
+        // `wss://Homelab.tail4bc643.ts.net` gets `Homelab` on the phone and `homelab` on the
+        // laptop, and `ws://LOCALHOST:3004` misses the local-host set here while matching it
+        // there. Hostnames are case-insensitive, so this loses nothing.
+        return sanitised(derivedName(fromHost: host.lowercased())) ?? defaultName
     }
 
-    /// The last resort, when the stored relay URL is not one this app could even connect to.
-    static let defaultName = "Buzz"
+    /// What a relay URL this app could not parse is called. Desktop's word for the same
+    /// case, not an invention of Hive's.
+    static let defaultName = "Community"
 
-    /// The relay's NIP-11 information document URL: the same origin as the socket, over
-    /// HTTP. `ws → http`, `wss → https`, and no path — the document is served at the root.
-    static func informationURL(forRelay urlString: String) -> URL? {
-        guard let websocket = RelayEndpoint.websocketURL(from: urlString),
-              var components = URLComponents(url: websocket, resolvingAgainstBaseURL: false)
-        else { return nil }
-        components.scheme = websocket.scheme?.lowercased() == "ws" ? "http" : "https"
-        components.path = ""
-        return components.url
-    }
-
-    /// The `name` out of a NIP-11 document, or `nil` when the document has none worth
-    /// showing.
+    /// Desktop's rule, label for label. See the type comment for why it is copied rather
+    /// than improved on.
     ///
-    /// Pure, so the parsing is tested against real relay bytes rather than over a socket.
-    /// Everything else in the document is ignored: this asks one question.
-    static func name(fromInformationDocument data: Data) -> String? {
-        struct Document: Decodable { let name: String? }
-        guard let document = try? JSONDecoder().decode(Document.self, from: data) else { return nil }
-        return document.name.flatMap(sanitised)
+    /// The two fixed answers are spelled as Desktop spells them — `Local Dev`, and
+    /// `Buzz (staging)` with the lowercase word in brackets — because they are strings
+    /// Desktop writes out rather than labels either client borrows from a host.
+    private static func derivedName(fromHost host: String) -> String {
+        if localHosts.contains(host) { return "Local Dev" }
+        let labels = host.split(separator: ".")
+        if labels.contains(where: { $0 == "stage" || $0 == "staging" }) { return "Buzz (staging)" }
+        // A single-label host — `wss://myrelay` on a LAN with a search domain — has no
+        // subdomain to take, so the host itself is the answer.
+        guard labels.count >= 2 else { return host }
+        // `relay.acme.com` names the machine before the community, so the label after it is
+        // the one an operator chose.
+        return String(labels[0] == "relay" ? labels[1] : labels[0])
     }
+
+    /// The hosts that mean "this developer's own machine".
+    ///
+    /// `::1` is in here as well as Desktop's `[::1]` because the bracket form is a URL
+    /// syntax rather than a host: JavaScript's `URL.hostname` keeps the brackets and
+    /// Foundation's `URL.host()` strips them, so matching Desktop's literal alone would
+    /// never fire on iOS. Verified against Foundation rather than assumed.
+    private static let localHosts: Set<String> = [
+        "localhost", "127.0.0.1", "[::1]", "::1", "0.0.0.0",
+    ]
 
     /// A name fit to put in a title bar: trimmed, non-empty, and bounded.
     ///
-    /// The cap is not cosmetic. The heading truncates by width already, but the string also
-    /// becomes an accessibility label, and a relay is free to advertise a paragraph.
+    /// The only step Desktop has no counterpart for, and the one place a divergence is worth
+    /// it: the heading truncates by width already, but this string also becomes an
+    /// accessibility label, which VoiceOver reads in full. A DNS label may be 63 characters,
+    /// so the bound is reachable without anybody being hostile. It bites above 60 characters
+    /// and no host in practice comes near that, so the two clients still agree on every name
+    /// either of them will really show.
     static func sanitised(_ raw: String) -> String? {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
@@ -75,66 +105,4 @@ enum CommunityIdentity {
     }
 
     private static let maximumLength = 60
-}
-
-/// The community's name, resolved for the home screen.
-///
-/// An object rather than a value because the name arrives after the first frame: it starts
-/// at whatever is cached (or the relay's host), and moves once — if at all — when the relay
-/// answers. Nothing else on the screen waits for it.
-@MainActor
-@Observable
-final class CommunityModel {
-    /// What the heading shows right now. Never empty.
-    private(set) var name: String
-
-    private let relayURLString: String
-    private let defaults: UserDefaults
-    /// How the document is fetched. Injected so the resolution can be driven in a test
-    /// without a relay, and so a test can never reach the network.
-    private let load: @Sendable (URL) async -> Data?
-
-    init(
-        relayURLString: String = RelayEndpoint.storedURLString,
-        defaults: UserDefaults = .standard,
-        load: @escaping @Sendable (URL) async -> Data? = CommunityModel.fetchInformationDocument
-    ) {
-        self.relayURLString = relayURLString
-        self.defaults = defaults
-        self.load = load
-        name = CommunityIdentity.cachedName(in: defaults)
-            ?? CommunityIdentity.fallbackName(forRelay: relayURLString)
-    }
-
-    /// Asks the relay what it is called, and remembers the answer.
-    ///
-    /// Failure is silent and leaves the current name in place: the document is a courtesy,
-    /// not a dependency, and a relay that is asleep or off-tailnet must not turn the heading
-    /// into an error.
-    func run() async {
-        guard let url = CommunityIdentity.informationURL(forRelay: relayURLString),
-              let data = await load(url),
-              let resolved = CommunityIdentity.name(fromInformationDocument: data)
-        else { return }
-        defaults.set(resolved, forKey: CommunityIdentity.storageKey)
-        name = resolved
-    }
-
-    /// The production fetch: one short request for the NIP-11 document.
-    ///
-    /// `nonisolated` and `@Sendable` so it runs off the main actor. Ephemeral, because the
-    /// cache that matters is the name in `UserDefaults` and a URL cache would only add a
-    /// second, staler one.
-    static let fetchInformationDocument: @Sendable (URL) async -> Data? = { url in
-        var request = URLRequest(url: url)
-        request.setValue("application/nostr+json", forHTTPHeaderField: "Accept")
-        request.timeoutInterval = 10
-        let session = URLSession(configuration: .ephemeral)
-        defer { session.finishTasksAndInvalidate() }
-        guard let (data, response) = try? await session.data(for: request),
-              let http = response as? HTTPURLResponse,
-              (200 ..< 300).contains(http.statusCode)
-        else { return nil }
-        return data
-    }
 }

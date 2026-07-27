@@ -12,27 +12,33 @@ import UIKit
 struct HomeShortcutTests {
     // MARK: - The cards
 
-    @Test("Threads shows a count only when there is something new; Later always says zero")
-    func countVisibility() {
-        // The shortcut answers "is there anything for me in there". `Threads · 0` is that
-        // question answered "no" in a way someone has to read and dismiss every launch.
-        #expect(!HomeShortcut.threads.showsCount(0))
-        #expect(HomeShortcut.threads.showsCount(1))
-        // Later is different only because `Later · 0 items` is what was asked for, and it
-        // is currently the only thing that row says about itself.
-        #expect(HomeShortcut.later.showsCount(0))
-
+    @Test("every card says its number, zero included")
+    func countLabels() {
+        // Threads used to say nothing at zero, on the reasoning that an absence is quieter
+        // than a `0`. It is quieter, and it is also ambiguous: a card with no second line
+        // reads as one that has not loaded rather than one with nothing in it.
+        #expect(HomeShortcut.threads.countLabel(0) == "0 new")
         #expect(HomeShortcut.threads.countLabel(1) == "1 new")
         #expect(HomeShortcut.threads.countLabel(4) == "4 new")
         #expect(HomeShortcut.later.countLabel(0) == "0 items")
         #expect(HomeShortcut.later.countLabel(1) == "1 item")
     }
 
+    @Test("a card with something in it is bordered, and an empty one is not")
+    func borderFollowsTheCount() {
+        // The rule the card draws its accent border from. Asserted here rather than against
+        // a rendered card, because a stroke is not something a test can read back — and
+        // stated as a fact about the *count* so no card can ever be the exception.
+        #expect(!HomeShortcutCard.hasSomethingWaiting(0))
+        #expect(HomeShortcutCard.hasSomethingWaiting(1))
+        #expect(HomeShortcutCard.hasSomethingWaiting(12))
+    }
+
     @Test("a card is spoken as its destination and what is in it")
     func accessibilityLabels() {
         // `.combine` flattens the card into one element, so this string is the whole of
         // what a screen reader gets — the two lines it draws have to arrive as a sentence.
-        #expect(HomeShortcutCard.accessibilityLabel(.threads, count: nil) == "Threads")
+        #expect(HomeShortcutCard.accessibilityLabel(.threads, count: 0) == "Threads, 0 new")
         #expect(HomeShortcutCard.accessibilityLabel(.threads, count: 3) == "Threads, 3 new")
         #expect(HomeShortcutCard.accessibilityLabel(.later, count: 0) == "Later, 0 items")
     }
@@ -48,17 +54,17 @@ struct HomeShortcutTests {
 
     // MARK: - Summarising a thread
 
-    @Test("the opener is cut at 2,000 characters, and marked where it was cut")
-    func openerCap() {
+    @Test("a shown message is cut at 2,000 characters, and marked where it was cut")
+    func messageCap() {
         let short = String(repeating: "a", count: 1999)
-        #expect(ThreadSummary.opener(short) == short)
+        #expect(ThreadSummary.cut(short) == short)
 
         let exact = String(repeating: "a", count: 2000)
         // At the limit, not over it: nothing is cut and nothing is claimed to be.
-        #expect(ThreadSummary.opener(exact) == exact)
+        #expect(ThreadSummary.cut(exact) == exact)
 
         let long = String(repeating: "a", count: 2001)
-        let cut = ThreadSummary.opener(long)
+        let cut = ThreadSummary.cut(long)
         #expect(cut.count == 2001)
         #expect(cut.hasSuffix("\u{2026}"))
         #expect(cut.dropLast() == String(repeating: "a", count: 2000))
@@ -67,8 +73,8 @@ struct HomeShortcutTests {
         // family emoji are far more than 2,000 UTF-16 units; a unit-based cut would land
         // mid-cluster and produce mojibake.
         let emoji = String(repeating: "👩‍👩‍👧‍👦", count: 2001)
-        #expect(ThreadSummary.opener(emoji).count == 2001)
-        #expect(ThreadSummary.opener(emoji).dropLast().allSatisfy { $0 == "👩‍👩‍👧‍👦" })
+        #expect(ThreadSummary.cut(emoji).count == 2001)
+        #expect(ThreadSummary.cut(emoji).dropLast().allSatisfy { $0 == "👩‍👩‍👧‍👦" })
     }
 
     @Test("the cut is applied to the row, so a huge opener is never parsed whole")
@@ -185,7 +191,7 @@ struct HomeShortcutTests {
         #expect(marks.unseenCount(among: model.unreadThreads) == 0)
     }
 
-    @Test("the Threads screen reads each thread's opener, its mentions, and its people")
+    @Test("the Threads screen reads each thread's two messages, their mentions, and its people")
     @MainActor
     func threadsModelLoads() async throws {
         let temp = TempStore()
@@ -223,8 +229,8 @@ struct HomeShortcutTests {
         #expect(thread.latestReply.content == "and again")
         #expect(thread.newReplyCount == 2)
         // The opener's own `p` tags, so its `@`-token resolves here exactly as it does in
-        // the thread this row opens. The newest reply is no longer drawn, so its mentions
-        // are no longer read.
+        // the thread this row opens. A reply that mentions nobody resolves to nothing, which
+        // is not the same as one whose refs were never read — see `ThreadsRowTests`.
         #expect(model.mentions(for: thread.opener.id).map(\.pubkey) == [reader.pubkey])
         #expect(model.mentions(for: thread.latestReply.id).isEmpty)
 
