@@ -37,7 +37,6 @@ struct ChannelListModelTests {
         #expect(channel.name == "General")
         #expect(channel.picture == "https://x/pic")
         #expect(channel.lastMessageID == message.id)
-        #expect(model.mentions(for: channel).map(\.pubkey) == [relay.pubkey])
         // No kind-0 profile for the author, so the row falls back to the raw pubkey.
         #expect(channel.lastMessageAuthor == author.pubkey)
         #expect(model.channels.count == 1)
@@ -73,6 +72,40 @@ struct ChannelListModelTests {
         )
         await waitUntil { model.channels.first?.unreadCount == 0 }
         #expect(model.channels.first?.hasUnread == false)
+    }
+
+    @Test("the mention badge counts only the unread messages addressed to the reader, live")
+    func mentionCountTracksReadState() async throws {
+        let temp = TempStore()
+        defer { temp.remove() }
+        let store = try temp.open()
+        let relay = try Fixture()
+        let peer = try Fixture()
+        let reader = try Fixture()
+
+        let model = ChannelListModel(store: store, selfPubkey: reader.pubkey)
+        let run = Task { await model.run() }
+        defer { run.cancel() }
+
+        _ = try await store.ingest(batch: [
+            try relay.channelMetadata("general", name: "General", at: 500),
+            try peer.message("nothing to do with you", in: "general", at: 1_000),
+            try peer.event(
+                .channelMessage, "hey @reader",
+                tags: [["h", "general"], ["p", reader.pubkey]], at: 2_000
+            ),
+        ], phase: .backfill)
+
+        await waitUntil { model.channels.first?.unreadCount == 2 }
+        #expect(model.channels.first?.unreadMentionCount == 1)
+
+        // Reading past the mention clears the badge while an ordinary unread remains
+        // behind it — the two counts move independently.
+        try await store.applyReadState(
+            author: reader.pubkey, slot: "phone", contexts: ["general": 2_000],
+            sourceCreatedAt: 10, sourceEventID: "e"
+        )
+        await waitUntil { model.channels.first?.unreadMentionCount == 0 }
     }
 
     @Test("a newer message reorders the list live")

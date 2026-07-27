@@ -23,8 +23,6 @@ final class ChannelListModel {
     /// True once the first snapshot has been applied, so the view can tell "empty"
     /// from "not loaded yet".
     private(set) var hasLoaded = false
-    /// Mention identities for each newest-message preview.
-    private(set) var mentionsByMessageID: [String: MentionRefList] = [:]
 
     private let store: BuzzEventStore
     /// The local identity, so a channel's own posts are excluded from its unread
@@ -42,10 +40,12 @@ final class ChannelListModel {
     nonisolated func run() async {
         do {
             for try await _ in DatabaseSignal.changes(in: store.reader) {
+                // One read. The second — a `mentions(for:)` batch over every row's newest
+                // message id — went with the preview line it fed: the sidebar's mention
+                // badge is now a column on this same query, counted over every unread
+                // message rather than guessed from the newest one's `p` tags.
                 let rows = (try? store.channelList(selfPubkey: selfPubkey)) ?? []
-                let messageIDs = rows.compactMap(\.lastMessageID)
-                let mentions = (try? store.mentions(for: messageIDs)) ?? [:]
-                await apply(rows, mentions: mentions)
+                await apply(rows)
             }
         } catch {
             // The stream ends on cancellation or store teardown; the last snapshot
@@ -53,23 +53,17 @@ final class ChannelListModel {
         }
     }
 
-    func mentions(for channel: ChannelListRow) -> [MentionRef] {
-        guard let messageID = channel.lastMessageID else { return [] }
-        return mentionsByMessageID[messageID]?.refs ?? []
-    }
-
-    private func apply(_ rows: [ChannelListRow], mentions: [String: MentionRefList]) {
+    private func apply(_ rows: [ChannelListRow]) {
         // The same guard ``EntityDirectoryModel/apply(_:)`` carries, and for the same
         // reason: the observation re-fires on *every* committed transaction, so a
         // reaction, a typing-unrelated read-state blob, or a message in a channel whose
-        // preview did not change would otherwise assign an equal list — and an equal
+        // row did not change would otherwise assign an equal list — and an equal
         // assignment still invalidates every view reading it. This view is the sidebar
         // and the root of the environment the whole app resolves names through, so that
-        // is a global re-render pump. Covers all three assigned properties, `hasLoaded`
+        // is a global re-render pump. Covers both assigned properties, `hasLoaded`
         // included, so the very first (empty) snapshot still lands.
-        guard rows != channels || mentions != mentionsByMessageID || !hasLoaded else { return }
+        guard rows != channels || !hasLoaded else { return }
         channels = rows
-        mentionsByMessageID = mentions
         hasLoaded = true
     }
 }

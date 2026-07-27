@@ -1,12 +1,18 @@
 import BuzzKit
 import Foundation
 
-/// The sidebar's three groupings (§8): Channels, Direct Messages, Agents.
+/// The sidebar's groupings: Starred, then Channels, Direct Messages, Agents.
 ///
-/// A section is *derived*, never stored: which one a conversation lands in is a
-/// projection of ``ConversationIdentity/Kind``, which the foundation already decided
+/// Three of the four are *derived*, never stored: which one a conversation lands in is
+/// a projection of ``ConversationIdentity/Kind``, which the foundation already decided
 /// from the roster. There is no second classifier here.
+///
+/// ``starred`` is the exception, and deliberately so — it is the one grouping that is
+/// not a fact about the conversation but a choice the reader made about it, held on this
+/// device (see ``StarredConversations``). It is not a fifth kind: a starred conversation
+/// keeps its kind, its title, and its mark, and only its heading changes.
 enum SidebarSection: String, CaseIterable, Hashable, Sendable, Identifiable {
+    case starred
     case channels
     case directMessages
     case agents
@@ -16,6 +22,7 @@ enum SidebarSection: String, CaseIterable, Hashable, Sendable, Identifiable {
     /// The header's label.
     var title: String {
         switch self {
+        case .starred: "Starred"
         case .channels: "Channels"
         case .directMessages: "Direct Messages"
         case .agents: "Agents"
@@ -50,10 +57,10 @@ enum SidebarSection: String, CaseIterable, Hashable, Sendable, Identifiable {
 
 /// How one row advertises unread activity.
 ///
-/// Two *visually distinct* states, the pattern worth lifting from the Buzz Flutter
-/// client: a quiet dot for "there is something new in here", a numeric pill for
-/// "something new in here is addressed to you". Folding both into one badge is
-/// exactly what makes a mention easy to walk past.
+/// Two *visually distinct* states, the pattern Slack and the Buzz Flutter client share:
+/// a name in bold for "there is something new in here", a numeric badge for "this many
+/// of them are addressed to you". Folding both into one badge is exactly what makes a
+/// mention easy to walk past.
 enum UnreadIndicator: Hashable, Sendable {
     /// Caught up — nothing drawn.
     ///
@@ -61,54 +68,60 @@ enum UnreadIndicator: Hashable, Sendable {
     /// `Optional.none` at every comparison site, so `dictionary[key] == .none` silently
     /// asks whether the *lookup* failed instead of whether the row is read.
     case caughtUp
-    /// Unread messages, none of which mention the local identity: a small dot.
+    /// Unread messages, none of which mention the local identity. The bolded name is the
+    /// whole signal; there is no separate dot beside it.
     case unread
-    /// Unread messages that mention the local identity: a numeric pill.
+    /// How many unread messages mention the local identity: a numeric badge.
     case mention(Int)
 
-    /// The indicator for a channel's unread count and whether those unread messages
-    /// mention you.
+    /// The indicator for a channel's unread count and how many of those unread messages
+    /// address the local identity.
     ///
-    /// # Known limitation
-    ///
-    /// `mentionsSelf` can only be answered from the **newest** message's `p` tags:
-    /// ``ChannelListRow`` carries one message's worth of preview and
-    /// ``BuzzEventStore/mentions(for:)`` is asked about exactly those ids, so there is
-    /// no per-channel "unread mentions" count to read. A mention sitting in an older
-    /// but still-unread message therefore shows as a plain dot. That is the honest
-    /// reading of the data the model has, not an approximation of a count it does not.
-    static func resolve(unreadCount: Int, mentionsSelf: Bool) -> UnreadIndicator {
+    /// Both numbers come from one ``BuzzKit/ChannelListRow``, counted over the same set
+    /// by the same query — so the badge cannot claim more mentions than the row has
+    /// unread messages, and a mention in an older-but-still-unread message counts
+    /// exactly like a mention in the newest one. (Until Part 6 the answer could only be
+    /// read from the *newest* message's `p` tags, so an older unread mention showed as a
+    /// plain dot and the badge borrowed the unread count for its number.)
+    static func resolve(unreadCount: Int, mentionCount: Int) -> UnreadIndicator {
         guard unreadCount > 0 else { return .caughtUp }
-        return mentionsSelf ? .mention(unreadCount) : .unread
+        return mentionCount > 0 ? .mention(mentionCount) : .unread
     }
 
-    /// Whether the row should read as unread (bolder title, primary-coloured preview).
+    /// Whether the row should read as unread — a bolder, full-strength name.
     var isUnread: Bool { self != .caughtUp }
 
-    /// The pill's text, capped so a very busy channel never widens the row. `nil` for
-    /// the states that draw no pill.
+    /// The badge's text, capped so a very busy channel never widens the row. `nil` for
+    /// the states that draw no badge.
     var badgeText: String? {
         guard case let .mention(count) = self else { return nil }
         return count > 99 ? "99+" : "\(count)"
     }
 
     /// The spoken form, folded into the row's combined label so VoiceOver does not
-    /// meet an unlabelled dot.
+    /// meet an unlabelled badge.
     var accessibilityDescription: String? {
         switch self {
         case .caughtUp: nil
         case .unread: "unread"
-        case let .mention(count): "\(count) unread, mentions you"
+        case let .mention(count): count == 1 ? "1 mention" : "\(count) mentions"
         }
     }
 }
 
 /// One sidebar row, fully resolved once per snapshot.
 ///
-/// Everything the row draws is decided here — its section, title, avatar, author
-/// prefix, indicator, and even its mention resolver — so the view body performs no
-/// name resolution, no store read, and no per-row formatter or resolver construction.
-/// That is the scroll-performance half of §8 and §9.
+/// Everything the row draws is decided here — its section, title, mark, and indicator —
+/// so the view body performs no name resolution and no store read. That is the
+/// scroll-performance half of §8 and §9.
+///
+/// # What a row no longer carries
+///
+/// A message preview, its author prefix, its own mention resolver, and its timestamp.
+/// The Slack-style list shows a conversation's *name* and whether it wants you, and
+/// nothing else — so the resolver a preview needed is not built, the snippet is not
+/// styled, and the shared clock is not read once per row. What used to be the most
+/// expensive part of a sidebar snapshot is now absent rather than optimised.
 struct SidebarRow: Identifiable {
     /// The navigation value the row pushes. Deliberately still a ``ChannelListRow``,
     /// so the pushed timeline's `navigationDestination(for:)` is unchanged.
@@ -116,28 +129,25 @@ struct SidebarRow: Identifiable {
     /// The conversation this row *is*, as the shared resolver sees it.
     let conversation: ConversationIdentity
     let indicator: UnreadIndicator
-    /// The preview's author prefix, already human-readable; `nil` when there is no
-    /// author to name.
-    let authorLabel: String?
-    /// The resolver for the preview's `@`/`#` tokens, built once here rather than per
-    /// render pass.
-    let previewResolver: MessageMentionResolver
+    /// Whether the reader has starred this conversation on this device. Decided here so
+    /// the row's swipe action and its heading agree without either consulting the store
+    /// of stars a second time.
+    let isStarred: Bool
     /// The channel's roster, so the row's presence dot is a set test rather than a
     /// lookup back into a model.
     let members: Set<String>
 
     var id: String { channel.id }
-    var section: SidebarSection { SidebarSection.section(for: conversation.kind) }
+    /// A starred conversation is filed under its star rather than under its kind — the
+    /// Slack rule, and the reason the section is worth having: it is not a copy of the
+    /// row that also appears below, it is where the row now lives.
+    var section: SidebarSection {
+        isStarred ? .starred : SidebarSection.section(for: conversation.kind)
+    }
+
     /// Always a human-readable name — a channel's name, or the peer's for a DM.
     var title: String { conversation.title }
     var isPrivate: Bool { conversation.isPrivate }
-    var date: Date? { channel.lastMessageDate }
-
-    /// The newest message's text, or `nil` for a conversation with nothing in it yet.
-    var snippet: String? {
-        guard let snippet = channel.lastMessageSnippet, !snippet.isEmpty else { return nil }
-        return snippet
-    }
 }
 
 /// One section as the sidebar draws it.
@@ -167,38 +177,22 @@ struct SidebarContent {
     ///   - channels: the live channel list, in the store's own order.
     ///   - names: the shared resolver — the only source of titles, avatars, kinds, and
     ///     rosters.
-    ///   - channelNames: the app-wide `#channel` map, for the preview's `#`-tokens.
-    ///   - mentions: the newest message's mention refs for a row, injected so this
-    ///     stays a pure function over data the caller already has.
+    ///   - starred: the conversation ids the reader has starred on this device.
     static func build(
         channels: [ChannelListRow],
         names: EntityNames,
-        channelNames: ChannelNameMap,
-        mentions: (ChannelListRow) -> [MentionRef]
+        starred: Set<String> = []
     ) -> SidebarContent {
         var grouped: [SidebarSection: [SidebarRow]] = [:]
         for channel in channels {
-            let refs = mentions(channel)
             let row = SidebarRow(
                 channel: channel,
                 conversation: names.conversation(for: channel),
                 indicator: .resolve(
                     unreadCount: channel.unreadCount,
-                    mentionsSelf: mentionsSelf(refs, selfPubkey: names.selfPubkey)
+                    mentionCount: channel.unreadMentionCount
                 ),
-                authorLabel: authorLabel(
-                    channel.lastMessageAuthor,
-                    pubkey: channel.lastMessageAuthorPubkey,
-                    names: names
-                ),
-                previewResolver: MessageMentionResolver(
-                    // The shared aliasing, not a sidebar-local copy: the timeline and a
-                    // thread build their per-message resolver through the same call, so a
-                    // profile-less mention resolves identically on all three.
-                    mentions: names.aliased(refs),
-                    channels: channelNames,
-                    selfPubkey: names.selfPubkey
-                ),
+                isStarred: starred.contains(channel.id),
                 members: names.members(of: channel.id)
             )
             grouped[row.section, default: []].append(row)
@@ -239,39 +233,7 @@ extension SidebarContent {
     }
 }
 
-// MARK: - Preview resolution
-
-extension SidebarContent {
-    /// The author prefix for a row's preview, guaranteed human-readable.
-    ///
-    /// The chain is ``TimelineRowView``'s, so the same person prefixes a preview here and
-    /// heads a message there: the shared directory first — which reaches the agent name,
-    /// the NIP-05 username, and finally the short `npub1…` form that a profile-only
-    /// projection cannot — then the display name the row itself carries, for an identity
-    /// the directory has no entry for, and the short identifier as the floor.
-    ///
-    /// It takes the author's **key** as well as the label because
-    /// ``ChannelListRow/lastMessageAuthor`` is *either* a kind-0 display name *or* the raw
-    /// pubkey, and telling those apart by shape (64 hex characters) is a guess that a user
-    /// whose display name happens to be 64 hex characters loses — the row then showed them
-    /// a fabricated, plausible-looking `npub1…` for someone else. With the key in hand the
-    /// test is an equality, not a heuristic.
-    ///
-    /// An absent author with no key yields `nil` and the row simply shows the message.
-    static func authorLabel(_ author: String?, pubkey: String?, names: EntityNames) -> String? {
-        let carried = author?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard let pubkey, !pubkey.isEmpty else {
-            return carried.isEmpty ? nil : carried
-        }
-        if let human = names.humanName(for: pubkey) { return human }
-        if !carried.isEmpty, carried.lowercased() != pubkey.lowercased() { return carried }
-        return names.shortIdentifier(for: pubkey)
-    }
-
-    /// Whether any of a message's mentions is the local identity.
-    static func mentionsSelf(_ refs: [MentionRef], selfPubkey: String?) -> Bool {
-        guard let selfPubkey, !selfPubkey.isEmpty else { return false }
-        let key = selfPubkey.lowercased()
-        return refs.contains { $0.pubkey.lowercased() == key }
-    }
-}
+// The author prefix and the per-row mention resolver that used to live here went with
+// the preview line they served. Whether a row's unread messages mention you is no longer
+// inferred from the newest message's `p` tags either — ``BuzzKit/ChannelListRow`` counts
+// it directly, over the same set it counts unread messages over.

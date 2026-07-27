@@ -211,8 +211,8 @@ struct EntityNamesTests {
         #expect(resolver.aliased([]).isEmpty)
     }
 
-    @Test("a profile-less mention resolves identically in the timeline and the sidebar")
-    func profilelessMentionResolvesOnEverySurface() throws {
+    @Test("a profile-less mention resolves only because the surface aliases through the directory")
+    func profilelessMentionNeedsTheDirectoryAlias() throws {
         let rows = [channel("general", name: "General")]
         let resolver = names(
             entities: [
@@ -232,23 +232,19 @@ struct EntityNamesTests {
         let unaliased = MessageMentionResolver(mentions: stored, channels: .empty, selfPubkey: me)
         #expect(unaliased.mention(forName: "Jarvis") == nil)
 
-        // The resolver a timeline row builds, and the one the sidebar row carries, now go
-        // through the same ``EntityNames/aliased(_:)``.
+        // The resolver a timeline row builds goes through ``EntityNames/aliased(_:)``, and
+        // that is what makes the authored token resolve.
         let timeline = MessageMentionResolver(
             mentions: resolver.aliased(stored), channels: .empty, selfPubkey: me
         )
-        let sidebar = try #require(
-            SidebarContent.build(
-                channels: rows,
-                names: resolver,
-                channelNames: .empty,
-                mentions: { _ in stored }
-            ).sections.first?.rows.first?.previewResolver
-        )
         #expect(timeline.mention(forName: "Jarvis")?.pubkey == agent)
-        #expect(sidebar.mention(forName: "Jarvis")?.pubkey == agent)
-        // Identical, not merely both non-nil: one aliasing means one answer everywhere.
-        #expect(timeline.identity == sidebar.identity)
+
+        // The sidebar was the second surface this was asserted across; since Part 6 its
+        // rows draw no message text, so the timeline row is the only place a mention is
+        // rendered and `aliased(_:)` has one caller. The aliasing itself is asserted
+        // directly above, in `aliasesAgentAndProfileNames`.
+        #expect(SidebarContent.build(channels: rows, names: resolver)
+            .sections.first?.rows.first?.title == "General")
     }
 
     @Test("a just-opened DM names itself from the peer the relay named, until its roster lands")

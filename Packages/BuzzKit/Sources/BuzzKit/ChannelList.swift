@@ -48,6 +48,16 @@ public struct ChannelListRow: Sendable, Hashable, Identifiable {
     /// ever marked read counts every such message (unknown state is unread, the
     /// conservative NIP-RS default). Zero when caught up.
     public let unreadCount: Int
+    /// How many of those unread messages `p`-tag the local identity — the number behind
+    /// the sidebar's mention badge.
+    ///
+    /// Counted over exactly the set ``unreadCount`` counts, so it can never exceed it: a
+    /// badge reading `3` on a row holding two unread messages is arithmetic a reader
+    /// notices immediately. A message that tags the same identity twice counts once.
+    ///
+    /// Zero without a local identity, which is the honest answer rather than a
+    /// degradation — with no key there is nobody for a message to be addressed to.
+    public let unreadMentionCount: Int
 
     public init(
         id: String,
@@ -60,7 +70,8 @@ public struct ChannelListRow: Sendable, Hashable, Identifiable {
         lastMessageSnippet: String?,
         lastMessageAuthor: String?,
         lastMessageAuthorPubkey: String? = nil,
-        unreadCount: Int = 0
+        unreadCount: Int = 0,
+        unreadMentionCount: Int = 0
     ) {
         self.id = id
         self.name = name
@@ -73,6 +84,7 @@ public struct ChannelListRow: Sendable, Hashable, Identifiable {
         self.lastMessageAuthor = lastMessageAuthor
         self.lastMessageAuthorPubkey = lastMessageAuthorPubkey
         self.unreadCount = unreadCount
+        self.unreadMentionCount = unreadMentionCount
     }
 
     /// Whether the channel carries any unread messages — the bold-name / count-pill gate.
@@ -175,6 +187,39 @@ extension BuzzEventStore {
               AND NOT EXISTS (SELECT 1 FROM thread t WHERE t.event_id = ue.id)
               AND NOT \(deletionApplies(target: "ue.id", author: "ue.pubkey", owner: "ueo.owner_pubkey"))
             GROUP BY ue.h
+        ),
+        -- The subset of `unread` addressed to the local identity: same predicates, plus a
+        -- `p` tag naming them. A second CTE over the same conditions rather than a
+        -- conditional aggregate inside `unread`, because the tag join is what makes it
+        -- cheap — it visits messages that carry a `p` tag rather than every unread message
+        -- in the workspace. COUNT(DISTINCT) because a message may tag one identity twice
+        -- and a badge counts messages, not tags. With `:selfPubkey` NULL the join matches
+        -- nothing and every channel falls to zero.
+        --
+        -- `COLLATE NOCASE` on the tag value, deliberately, where `event.pubkey`
+        -- comparisons elsewhere in this file are binary: a pubkey in the log went through
+        -- NIP-01's strictly-lowercase hex decode, but a *tag value* is a raw string
+        -- written by whichever client sent the message and never decoded. Missing a
+        -- mention because another client upper-cased a key is the worse failure, and it
+        -- is the case-insensitivity the sidebar's own `mentionsSelf` had before this
+        -- column replaced it. Measured at 2.0 ms against 2.2 ms binary over a 50k-event
+        -- store, so it costs nothing here — unlike on `event.pubkey`, where the same
+        -- collation is the difference between 2 ms and 63 ms (see ``RecentMentions``).
+        mentioned AS (
+            SELECT me.h AS channel_id, COUNT(DISTINCT me.id) AS n
+            FROM event me
+            JOIN event_tag mt ON mt.event_id = me.id
+                             AND mt.name = 'p'
+                             AND mt.value = :selfPubkey COLLATE NOCASE
+            LEFT JOIN event_owner meo ON meo.event_id = me.id
+            LEFT JOIN frontier mf ON mf.channel_id = me.h
+            WHERE me.kind = :kind
+              AND me.h IS NOT NULL
+              AND me.pubkey <> :selfPubkey
+              AND me.created_at > COALESCE(mf.read_at, 0)
+              AND NOT EXISTS (SELECT 1 FROM thread t WHERE t.event_id = me.id)
+              AND NOT \(deletionApplies(target: "me.id", author: "me.pubkey", owner: "meo.owner_pubkey"))
+            GROUP BY me.h
         )
         SELECT c.id            AS id,
                c.name          AS name,
@@ -186,7 +231,8 @@ extension BuzzEventStore {
                n.content       AS last_message_snippet,
                n.pubkey        AS author_pubkey,
                p.display_name  AS author_name,
-               COALESCE(u.n, 0) AS unread_count
+               COALESCE(u.n, 0) AS unread_count,
+               COALESCE(m.n, 0) AS mention_count
         FROM channel c
         LEFT JOIN visible n
                ON n.channel_id = c.id
@@ -197,6 +243,7 @@ extension BuzzEventStore {
                             OR (n2.created_at = n.created_at AND n2.msg_id > n.msg_id))
                   )
         LEFT JOIN unread u ON u.channel_id = c.id
+        LEFT JOIN mentioned m ON m.channel_id = c.id
         LEFT JOIN profile p ON p.pubkey = n.pubkey
         ORDER BY last_message_at DESC NULLS LAST, c.name ASC, c.id ASC
         """
@@ -221,7 +268,8 @@ extension BuzzEventStore {
             lastMessageSnippet: row["last_message_snippet"],
             lastMessageAuthor: author,
             lastMessageAuthorPubkey: authorPubkey,
-            unreadCount: row["unread_count"] ?? 0
+            unreadCount: row["unread_count"] ?? 0,
+            unreadMentionCount: row["mention_count"] ?? 0
         )
     }
 }

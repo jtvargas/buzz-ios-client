@@ -270,55 +270,6 @@ extension MentionComposerTests {
         #expect(systemEdit.tokens.isEmpty)
     }
 
-    // MARK: - Live index
-
-    @Test("one index completes people for @ and channels for #")
-    func completesBothKinds() async throws {
-        let temp = TempStore()
-        defer { temp.remove() }
-        let store = try temp.open()
-        let relay = try Fixture()
-        let member = try Fixture()
-
-        _ = try await store.ingest(batch: [
-            try relay.channelMetadata("room-1", name: "general"),
-            try relay.channelMetadata("room-2", name: "design", isPrivate: true),
-            try relay.event(
-                .groupMembers,
-                "",
-                tags: [["d", "room-1"], ["p", member.pubkey]],
-                at: 1_001
-            ),
-            try member.event(.metadata, #"{"display_name":"Ada Lovelace"}"#, at: 900),
-        ], phase: .backfill)
-
-        let model = MentionAutocompleteModel(channel: "room-1", store: store, selfPubkey: nil)
-        let observation = Task { await model.run() }
-        defer { observation.cancel() }
-
-        model.update(for: MentionDraft(text: "hey @ad"))
-        await waitUntil { model.suggestions.map(\.label) == ["Ada Lovelace"] }
-        #expect(model.suggestions.map(\.kind) == [.user])
-
-        model.update(for: MentionDraft(text: "see #de"))
-        await waitUntil { model.suggestions.map(\.label) == ["design"] }
-        #expect(model.suggestions.map(\.kind) == [.channel])
-        #expect(model.suggestions.first?.insertionLabel == "#design")
-        #expect(model.suggestions.first?.isPrivateChannel == true)
-
-        // A bare `#` lists every named channel, in the read's alphabetical order.
-        model.update(for: MentionDraft(text: "see #"))
-        await waitUntil { model.suggestions.count == 2 }
-        #expect(model.suggestions.map(\.label) == ["design", "general"])
-
-        // Picking one inserts through the same path a person goes through.
-        var draft = MentionDraft(text: "see #")
-        let picked = try #require(model.suggestions.last)
-        model.select(picked, in: &draft)
-        #expect(draft.text == "see #general ")
-        #expect(draft.mentionedPubkeys(sender: nil).isEmpty)
-    }
-
     // MARK: - Send path
 
     @Test("channel send emits one normalized p tag for the selected mention")

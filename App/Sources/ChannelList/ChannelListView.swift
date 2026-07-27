@@ -1,9 +1,9 @@
 import BuzzKit
 import SwiftUI
 
-/// The sidebar (§8): Channels, Direct Messages, and Agents as expandable sections of
-/// compact rows, live from the store, with the engine-state pill in the toolbar.
-/// Tapping a conversation pushes its timeline.
+/// The sidebar (§8): Starred, Channels, Direct Messages, and Agents as expandable
+/// sections of compact rows, live from the store, with the engine-state pill in the
+/// toolbar. Tapping a conversation pushes its timeline; a swipe or a long press stars it.
 ///
 /// # Why the app-wide environment lives here
 ///
@@ -22,6 +22,9 @@ struct ChannelListView: View {
     @State private var directory: EntityDirectoryModel
     @State private var ticker = RelativeTimeTicker()
     @State private var router: DirectMessageRouter
+    /// The reader's starred conversations, on this device. Owned here because this view
+    /// both groups by it and offers the action that changes it.
+    @State private var starred = StarredConversations()
     @State private var showAccount = false
     /// The pushed conversations. An explicit path — rather than the implicit one
     /// `NavigationLink(value:)` drives — because opening a direct message has to push
@@ -36,6 +39,8 @@ struct ChannelListView: View {
     // Expansion persists across launches, one `UserDefaults` flag per section. The keys
     // come from ``SidebarSection/expansionStorageKey`` so the view and the tests that
     // pin those strings cannot drift apart.
+    @AppStorage(SidebarSection.starred.expansionStorageKey)
+    private var starredExpanded = SidebarSection.defaultIsExpanded
     @AppStorage(SidebarSection.channels.expansionStorageKey)
     private var channelsExpanded = SidebarSection.defaultIsExpanded
     @AppStorage(SidebarSection.directMessages.expansionStorageKey)
@@ -63,7 +68,7 @@ struct ChannelListView: View {
         let channelNames = ChannelNameMap(channels: model.channels)
 
         NavigationStack(path: $path) {
-            sidebar(names: names, channelNames: channelNames)
+            sidebar(names: names)
                 .navigationTitle("Messages")
                 .navigationDestination(for: ConversationRoute.self) { route in
                     ChannelTimelineView(
@@ -150,17 +155,17 @@ struct ChannelListView: View {
 // MARK: - Content
 
 private extension ChannelListView {
-    /// One list, three sections, no card per row. `List` keeps the rows lazy and
+    /// One list, one section per heading, no card per row. `List` keeps the rows lazy and
     /// recycled; `SidebarRow.id` (the channel's group id) keeps their identity stable
-    /// as previews and unread counts stream in, so a re-read updates rows instead of
-    /// rebuilding them.
+    /// as unread counts stream in, so a re-read updates rows instead of rebuilding them.
     @ViewBuilder
-    func sidebar(names: EntityNames, channelNames: ChannelNameMap) -> some View {
+    func sidebar(names: EntityNames) -> some View {
         if model.channels.isEmpty {
             emptyState
         } else {
             List {
-                ForEach(sidebarContent(names: names, channelNames: channelNames).sections) { section in
+                let sections = sidebarContent(names: names).sections
+                ForEach(Array(sections.enumerated()), id: \.element.id) { index, section in
                     Section {
                         if expansion(for: section.section).wrappedValue {
                             rows(of: section)
@@ -169,6 +174,9 @@ private extension ChannelListView {
                         SidebarSectionHeader(
                             section: section.section,
                             count: section.count,
+                            // Only between sections: the first heading already has the
+                            // navigation bar's edge above it.
+                            showsDivider: index > 0,
                             isExpanded: expansion(for: section.section)
                         )
                         .listRowInsets(Self.headerInsets)
@@ -189,10 +197,28 @@ private extension ChannelListView {
                 ChannelRowView(row: row, presence: presence)
             }
             .listRowInsets(Self.rowInsets)
-            // No per-row rule: three sections of ruled rows read as a form, not as one
-            // navigation surface. Spacing and the section headings do the separating.
+            // No per-row rule: sections of ruled rows read as a form, not as one
+            // navigation surface. The section headings do the separating.
             .listRowSeparator(.hidden)
+            .swipeActions(edge: .leading, allowsFullSwipe: true) { starAction(row) }
+            // The same action a second way. A swipe is the fast path for someone who
+            // knows it is there; a long press is how anyone else finds it at all.
+            .contextMenu { starAction(row) }
         }
+    }
+
+    /// Star or unstar one conversation. One definition, used by both the swipe and the
+    /// context menu, so the two can never offer different words for the same action.
+    func starAction(_ row: SidebarRow) -> some View {
+        Button {
+            withAnimation(.snappy(duration: 0.22)) { starred.toggle(row.id) }
+        } label: {
+            Label(
+                row.isStarred ? "Unstar" : "Star",
+                systemImage: row.isStarred ? "star.slash" : "star"
+            )
+        }
+        .tint(.yellow)
     }
 
     @ViewBuilder
@@ -260,18 +286,14 @@ private extension ChannelListView {
     /// Deliberately does **not** read the presence roster: presence is consulted inside
     /// each row instead, so a heartbeat invalidates the small views that draw a dot
     /// rather than re-deriving every section (§9).
-    func sidebarContent(names: EntityNames, channelNames: ChannelNameMap) -> SidebarContent {
-        SidebarContent.build(
-            channels: model.channels,
-            names: names,
-            channelNames: channelNames,
-            mentions: { model.mentions(for: $0) }
-        )
+    func sidebarContent(names: EntityNames) -> SidebarContent {
+        SidebarContent.build(channels: model.channels, names: names, starred: starred.ids)
     }
 
     /// The persisted expansion flag for a section.
     func expansion(for section: SidebarSection) -> Binding<Bool> {
         switch section {
+        case .starred: $starredExpanded
         case .channels: $channelsExpanded
         case .directMessages: $directMessagesExpanded
         case .agents: $agentsExpanded
