@@ -189,6 +189,21 @@ struct ConversationScaffold<Content: View, Bar: View, Accessory: View>: View {
         // update pass and a scroll geometry callback runs after layout, so the window is
         // open by the time the new content has been measured.
         .onChange(of: contentRevision) { place.contentDidChange() }
+        // A change of *width* is the one content change the owner cannot declare, because it
+        // did not make it: every row re-wraps, so every row's height is genuinely new. A
+        // rotation, an iPad split, a Slide Over.
+        //
+        // Width and not size: the keyboard moves the container's height on every raise, and
+        // treating that as a content change is the whole defect ``ConversationReaderPlace``
+        // documents. Measured on iPhone 17 Pro / iOS 26, portrait → landscape → portrait with
+        // a reader parked in history: without this they came back seven messages adrift
+        // (rows 1042–1045 → 1035–1036, distance-to-bottom 3281 → 8086); with it they come
+        // back where they were.
+        .onScrollGeometryChange(for: CGFloat.self) { geometry in
+            geometry.containerSize.width
+        } action: { _, _ in
+            place.contentDidChange()
+        }
         // The reader's place, carried across the settling that follows a commit — and
         // deliberately *not* across a height change with no commit behind it, which is the
         // stack re-measuring rows nobody touched.
