@@ -234,8 +234,9 @@ extension BuzzEventStore {
 
     // MARK: - Shared query pieces
 
-    /// One column list so the two branches and the outer select cannot drift.
-    private static let timelineColumns = """
+    /// One column list so the branches and every outer select cannot drift. Internal
+    /// rather than private because `TimelineRows.swift` selects the same list.
+    static let timelineColumns = """
     id, pubkey, created_at, content, edited, deleted, rich,
     display_name, picture, parent_id, root_id, reply_count, last_reply_at,
     state, last_error
@@ -264,7 +265,7 @@ extension BuzzEventStore {
     ///
     /// The reply tallies exclude deleted replies, so a thread whose only reply was
     /// removed stops advertising one.
-    private static func eventBranch(where predicate: String) -> String {
+    static func eventBranch(where predicate: String) -> String {
         """
         SELECT e.id                AS id,
                e.pubkey            AS pubkey,
@@ -367,7 +368,7 @@ extension BuzzEventStore {
         """
     }
 
-    private static func makeRows(_ rows: [Row]) -> [TimelineRow] {
+    static func makeRows(_ rows: [Row]) -> [TimelineRow] {
         rows.map(makeRow)
     }
 

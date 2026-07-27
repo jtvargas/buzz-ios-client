@@ -18,24 +18,20 @@ import SwiftUI
 /// # The rule above it
 ///
 /// The divider belongs to the header rather than sitting between rows: a per-row rule
-/// makes a list of conversations read as a form, where one rule per heading
-/// separates the groups and nothing else. The first heading draws none — a rule under the
-/// navigation bar is a line against a line.
+/// makes a list of conversations read as a form, where one rule per heading separates the
+/// groups and nothing else. Every heading draws one, including the first — the home
+/// shortcuts always sit above it, so there is always a group up there to be separated
+/// from.
 struct SidebarSectionHeader: View {
     let section: SidebarSection
     /// How many conversations the section holds.
     let count: Int
-    /// Whether a rule is drawn above this heading. False for the first heading in the
-    /// list, which has the navigation bar's own edge above it already.
-    var showsDivider = true
     @Binding var isExpanded: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if showsDivider {
-                Divider()
-                    .accessibilityHidden(true)
-            }
+            Divider()
+                .accessibilityHidden(true)
             control
         }
     }
