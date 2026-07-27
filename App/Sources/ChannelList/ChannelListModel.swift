@@ -23,6 +23,9 @@ final class ChannelListModel {
     /// True once the first snapshot has been applied, so the view can tell "empty"
     /// from "not loaded yet".
     private(set) var hasLoaded = false
+    /// How many threads hold replies the reader has not seen — the Threads shortcut's
+    /// number. Threads, not replies: see ``BuzzEventStore/newThreadCount(selfPubkey:)``.
+    private(set) var newThreadCount = 0
 
     private let store: BuzzEventStore
     /// The local identity, so a channel's own posts are excluded from its unread
@@ -45,7 +48,11 @@ final class ChannelListModel {
                 // badge is now a column on this same query, counted over every unread
                 // message rather than guessed from the newest one's `p` tags.
                 let rows = (try? store.channelList(selfPubkey: selfPubkey)) ?? []
-                await apply(rows)
+                // A count, not the thread list: the shortcut needs a number, and reading
+                // fifty threads' worth of openers and replies per commit to draw one digit
+                // is work the Threads screen does when it is actually open.
+                let threads = (try? store.newThreadCount(selfPubkey: selfPubkey)) ?? 0
+                await apply(rows, newThreadCount: threads)
             }
         } catch {
             // The stream ends on cancellation or store teardown; the last snapshot
@@ -53,17 +60,18 @@ final class ChannelListModel {
         }
     }
 
-    private func apply(_ rows: [ChannelListRow]) {
+    private func apply(_ rows: [ChannelListRow], newThreadCount threads: Int) {
         // The same guard ``EntityDirectoryModel/apply(_:)`` carries, and for the same
         // reason: the observation re-fires on *every* committed transaction, so a
         // reaction, a typing-unrelated read-state blob, or a message in a channel whose
         // row did not change would otherwise assign an equal list — and an equal
         // assignment still invalidates every view reading it. This view is the sidebar
         // and the root of the environment the whole app resolves names through, so that
-        // is a global re-render pump. Covers both assigned properties, `hasLoaded`
+        // is a global re-render pump. Covers every assigned property, `hasLoaded`
         // included, so the very first (empty) snapshot still lands.
-        guard rows != channels || !hasLoaded else { return }
+        guard rows != channels || threads != newThreadCount || !hasLoaded else { return }
         channels = rows
+        newThreadCount = threads
         hasLoaded = true
     }
 }

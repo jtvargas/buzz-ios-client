@@ -29,8 +29,21 @@ struct ThreadView: View {
     /// actually has can reach it — a missing name renders as nothing at all, silently.
     static let threadSymbol = "text.append"
 
+    /// Where this thread rests when it opens. A thread reached from a message in its own
+    /// channel opens at the newest reply — the reader has the opener in front of them
+    /// already. One reached from the Threads screen's row opens at the opener instead,
+    /// because that row's tap is the question "what is this about".
+    private let landing: ThreadLanding
+
     /// The production initialiser: the engine is all three of the collaborators below.
-    init(root: String, channel: String, store: BuzzEventStore, engine: SyncEngine, selfPubkey: String?) {
+    init(
+        root: String,
+        channel: String,
+        store: BuzzEventStore,
+        engine: SyncEngine,
+        selfPubkey: String?,
+        landingOn landing: ThreadLanding = .latestReply
+    ) {
         self.init(
             root: root,
             channel: channel,
@@ -38,7 +51,8 @@ struct ThreadView: View {
             sender: engine,
             opener: engine,
             presence: engine.presenceStore,
-            selfPubkey: selfPubkey
+            selfPubkey: selfPubkey,
+            landingOn: landing
         )
     }
 
@@ -60,9 +74,11 @@ struct ThreadView: View {
         sender: any MessageSending,
         opener: any ThreadOpening,
         presence: PresenceStore,
-        selfPubkey: String?
+        selfPubkey: String?,
+        landingOn landing: ThreadLanding = .latestReply
     ) {
         channelID = channel
+        self.landing = landing
         _model = State(initialValue: ThreadModel(
             root: root,
             channel: channel,
@@ -110,6 +126,9 @@ struct ThreadView: View {
             action: { dismiss() }
         )
         .profileSheet(peer: $profilePeer, presence: presence)
+        // After the first render, so the scaffold's `onChange(of: jumpToken)` is installed
+        // and the bump is a transition it sees — see ``ThreadModel/landOnOpener()``.
+        .task { if landing == .opener { model.landOnOpener() } }
         .task { await model.run() }
         .task { await presence.run() }
     }

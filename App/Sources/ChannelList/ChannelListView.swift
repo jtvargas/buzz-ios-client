@@ -26,6 +26,11 @@ struct ChannelListView: View {
     /// both groups by it and offers the action that changes it.
     @State private var starred = StarredConversations()
     @State private var showAccount = false
+    /// The Threads screen, when it is pushed. A value rather than a `Bool` so it goes
+    /// through `navigationDestination(item:)` like every other push in the app.
+    @State private var showsThreads: ThreadsRoute?
+    /// Whether the Later shortcut's "not built yet" notice is showing.
+    @State private var showsLaterNotice = false
     /// The pushed conversations. An explicit path — rather than the implicit one
     /// `NavigationLink(value:)` drives — because opening a direct message has to push
     /// programmatically from a sheet that is already dismissing.
@@ -94,6 +99,17 @@ struct ChannelListView: View {
                 }
                 .sheet(isPresented: $showAccount) {
                     AccountView(store: store, engine: engine, selfPubkey: environment.selfPubkeyHex)
+                }
+                .navigationDestination(item: $showsThreads) { _ in
+                    ThreadsView(store: store, engine: engine, selfPubkey: environment.selfPubkeyHex)
+                }
+                .alert("Later isn't built yet", isPresented: $showsLaterNotice) {
+                    Button("OK", role: .cancel) {}
+                } message: {
+                    Text(
+                        "Saving a message for later is coming. The shortcut is here so the "
+                            + "rest of this screen can be built around it."
+                    )
                 }
         }
         // The app-wide `#channel` name→id map, built from the live channel list and
@@ -164,8 +180,8 @@ private extension ChannelListView {
             emptyState
         } else {
             List {
-                let sections = sidebarContent(names: names).sections
-                ForEach(Array(sections.enumerated()), id: \.element.id) { index, section in
+                shortcuts
+                ForEach(sidebarContent(names: names).sections) { section in
                     Section {
                         if expansion(for: section.section).wrappedValue {
                             rows(of: section)
@@ -174,9 +190,6 @@ private extension ChannelListView {
                         SidebarSectionHeader(
                             section: section.section,
                             count: section.count,
-                            // Only between sections: the first heading already has the
-                            // navigation bar's edge above it.
-                            showsDivider: index > 0,
                             isExpanded: expansion(for: section.section)
                         )
                         .listRowInsets(Self.headerInsets)
@@ -186,6 +199,40 @@ private extension ChannelListView {
             }
             .listStyle(.plain)
             .listSectionSpacing(.compact)
+        }
+    }
+
+    /// The Threads and Later shortcuts, in a headerless section above the conversations.
+    ///
+    /// A section of their own rather than rows inside the first one: they are not
+    /// conversations, and a heading over them would have to claim they are. Every
+    /// conversation heading below draws its rule because this section is always above it.
+    var shortcuts: some View {
+        Section {
+            ForEach(HomeShortcut.allCases) { shortcut in
+                Button { press(shortcut) } label: {
+                    HomeShortcutRow(shortcut: shortcut, count: count(for: shortcut))
+                }
+                .buttonStyle(.plain)
+                .listRowInsets(Self.rowInsets)
+                .listRowSeparator(.hidden)
+            }
+        }
+    }
+
+    func count(for shortcut: HomeShortcut) -> Int? {
+        let count = switch shortcut {
+        case .threads: model.newThreadCount
+        // Nothing is saved anywhere yet, so this is the truth rather than a placeholder.
+        case .later: 0
+        }
+        return shortcut.showsCount(count) ? count : nil
+    }
+
+    func press(_ shortcut: HomeShortcut) {
+        switch shortcut {
+        case .threads: showsThreads = ThreadsRoute()
+        case .later: showsLaterNotice = true
         }
     }
 

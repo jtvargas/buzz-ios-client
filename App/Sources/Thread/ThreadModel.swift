@@ -78,29 +78,12 @@ final class ThreadModel {
     /// second set of rules — see ``ConversationJumpState``.
     let jump = ConversationJumpState()
 
-    /// Bumped to ask the scaffold to scroll.
-    private(set) var jumpToken = 0
+    /// Bumped to ask the scaffold to scroll. Settable across the module rather than
+    /// `private(set)` for the reason ``ChannelTimelineModel/jumpToken`` is — the jumps
+    /// that bump it are in `ThreadModel+Jump.swift`.
+    var jumpToken = 0
     /// Where the next bump of ``jumpToken`` lands.
-    private(set) var jumpTarget: ConversationJumpTarget = .bottom
-
-    /// Releases the frozen tail and asks the view to scroll to the newest reply.
-    func jumpToLatest() {
-        isAtBottom = true
-        jumpTarget = .bottom
-        jumpToken += 1
-    }
-
-    /// Renders the held-back replies and lands the reader on the *first* of them —
-    /// where reading resumes, rather than at the bottom past everything the pill just
-    /// announced. See ``ChannelTimelineModel/jumpToNewMessages()`` for why the reader is
-    /// left away from the bottom, and what re-arms behind them.
-    func jumpToNewMessages() {
-        guard let target = jump.firstUnreadID else { return jumpToLatest() }
-        tail.release()
-        rebuild()
-        jumpTarget = .message(target)
-        jumpToken += 1
-    }
+    var jumpTarget: ConversationJumpTarget = .bottom
 
     private let store: BuzzEventStore
     private let sender: any MessageSending
@@ -110,8 +93,10 @@ final class ThreadModel {
 
     /// Every row the thread holds, ascending, whether or not it is being rendered.
     private var loaded: [TimelineRow] = []
-    /// The boundary behind which arrivals are held while the reader reads.
-    private var tail = TimelineTail()
+    /// The boundary behind which arrivals are held while the reader reads. Internal
+    /// for the same reason the jump properties above are: `ThreadModel+Jump.swift`
+    /// releases it.
+    var tail = TimelineTail()
 
     /// Whether ``primeIfNeeded()`` has already read the thread. Not observable: nothing
     /// reads it, and it is written from inside a `body`.
@@ -217,7 +202,9 @@ final class ThreadModel {
     }
 
     /// Re-derives the rendered rows and their grouped items from the loaded thread.
-    private func rebuild() {
+    /// Internal for the reason the jump state is: `ThreadModel+Jump.swift` re-derives
+    /// after releasing the tail.
+    func rebuild() {
         // A thread opened before its own opener had landed had no row to freeze at, so a
         // reader who left the bottom of it armed nothing — and `isAtBottom` has no
         // `false → false` transition to recover on. The first content to appear while they
@@ -297,15 +284,6 @@ final class ThreadModel {
                 // A transient send failure leaves the reply queued for the next drain.
             }
         }
-    }
-
-    /// Brings an own reply into view — but only when it would otherwise land somewhere
-    /// its author cannot see it. Already at the bottom with nothing held back, the author
-    /// is looking straight at where it will appear, and re-anchoring interrupts a scroll
-    /// in progress for no gain.
-    private func jumpToLatestIfNeeded() {
-        guard !isAtBottom || jump.unreadCount > 0 else { return }
-        jumpToLatest()
     }
 
 }
