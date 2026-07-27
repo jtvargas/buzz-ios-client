@@ -140,7 +140,7 @@ struct ThreadsView: View {
     private func isUnseen(_ activity: ThreadActivity) -> Bool {
         guard activity.hasNewReplies else { return false }
         guard let threadReads else { return true }
-        return threadReads.hasUnseen(activity.rootID, latestReplyAt: activity.latestReply.createdAt)
+        return threadReads.hasUnseen(activity.rootID, latestReplyByOthersAt: activity.latestReplyByOthersAt)
     }
 
     /// Where this thread lives, resolved through the shared directory — so a thread

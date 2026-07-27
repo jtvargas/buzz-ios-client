@@ -205,6 +205,11 @@ struct ThreadActivityTests {
         #expect(thread.replyCount == 3)
         #expect(thread.newReplyCount == 2)
         #expect(thread.hasNewReplies)
+        // The newest reply is the reader's own at 4000; the newest one a read mark can be
+        // judged against is the peer's at 3000. Taking the former is the cross-device bug:
+        // a mark set here would be outrun by the reader's own message.
+        #expect(thread.latestReply.createdAt == 4000)
+        #expect(thread.latestReplyByOthersAt == 3000)
         #expect(try store.unreadThreads(selfPubkey: selfPubkey).map(\.newReplyCount) == [2])
 
         // The frontier is the *channel's*: reading the channel to its end also clears its
@@ -219,6 +224,10 @@ struct ThreadActivityTests {
         #expect(try store.unreadThreads(selfPubkey: selfPubkey).isEmpty)
         // Still listed — the screen shows recent activity, not only unread activity.
         #expect(thread.replyCount == 3)
+        // And still the peer's 3000: the frontier decides what is *new*, never who said the
+        // last word. A maximum restricted to new replies would have collapsed to nothing
+        // here, and a device-local mark would have had nothing left to be compared against.
+        #expect(thread.latestReplyByOthersAt == 3000)
     }
 
     @Test("the card's read is one row per thread, not one per reply")
@@ -248,9 +257,12 @@ struct ThreadActivityTests {
         #expect(unread.map(\.rootID) == [quiet.id, busy.id])
         #expect(unread.map(\.newReplyCount) == [1, 3])
         #expect(unread.map(\.latestReplyAt) == [2300, 2200])
+        // With nothing of the reader's in either thread the two maxima coincide, which is
+        // the case that hides the difference — hence the ones above that do not.
+        #expect(unread.map(\.latestReplyByOthersAt) == [2300, 2200])
     }
 
-    @Test("a thread's own reply keeps the newest-reply mark moving")
+    @Test("the reader's own reply moves the newest reply, never the one a mark is judged by")
     func latestReplyAtIncludesOwnReplies() async throws {
         let database = TempDatabase()
         defer { database.remove() }
@@ -276,6 +288,10 @@ struct ThreadActivityTests {
         let unread = try #require(try store.unreadThreads(selfPubkey: selfKey.publicKey.hex).first)
         #expect(unread.newReplyCount == 1)
         #expect(unread.latestReplyAt == 3000)
+        // The two are a message apart, and that message is the reader's. A mark set at 2000
+        // on the device that read this thread is *behind* `latestReplyAt` and level with
+        // this — which is why the second one exists and the count is judged by it.
+        #expect(unread.latestReplyByOthersAt == 2000)
     }
 
     @Test("a non-positive limit reads nothing")
