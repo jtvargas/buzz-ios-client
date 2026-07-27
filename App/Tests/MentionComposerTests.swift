@@ -350,17 +350,29 @@ extension MentionComposerTests {
             ),
         ], phase: .backfill)
 
+        // The store's answer first, synchronously. If this holds and the panel's order
+        // still does not, the defect is in the ranking and not in the read — which is a
+        // distinction a single assertion on the rendered list cannot make, and one that
+        // cost a CI-only failure to learn.
+        #expect(try store.recentMentions(by: me.pubkey, limit: 20).pubkeys
+            == [cy.pubkey, bo.pubkey].map { $0.lowercased() })
+
         let model = MentionAutocompleteModel(channel: "room-1", store: store, selfPubkey: me.pubkey)
         let observation = Task { await model.run() }
         defer { observation.cancel() }
 
         model.update(for: MentionDraft(text: "hey @"))
-        await waitUntil { model.suggestions.map(\.label) == ["Cy", "Bo", "Ada"] }
+        // Waits for the index to be *populated*, then asserts its order. Waiting on the
+        // order itself makes a wrong order indistinguishable from a slow one: the poll
+        // simply never ends and the suite reports a timeout instead of the list it got.
+        await waitUntil { model.suggestions.count == 3 }
+        #expect(model.suggestions.map(\.label) == ["Cy", "Bo", "Ada"])
 
         // Recency does not outrank the name being typed: `ad` matches Ada alone, and a
         // more recently mentioned person who does not match is not a candidate at all.
         model.update(for: MentionDraft(text: "hey @ad"))
-        await waitUntil { model.suggestions.map(\.label) == ["Ada"] }
+        await waitUntil { model.suggestions.count == 1 }
+        #expect(model.suggestions.map(\.label) == ["Ada"])
     }
 
     // MARK: - Send path
