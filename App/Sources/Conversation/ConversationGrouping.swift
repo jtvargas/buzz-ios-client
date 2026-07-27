@@ -27,6 +27,20 @@ enum ConversationItem: Identifiable, Hashable {
     }
 }
 
+extension [ConversationItem] {
+    /// The id of the newest message in this list — what the scaffold lands on when it has to
+    /// reach "the newest message". See ``ConversationScaffold/newestID``.
+    ///
+    /// Searched from the end and skipping day separators, rather than taken from `last`. A
+    /// separator only ever precedes the messages of its day, so today the final element is
+    /// always a message; the search costs one comparison in that case, and it means a future
+    /// trailing element — a typing indicator, an unread rule — cannot silently become the
+    /// thing a conversation scrolls to.
+    var newestMessageID: String? {
+        last { $0.message != nil }?.id
+    }
+}
+
 /// The day a separator marks: its stable key and a date inside it to format.
 struct DayMarker: Identifiable, Hashable {
     let id: String

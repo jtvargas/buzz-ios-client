@@ -60,6 +60,7 @@ struct ThreadView: View {
             jumpToken: model.jumpToken,
             jumpTarget: model.jumpTarget,
             contentRevision: model.contentRevision,
+            newestID: model.items.newestMessageID,
             onLeavingScreen: releaseComposer
         ) {
             list

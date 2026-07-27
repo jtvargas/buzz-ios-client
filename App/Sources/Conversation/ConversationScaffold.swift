@@ -70,6 +70,29 @@ struct ConversationScaffold<Content: View, Bar: View, Accessory: View>: View {
     /// reading an observable `let` inside the smallest view that needs it — are for the
     /// things that fire on every scrolled frame. This is not one of them.
     var contentRevision: Int = 0
+    /// The id of the newest row the owner is rendering — the same id its `ForEach` gives that
+    /// row.
+    ///
+    /// This is what "go to the newest message" resolves against, in place of the content's
+    /// bottom edge. The edge is not a place. A `LazyVStack` sizes every row it has not
+    /// measured at the average of the ones it has, so a conversation resting on a message
+    /// taller than the viewport reports an extent that is largely invented — measured on
+    /// iPhone 17 Pro / iOS 26, a six-reply thread holding about 2 950 points of content
+    /// reported **16 019**, and a fifty-message channel **143 255**. Landing on the bottom of
+    /// that number puts the reader past where the messages end, with nothing rendered, and it
+    /// does not recover: sampled again five seconds later, still not one row on screen.
+    ///
+    /// A row id is immune to all of it, because a row is a real view with a real frame.
+    ///
+    /// Note what this does *not* do: the extent is still invented. It simply stops being
+    /// something anything navigates by. Apple's own guidance for lazy stacks is now explicit —
+    /// *"avoid using the absolute content size or content offset with lazy stacks, since these
+    /// are estimated and unstable"* (WWDC26 session 321) — and the remaining reads of both in
+    /// this file are the reason the surface still owns a known defect: see the note on
+    /// ``ConversationReaderPlace``.
+    ///
+    /// `nil` only for an empty conversation, where there is no newest message to go to.
+    var newestID: String?
     /// Fired while the top of the loaded history is near. The owner must be
     /// idempotent: this can fire repeatedly across one page load.
     var onReachedTop: () -> Void = {}
@@ -124,11 +147,11 @@ struct ConversationScaffold<Content: View, Bar: View, Accessory: View>: View {
     }
 
     var body: some View {
-        // The reader is here for one job — landing on a *particular* message, which is
-        // what the "N new messages" affordance asks for. See ``jump(using:)``.
+        // Every scroll this file performs goes through this proxy, because every one of them
+        // names a row. There is no path left that targets a content edge — see ``newestID``.
         ScrollViewReader { proxy in
             ZStack(alignment: .bottom) {
-                scroll
+                scroll(using: proxy)
                 // A `ZStack` child is laid out inside the safe area, so this bottom edge
                 // already sits above the keyboard (or the home indicator); `barHeight`
                 // lifts it clear of the composer. No inset arithmetic, no observer.
@@ -149,7 +172,7 @@ struct ConversationScaffold<Content: View, Bar: View, Accessory: View>: View {
         // could not reproduce.
     }
 
-    private var scroll: some View {
+    private func scroll(using proxy: ScrollViewProxy) -> some View {
         ScrollView(.vertical) {
             content
         }
@@ -211,18 +234,8 @@ struct ConversationScaffold<Content: View, Bar: View, Accessory: View>: View {
         // Separate from `Edges` on purpose: that projection is three `Bool`s so it fires
         // on band crossings, and this one has to see every reading, because the distance
         // it corrects to is taken from the ones where nothing changed.
-        .onScrollGeometryChange(for: ConversationReaderPlace.Span.self) { geometry in
-            ConversationReaderPlace.Span(
-                contentHeight: geometry.contentSize.height,
-                offset: geometry.contentOffset.y,
-                distance: geometry.contentSize.height - geometry.visibleRect.maxY
-            )
-        } action: { _, span in
-            switch place.correction(for: span, atBottomSlack: Self.atBottomSlack) {
-            case .none: break
-            case .bottom: position.scrollTo(edge: .bottom)
-            case let .offset(target): position.scrollTo(y: target)
-            }
+        .onScrollGeometryChange(for: ConversationReaderPlace.Span.self) { Self.span($0) } action: { _, span in
+            apply(place.correction(for: span, atBottomSlack: Self.atBottomSlack), using: proxy)
         }
         // Who is moving the list, and whether the reader has ever moved it themselves.
         // Attached beside the geometry observers so it binds to the same scroll view.
@@ -235,14 +248,23 @@ struct ConversationScaffold<Content: View, Bar: View, Accessory: View>: View {
             if phase != .idle, phase != .animating { place.hasMoved = true }
         }
         .scrollPosition($position)
-        // Written out per role rather than as the one-argument form, so each intent is
-        // legible: open at the newest message, follow the *container* when it changes
-        // (the keyboard, a growing composer), and rest a short conversation against the
-        // composer. `.sizeChanges` covers content height too, and for that half it does
-        // nothing at all — ``ConversationReaderPlace`` is what makes it hold, and carries
-        // the measurement.
+        // Two roles, not three. `.initialOffset` opens the conversation at its newest
+        // message; `.alignment` rests a short one against the composer instead of hanging it
+        // under the navigation bar.
+        //
+        // `.sizeChanges` is deliberately absent, and its removal is the other half of this
+        // change. It resolves against `contentSize.height`, so on a `LazyVStack` it followed
+        // an extent that inflates every time the keyboard takes height from the viewport and
+        // rows that left it revert to estimates — straight past the end of the real content.
+        // Measured across thirteen thread and channel shapes on iPhone 17 Pro / iOS 26
+        // (`~/.buzz/.scratch/scrollharness`, `FocusTests`): opening a conversation, touching
+        // nothing and tapping the composer failed twenty assertions with this anchor present
+        // and one with it removed, and the two shapes that came to rest with no message row
+        // on screen at all both stop doing so.
+        //
+        // What it was there for is now done by the correction above, which lands on a row
+        // instead of an edge.
         .defaultScrollAnchor(.bottom, for: .initialOffset)
-        .defaultScrollAnchor(.bottom, for: .sizeChanges)
         .defaultScrollAnchor(.bottom, for: .alignment)
         // Only the message list dismisses the keyboard, and this is applied inside
         // `safeAreaBar` so the bar's own scroll views do not inherit the mode.
@@ -257,29 +279,58 @@ struct ConversationScaffold<Content: View, Bar: View, Accessory: View>: View {
         }
     }
 
+    /// The three numbers ``ConversationReaderPlace`` reads, taken from one layout so they
+    /// cannot disagree with each other.
+    private static func span(_ geometry: ScrollGeometry) -> ConversationReaderPlace.Span {
+        ConversationReaderPlace.Span(
+            contentHeight: geometry.contentSize.height,
+            offset: geometry.contentOffset.y,
+            distance: geometry.contentSize.height - geometry.visibleRect.maxY
+        )
+    }
+
+    /// Carries out what one geometry reading implied.
+    ///
+    /// Split out from the observer that produces it only so ``scroll(using:)`` stays inside the
+    /// project's function-length rule; the two belong together.
+    private func apply(_ correction: ConversationReaderPlace.Correction, using proxy: ScrollViewProxy) {
+        switch correction {
+        case .none:
+            break
+        case .bottom:
+            // The newest *row*, never the content's bottom edge. The edge is what put the
+            // reader past the end of a largely invented extent, with nothing rendered and no
+            // recovery — see ``newestID``.
+            if let newestID { proxy.scrollTo(newestID, anchor: .bottom) }
+        case let .offset(target):
+            position.scrollTo(y: target)
+        }
+    }
+
     /// Performs the jump the owner just asked for.
     ///
-    /// # Why two mechanisms for one scroll
+    /// # Why both destinations are rows
     ///
-    /// `ScrollPosition` takes the bottom edge, which is what an own send and `↓ Latest`
-    /// want, and it is the same object the list's position is bound to.
+    /// They used to be a row and an edge: a particular message went through this proxy, and
+    /// "the newest message" went to `ScrollPosition`'s bottom edge. The edge half is gone,
+    /// because it resolves against `contentSize.height` — see ``newestID`` for what that
+    /// number is worth here. An own send or `↓ Latest` could land the reader past the end of
+    /// the content with nothing on screen, and did.
     ///
-    /// It cannot take a *message*, though — not here. `scrollTo(id:anchor:)` reaches the
-    /// right row, but its `anchor` argument loses to `defaultScrollAnchor(.bottom, for:
-    /// .alignment)` above: measured in a harness against this file, `anchor: .top` landed
-    /// the target hard against the *bottom* edge, with everything the pill had just
-    /// announced still below the fold — the same place the reader was already looking.
-    /// Dropping the `.alignment` anchor to fix it is not a trade worth making: that is
-    /// what rests a short conversation against the composer instead of under the
-    /// navigation bar.
-    ///
-    /// A `ScrollViewReader`'s proxy honours the anchor in the same hierarchy, so the two
-    /// jumps take the two paths, and each takes the one it is good at.
+    /// The asymmetry that remains is real and is why this takes the proxy rather than
+    /// `ScrollPosition`: the proxy honours its `anchor` argument in this hierarchy, whereas
+    /// `ScrollPosition.scrollTo(id:anchor:)` loses the anchor to
+    /// `defaultScrollAnchor(.bottom, for: .alignment)` below — measured, `anchor: .top` landed
+    /// the target hard against the bottom edge with everything the pill had just announced
+    /// still below the fold. The `.alignment` anchor earns its place, so the proxy is the path
+    /// that works alongside it.
     private func jump(using proxy: ScrollViewProxy) {
         withAnimation(.smooth(duration: 0.2)) {
             switch jumpTarget {
             case .bottom:
-                position.scrollTo(edge: .bottom)
+                // Anchored at the bottom, which is where a conversation rests anyway. Nothing
+                // here reads the extent.
+                if let newestID { proxy.scrollTo(newestID, anchor: .bottom) }
             case let .message(id):
                 // Anchored at the top, so the first thing under the reader's eye is the
                 // first message they have not read; a target too near the end of the
