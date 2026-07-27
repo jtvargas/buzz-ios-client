@@ -53,6 +53,31 @@ public struct ThreadActivity: Sendable, Hashable, Identifiable {
     public var hasNewReplies: Bool { newReplyCount > 0 }
 }
 
+/// One thread holding replies the reader has not seen: which thread, how many, and how
+/// recent the newest reply in it is.
+///
+/// Deliberately carries no message content. It is read on every committed transaction to
+/// draw a single number on the home screen, so it stays ids and integers — the openers and
+/// replies behind them are resolved only by ``BuzzEventStore/threadActivity(selfPubkey:limit:)``,
+/// which runs while the Threads screen is actually open.
+public struct UnreadThread: Sendable, Hashable, Identifiable {
+    /// The thread's root event id.
+    public let rootID: String
+    /// Replies newer than the channel's read frontier, written by somebody else.
+    public let newReplyCount: Int
+    /// The newest surviving reply's `created_at`, the reader's own included — the value a
+    /// device-local "I have seen this thread" mark is compared against.
+    public let latestReplyAt: Int64
+
+    public var id: String { rootID }
+
+    public init(rootID: String, newReplyCount: Int, latestReplyAt: Int64) {
+        self.rootID = rootID
+        self.newReplyCount = newReplyCount
+        self.latestReplyAt = latestReplyAt
+    }
+}
+
 public extension BuzzEventStore {
     /// Threads with replies, most recently active first.
     ///
@@ -80,18 +105,21 @@ public extension BuzzEventStore {
         }
     }
 
-    /// How many threads are holding replies the reader has not seen — the Threads card's
-    /// number.
+    /// The threads holding replies the reader has not seen, newest activity first — what
+    /// the Threads card counts.
     ///
-    /// Counts *threads*, not replies: the card offers a screen to go and read, and "4"
-    /// meaning four conversations to catch up on is a number someone can act on, where
-    /// four replies spread over one thread and three is not.
+    /// A list of roots rather than a bare number, because the number the card shows is not
+    /// this list's length: a thread the reader has already opened on this device is struck
+    /// off by ``ThreadReadMarks``, whose marks live in `UserDefaults` and so cannot be
+    /// joined here. Handing back the roots and their newest reply is what lets that
+    /// subtraction happen in the one place that knows about it, over ids and timestamps
+    /// rather than over message content.
     ///
     /// Its own query rather than a tally over ``threadActivity(selfPubkey:limit:)``,
     /// because this one runs on the sidebar's per-commit path while that one only runs
     /// while the Threads screen is open — and this one touches no message content at all.
-    nonisolated func newThreadCount(selfPubkey: String?) throws -> Int {
-        try reader.read { db in try Self.fetchNewThreadCount(db, selfPubkey: selfPubkey) }
+    nonisolated func unreadThreads(selfPubkey: String?) throws -> [UnreadThread] {
+        try reader.read { db in try Self.fetchUnreadThreads(db, selfPubkey: selfPubkey) }
     }
 }
 
@@ -214,22 +242,40 @@ extension BuzzEventStore {
         ])
     }
 
-    static func fetchNewThreadCount(_ db: Database, selfPubkey: String?) throws -> Int {
-        try Int.fetchOne(db, sql: """
+    /// The unread roots, aggregated per thread.
+    ///
+    /// `latest_reply_at` is taken over *every* surviving reply and not only the new ones,
+    /// because it is what a device-local read mark is compared against: a mark is set from
+    /// the newest reply on screen, which may well be the reader's own.
+    static func fetchUnreadThreads(_ db: Database, selfPubkey: String?) throws -> [UnreadThread] {
+        try Row.fetchAll(db, sql: """
         WITH \(threadFrontierCTE),
         \(threadRepliesCTE)
-        SELECT COUNT(DISTINCT r.root_id)
+        SELECT r.root_id           AS root_id,
+               MAX(r.created_at)   AS latest_reply_at,
+               SUM(CASE
+                     WHEN r.created_at > r.read_at
+                      AND (:selfPubkey IS NULL OR r.pubkey <> :selfPubkey)
+                     THEN 1 ELSE 0
+                   END) AS new_count
         FROM reply r
         JOIN event root2 ON root2.id = r.root_id
         LEFT JOIN event_owner reo ON reo.event_id = root2.id
-        WHERE r.created_at > r.read_at
-          AND (:selfPubkey IS NULL OR r.pubkey <> :selfPubkey)
-          AND root2.kind = :kind
+        WHERE root2.kind = :kind
           AND root2.h IS NOT NULL
           AND NOT \(deletionApplies(target: "root2.id", author: "root2.pubkey", owner: "reo.owner_pubkey"))
+        GROUP BY r.root_id
+        HAVING new_count > 0
+        ORDER BY latest_reply_at DESC, root_id DESC
         """, arguments: [
             "kind": EventKind.channelMessage.rawValue,
             "selfPubkey": selfPubkey,
-        ]) ?? 0
+        ]).map { row in
+            UnreadThread(
+                rootID: row["root_id"],
+                newReplyCount: row["new_count"] ?? 0,
+                latestReplyAt: row["latest_reply_at"] ?? 0
+            )
+        }
     }
 }

@@ -27,7 +27,8 @@ What follows describes the app as it is on `main`, not as it is planned. Anythin
 
 **Conversations**
 
-- **Sidebar** with three sections — Channels, Direct Messages, Agents — each collapsible, with its state remembered across launches. Rows carry the newest message, its time, and an unread indicator: a quiet dot for ordinary unread, a numeric badge when the unread messages mention you.
+- **Sidebar** with four sections — Starred, Channels, Direct Messages, Agents — each collapsible, with its state remembered across launches. A row is the conversation's name and nothing else: an unread one is bold and at full strength, and a numeric badge counts the unread messages that mention you. Starring a conversation is local to the device.
+- **Shortcut cards** above the list: **Threads**, which opens a screen of recent thread activity and counts the threads holding replies you have not read, and **Later**, which is not built yet and says so.
 - **Channels, direct messages and threads** all render through one shell, so a new surface inherits its scrolling, keyboard and layout behaviour rather than reimplementing it. (A thread deliberately opts out of one part: it does not page into history.)
 - A **direct message is a channel whose roster is exactly two members including you** — derived in one place rather than treated as a separate surface. An agent DM is the same thing with an agent on the other end.
 - **Open a DM from a profile sheet** — its `Message` button opens the existing conversation if there is one and asks the relay to create it if there is not.
@@ -69,11 +70,11 @@ What follows describes the app as it is on `main`, not as it is planned. Anythin
 These exist upstream, or are on the roadmap, and are honestly absent here:
 
 - **Push notifications.** There is no APNs registration; you see activity when the app is open.
-- **Activity feed** and **in-app search.** No mentions/reactions inbox, no cross-channel search screen.
+- **Activity feed** and **in-app search.** The Activity tab exists and is a placeholder: there is no mentions/reactions inbox behind it, and no cross-channel search screen.
 - **Media.** No image or file attachments — the composer's `+` opens a placeholder — and no inline media in messages. Avatars are the only images fetched.
 - **Authoring an edit or a deletion.** Both render when they arrive from elsewhere; Hive can only discard one of its own messages that has not left the outbox.
 - **A profile from the sidebar or the channel roster.** The sheet is reached from a message today, so someone who has not posted in the open conversation has no entry point.
-- **Forum, Pulse, invites and deep links, custom emoji, channel mutes and stars.**
+- **Forum, Pulse, invites and deep links, custom emoji, and channel mutes.** A conversation can be starred, but the star stays on the device rather than syncing.
 - **Creating a named channel, and editing a roster.** Hive asks the relay to open a direct message, and otherwise reads membership rather than changing it.
 - **An iPad layout.** The app installs and runs on iPad, but nothing is laid out for it.
 - **Widgets, share extension, App Intents, Live Activities.**
@@ -82,7 +83,7 @@ These exist upstream, or are on the roadmap, and are honestly absent here:
 
 ## Product model
 
-Sidebar-first, Slack-style: one navigation stack rooted on the conversation list, pushing a timeline, then a thread. Account and channel details are sheets. There is no tab bar — Activity and Search will arrive as their own surfaces when they are built.
+Sidebar-first, Slack-style: a Home tab rooted on the conversation list, pushing a timeline, then a thread — the tab bar hides itself inside a conversation, so a reading surface is still the whole screen. Account and channel details are sheets. The second tab, Activity, is a placeholder that says so; Search will arrive as its own surface when it is built.
 
 ## Architecture
 

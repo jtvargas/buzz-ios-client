@@ -86,6 +86,13 @@ struct ConversationTitleBar: ViewModifier {
     let action: () -> Void
     /// What VoiceOver says the tap does.
     var actionHint: String?
+    /// Whether the heading is a label rather than a control.
+    ///
+    /// A `Button` either way — the sizing this whole file is about belongs to the button,
+    /// not to the action — but hit testing is off, so it neither highlights nor pretends to
+    /// lead somewhere. The one heading that has nowhere to go is the Activity tab's, which
+    /// names a screen instead of a conversation.
+    var isInert = false
 
     /// The bound on the text column, kept in step with the surface's width so the pill can
     /// be as wide as the bar allows in landscape without risking the overflow menu in
@@ -117,6 +124,7 @@ struct ConversationTitleBar: ViewModifier {
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button(action: action) { label }
+                        .allowsHitTesting(!isInert)
                         .accessibilityLabel(accessibilityLabel)
                         .accessibilityHint(actionHint ?? "")
                 }
@@ -304,6 +312,22 @@ extension View {
             subtitle: subtitle,
             action: action,
             actionHint: actionHint
+        ))
+    }
+
+    /// The same heading with nothing behind a tap — for a screen that has a name but no
+    /// conversation and nowhere for the heading to lead. See ``ConversationTitleBar/isInert``.
+    func conversationTitle(
+        mark: ConversationTitleBar.Mark = .none,
+        title: String,
+        subtitle: ConversationTitleBar.Subtitle? = nil
+    ) -> some View {
+        modifier(ConversationTitleBar(
+            mark: mark,
+            title: title,
+            subtitle: subtitle,
+            action: {},
+            isInert: true
         ))
     }
 }

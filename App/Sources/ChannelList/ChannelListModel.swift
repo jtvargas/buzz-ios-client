@@ -23,9 +23,13 @@ final class ChannelListModel {
     /// True once the first snapshot has been applied, so the view can tell "empty"
     /// from "not loaded yet".
     private(set) var hasLoaded = false
-    /// How many threads hold replies the reader has not seen — the Threads shortcut's
-    /// number. Threads, not replies: see ``BuzzEventStore/newThreadCount(selfPubkey:)``.
-    private(set) var newThreadCount = 0
+    /// The threads holding replies the reader has not seen, newest first — what the
+    /// Threads shortcut counts, before the device's own read marks are subtracted.
+    ///
+    /// The roots rather than a number, because the number is not this list's length: a
+    /// thread already opened on this device is struck off by ``ThreadReadMarks``, which
+    /// lives in `UserDefaults` and so cannot be part of the store's read.
+    private(set) var unreadThreads: [UnreadThread] = []
 
     private let store: BuzzEventStore
     /// The local identity, so a channel's own posts are excluded from its unread
@@ -48,11 +52,12 @@ final class ChannelListModel {
                 // badge is now a column on this same query, counted over every unread
                 // message rather than guessed from the newest one's `p` tags.
                 let rows = (try? store.channelList(selfPubkey: selfPubkey)) ?? []
-                // A count, not the thread list: the shortcut needs a number, and reading
-                // fifty threads' worth of openers and replies per commit to draw one digit
-                // is work the Threads screen does when it is actually open.
-                let threads = (try? store.newThreadCount(selfPubkey: selfPubkey)) ?? 0
-                await apply(rows, newThreadCount: threads)
+                // Ids and timestamps, not the thread list: the shortcut needs a number the
+                // device's read marks can be subtracted from, and reading fifty threads'
+                // worth of openers and replies per commit to draw one digit is work the
+                // Threads screen does when it is actually open.
+                let threads = (try? store.unreadThreads(selfPubkey: selfPubkey)) ?? []
+                await apply(rows, unreadThreads: threads)
             }
         } catch {
             // The stream ends on cancellation or store teardown; the last snapshot
@@ -60,7 +65,7 @@ final class ChannelListModel {
         }
     }
 
-    private func apply(_ rows: [ChannelListRow], newThreadCount threads: Int) {
+    private func apply(_ rows: [ChannelListRow], unreadThreads threads: [UnreadThread]) {
         // The same guard ``EntityDirectoryModel/apply(_:)`` carries, and for the same
         // reason: the observation re-fires on *every* committed transaction, so a
         // reaction, a typing-unrelated read-state blob, or a message in a channel whose
@@ -69,9 +74,9 @@ final class ChannelListModel {
         // and the root of the environment the whole app resolves names through, so that
         // is a global re-render pump. Covers every assigned property, `hasLoaded`
         // included, so the very first (empty) snapshot still lands.
-        guard rows != channels || threads != newThreadCount || !hasLoaded else { return }
+        guard rows != channels || threads != unreadThreads || !hasLoaded else { return }
         channels = rows
-        newThreadCount = threads
+        unreadThreads = threads
         hasLoaded = true
     }
 }
