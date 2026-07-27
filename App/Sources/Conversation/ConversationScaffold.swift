@@ -74,6 +74,9 @@ struct ConversationScaffold<Content: View, Bar: View, Accessory: View>: View {
 
     @State private var position = ScrollPosition(idType: String.self)
     @State private var barHeight: CGFloat = 0
+    /// Where the reader is and who put them there — see ``ConversationReaderPlace`` for
+    /// what it corrects and why the anchors below are not enough on their own.
+    @State private var place = ConversationReaderPlace()
 
     /// The band that counts as *at* the bottom — releasing the owner's frozen tail.
     /// Tight, because releasing grows the content by every held row, and a
@@ -166,11 +169,40 @@ struct ConversationScaffold<Content: View, Bar: View, Accessory: View>: View {
             if isFarFromBottom != edges.farFromBottom { isFarFromBottom = edges.farFromBottom }
             if edges.nearTop { onReachedTop() }
         }
+        // The reader's place, restored whenever the *content* changes height under them.
+        // Separate from `Edges` on purpose: that projection is three `Bool`s so it fires
+        // on band crossings, and this one has to see every reading, because the distance
+        // it corrects to is taken from the ones where nothing changed.
+        .onScrollGeometryChange(for: ConversationReaderPlace.Span.self) { geometry in
+            ConversationReaderPlace.Span(
+                contentHeight: geometry.contentSize.height,
+                offset: geometry.contentOffset.y,
+                distance: geometry.contentSize.height - geometry.visibleRect.maxY
+            )
+        } action: { _, span in
+            switch place.correction(for: span, atBottomSlack: Self.atBottomSlack) {
+            case .none: break
+            case .bottom: position.scrollTo(edge: .bottom)
+            case let .offset(target): position.scrollTo(y: target)
+            }
+        }
+        // Who is moving the list, and whether the reader has ever moved it themselves.
+        // Attached beside the geometry observers so it binds to the same scroll view.
+        .onScrollPhaseChange { _, phase in
+            place.isScrolling = phase != .idle
+            // Every phase but the one this file causes itself. Naming the reader's phases
+            // instead would be a list to keep in step with the framework, and getting it
+            // wrong is silent: the conversation would simply pin itself to the newest
+            // message under someone reading history.
+            if phase != .idle, phase != .animating { place.hasMoved = true }
+        }
         .scrollPosition($position)
         // Written out per role rather than as the one-argument form, so each intent is
-        // legible: open at the newest message, keep the distance to the newest message
-        // when content or container size changes (an older page arriving, the keyboard,
-        // a growing composer), and rest a short conversation against the composer.
+        // legible: open at the newest message, follow the *container* when it changes
+        // (the keyboard, a growing composer), and rest a short conversation against the
+        // composer. `.sizeChanges` covers content height too, and for that half it does
+        // nothing at all — ``ConversationReaderPlace`` is what makes it hold, and carries
+        // the measurement.
         .defaultScrollAnchor(.bottom, for: .initialOffset)
         .defaultScrollAnchor(.bottom, for: .sizeChanges)
         .defaultScrollAnchor(.bottom, for: .alignment)
@@ -216,6 +248,10 @@ struct ConversationScaffold<Content: View, Bar: View, Accessory: View>: View {
                 // content simply lands as far as the scroll view can go, which is the
                 // bottom — and the bottom is where that message is anyway.
                 proxy.scrollTo(id, anchor: .top)
+                // Landing on a message is the reader choosing a place that is not the
+                // newest one, exactly as a drag is. Without this, the next content change
+                // would put them back at the bottom they deliberately left.
+                place.hasMoved = true
             }
         }
     }
