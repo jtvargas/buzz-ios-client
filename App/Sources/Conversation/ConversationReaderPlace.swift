@@ -18,9 +18,40 @@ import CoreGraphics
 /// | after | 80 338 | **44 300** | **997–999** |
 ///
 /// The raw offset is kept — which is `.top` behaviour — and the reader is thrown a whole
-/// page backwards. Removing `.scrollPosition` and removing the `.sizeChanges` anchor were
-/// each measured separately and together: all four variants behave identically, so neither
-/// modifier owns this and neither can be traded for it.
+/// page backwards.
+///
+/// > Retracted. A paragraph here used to say that removing `.scrollPosition` and removing the
+/// `.sizeChanges` anchor had each been measured, separately and together, and that all four
+/// variants behaved identically — so neither modifier owned the defect and neither could be
+/// traded for it. **That comparison never happened.** The variants were selected by launch
+/// arguments (`-noposition`, `-nosizeanchor`) that no code in the harness ever read, so all
+/// four runs were the same binary. The claim then stood for two pull requests as the reason
+/// not to touch the anchor. Rebuilt as real source patches, the `.sizeChanges` anchor turned
+/// out to own a defect of its own, and it is gone — see ``ConversationScaffold``. An arm is a
+/// patched copy of these files now (`~/.buzz/.scratch/harness-*/Sources/`), so a variant that
+/// was not built cannot compile.
+///
+/// # What this type still gets wrong
+///
+/// A settling window closes on a run of readings whose height held still, and **a conversation
+/// at rest produces no readings at all** — `onScrollGeometryChange` fires on change. So a
+/// window opened by a reaction chip or an arriving reply stands until the reader touches
+/// something, and what they usually touch is the composer: the keyboard is then spent as that
+/// old commit settling, and a reader up in history is moved. Measured, five of thirteen shapes,
+/// all of them with a live store: **821–861 points for a 311-point keyboard**.
+///
+/// Closing the window on a container change fixes exactly that and costs more than it saves —
+/// measured, it takes the keyboard's own re-pin away from a reader who is *at* the newest
+/// message, and the blank conversation returns in four shapes. Narrowing it to re-pin only an
+/// at-bottom reader was also measured, and lands between the two (eight failures against one).
+/// Both attempts are recorded in `mem/buzz-ios-scroll-round3`; neither is in the tree.
+///
+/// The reason no arrangement of this file gets both cases to zero is that every input it has —
+/// `contentSize.height`, `contentOffset.y`, and the distance derived from them — is estimated
+/// by the `LazyVStack` it is measuring. Apple's guidance is now explicit: *"avoid using the
+/// absolute content size or content offset with lazy stacks, since these are estimated and
+/// unstable"* (WWDC26 session 321). The remaining fix is an engine whose anchor is a row, not a
+/// number; this type is what holds the line until then.
 ///
 /// The same gap is what the owner's report is made of. A `LazyVStack` reports the height of
 /// the rows it has measured, so a conversation whose content lands *after* the first layout

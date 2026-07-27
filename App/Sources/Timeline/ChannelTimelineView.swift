@@ -88,6 +88,7 @@ struct ChannelTimelineView: View {
             jumpToken: model.jumpToken,
             jumpTarget: model.jumpTarget,
             contentRevision: model.contentRevision,
+            newestID: model.items.newestMessageID,
             onReachedTop: loadOlderPage,
             onLeavingScreen: releaseComposer
         ) {
