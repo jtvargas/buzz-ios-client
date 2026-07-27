@@ -14,6 +14,11 @@ import SwiftUI
 /// `navigationDestination` — together with the four `.task`s that drive them. A value
 /// injected *inside* the destination does not reach the pushed view, so moving any of
 /// them down would silently cost every pushed surface its name resolution.
+///
+/// # Why this view decides about the tab bar
+///
+/// See ``ChannelListTabBar``: a pushed view that hides the bar itself leaves the screen
+/// underneath at the wrong bottom inset for half a second after the pop — the owner's jump.
 struct ChannelListView: View {
     @Environment(AppEnvironment.self) private var environment
 
@@ -35,6 +40,16 @@ struct ChannelListView: View {
     /// The Threads screen, when it is pushed. A value rather than a `Bool` so it goes
     /// through `navigationDestination(item:)` like every other push in the app.
     @State private var showsThreads: ThreadsRoute?
+    /// The thread the **Threads screen** has open, hoisted out of ``ThreadsView`` to here.
+    ///
+    /// State in the wrong place, but for ``ChannelListTabBar``: this stack has to know about
+    /// every push that hides the tab bar, and a `@State` inside ``ThreadsView`` is a push it
+    /// cannot see. Only the storage moved — that screen still declares the destination.
+    ///
+    /// The thread a *conversation* opens stays ``ChannelTimelineView``'s own `@State`: by
+    /// then `path` is non-empty and the bar is already hidden, so hoisting it would move
+    /// state upwards for no change in behaviour.
+    @State private var openedThread: ThreadRoute?
     /// Whether the Later shortcut's "not built yet" notice is showing.
     @State private var showsLaterNotice = false
     /// The pushed conversations. An explicit path — rather than the implicit one
@@ -120,7 +135,12 @@ struct ChannelListView: View {
                     AccountView(store: store, engine: engine, selfPubkey: environment.selfPubkeyHex)
                 }
                 .navigationDestination(item: $showsThreads) { _ in
-                    ThreadsView(store: store, engine: engine, selfPubkey: environment.selfPubkeyHex)
+                    ThreadsView(
+                        store: store,
+                        engine: engine,
+                        selfPubkey: environment.selfPubkeyHex,
+                        openedThread: $openedThread
+                    )
                 }
                 .alert("Later isn't built yet", isPresented: $showsLaterNotice) {
                     Button("OK", role: .cancel) {}
@@ -131,6 +151,9 @@ struct ChannelListView: View {
                     )
                 }
         }
+        // Declared here on the stack and by nothing below it — ``ChannelListTabBar`` holds
+        // the measurements that put it here rather than on the pushed views.
+        .toolbar(ChannelListTabBar.visibility(conversations: path, openedThread: openedThread), for: .tabBar)
         // The app-wide `#channel` name→id map, built from the live channel list and
         // injected once here so every pushed timeline and thread resolves `#`-tokens
         // through the same source. Rebuilt only when the channel set changes.

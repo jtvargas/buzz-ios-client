@@ -121,9 +121,13 @@ struct ThreadView: View {
             accessory
         }
         .overlay { emptyState }
-        // The same reason the channel hides it: a thread is a reading surface with a
-        // composer, and the tab bar would be a second bottom inset under it.
-        .toolbar(.hidden, for: .tabBar)
+        // The tab bar is hidden for a thread, for the same reason it is hidden for a
+        // channel: a thread is a reading surface with a composer, and the bar would be a
+        // second bottom inset under it. Declared by the view that owns the stack rather than
+        // here — see ``ChannelListView/hidesTabBar``, which also explains why this view
+        // keeping a `.hidden` of its own would not have been a harmless belt-and-braces: a
+        // stack-level `.visible` beats it, so the two have to agree, so only one of them may
+        // speak.
         .conversationTitle(
             mark: .symbol(Self.threadSymbol),
             title: "Thread",

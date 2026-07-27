@@ -35,10 +35,15 @@ struct RootView: View {
     /// ``ChannelListView``, with the app-wide resolvers injected above it — so a push in one
     /// tab is not a push in the other, and switching tabs does not unwind a stack.
     ///
-    /// Conversations and threads hide the bar themselves (`.toolbar(.hidden, for: .tabBar)`),
-    /// which keeps the reading surface exactly the height it is today. That matters more than
-    /// it looks: the scroll and keyboard behaviour of a conversation is arithmetic over the
-    /// safe area, and a tab bar under the composer would change it everywhere at once.
+    /// Conversations and threads are read without the tab bar, which keeps the reading
+    /// surface exactly the height it is today. That matters more than it looks: the scroll
+    /// and keyboard behaviour of a conversation is arithmetic over the safe area, and a tab
+    /// bar under the composer would change it everywhere at once.
+    ///
+    /// *Which* screens those are is declared once, by the view that owns each stack —
+    /// ``ChannelListView/hidesTabBar`` — and not by the pushed screens themselves. Doing it
+    /// per pushed view is what produced the jump the owner reported on the way back; the
+    /// traces are in that property's documentation.
     private func tabs(engine: SyncEngine) -> some View {
         TabView(selection: $tab) {
             Tab(value: HomeTab.home) {
