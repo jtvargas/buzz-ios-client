@@ -15,10 +15,8 @@ import SwiftUI
 /// injected *inside* the destination does not reach the pushed view, so moving any of
 /// them down would silently cost every pushed surface its name resolution.
 ///
-/// # Why this view decides about the tab bar
-///
-/// See ``ChannelListTabBar``: a pushed view that hides the bar itself leaves the screen
-/// underneath at the wrong bottom inset for half a second after the pop — the owner's jump.
+/// It decides about the tab bar for the whole stack rather than leaving that to each
+/// pushed view — see ``ChannelListTabBar``, which holds the measurements that put it here.
 struct ChannelListView: View {
     @Environment(AppEnvironment.self) private var environment
 
@@ -42,11 +40,9 @@ struct ChannelListView: View {
     ///
     /// State in the wrong place, but for ``ChannelListTabBar``: this stack has to know about
     /// every push that hides the tab bar, and a `@State` inside ``ThreadsView`` is a push it
-    /// cannot see. Only the storage moved — that screen still declares the destination.
-    ///
-    /// The thread a *conversation* opens stays ``ChannelTimelineView``'s own `@State`: by
-    /// then `path` is non-empty and the bar is already hidden, so hoisting it would move
-    /// state upwards for no change in behaviour.
+    /// cannot see. Only the storage moved — that screen still declares the destination. The
+    /// thread a *conversation* opens needs no such move: by then `path` is non-empty and the
+    /// bar is already hidden.
     @State private var openedThread: ThreadRoute?
     /// Whether the Later shortcut's "not built yet" notice is showing.
     @State private var showsLaterNotice = false
