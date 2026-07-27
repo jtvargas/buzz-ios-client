@@ -260,6 +260,42 @@ struct ChannelTimelineModelTests {
         #expect(shape(model.items) == ["day", "monday", "day", "wednesday"])
     }
 
+    @Test("every change to what a row renders is declared to the scaffold")
+    func contentRevisionCoversWhatIsRendered() async throws {
+        // The scaffold restores the reader's place across the settling that follows one of
+        // these bumps, and across nothing else — so a change that forgets to bump is a real
+        // insertion that moves the reader, and this is the only place that would catch it.
+        // Both halves matter: the item set, and the chips drawn inside a row, which change
+        // its height without changing the set at all.
+        let temp = TempStore()
+        defer { temp.remove() }
+        let store = try temp.open()
+        let author = try Fixture()
+
+        let model = ChannelTimelineModel(channel: "room-1", store: store, sender: StubSender())
+        let run = Task { await model.run() }
+        defer { run.cancel() }
+
+        let first = try author.message("one", in: "room-1", at: 1_000)
+        _ = try await store.ingest(batch: [first], phase: .backfill)
+        await waitUntil { model.rows.count == 1 }
+        let afterFirstRow = model.contentRevision
+        #expect(afterFirstRow > 0)
+
+        _ = try await store.ingest(
+            batch: [try author.message("two", in: "room-1", at: 1_001)], phase: .live
+        )
+        await waitUntil { model.rows.count == 2 }
+        let afterSecondRow = model.contentRevision
+        #expect(afterSecondRow > afterFirstRow)
+
+        _ = try await store.ingest(
+            batch: [try author.event(.reaction, "👍", tags: [["e", first.id]], at: 1_002)], phase: .live
+        )
+        await waitUntil { !model.reactions(for: first.id).isEmpty }
+        #expect(model.contentRevision > afterSecondRow)
+    }
+
     @Test("a message in another channel does not appear")
     func scopedToChannel() async throws {
         let temp = TempStore()

@@ -54,6 +54,22 @@ struct ConversationScaffold<Content: View, Bar: View, Accessory: View>: View {
     /// Where that jump lands. Read when ``jumpToken`` changes, so the owner sets both
     /// before bumping.
     var jumpTarget: ConversationJumpTarget = .bottom
+    /// Bumped by the owner whenever the content it renders changes — rows arriving, an
+    /// older page inserted, a row pruned, a reaction chip appearing.
+    ///
+    /// This is what tells the reader's place apart from the stack re-measuring it. A
+    /// `LazyVStack`'s reported height moves whenever the container does, so "the height
+    /// changed" cannot stand in for "the content changed" — see ``ConversationReaderPlace``
+    /// for what that cost. Over-bumping is harmless; missing a bump means a real insertion
+    /// moves the reader.
+    ///
+    /// A plain `Int`, which the owning surface reads in its own `body` — so a bump
+    /// invalidates that body, list included. Deliberate: the events behind it are
+    /// user-paced (a message, a page, someone reacting), not frame-paced, and the two
+    /// tricks this file's neighbours use to avoid an invalidation — a hand-written binding,
+    /// reading an observable `let` inside the smallest view that needs it — are for the
+    /// things that fire on every scrolled frame. This is not one of them.
+    var contentRevision: Int = 0
     /// Fired while the top of the loaded history is near. The owner must be
     /// idempotent: this can fire repeatedly across one page load.
     var onReachedTop: () -> Void = {}
@@ -169,7 +185,29 @@ struct ConversationScaffold<Content: View, Bar: View, Accessory: View>: View {
             if isFarFromBottom != edges.farFromBottom { isFarFromBottom = edges.farFromBottom }
             if edges.nearTop { onReachedTop() }
         }
-        // The reader's place, restored whenever the *content* changes height under them.
+        // The owner's commit, ahead of the readings it produces: `onChange` runs in the
+        // update pass and a scroll geometry callback runs after layout, so the window is
+        // open by the time the new content has been measured.
+        .onChange(of: contentRevision) { place.contentDidChange() }
+        // A change of *width* is the one content change the owner cannot declare, because it
+        // did not make it: every row re-wraps, so every row's height is genuinely new. A
+        // rotation, an iPad split, a Slide Over.
+        //
+        // Width and not size: the keyboard moves the container's height on every raise, and
+        // treating that as a content change is the whole defect ``ConversationReaderPlace``
+        // documents. Measured on iPhone 17 Pro / iOS 26, portrait → landscape → portrait with
+        // a reader parked in history: without this they came back seven messages adrift
+        // (rows 1042–1045 → 1035–1036, distance-to-bottom 3281 → 8086); with it they come
+        // back where they were.
+        .onScrollGeometryChange(for: CGFloat.self) { geometry in
+            geometry.containerSize.width
+        } action: { _, _ in
+            place.contentDidChange()
+        }
+        // The reader's place, carried across the settling that follows a commit — and
+        // deliberately *not* across a height change with no commit behind it, which is the
+        // stack re-measuring rows nobody touched.
+        //
         // Separate from `Edges` on purpose: that projection is three `Bool`s so it fires
         // on band crossings, and this one has to see every reading, because the distance
         // it corrects to is taken from the ones where nothing changed.

@@ -59,6 +59,7 @@ struct ThreadView: View {
             ),
             jumpToken: model.jumpToken,
             jumpTarget: model.jumpTarget,
+            contentRevision: model.contentRevision,
             onLeavingScreen: releaseComposer
         ) {
             list
