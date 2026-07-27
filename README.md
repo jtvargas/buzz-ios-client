@@ -83,7 +83,7 @@ These exist upstream, or are on the roadmap, and are honestly absent here:
 
 ## Product model
 
-Sidebar-first, Slack-style: a Home tab rooted on the conversation list, pushing a timeline, then a thread — the tab bar hides itself inside a conversation, so a reading surface is still the whole screen. Account and channel details are sheets. The second tab, Activity, is a placeholder that says so; Search will arrive as its own surface when it is built.
+Sidebar-first, Slack-style: a Home tab rooted on the conversation list, pushing a timeline, then a thread — the tab bar is hidden inside a conversation, so a reading surface is still the whole screen. Account and channel details are sheets. The second tab, Activity, is a placeholder that says so; Search will arrive as its own surface when it is built.
 
 ## Architecture
 
