@@ -237,7 +237,7 @@ Three things the bar does that are not in the documentation and had to be measur
    on the glass. A 2pt `offset` is the only lever that reaches this, and it does not move the
    tap target.
 
-What the heading now carries: a `#` and `12 members · 3 online` for a channel; `text.append`
+What the heading carries: a `#` and `12 members · 3 online` for a channel; `text.append`
 and the parent conversation for a thread; and for a direct message the peer's own face with
 their presence — a green or grey dot and the word — in place of the NIP-05 identifier, which
 does not change and is still on the profile sheet. Presence is read from the same
@@ -246,3 +246,102 @@ same person. The thread heading pops back to its conversation on tap, driven as 
 `~/.buzz/.scratch/headerharness` (`UITests/ThreadHeadingTests.swift`) rather than assumed —
 the harness now builds the shipping `ConversationTitleBar.swift` by symlink, so what is
 screenshotted there is this file.
+
+## Amendment (Parts 2–5): the conversation body, and the drag surface
+
+Four passes since 1d extended the shell rather than changing its shape. Each settled at
+least one thing Apple does not document, and those are recorded here because the next
+person to touch this code will otherwise re-derive them from a symptom.
+
+**Completion is anchored to the caret, not to the end of the draft.** `MentionDraft`
+searched backwards from the end of the whole message, so a trigger typed mid-sentence
+produced a query of everything after it, a newline anywhere later killed the token
+outright, and a double space did the same. The scan now runs from the caret backwards to
+the first delimiter, which makes mid-sentence, multiline and repeated triggers one code
+path instead of three special cases. The caret itself is new information: `TokenTextView`
+implements `textViewDidChangeSelection`, but reports **only when the text view and the
+published draft already agree about the text** — while an edit is in flight UIKit's
+selection describes a string the model has not seen, and the edit carries its own caret a
+moment later. One internal space stays legal in a query, deliberately, because display
+names contain spaces and `@Will Pfleger` is otherwise unreachable.
+
+**Interactive ranges are links, because links are the only run a `Text` will let you
+press.** Three measurements shaped this:
+
+1. A custom `AttributedString` attribute is **invisible to `Text.Layout`**, so a
+   `TextRenderer` cannot see it and cannot draw behind it. The inline is built as
+   concatenated `Text` segments, not one attributed string. `AttributedString`'s own
+   background colour was never an option either — a bare rectangle, no corner radius, no
+   padding.
+2. A `link` still reaches `OpenURLAction` under a custom renderer, **private schemes
+   included**. So a mention travels as a URL and inherits the tap arbitration links
+   already had; pressing one claims the tap and never also opens the thread. Interaction
+   priority comes from that proven path rather than a second mechanism to keep in step.
+3. **A press-down highlight is not affordable.** A `DragGesture(minimumDistance: 0)` on
+   the text swallows the row's own tap (0 row taps across every press in the harness);
+   moving it to the row keeps both taps but stops the message list scrolling at all. The
+   pill flashes on activation instead — visible feedback, on release rather than on press.
+
+Identity never comes from the visible name: a mention's URL carries the pubkey that
+message's own `p` tags resolved to, an authored `hive-entity:` link is stripped (or an
+author could hand themselves a mention pointing at anyone), and a `buzz://` the app cannot
+route stays plain text rather than looking pressable and doing nothing.
+
+**A pill's gap from its neighbours is kerning, not padding.** The fill is drawn 4pt past
+its glyphs, and growing a fill does not move the text around it — it grows *over* the
+letter beside it. The advance has to come from layout, so an interactive range is kerned
+7pt before it and after its last character. The part that had to be measured: a run's
+typographic bounds **include** the kern added after its last character, so the advance
+inserted to open the gap was itself being filled as pill. The last character carries a
+marker saying how much of its width is gap and the renderer takes it back out before
+filling. Only the last character carries it, so a link wrapping across two lines still
+fills to the end of its glyphs on the first line — trimming every fragment instead would
+leave the characters at the wrap outside their own pill.
+
+**A jump to a *message* cannot go through `ScrollPosition`.** `scrollTo(id:anchor:)`
+reaches the right row but **loses its anchor** to `defaultScrollAnchor(.bottom, for:
+.alignment)` above it: asking for a row at `.top` landed it hard against the *bottom*
+edge, leaving the reader exactly where they were. That alignment anchor is what rests a
+short conversation against the composer, so it stays; the message jump goes through a
+`ScrollViewReader`, whose proxy honours the anchor in the same hierarchy, and the
+jump-to-bottom keeps `ScrollPosition`. Two mechanisms, each doing the one it is good at.
+
+The affordances also need their own distance band. The freeze arms ~120pt off the bottom,
+which is right for "stop moving my place" and far too eager for a floating button that
+would then sit on the message being read; `↓ Latest` waits for half a viewport. And the
+pill's state lives in its own observable read by a leaf view — read in the same body as
+the message list, every arrival while scrolled up re-evaluated the whole timeline. Both
+models also stopped writing back values equal to the ones they held, which the observation
+was doing on every commit regardless.
+
+**The dismissal gesture's active band is a property, and it had to be set.**
+`.scrollDismissesKeyboard(.interactively)` does not begin when the drag begins — UIKit
+waits for the touch to reach the keyboard's own top edge, so the band the composer
+occupies was dead and a drag ending inside it moved the keyboard across zero frames.
+`ConversationKeyboardDismissPadding` sets `keyboardLayoutGuide.keyboardDismissPadding` to
+the bar height the scaffold already measures. Measured with a real finger held mid-drag
+while a `CADisplayLink` recorded both positions per frame: the same drag moved the
+keyboard across 0 frames without it and 17 with it.
+
+That measurement also settled the risk the whole pass hung on. The long-standing SwiftUI
+report — a `safeAreaInset` bar stays put through an interactive dismissal and snaps at the
+end — **does not reproduce on iOS 26.0**: across 69 consecutive frames the composer-to-
+keyboard gap held at exactly 112.0pt, with the drawn position trailing the laid-out one by
+a single frame rather than by an animation.
+
+One requirement remains structurally out of reach, and is recorded so it is not
+re-attempted blind: **a drag that begins on the composer cannot drive the dismissal.**
+`safeAreaBar` makes the bar a *sibling* of the scroll view, so the touch is never delivered
+to the list's pan, and UIKit's interactive dismissal is driven by that pan alone with no
+public way to hand it a foreign gesture. Making the bar's dead space hit-transparent was
+tried twice, including moving its glass into a non-hit-testing background; neither got the
+touch through, and success would drop taps onto the message rows behind the bar. The only
+shipped implementation is Telegram's, which moves the keyboard's own window through private
+API.
+
+Two harness notes for whoever measures next. `app.scrollViews.firstMatch` in XCUITest
+resolves to the **keyboard's own 44pt candidate strip**, not the message list — take
+coordinates from the window. And a `keyboardLayoutGuide` is clamped to its owning view's
+bounds, so asking a small probe view reports that view's own edge as the keyboard's; ask
+the window's root view. The full recipe is in `GUIDES/IOS_KEYBOARD_SCROLL_VERIFICATION.md`
+in the maintainer's workspace.
