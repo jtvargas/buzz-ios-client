@@ -27,7 +27,7 @@ This is the living checklist for the headline milestone: feature parity with the
 | Threads | `channels` | ✅ | Replies row with participant faces; heading pops back to the conversation |
 | Reactions | `channels` | ✅ | Six-emoji palette, chips with counts, own reaction withdrawable |
 | Direct messages | `channels` | ✅ | A DM is a channel whose roster is exactly two members including you; opened or created from the profile sheet |
-| Activity feed (mentions/replies/reactions) | `activity` | ☐ | No inbox surface |
+| Activity feed (mentions/replies/reactions) | `activity` | ☐ | A tab exists and is a placeholder; nothing is collected behind it |
 | Search | `search` | ☐ | No in-app search |
 | Profiles | `profile` | ◐ | Profile sheet (picture, name, member/agent, presence, npub + copy, Message) opens from a message's avatar, name or mention; not yet from the sidebar or the channel roster. Own profile (display name, About) editable in Account |
 | Settings | `settings` | ◐ | Account sheet: profile, key backup, own npub, sign out; relay endpoint at sign-in; connection-state pill in the sidebar. No general settings screen |

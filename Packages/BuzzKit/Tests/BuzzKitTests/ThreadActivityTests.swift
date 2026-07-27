@@ -92,7 +92,7 @@ struct ThreadActivityTests {
         ], phase: .backfill)
 
         #expect(try store.threadActivity(selfPubkey: nil, limit: 10).isEmpty)
-        #expect(try store.newThreadCount(selfPubkey: nil) == 0)
+        #expect(try store.unreadThreads(selfPubkey: nil).isEmpty)
     }
 
     @Test("threads order by their newest reply, not by when they were opened")
@@ -172,7 +172,7 @@ struct ThreadActivityTests {
             try peer.event(.deletion, "", tags: [["e", opener.id]], at: 2001),
         ], phase: .live)
         #expect(try store.threadActivity(selfPubkey: nil, limit: 10).isEmpty)
-        #expect(try store.newThreadCount(selfPubkey: nil) == 0)
+        #expect(try store.unreadThreads(selfPubkey: nil).isEmpty)
     }
 
     // MARK: - What counts as new
@@ -205,7 +205,7 @@ struct ThreadActivityTests {
         #expect(thread.replyCount == 3)
         #expect(thread.newReplyCount == 2)
         #expect(thread.hasNewReplies)
-        #expect(try store.newThreadCount(selfPubkey: selfPubkey) == 1)
+        #expect(try store.unreadThreads(selfPubkey: selfPubkey).map(\.newReplyCount) == [2])
 
         // The frontier is the *channel's*: reading the channel to its end also clears its
         // threads, since NIP-RS keys read state by channel and there is no finer one.
@@ -216,13 +216,13 @@ struct ThreadActivityTests {
         thread = try #require(try store.threadActivity(selfPubkey: selfPubkey, limit: 10).first)
         #expect(thread.newReplyCount == 0)
         #expect(!thread.hasNewReplies)
-        #expect(try store.newThreadCount(selfPubkey: selfPubkey) == 0)
+        #expect(try store.unreadThreads(selfPubkey: selfPubkey).isEmpty)
         // Still listed — the screen shows recent activity, not only unread activity.
         #expect(thread.replyCount == 3)
     }
 
-    @Test("the card counts threads, not replies")
-    func newThreadCountCountsThreads() async throws {
+    @Test("the card's read is one row per thread, not one per reply")
+    func unreadThreadsAreGroupedByRoot() async throws {
         let database = TempDatabase()
         defer { database.remove() }
         let store = try database.open()
@@ -240,9 +240,42 @@ struct ThreadActivityTests {
             try reply(peer, "d", to: quiet, at: 2300),
         ], phase: .backfill)
 
-        // Four new replies across two threads. The card says 2: it offers a screen to go
-        // and read, and two conversations to catch up on is what someone can act on.
-        #expect(try store.newThreadCount(selfPubkey: nil) == 2)
+        // Four new replies across two threads, and two rows back: the card offers a screen
+        // to go and read, and two conversations to catch up on is what someone can act on.
+        // Newest activity first, and each row carries its own newest reply so a device-local
+        // read mark has something to be compared against.
+        let unread = try store.unreadThreads(selfPubkey: nil)
+        #expect(unread.map(\.rootID) == [quiet.id, busy.id])
+        #expect(unread.map(\.newReplyCount) == [1, 3])
+        #expect(unread.map(\.latestReplyAt) == [2300, 2200])
+    }
+
+    @Test("a thread's own reply keeps the newest-reply mark moving")
+    func latestReplyAtIncludesOwnReplies() async throws {
+        let database = TempDatabase()
+        defer { database.remove() }
+        let store = try database.open()
+        let relay = try Fixture()
+        let peer = try Fixture()
+        let selfKey = try PrivateKey()
+
+        let opener = try peer.message("question", in: "room-1", at: 1000)
+        _ = try await store.ingest(batch: [
+            try meta(relay, "room-1", name: "One"),
+            opener,
+            try reply(peer, "theirs", to: opener, at: 2000),
+            try NostrEvent.signed(
+                kind: .channelMessage, content: "mine",
+                tags: [["h", "room-1"], ["e", opener.id, "", "reply"]],
+                createdAt: Date(timeIntervalSince1970: 3000), with: selfKey
+            ),
+        ], phase: .backfill)
+
+        // One new reply — the peer's — but the newest reply is the reader's own, and that
+        // is the timestamp a mark set from what is on screen will carry.
+        let unread = try #require(try store.unreadThreads(selfPubkey: selfKey.publicKey.hex).first)
+        #expect(unread.newReplyCount == 1)
+        #expect(unread.latestReplyAt == 3000)
     }
 
     @Test("a non-positive limit reads nothing")

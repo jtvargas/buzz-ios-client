@@ -84,6 +84,12 @@ struct TimelineRowView: View {
     /// asks and the surface presents. Absent on a surface with nowhere to present it,
     /// where the identity then renders as plain text rather than as a dead control.
     var onOpenProfile: ((String) -> Void)?
+    /// How many lines of the message body to draw, or `nil` for all of them.
+    ///
+    /// `nil` on both conversation surfaces: a message being read is read whole. The Threads
+    /// screen is the one place a bound belongs, because a row there is a summary of a
+    /// conversation and a single 40-line opener would be the whole screen.
+    var contentLineLimit: Int?
 
     var body: some View {
         HStack(alignment: .top, spacing: MessageRowMetrics.avatarGap) {
@@ -242,6 +248,8 @@ struct TimelineRowView: View {
                 // message being read in a timeline, not of the markdown, and the
                 // channel-list snippet wants its single line tight.
                 .lineSpacing(MessageRowMetrics.bodyLineSpacing)
+                // A no-op at `nil`, which is every message on both conversation surfaces.
+                .lineLimit(contentLineLimit)
         }
     }
 

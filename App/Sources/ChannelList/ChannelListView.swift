@@ -25,6 +25,12 @@ struct ChannelListView: View {
     /// The reader's starred conversations, on this device. Owned here because this view
     /// both groups by it and offers the action that changes it.
     @State private var starred = StarredConversations()
+    /// How far this device has read into each thread. Owned here for the same reason the
+    /// stars are: this view draws the number the marks subtract from, and it is the one
+    /// place above both the Threads screen and the thread views that write them.
+    @State private var threadReads = ThreadReadMarks()
+    /// What this workspace is called, for the heading. Resolves after the first frame.
+    @State private var community = CommunityModel()
     @State private var showAccount = false
     /// The Threads screen, when it is pushed. A value rather than a `Bool` so it goes
     /// through `navigationDestination(item:)` like every other push in the app.
@@ -74,7 +80,17 @@ struct ChannelListView: View {
 
         NavigationStack(path: $path) {
             sidebar(names: names)
-                .navigationTitle("Messages")
+                // The heading every other screen carries, naming the workspace this app is
+                // signed in to (§ ``CommunityIdentity``). It leads to the same account sheet
+                // the face at the trailing edge does — the two are one destination, and this
+                // is the larger target.
+                .conversationTitle(
+                    mark: .symbol(Self.communitySymbol),
+                    title: community.name,
+                    actionHint: "Double tap to show your account"
+                ) {
+                    showAccount = true
+                }
                 .navigationDestination(for: ConversationRoute.self) { route in
                     ChannelTimelineView(
                         channel: route.channel,
@@ -85,16 +101,19 @@ struct ChannelListView: View {
                     )
                 }
                 .toolbar {
-                    ToolbarItem(placement: .topBarLeading) {
+                    // Both at the trailing edge: the heading now holds the leading slot, and
+                    // a second item there would push it towards the overflow menu the whole
+                    // of ``ConversationTitleBar`` exists to stay out of.
+                    ToolbarItem(placement: .topBarTrailing) {
+                        EngineStatePill(state: environment.engineState)
+                    }
+                    ToolbarItem(placement: .topBarTrailing) {
                         Button {
                             showAccount = true
                         } label: {
                             Image(systemName: "person.crop.circle")
                         }
                         .accessibilityLabel("Account")
-                    }
-                    ToolbarItem(placement: .topBarTrailing) {
-                        EngineStatePill(state: environment.engineState)
                     }
                 }
                 .sheet(isPresented: $showAccount) {
@@ -122,6 +141,10 @@ struct ChannelListView: View {
         // age their timestamps off one tick (§7/§9).
         .environment(\.entityNames, names)
         .environment(\.relativeTimeTicker, ticker)
+        // The device's per-thread read marks, injected above both the Threads screen that
+        // reads them and the thread views that write them — so opening a thread from any
+        // surface strikes it off the same count this view draws.
+        .environment(\.threadReadMarks, threadReads)
         // Injected here, above the destination, because the sheet that *starts* a direct
         // message lives inside a pushed conversation while the navigation that *finishes*
         // it belongs to this stack.
@@ -165,15 +188,26 @@ struct ChannelListView: View {
         .task { await presence.run() }
         .task { await directory.run() }
         .task { await ticker.run() }
+        .task { await community.run() }
     }
+
+    /// The mark on the home heading: a honeycomb for the workspace as a whole, which is
+    /// neither a room (`#`) nor a person (a face). Named here so a test can check the system
+    /// actually has it — a missing symbol renders as nothing at all, silently.
+    static let communitySymbol = "circle.hexagongrid"
 }
 
 // MARK: - Content
 
 private extension ChannelListView {
-    /// One list, one section per heading, no card per row. `List` keeps the rows lazy and
-    /// recycled; `SidebarRow.id` (the channel's group id) keeps their identity stable
-    /// as unread counts stream in, so a re-read updates rows instead of rebuilding them.
+    /// One flat list: the shortcut cards, then a heading row and its conversations for each
+    /// grouping. `List` keeps the rows lazy and recycled; `SidebarRow.id` (the channel's
+    /// group id) keeps their identity stable as unread counts stream in, so a re-read
+    /// updates rows instead of rebuilding them.
+    ///
+    /// Flat, and not a `Section` per heading, because a plain list **pins** section headers
+    /// — see ``SidebarSectionHeader``. Everything else about the grouping is unchanged: the
+    /// headings still expand and collapse, and each still draws the rule above it.
     @ViewBuilder
     func sidebar(names: EntityNames) -> some View {
         if model.channels.isEmpty {
@@ -182,47 +216,38 @@ private extension ChannelListView {
             List {
                 shortcuts
                 ForEach(sidebarContent(names: names).sections) { section in
-                    Section {
-                        if expansion(for: section.section).wrappedValue {
-                            rows(of: section)
-                        }
-                    } header: {
-                        SidebarSectionHeader(
-                            section: section.section,
-                            count: section.count,
-                            isExpanded: expansion(for: section.section)
-                        )
-                        .listRowInsets(Self.headerInsets)
-                        .listRowSeparator(.hidden)
+                    SidebarSectionHeader(
+                        section: section.section,
+                        count: section.count,
+                        isExpanded: expansion(for: section.section)
+                    )
+                    .listRowInsets(Self.headerInsets)
+                    .listRowSeparator(.hidden)
+                    if expansion(for: section.section).wrappedValue {
+                        rows(of: section)
                     }
                 }
             }
             .listStyle(.plain)
-            .listSectionSpacing(.compact)
         }
     }
 
-    /// The Threads and Later shortcuts, in a headerless section above the conversations.
+    /// The Threads and Later cards, in one row above the conversations.
     ///
-    /// A section of their own rather than rows inside the first one: they are not
-    /// conversations, and a heading over them would have to claim they are. Every
-    /// conversation heading below draws its rule because this section is always above it.
+    /// One list row holding both, rather than a row each: they are a set of destinations,
+    /// and the first conversation heading below draws its rule because this is always above
+    /// it.
     var shortcuts: some View {
-        Section {
-            ForEach(HomeShortcut.allCases) { shortcut in
-                Button { press(shortcut) } label: {
-                    HomeShortcutRow(shortcut: shortcut, count: count(for: shortcut))
-                }
-                .buttonStyle(.plain)
-                .listRowInsets(Self.rowInsets)
-                .listRowSeparator(.hidden)
-            }
-        }
+        HomeShortcutCards(count: count(for:), press: press(_:))
+            .listRowInsets(Self.cardsInsets)
+            .listRowSeparator(.hidden)
     }
 
     func count(for shortcut: HomeShortcut) -> Int? {
         let count = switch shortcut {
-        case .threads: model.newThreadCount
+        // The store's unread threads, less the ones already read on this device: opening a
+        // thread (or replying in it) marks it, and the mark is what strikes it off here.
+        case .threads: threadReads.unseenCount(among: model.unreadThreads)
         // Nothing is saved anywhere yet, so this is the truth rather than a placeholder.
         case .later: 0
         }
@@ -283,6 +308,9 @@ private extension ChannelListView {
 
     static let rowInsets = EdgeInsets(top: 2, leading: 16, bottom: 2, trailing: 16)
     static let headerInsets = EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16)
+    /// The cards sit slightly clear of the first heading's rule, which is the only thing
+    /// between them and the conversations.
+    static let cardsInsets = EdgeInsets(top: 8, leading: 16, bottom: 10, trailing: 16)
 }
 
 // MARK: - Derivation
@@ -345,40 +373,5 @@ private extension ChannelListView {
         case .directMessages: $directMessagesExpanded
         case .agents: $agentsExpanded
         }
-    }
-}
-
-/// One pushed conversation: the row its timeline renders, and — when the push came from
-/// opening a direct message — the peer the relay said it is with.
-///
-/// A route type rather than the bare ``BuzzKit/ChannelListRow`` the sidebar pushes,
-/// because the two ways into a conversation know different things about it. From the
-/// sidebar the roster is already read, so the row is the whole story. From a profile
-/// sheet's Message action the channel is seconds old and its roster is still in flight, so
-/// the peer travels with the push (see ``OpenedConversation``).
-struct ConversationRoute: Hashable {
-    let channel: ChannelListRow
-    /// The peer this conversation was just opened with, or `nil` when the roster is the
-    /// only thing that should name it.
-    var knownPeer: String?
-}
-
-extension ConversationRoute {
-    /// `path` with this conversation opened: exactly one instance of it, on top.
-    ///
-    /// Pure so the rule is tested rather than driven through a navigation stack.
-    ///
-    /// A plain append is wrong here because the tap that opens a conversation is reachable
-    /// from *inside* that same conversation: the peer's face is on every row of a DM, and
-    /// their profile sheet offers Message. Appending there pushed a second copy of the
-    /// conversation onto the first, so backing out of a DM went through an identical DM.
-    /// Already-on-top is left completely alone rather than replaced, because re-assigning
-    /// the same conversation as a *different* element value is a pop-and-push the reader
-    /// would watch happen.
-    func pushed(onto path: [ConversationRoute]) -> [ConversationRoute] {
-        guard path.last?.channel.id != channel.id else { return path }
-        var updated = path.filter { $0.channel.id != channel.id }
-        updated.append(self)
-        return updated
     }
 }

@@ -150,6 +150,11 @@ struct ChannelTimelineView: View {
         }
         .overlay { emptyState }
         .modifier(header)
+        // A conversation takes the whole screen. The tab bar is not just visual clutter
+        // under the composer: it is a second bottom inset, and every scroll and keyboard
+        // decision this surface makes is arithmetic over that inset — so a conversation
+        // reads exactly as it did before there were tabs.
+        .toolbar(.hidden, for: .tabBar)
         .sheet(isPresented: $showsChannelDetails) {
             ChannelDetailsView(
                 channel: channel,

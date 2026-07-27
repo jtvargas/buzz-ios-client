@@ -21,6 +21,9 @@ struct ThreadView: View {
     @State private var presence: PresenceModel
     /// Whose profile is open, if anyone's — set by a tap on a reply's avatar or name.
     @State private var profilePeer: ProfilePeer?
+    /// This device's per-thread read marks. Absent on a surface reached without them (the
+    /// conversation fixture), where nothing is recorded.
+    @Environment(\.threadReadMarks) private var threadReads
     private let channelID: String
 
     /// The mark on a thread's heading. `text.append` rather than a bubble or an arrow: it is
@@ -118,6 +121,9 @@ struct ThreadView: View {
             accessory
         }
         .overlay { emptyState }
+        // The same reason the channel hides it: a thread is a reading surface with a
+        // composer, and the tab bar would be a second bottom inset under it.
+        .toolbar(.hidden, for: .tabBar)
         .conversationTitle(
             mark: .symbol(Self.threadSymbol),
             title: "Thread",
@@ -131,6 +137,16 @@ struct ThreadView: View {
         .task { if landing == .opener { model.landOnOpener() } }
         .task { await model.run() }
         .task { await presence.run() }
+        // Mark-on-view, the same discipline the channel's read state follows — and the
+        // *rendered* newest row for the same reason: a reply held behind a frozen tail has
+        // not been seen, so it must still count as new. Being here rather than in the model
+        // is deliberate: this marker never leaves the device, so it is view state, not
+        // something the thread publishes. Replying is covered without a second path — a sent
+        // reply is a new newest row.
+        .onChange(of: model.rows.last?.createdAt, initial: true) { _, newest in
+            guard let newest else { return }
+            threadReads?.mark(model.root, seenUpTo: newest)
+        }
     }
 
     // MARK: - List
