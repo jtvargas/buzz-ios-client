@@ -29,8 +29,6 @@ struct ChannelListView: View {
     /// stars are: this view draws the number the marks subtract from, and it is the one
     /// place above both the Threads screen and the thread views that write them.
     @State private var threadReads = ThreadReadMarks()
-    /// What this workspace is called, for the heading. Resolves after the first frame.
-    @State private var community = CommunityModel()
     @State private var showAccount = false
     /// The Threads screen, when it is pushed. A value rather than a `Bool` so it goes
     /// through `navigationDestination(item:)` like every other push in the app.
@@ -86,7 +84,11 @@ struct ChannelListView: View {
                 // is the larger target.
                 .conversationTitle(
                     mark: .symbol(Self.communitySymbol),
-                    title: community.name,
+                    // Derived from the stored relay URL where it is used, rather than held
+                    // in a model: it is the same string on every pass and on every launch,
+                    // and an object whose only job is to hold a constant still has to be
+                    // created, injected and driven for it.
+                    title: CommunityIdentity.name(),
                     actionHint: "Double tap to show your account"
                 ) {
                     showAccount = true
@@ -188,13 +190,15 @@ struct ChannelListView: View {
         .task { await presence.run() }
         .task { await directory.run() }
         .task { await ticker.run() }
-        .task { await community.run() }
     }
 
-    /// The mark on the home heading: a honeycomb for the workspace as a whole, which is
-    /// neither a room (`#`) nor a person (a face). Named here so a test can check the system
-    /// actually has it — a missing symbol renders as nothing at all, silently.
-    static let communitySymbol = "circle.hexagongrid"
+    /// The mark on the home heading: one cell of the honeycomb, for the workspace as a whole
+    /// — which is neither a room (`#`) nor a person (a face). Filled and singular rather than
+    /// the outlined grid it was, because the bar draws its mark small and a mesh of hairlines
+    /// at that size reads as noise where a solid shape reads as a mark. Named here so a test
+    /// can check the system actually has it — a missing symbol renders as nothing at all,
+    /// silently.
+    static let communitySymbol = "hexagon.fill"
 }
 
 // MARK: - Content
@@ -243,15 +247,14 @@ private extension ChannelListView {
             .listRowSeparator(.hidden)
     }
 
-    func count(for shortcut: HomeShortcut) -> Int? {
-        let count = switch shortcut {
+    func count(for shortcut: HomeShortcut) -> Int {
+        switch shortcut {
         // The store's unread threads, less the ones already read on this device: opening a
         // thread (or replying in it) marks it, and the mark is what strikes it off here.
         case .threads: threadReads.unseenCount(among: model.unreadThreads)
         // Nothing is saved anywhere yet, so this is the truth rather than a placeholder.
         case .later: 0
         }
-        return shortcut.showsCount(count) ? count : nil
     }
 
     func press(_ shortcut: HomeShortcut) {
