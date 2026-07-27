@@ -319,6 +319,50 @@ extension MentionComposerTests {
         #expect(draft.mentionedPubkeys(sender: nil).isEmpty)
     }
 
+    @Test("a bare @ lists the people mentioned most recently first, then the rest alphabetically")
+    func ranksPeopleByRecentUsage() async throws {
+        let temp = TempStore()
+        defer { temp.remove() }
+        let store = try temp.open()
+        let relay = try Fixture()
+        let me = try Fixture()
+        // Named so the alphabetical fallback is the *opposite* of the recency order: any
+        // ordering that came from the read rather than from recency would show Ada first.
+        let ada = try Fixture(), bo = try Fixture(), cy = try Fixture()
+
+        _ = try await store.ingest(batch: [
+            try relay.channelMetadata("room-1", name: "general"),
+            try relay.event(
+                .groupMembers, "",
+                tags: [["d", "room-1"]] + [ada, bo, cy].map { ["p", $0.pubkey] },
+                at: 1_001
+            ),
+            try ada.event(.metadata, #"{"display_name":"Ada"}"#, at: 900),
+            try bo.event(.metadata, #"{"display_name":"Bo"}"#, at: 900),
+            try cy.event(.metadata, #"{"display_name":"Cy"}"#, at: 900),
+            // The reader's own history: Cy most recently, then Bo. Ada has never been
+            // mentioned and falls to the alphabetical tail behind both.
+            try me.event(
+                .channelMessage, "hi", tags: [["h", "room-1"], ["p", bo.pubkey]], at: 2_000
+            ),
+            try me.event(
+                .channelMessage, "hi", tags: [["h", "room-1"], ["p", cy.pubkey]], at: 3_000
+            ),
+        ], phase: .backfill)
+
+        let model = MentionAutocompleteModel(channel: "room-1", store: store, selfPubkey: me.pubkey)
+        let observation = Task { await model.run() }
+        defer { observation.cancel() }
+
+        model.update(for: MentionDraft(text: "hey @"))
+        await waitUntil { model.suggestions.map(\.label) == ["Cy", "Bo", "Ada"] }
+
+        // Recency does not outrank the name being typed: `ad` matches Ada alone, and a
+        // more recently mentioned person who does not match is not a candidate at all.
+        model.update(for: MentionDraft(text: "hey @ad"))
+        await waitUntil { model.suggestions.map(\.label) == ["Ada"] }
+    }
+
     // MARK: - Send path
 
     @Test("channel send emits one normalized p tag for the selected mention")

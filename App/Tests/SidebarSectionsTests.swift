@@ -13,18 +13,18 @@ import Testing
 @Suite("Sidebar sections", .timeLimit(.minutes(1)))
 struct SidebarSectionsTests {
     /// A valid 32-byte key, so any short form exercises the real bech32 path.
-    private static func key(_ byte: UInt8) -> String {
+    static func key(_ byte: UInt8) -> String {
         String(repeating: String(format: "%02x", byte), count: 32)
     }
 
-    private let me = key(0x11)
-    private let peer = key(0x22)
-    private let agent = key(0x33)
-    private let other = key(0x44)
+    let me = key(0x11)
+    let peer = key(0x22)
+    let agent = key(0x33)
+    let other = key(0x44)
 
     // MARK: - Fixtures
 
-    private func names(
+    func names(
         entities: [DirectoryEntity],
         rosters: [String: Set<String>] = [:],
         channels: [ChannelListRow] = [],
@@ -40,7 +40,7 @@ struct SidebarSectionsTests {
         )
     }
 
-    private func channel(
+    func channel(
         _ id: String,
         name: String? = nil,
         isPrivate: Bool = false,
@@ -48,7 +48,8 @@ struct SidebarSectionsTests {
         author: String? = nil,
         authorPubkey: String? = nil,
         snippet: String? = nil,
-        unreadCount: Int = 0
+        unreadCount: Int = 0,
+        unreadMentionCount: Int = 0
     ) -> ChannelListRow {
         ChannelListRow(
             id: id,
@@ -61,21 +62,17 @@ struct SidebarSectionsTests {
             lastMessageSnippet: snippet,
             lastMessageAuthor: author,
             lastMessageAuthorPubkey: authorPubkey,
-            unreadCount: unreadCount
+            unreadCount: unreadCount,
+            unreadMentionCount: unreadMentionCount
         )
     }
 
-    private func build(
+    func build(
         _ channels: [ChannelListRow],
         names: EntityNames,
-        mentions: [String: [MentionRef]] = [:]
+        starred: Set<String> = []
     ) -> SidebarContent {
-        SidebarContent.build(
-            channels: channels,
-            names: names,
-            channelNames: .empty,
-            mentions: { mentions[$0.id] ?? [] }
-        )
+        SidebarContent.build(channels: channels, names: names, starred: starred)
     }
 }
 
@@ -152,81 +149,35 @@ extension SidebarSectionsTests {
         #expect(SidebarSection.section(for: .channel) == .channels)
         #expect(SidebarSection.section(for: .direct) == .directMessages)
         #expect(SidebarSection.section(for: .agent) == .agents)
-        #expect(SidebarSection.allCases == [.channels, .directMessages, .agents])
+        // Starred leads: it is the shortlist, and a shortlist below the full list is a
+        // second list rather than a shortcut.
+        #expect(SidebarSection.allCases == [.starred, .channels, .directMessages, .agents])
+        #expect(SidebarSection.starred.title == "Starred")
         #expect(SidebarSection.channels.title == "Channels")
         #expect(SidebarSection.directMessages.title == "Direct Messages")
         #expect(SidebarSection.agents.title == "Agents")
     }
 }
 
-// MARK: - Ordering
-
-extension SidebarSectionsTests {
-    @Test("orders newest first inside a section, messageless last, then by rendered title")
-    func ordering() {
-        let rows = [
-            channel("zulu", name: "Zulu", lastMessageAt: nil),
-            channel("alpha", name: "Alpha", lastMessageAt: nil),
-            channel("older", name: "Older", lastMessageAt: 1_000),
-            channel("newer", name: "Newer", lastMessageAt: 2_000),
-        ]
-        let resolver = names(
-            entities: [DirectoryEntity(pubkey: me, profileName: "Me")],
-            channels: rows,
-            selfPubkey: me
-        )
-
-        let ordered = build(rows, names: resolver).sections[0].rows.map(\.id)
-        #expect(ordered == ["newer", "older", "alpha", "zulu"])
-    }
-
-    @Test("a DM sorts on the peer's name, not the group's, and ties break on id")
-    func orderingUsesRenderedTitle() {
-        let rows = [
-            channel("dm-b", name: "zzz-group"),
-            channel("dm-a", name: "aaa-group"),
-        ]
-        let resolver = names(
-            entities: [
-                DirectoryEntity(pubkey: me, profileName: "Me"),
-                DirectoryEntity(pubkey: peer, profileName: "Ada"),
-                DirectoryEntity(pubkey: agent, profileName: "Zoe"),
-            ],
-            rosters: ["dm-b": [me, peer], "dm-a": [me, agent]],
-            channels: rows,
-            selfPubkey: me
-        )
-
-        // `dm-b` is named "zzz-group" but is a DM with Ada, so it sorts first.
-        #expect(build(rows, names: resolver).sections[0].rows.map(\.title) == ["Ada", "Zoe"])
-
-        // Same timestamp and same rendered title: the group id is the last resort, so
-        // the order is total and does not flicker between reads.
-        let ambiguous = [
-            channel("b-id", name: "Same", lastMessageAt: 5),
-            channel("a-id", name: "Same", lastMessageAt: 5),
-        ]
-        let plain = names(entities: [], channels: ambiguous)
-        #expect(build(ambiguous, names: plain).sections[0].rows.map(\.id) == ["a-id", "b-id"])
-    }
-}
-
 // MARK: - Unread versus mention
 
 extension SidebarSectionsTests {
-    @Test("a dot for ordinary unread, a numeric pill when the unread messages mention you")
+    @Test("a bold name for ordinary unread, a numeric badge for the messages addressed to you")
     func unreadVersusMention() {
-        #expect(UnreadIndicator.resolve(unreadCount: 0, mentionsSelf: false) == .caughtUp)
-        // A mention with nothing unread is already read: no indicator at all.
-        #expect(UnreadIndicator.resolve(unreadCount: 0, mentionsSelf: true) == .caughtUp)
-        #expect(UnreadIndicator.resolve(unreadCount: 3, mentionsSelf: false) == .unread)
-        #expect(UnreadIndicator.resolve(unreadCount: 3, mentionsSelf: true) == .mention(3))
+        #expect(UnreadIndicator.resolve(unreadCount: 0, mentionCount: 0) == .caughtUp)
+        // A mention with nothing unread is already read: no indicator at all. The counts
+        // come from one query over one set, so this state should not arise — it is
+        // resolved rather than trusted, because a badge on a read row is unexplainable.
+        #expect(UnreadIndicator.resolve(unreadCount: 0, mentionCount: 2) == .caughtUp)
+        #expect(UnreadIndicator.resolve(unreadCount: 3, mentionCount: 0) == .unread)
+        // The badge shows the *mention* count, not the unread count it is a subset of.
+        #expect(UnreadIndicator.resolve(unreadCount: 5, mentionCount: 2) == .mention(2))
 
         #expect(UnreadIndicator.caughtUp.isUnread == false)
         #expect(UnreadIndicator.unread.isUnread)
         #expect(UnreadIndicator.mention(1).isUnread)
 
-        // Only the pill draws a number, and it is capped so a busy channel never
+        // Only the badge draws a number, and it is capped so a busy channel never
         // widens the row.
         #expect(UnreadIndicator.caughtUp.badgeText == nil)
         #expect(UnreadIndicator.unread.badgeText == nil)
@@ -235,80 +186,38 @@ extension SidebarSectionsTests {
 
         #expect(UnreadIndicator.caughtUp.accessibilityDescription == nil)
         #expect(UnreadIndicator.unread.accessibilityDescription == "unread")
-        #expect(UnreadIndicator.mention(2).accessibilityDescription == "2 unread, mentions you")
+        #expect(UnreadIndicator.mention(1).accessibilityDescription == "1 mention")
+        #expect(UnreadIndicator.mention(2).accessibilityDescription == "2 mentions")
     }
 
-    @Test("the indicator comes from the newest message's mentions of the local identity")
-    func indicatorFromMentions() {
+    @Test("the indicator is the row's own unread and mention counts, not a guess from one message")
+    func indicatorFromRowCounts() {
         let rows = [
-            channel("mentions-me", name: "Mentions", lastMessageAt: 3_000, unreadCount: 2),
+            channel("mentions-me", name: "Mentions", lastMessageAt: 3_000,
+                    unreadCount: 5, unreadMentionCount: 2),
             channel("mentions-other", name: "Other", lastMessageAt: 2_000, unreadCount: 5),
             channel("caught-up", name: "Quiet", lastMessageAt: 1_000, unreadCount: 0),
         ]
         let resolver = names(
             entities: [DirectoryEntity(pubkey: me, profileName: "Me")],
             channels: rows,
-            selfPubkey: me.uppercased()
+            selfPubkey: me
         )
-        let content = build(rows, names: resolver, mentions: [
-            // The stored ref carries the key upper-cased; matching is case-insensitive.
-            "mentions-me": [MentionRef(pubkey: me.uppercased(), displayName: "Me")],
-            "mentions-other": [MentionRef(pubkey: other, displayName: "Third")],
-            "caught-up": [MentionRef(pubkey: me, displayName: "Me")],
-        ])
 
-        let byID = Dictionary(uniqueKeysWithValues: content.sections[0].rows.map { ($0.id, $0.indicator) })
+        let byID = Dictionary(uniqueKeysWithValues: build(rows, names: resolver)
+            .sections[0].rows.map { ($0.id, $0.indicator) })
+        // Two mentions inside five unread messages: the badge counts the mentions. Until
+        // Part 6 this row could only show `5`, because the count it had was the unread one.
         #expect(byID["mentions-me"] == .mention(2))
         #expect(byID["mentions-other"] == .unread)
         #expect(byID["caught-up"] == .caughtUp)
     }
-
-    @Test("a keyless session never claims a mention")
-    func mentionsSelfNeedsAnIdentity() {
-        let refs = [MentionRef(pubkey: me, displayName: "Me")]
-        #expect(SidebarContent.mentionsSelf(refs, selfPubkey: nil) == false)
-        #expect(SidebarContent.mentionsSelf(refs, selfPubkey: "") == false)
-        #expect(SidebarContent.mentionsSelf(refs, selfPubkey: me.uppercased()))
-        #expect(SidebarContent.mentionsSelf([], selfPubkey: me) == false)
-    }
 }
 
-// MARK: - Names in the preview
+// MARK: - What a row carries
 
 extension SidebarSectionsTests {
-    @Test("the preview's author prefix is never a raw key, and never a guess about one")
-    func authorPrefixResolvesThroughTheDirectory() {
-        let resolver = names(entities: [
-            DirectoryEntity(pubkey: agent, agentName: "Jarvis", isAgent: true),
-            DirectoryEntity(pubkey: peer, nip05: "ada@buzz.dev"),
-        ])
-
-        // The directory answers first, reaching the agent name and the NIP-05 username a
-        // profile-only projection cannot. `channelList` has no name for either, so the
-        // label it carries is the key.
-        #expect(SidebarContent.authorLabel(agent, pubkey: agent, names: resolver) == "Jarvis")
-        #expect(SidebarContent.authorLabel(peer, pubkey: peer, names: resolver) == "ada")
-        // A display name the store resolved for someone the directory has no entry for
-        // (a member who left) is the best name anyone has, so it passes through.
-        #expect(
-            SidebarContent.authorLabel("Ada Lovelace", pubkey: other, names: resolver)
-                == "Ada Lovelace"
-        )
-        // Nothing known anywhere: a short npub, never the 64-character key.
-        let unknown = SidebarContent.authorLabel(other, pubkey: other, names: resolver)
-        #expect(unknown?.hasPrefix("npub1") == true)
-        #expect(unknown?.contains(other) == false)
-        // Carrying the key is what makes "name or key?" an equality instead of a shape
-        // test. A display name that happens to be 64 hex characters was detected as a key
-        // and rendered as a plausible `npub1…` belonging to somebody else.
-        let hexName = String(repeating: "ab", count: 32)
-        #expect(SidebarContent.authorLabel(hexName, pubkey: other, names: resolver) == hexName)
-        // No author to name at all.
-        #expect(SidebarContent.authorLabel(nil, pubkey: nil, names: resolver) == nil)
-        #expect(SidebarContent.authorLabel("   ", pubkey: nil, names: resolver) == nil)
-    }
-
-    @Test("a row carries a resolved title, author prefix, and roster with no view work left")
+    @Test("a row carries a resolved title, roster, and indicator with no view work left")
     func rowIsFullyResolved() {
         let rows = [channel(
             "general",
@@ -330,30 +239,24 @@ extension SidebarSectionsTests {
             selfPubkey: me
         )
 
-        let row = build(rows, names: resolver).sections[0].rows[0]
+        let row = build(rows, names: resolver, starred: ["general"]).sections[0].rows[0]
         #expect(row.title == "General")
         #expect(row.isPrivate)
-        #expect(row.authorLabel == "Jarvis")
-        #expect(row.snippet == "shipping now")
         #expect(row.members == [me, agent, other])
-        #expect(row.date == Date(timeIntervalSince1970: 4_000))
         #expect(row.indicator == .unread)
-        #expect(row.section == .channels)
+        #expect(row.isStarred)
+        #expect(row.section == .starred)
         // The navigation value is still the store's own row, so the pushed timeline's
-        // destination is unchanged.
+        // destination is unchanged — and it still carries the snippet the sidebar has
+        // stopped drawing, because the pushed timeline is what reads it.
         #expect(row.channel == rows[0])
+        #expect(row.channel.lastMessageSnippet == "shipping now")
     }
 
-    @Test("an empty snippet reads as no messages rather than a blank line")
-    func emptySnippet() {
-        let rows = [channel("general", name: "General", lastMessageAt: 10, snippet: "")]
-        let resolver = names(entities: [], channels: rows)
-        #expect(build(rows, names: resolver).sections[0].rows[0].snippet == nil)
-    }
-
-    // The preview's mention aliasing is no longer the sidebar's own: it lives on
-    // ``EntityNames`` and is asserted there, along with the cross-surface agreement it
-    // exists for — see `EntityNamesTests.profilelessMentionResolvesOnEverySurface`.
+    // The preview line, its author prefix, and its per-row mention resolver are gone with
+    // the Slack-style row (Part 6) — `SidebarContent.authorLabel`/`mentionsSelf` and the
+    // tests that pinned them went with them. The aliasing they shared still lives on
+    // ``EntityNames`` and is asserted there.
 }
 
 // MARK: - Persisted expansion
@@ -364,6 +267,7 @@ extension SidebarSectionsTests {
         #expect(SidebarSection.defaultIsExpanded)
         // Pinned strings: renaming one silently discards the expansion state every
         // existing install has chosen, and nothing else would catch it.
+        #expect(SidebarSection.starred.expansionStorageKey == "sidebar.section.starred.expanded")
         #expect(SidebarSection.channels.expansionStorageKey == "sidebar.section.channels.expanded")
         #expect(
             SidebarSection.directMessages.expansionStorageKey

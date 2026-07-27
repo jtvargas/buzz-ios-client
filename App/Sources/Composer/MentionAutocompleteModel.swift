@@ -48,17 +48,29 @@ final class MentionAutocompleteModel {
                     selfPubkey: selfPubkey
                 )) ?? []
                 let channels = (try? store.channelSuggestions()) ?? []
+                // Who this author has `@`-named lately, read from the same signal as the
+                // candidates themselves so the ranking and the list it ranks are always
+                // the same snapshot.
+                let recent = (try? store.recentMentions(
+                    by: selfPubkey,
+                    limit: Self.recencyDepth
+                )) ?? .empty
                 // Indexed here, off the main actor. Normalizing every row costs a few
                 // milliseconds per hundred, and this loop re-fires on *every* committed
                 // transaction — an arriving message, a reaction, a read-state blob — so
                 // doing it on the way in would spend most of a frame on the main actor
                 // each time. `IndexedSuggestion` is `Sendable`, so the built indexes
                 // cross the hop instead of the raw rows.
+                //
+                // The recency rank is resolved here too, for the same reason the
+                // normalized strings are: it is fixed for as long as the index lives, so
+                // paying for the lookup once per snapshot beats paying for it per
+                // candidate per keystroke.
                 let users = candidates.enumerated().map {
-                    IndexedSuggestion(.user($1), originalOrder: $0)
+                    IndexedSuggestion(.user($1), originalOrder: $0, recent: recent)
                 }
                 let references = channels.enumerated().map {
-                    IndexedSuggestion(.channel($1), originalOrder: $0)
+                    IndexedSuggestion(.channel($1), originalOrder: $0, recent: recent)
                 }
                 await apply(users: users, channels: references)
             }
@@ -151,6 +163,7 @@ final class MentionAutocompleteModel {
                 suggestion: item.suggestion,
                 group: item.group,
                 score: score,
+                recencyRank: item.recencyRank,
                 originalOrder: item.originalOrder
             )
             let insertion = best.firstIndex { ranked.precedes($0) } ?? best.endIndex
@@ -165,6 +178,14 @@ final class MentionAutocompleteModel {
         value.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
             .lowercased()
     }
+
+    /// How deep the recency signal reaches. Comfortably past the eight rows the panel
+    /// draws, so the ordering among the people an author actually works with is real
+    /// rather than truncated — and short enough that the store read stays a small one.
+    ///
+    /// `nonisolated` because the read it bounds happens on the concurrent reader, off
+    /// this actor.
+    nonisolated private static let recencyDepth = 20
 }
 
 /// One indexed row: the normalized strings matching scans, computed off the main actor
@@ -177,15 +198,24 @@ private struct IndexedSuggestion: Sendable {
     let words: [String]
     let identifier: String
     let group: Int
+    /// How recently this identity was last `@`-named, `0` being the most recent, and
+    /// `Int.max` for someone who never has been — so "never mentioned" sorts after every
+    /// mention without needing a second optional to unwrap on every comparison.
+    let recencyRank: Int
     let originalOrder: Int
 
-    init(_ suggestion: MentionSuggestion, originalOrder: Int) {
+    init(_ suggestion: MentionSuggestion, originalOrder: Int, recent: RecentMentions) {
         self.suggestion = suggestion
         name = MentionAutocompleteModel.normalized(suggestion.label)
         secondary = MentionAutocompleteModel.normalized(suggestion.matchSecondary)
         words = name.split { $0.isWhitespace || $0 == "-" || $0 == "_" }.map(String.init)
         identifier = suggestion.matchIdentifier.lowercased()
         group = suggestion.rankingGroup
+        // Channels are never ranked by recency: a `#` token completes against its own
+        // index, which this signal says nothing about.
+        recencyRank = suggestion.kind == .user
+            ? (recent.rank(of: suggestion.entityID) ?? .max)
+            : .max
         self.originalOrder = originalOrder
     }
 
@@ -207,9 +237,24 @@ private struct RankedSuggestion {
     let suggestion: MentionSuggestion
     let group: Int
     let score: Int
+    let recencyRank: Int
     let originalOrder: Int
 
+    /// Match quality first, then who was named most recently, then the membership
+    /// grouping, then the read's own alphabetical order.
+    ///
+    /// Recency sits *above* `group` and below `score` on purpose. Above `group`, because
+    /// having just named someone is a stronger statement about who you mean than whether
+    /// they are a member or an agent — and because with no query typed every candidate
+    /// scores 0, which is precisely what makes the first three rows the three people you
+    /// mentioned most recently. Below `score`, because a name you are halfway through
+    /// typing is a stronger statement still: nobody wants last week's colleague on top of
+    /// the person whose name they are spelling out.
+    ///
+    /// Where there is no recency to speak of the tuple collapses to the original
+    /// `(group, score, originalOrder)`, so a fresh install ranks exactly as before.
     func precedes(_ other: RankedSuggestion) -> Bool {
-        (group, score, originalOrder) < (other.group, other.score, other.originalOrder)
+        (score, recencyRank, group, originalOrder)
+            < (other.score, other.recencyRank, other.group, other.originalOrder)
     }
 }
