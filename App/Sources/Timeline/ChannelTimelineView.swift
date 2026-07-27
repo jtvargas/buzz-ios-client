@@ -154,7 +154,11 @@ struct ChannelTimelineView: View {
         // under the composer: it is a second bottom inset, and every scroll and keyboard
         // decision this surface makes is arithmetic over that inset — so a conversation
         // reads exactly as it did before there were tabs.
-        .toolbar(.hidden, for: .tabBar)
+        //
+        // That is declared by the view that owns the stack, and deliberately not here:
+        // `.toolbar(.hidden, for: .tabBar)` on this view left the screen underneath at the
+        // wrong bottom inset for ~530ms after the pop, with its rows 49pt low, and then they
+        // snapped up. See ``ChannelListView/hidesTabBar`` for the traces.
         .sheet(isPresented: $showsChannelDetails) {
             ChannelDetailsView(
                 channel: channel,

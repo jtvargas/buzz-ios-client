@@ -41,7 +41,13 @@ struct ThreadsView: View {
     @Environment(\.threadReadMarks) private var threadReads
     @State private var model: ThreadsModel
     /// The thread this screen pushed, and where it should land when it opens.
-    @State private var openedThread: ThreadRoute?
+    ///
+    /// Held by ``ChannelListView`` rather than here, because the view that owns the
+    /// `NavigationStack` is the one that declares whether the tab bar is up, and it cannot
+    /// declare that for a push it cannot see (``ChannelListView/hidesTabBar``). Only the
+    /// storage moved: this screen still declares the destination below, so what it renders
+    /// and when is unchanged.
+    @Binding var openedThread: ThreadRoute?
     /// Whose profile is open, if anyone's — set by pressing a mention inside a summary.
     @State private var profilePeer: ProfilePeer?
     /// The workspace roster, so the profile sheet this screen presents shows presence
@@ -55,30 +61,42 @@ struct ThreadsView: View {
     private let selfPubkey: String?
 
     /// The production initialiser: the engine is every collaborator below.
-    init(store: BuzzEventStore, engine: SyncEngine, selfPubkey: String?) {
+    init(
+        store: BuzzEventStore,
+        engine: SyncEngine,
+        selfPubkey: String?,
+        openedThread: Binding<ThreadRoute?>
+    ) {
         self.init(
             store: store,
             sender: engine,
             opener: engine,
             presence: engine.presenceStore,
-            selfPubkey: selfPubkey
+            selfPubkey: selfPubkey,
+            openedThread: openedThread
         )
     }
 
     /// The same screen with its collaborators named, so a test can drive it without a
     /// relay socket — the seam ``ChannelTimelineView`` and ``ThreadView`` grew in #53.
+    ///
+    /// `openedThread` has no default on purpose. `.constant(nil)` would compile everywhere
+    /// and silently swallow every push, which is the failure that is hardest to see: a test
+    /// that taps a row and asserts a thread opened would fail with nothing wrong on screen.
     init(
         store: BuzzEventStore,
         sender: any MessageSending,
         opener: any ThreadOpening,
         presence: PresenceStore,
-        selfPubkey: String?
+        selfPubkey: String?,
+        openedThread: Binding<ThreadRoute?>
     ) {
         self.store = store
         self.sender = sender
         self.opener = opener
         presenceStore = presence
         self.selfPubkey = selfPubkey
+        _openedThread = openedThread
         _model = State(initialValue: ThreadsModel(store: store, selfPubkey: selfPubkey))
         _presence = State(initialValue: PresenceModel(store: presence))
     }

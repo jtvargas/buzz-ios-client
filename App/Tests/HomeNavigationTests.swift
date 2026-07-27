@@ -1,5 +1,7 @@
+import BuzzKit
 @testable import Hive
 import Foundation
+import SwiftUI
 import Testing
 import UIKit
 
@@ -30,6 +32,44 @@ struct HomeNavigationTests {
         #expect(UIImage(systemName: ActivityView.symbol) != nil)
         #expect(UIImage(systemName: ChannelListView.communitySymbol) != nil)
     }
+
+    // MARK: - Who is allowed to hide the tab bar
+
+    /// The four states the channel list's stack can be in, and the bar in each.
+    ///
+    /// Worth pinning as a unit test even though the *reason* it lives on the stack is a
+    /// timing one only a UI probe can measure (``ChannelListTabBar``): the thing most likely
+    /// to break later is not the timing, it is someone deciding the Threads screen should
+    /// hide the bar too, or moving `openedThread` back down into ``ThreadsView`` where the
+    /// stack cannot see it. Both show up here as a wrong answer.
+    @Test("only a conversation or a thread is read without the tab bar")
+    func tabBarVisibility() {
+        let conversation = ConversationRoute(channel: Self.row)
+        let thread = ThreadRoute(root: "root", channel: "channel")
+
+        // Nothing pushed — the sidebar. And, by construction, the Threads screen too: it
+        // keeps the bar precisely by not appearing in either input, so there is no second
+        // assertion to write for it here. That it is genuinely reachable in this state is
+        // the job of ``ChannelListView``'s separate `showsThreads`.
+        #expect(ChannelListTabBar.visibility(conversations: [], openedThread: nil) == .visible)
+        // A conversation, and a thread reached from inside one.
+        #expect(ChannelListTabBar.visibility(conversations: [conversation], openedThread: nil) == .hidden)
+        // A thread reached from the Threads screen, with no conversation under it. This is
+        // the case that only works because the route is held above ``ThreadsView``.
+        #expect(ChannelListTabBar.visibility(conversations: [], openedThread: thread) == .hidden)
+        #expect(ChannelListTabBar.visibility(conversations: [conversation], openedThread: thread) == .hidden)
+    }
+
+    private static let row = ChannelListRow(
+        id: "channel",
+        name: "general",
+        about: nil,
+        picture: nil,
+        isPrivate: false,
+        lastMessageAt: nil,
+        lastMessageSnippet: nil,
+        lastMessageAuthor: nil
+    )
 
     // MARK: - What the workspace is called
 
