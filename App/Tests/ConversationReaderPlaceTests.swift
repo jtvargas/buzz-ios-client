@@ -81,6 +81,21 @@ struct ConversationReaderPlaceTests {
         #expect(corrections == [.none, .none])
     }
 
+    @Test("a reading that is not made of numbers is not what the next one is compared against")
+    func nonFiniteIsNotAReference() {
+        // Recording it would make the reading after it look like a height change — and one
+        // with no commit behind it, so the reference would go un-refreshed for a frame.
+        let place = ConversationReaderPlace()
+        place.hasMoved = true
+        park(place, height: 40_000, offset: 30_000, distance: 1_000)
+        _ = feed(place, [span(height: .infinity, offset: .infinity, distance: .infinity)])
+        // The reader drags to a new place, and the height holds still there.
+        park(place, height: 40_000, offset: 25_000, distance: 6_000)
+        place.contentDidChange()
+        // A page arrives: the correction must aim at 6_000, the place they are actually in.
+        #expect(feed(place, [span(height: 60_000, offset: 25_000, distance: 26_000)]) == [.offset(45_000)])
+    }
+
     @Test("a height that holds still asks for nothing")
     func stableHeight() {
         let place = ConversationReaderPlace()

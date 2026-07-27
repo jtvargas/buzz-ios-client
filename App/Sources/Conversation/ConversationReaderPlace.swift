@@ -171,14 +171,19 @@ final class ConversationReaderPlace {
     ///
     /// - Parameter atBottomSlack: the band the scaffold counts as *at* the newest message.
     func correction(for span: Span, atBottomSlack: CGFloat) -> Correction {
-        defer { last = span }
         // An unresolved layout hands back a non-finite rect, and an offset computed from one
         // reaches `CALayer` as a NaN position — which is a crash, not a misplaced reader.
         // The same guard `dismissesSuggestionsOnScroll` carries, for the same reason.
+        //
+        // It is dropped rather than recorded: a reading that is not a number is not a state
+        // to compare the next one against either, and keeping it would make the reading
+        // after it look like a height change and skip a refresh of the reference.
         guard span.isFinite else { return .none }
+        let previous = last
+        last = span
         // Nothing to compare the first reading against, and a scroll view mid-first-layout
         // reports a zero height that means "not measured yet" rather than "empty".
-        guard let previous = last, previous.contentHeight > 0 else { return .none }
+        guard let previous, previous.contentHeight > 0 else { return .none }
         guard span.contentHeight != previous.contentHeight else {
             stableRun += 1
             if stableRun >= Self.stableReadingsToSettle { settling = 0 }
