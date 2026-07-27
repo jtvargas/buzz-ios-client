@@ -29,17 +29,49 @@ struct ThreadView: View {
     /// actually has can reach it — a missing name renders as nothing at all, silently.
     static let threadSymbol = "text.append"
 
+    /// The production initialiser: the engine is all three of the collaborators below.
     init(root: String, channel: String, store: BuzzEventStore, engine: SyncEngine, selfPubkey: String?) {
-        channelID = channel
-        _model = State(initialValue: ThreadModel(
+        self.init(
             root: root,
             channel: channel,
             store: store,
             sender: engine,
             opener: engine,
+            presence: engine.presenceStore,
+            selfPubkey: selfPubkey
+        )
+    }
+
+    /// The same view, with its collaborators named rather than taken from a `SyncEngine`.
+    ///
+    /// ``ThreadModel`` was always written against `MessageSending` and `ThreadOpening`; only
+    /// this view's initialiser reached for the concrete engine, and a `SyncEngine` cannot be
+    /// built without a relay socket. That made the scroll surface unreachable from a UI test,
+    /// so the thirteen shapes that found the `#49`/`#50`/`#52` defects lived outside the repo
+    /// and gated nothing — they rendered a *copy* of this screen, which is free to drift from
+    /// it.
+    ///
+    /// This initialiser exists so a test drives **this** view. It adds no behaviour: the
+    /// production path above delegates straight to it.
+    init(
+        root: String,
+        channel: String,
+        store: BuzzEventStore,
+        sender: any MessageSending,
+        opener: any ThreadOpening,
+        presence: PresenceStore,
+        selfPubkey: String?
+    ) {
+        channelID = channel
+        _model = State(initialValue: ThreadModel(
+            root: root,
+            channel: channel,
+            store: store,
+            sender: sender,
+            opener: opener,
             selfPubkey: selfPubkey
         ))
-        _presence = State(initialValue: PresenceModel(store: engine.presenceStore))
+        _presence = State(initialValue: PresenceModel(store: presence))
     }
 
     var body: some View {

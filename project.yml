@@ -81,6 +81,23 @@ targets:
       base:
         GENERATE_INFOPLIST_FILE: YES
         SWIFT_STRICT_CONCURRENCY: complete
+  # The conversation scroll shapes. A UI-testing bundle, not a unit-test one: the
+  # defects it exists for (a conversation that opens blank, a reader displaced when the
+  # keyboard arrives) only appear against a real keyboard and a real scroll view, which
+  # means an out-of-process driver. Kept out of the `Hive` scheme so the fast gate stays
+  # fast — it has its own scheme and its own CI job, because the run is minutes not
+  # seconds.
+  HiveUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - App/UITests
+    dependencies:
+      - target: Hive
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        SWIFT_STRICT_CONCURRENCY: complete
 schemes:
   Hive:
     build:
@@ -92,3 +109,13 @@ schemes:
       config: Debug
       targets:
         - HiveTests
+  # Runs the scroll shapes alone. `Hive` deliberately does not include them.
+  ConversationUITests:
+    build:
+      targets:
+        Hive: all
+        HiveUITests: [test]
+    test:
+      config: Debug
+      targets:
+        - HiveUITests
