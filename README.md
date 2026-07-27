@@ -115,8 +115,6 @@ One shell — `ConversationScaffold` — owns the message list, the floating com
 - Upstream third-party client guide: `NOSTR.md` in [block/buzz](https://github.com/block/buzz)
 - Base protocol: NIP-01, NIP-29 (groups), NIP-42 (auth), NIP-44 (encryption), NIP-98 (HTTP auth)
 - Buzz NIP extensions Hive implements today: **AB** (device pairing), **CW** (channel windows), **RS** (read state), **OA** (agent profiles), **IA**, **WP**. The full upstream set lives in `docs/nips/` in block/buzz — AA, AE, AM, AO, AP, DV, ER, GS and PL are not implemented here.
-- [jedbridges/comb](https://github.com/jedbridges/comb) (MIT) — an independent native iOS Buzz client; Hive borrows ideas and, where it fits, adapts code from it with attribution
-
 Architecture decisions are recorded in `docs/adr/`.
 
 ## Building
