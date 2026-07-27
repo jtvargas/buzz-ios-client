@@ -31,6 +31,13 @@ final class ThreadModel {
     /// ``rows`` with day separators interleaved, computed once per rows change. The
     /// separator above the thread's own opener is suppressed — see ``items(for:root:)``.
     private(set) var items: [ConversationItem] = []
+    /// Bumped whenever the rendered content changes: the item set, or anything drawn
+    /// inside a row that can change its height. ``ConversationScaffold`` restores the
+    /// reader's place across the settling that follows one of these, and across nothing
+    /// else — a `LazyVStack` re-measures unchanged content whenever the container moves,
+    /// so its reported height cannot stand in for this (see ``ConversationReaderPlace``).
+    private(set) var contentRevision = 0
+
     /// Surviving reaction groups per row, re-read on the same observation as `rows`.
     private(set) var reactionGroups: [String: [ReactionGroup]] = [:]
     /// The users each row mentions, keyed by message id, re-read on the same
@@ -225,7 +232,10 @@ final class ThreadModel {
         // must move the pill's count and nothing else.
         if rows != split.rendered { rows = split.rendered }
         let grouped = Self.items(for: split.rendered, root: root)
-        if items != grouped { items = grouped }
+        if items != grouped {
+            items = grouped
+            contentRevision += 1
+        }
         jump.hold(count: split.held.count, firstID: split.held.first?.id)
     }
 
@@ -298,19 +308,6 @@ final class ThreadModel {
         jumpToLatest()
     }
 
-    private func restore(document: MentionDraft, error: OutboxError) {
-        if mentionDraft.text.isEmpty { mentionDraft = document }
-        sendError = Self.describe(error)
-    }
-
-    private static func describe(_ error: OutboxError) -> String {
-        switch error {
-        case let .contentTooLarge(bytes, limit):
-            "Reply is too large (\(bytes) bytes; limit \(limit))."
-        case .invalidEvent, .notQueued, .encodingFailed:
-            "Couldn't send that reply."
-        }
-    }
 }
 
 // MARK: - Reactions & row actions
@@ -330,7 +327,10 @@ extension ThreadModel {
     }
 
     func applyReactions(_ groups: [String: [ReactionGroup]]) {
-        if reactionGroups != groups { reactionGroups = groups }
+        if reactionGroups != groups {
+            reactionGroups = groups
+            contentRevision += 1
+        }
     }
 
     /// The users a row mentions, empty when it mentions none — handed to the row's
@@ -344,7 +344,10 @@ extension ThreadModel {
     }
 
     func applyMentions(_ mentions: [String: MentionRefList]) {
-        if mentionRefs != mentions { mentionRefs = mentions }
+        if mentionRefs != mentions {
+            mentionRefs = mentions
+            contentRevision += 1
+        }
     }
 
     /// Sends a reaction on a message in the thread through the durable send path.

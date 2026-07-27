@@ -50,6 +50,29 @@ import CoreGraphics
 /// is zero by definition — a conversation opens at its newest message and stays there
 /// however the content settles underneath it.
 ///
+/// # Why a *declared* content change and not a measured one
+///
+/// The first version of this file took "the content changed" to mean `contentSize.height`
+/// changed, and that premise is false for the same reason the rest of this note is about: a
+/// `LazyVStack` estimates the rows it has not measured, so its reported height *also* moves
+/// when nothing was inserted at all — when the container changes, and as rows materialise
+/// under a scroll. Every one of those readings was taken for an insertion, and the
+/// estimation error was applied to the reader as a scroll. Measured on iPhone 17 Pro /
+/// iOS 26 in `~/.buzz/.scratch/scrollharness`, driving the keyboard up and down under a
+/// reader parked in history. A *jump* is one frame in which the offset moved with no finger
+/// on the list:
+///
+/// | run | correcting on a measured change | correcting on a declared one |
+/// |---|---|---|
+/// | 20 keyboard show/hides | 32 jumps, biggest −3925, reader **7 messages back** | **0**, offset 41868 → 41868 |
+/// | 10 slower show/hides | 18 jumps, biggest **−15750**, reader 5 messages back | **0**, offset 41910 → 41910 |
+/// | 3 background → foreground | 6 jumps: 32559 → 32699 → 32459 → 32220 | **0**, offset unchanged every cycle |
+///
+/// Raising the keyboard alone moved the measured height by **+3702 points** with not one row
+/// added. So the owner declares it instead: ``contentDidChange()`` opens a settling window,
+/// and outside that window a height change means the stack re-measured and means nothing to
+/// the reader.
+///
 /// # Why the reference is latched rather than read from the previous reading
 ///
 /// A `LazyVStack` does not arrive at its height once; it re-measures as rows materialise,
@@ -76,6 +99,10 @@ final class ConversationReaderPlace {
         /// From the newest message: `contentSize.height - visibleRect.maxY`, the same
         /// measure ``ConversationScaffold`` bands on.
         let distance: CGFloat
+
+        /// Whether this reading is made of numbers at all. A scroll view mid-layout can
+        /// report an infinite `visibleRect`, and every arithmetic result below inherits it.
+        var isFinite: Bool { contentHeight.isFinite && offset.isFinite && distance.isFinite }
     }
 
     /// What a reading asks the scroll view to do.
@@ -96,27 +123,82 @@ final class ConversationReaderPlace {
     /// by taking the pill to a particular message.
     var hasMoved = false
 
-    /// The distance last seen while the height was holding still.
+    /// The distance last seen while the height was holding still and no settling window was
+    /// open — the reader's own place, as opposed to a place a correction put them in.
     private(set) var anchoredDistance: CGFloat?
     private var last: Span?
+    /// Readings left in the window opened by ``contentDidChange()``. Zero means the height
+    /// belongs to content nobody changed, and a change in it is the stack re-measuring.
+    private var settling = 0
+    /// Consecutive readings whose height matched the one before. The window closes on a run
+    /// of these rather than on the first one: the reading that follows a commit is not
+    /// guaranteed to be the one carrying the new height.
+    private var stableRun = 0
 
     /// Below this, a correction is not worth a frame.
     private static let tolerance: CGFloat = 0.5
+    /// How long a settling window may stay open. A page load re-measures for a handful of
+    /// frames; this is about a second at 60Hz, so a stack that never settles — one being
+    /// scrolled the whole time — cannot hold the window open indefinitely.
+    private static let settlingReadings = 60
+    /// How still the height must be for the window to close. Three frames: long enough not
+    /// to close on a single coincidence mid-run, short enough that the next real change is
+    /// treated as its own.
+    private static let stableReadingsToSettle = 3
+
+    /// The owner's rendered content changed — rows arrived, an older page was inserted, a
+    /// row was pruned. The readings that follow are the *new* content being measured, and
+    /// the reader's place has to be carried across them.
+    ///
+    /// Idempotent, and cheap to over-call: a commit that changes no height simply closes the
+    /// window again on the next few readings without correcting anything.
+    ///
+    /// The one case this leaves open is a *storm* of commits — a window reopened faster than
+    /// three readings can close it — during which a re-measure would still be corrected.
+    /// Left as is because the storm cases are already the ones that want correcting: rows
+    /// arriving while the reader is at the bottom belong at the bottom, and rows arriving
+    /// while they are away are held behind the tail freeze and commit nothing.
+    func contentDidChange() {
+        settling = Self.settlingReadings
+        // The run that closes a window has to be a run measured *inside* it. Without this
+        // the stillness before the commit counts toward it, and the window shuts on the
+        // first reading — before the new content has been measured at all, which is the one
+        // moment it exists to cover.
+        stableRun = 0
+    }
 
     /// Reads one geometry sample and says what it implies.
     ///
     /// - Parameter atBottomSlack: the band the scaffold counts as *at* the newest message.
     func correction(for span: Span, atBottomSlack: CGFloat) -> Correction {
         defer { last = span }
+        // An unresolved layout hands back a non-finite rect, and an offset computed from one
+        // reaches `CALayer` as a NaN position — which is a crash, not a misplaced reader.
+        // The same guard `dismissesSuggestionsOnScroll` carries, for the same reason.
+        guard span.isFinite else { return .none }
         // Nothing to compare the first reading against, and a scroll view mid-first-layout
         // reports a zero height that means "not measured yet" rather than "empty".
         guard let previous = last, previous.contentHeight > 0 else { return .none }
         guard span.contentHeight != previous.contentHeight else {
-            // The height is holding still, so wherever the reader is, is where they mean to
-            // be. Taken mid-drag too: that is how a drag updates the reference.
-            anchoredDistance = span.distance
+            stableRun += 1
+            if stableRun >= Self.stableReadingsToSettle { settling = 0 }
+            // The reference is only refreshed once the window has closed. Inside one it must
+            // stay put — a `LazyVStack` arrives at its height in instalments, and a reference
+            // that follows the instalments is a reference chasing itself (measured: two of
+            // three page loads held, the third drifted thirty rows).
+            //
+            // A finger on the list is the exception, and not really one: nothing is corrected
+            // while the reader is scrolling, so where they have put the conversation *is*
+            // their place, window or no window.
+            if settling == 0 || isScrolling { anchoredDistance = span.distance }
             return .none
         }
+        stableRun = 0
+        // The height moved with no commit behind it: the stack re-measured content nobody
+        // changed. Correcting here is what moved the reader on every keyboard and every app
+        // switch — see the table above.
+        guard settling > 0 else { return .none }
+        settling -= 1
         guard !isScrolling else { return .none }
         // A conversation nobody has moved belongs at its newest message, and so does one
         // whose reader is already there.

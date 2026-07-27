@@ -5,15 +5,20 @@ import Testing
 /// What a change in the content's height does to the reader's place.
 ///
 /// Every case here is a sequence of geometry readings, because that is what the scroll
-/// view produces and because the bug this replaces was in the *sequence*: correcting
+/// view produces and because the first bug this replaced was in the *sequence*: correcting
 /// against the reading before the current one made each correction the reference for the
 /// next, and a `LazyVStack` re-measures several times per page load.
 ///
+/// The second bug was in the *premise*, and half of this suite is about it: a height that
+/// changed is not content that changed. A `LazyVStack` re-measures unchanged rows whenever
+/// the container moves — the keyboard, an app-switcher snapshot — so a correction owes
+/// itself to ``ConversationReaderPlace/contentDidChange()``, which the owner calls when it
+/// really did commit something.
+///
 /// Deliberately not here: that `defaultScrollAnchor(.bottom, for: .sizeChanges)` fails to
-/// do this at all. That is a fact about SwiftUI, not about this type, and it was settled
-/// in a harness around the shipping ``ConversationScaffold``
-/// (`~/.buzz/.scratch/scrollharness`) — the measurements are recorded on
-/// ``ConversationReaderPlace``.
+/// do this at all, and the sizes of the two failures above. Those are facts about SwiftUI
+/// and about a device, settled in a harness around the shipping ``ConversationScaffold``
+/// (`~/.buzz/.scratch/scrollharness`) and recorded on ``ConversationReaderPlace``.
 @MainActor
 @Suite("Conversation reader place", .timeLimit(.minutes(1)))
 struct ConversationReaderPlaceTests {
@@ -30,11 +35,21 @@ struct ConversationReaderPlaceTests {
         spans.map { place.correction(for: $0, atBottomSlack: slack) }
     }
 
+    /// Parks a reader at `distance` with the height holding still, and leaves no settling
+    /// window open — the state a conversation is in between commits.
+    ///
+    /// Four readings rather than two: the window closes on a *run* of unchanged heights, and
+    /// the reference is only refreshed once it has.
+    private func park(_ place: ConversationReaderPlace, height: CGFloat, offset: CGFloat, distance: CGFloat) {
+        _ = feed(place, Array(repeating: span(height: height, offset: offset, distance: distance), count: 4))
+    }
+
     // MARK: - Nothing to correct against
 
     @Test("the first reading corrects nothing")
     func firstReading() {
         let place = ConversationReaderPlace()
+        place.contentDidChange()
         #expect(place.correction(for: span(height: 5_000, offset: 4_000, distance: 0), atBottomSlack: slack) == .none)
     }
 
@@ -43,9 +58,25 @@ struct ConversationReaderPlaceTests {
         // A scroll view mid-first-layout reports zero, and the height that follows it is
         // the first real one — not a change to correct for.
         let place = ConversationReaderPlace()
+        place.contentDidChange()
         let corrections = feed(place, [
             span(height: 0, offset: 0, distance: 0),
             span(height: 5_000, offset: 4_000, distance: 0),
+        ])
+        #expect(corrections == [.none, .none])
+    }
+
+    @Test("a reading that is not made of numbers is ignored")
+    func nonFiniteGeometry() {
+        // An unresolved layout hands back an infinite `visibleRect`, and an offset computed
+        // from one reaches `CALayer` as a NaN position — a crash, not a misplaced reader.
+        let place = ConversationReaderPlace()
+        place.hasMoved = true
+        park(place, height: 40_000, offset: 30_000, distance: 1_000)
+        place.contentDidChange()
+        let corrections = feed(place, [
+            span(height: .infinity, offset: 30_000, distance: -.infinity),
+            span(height: 60_000, offset: .nan, distance: 21_000),
         ])
         #expect(corrections == [.none, .none])
     }
@@ -61,6 +92,68 @@ struct ConversationReaderPlaceTests {
         #expect(corrections == [.none, .none, .none])
     }
 
+    // MARK: - A height that moved with no commit behind it
+
+    @Test("the stack re-measuring unchanged content moves nobody")
+    func reMeasureIsNotAContentChange() {
+        // The regression this suite exists for. Raising the keyboard changed the measured
+        // height of a 50-message conversation by +3702 points with not one row added, and
+        // correcting that drift moved the reader seven messages back over twenty
+        // show/hides.
+        let place = ConversationReaderPlace()
+        place.hasMoved = true
+        park(place, height: 40_000, offset: 30_000, distance: 1_000)
+        let corrections = feed(place, [
+            span(height: 43_702, offset: 33_702, distance: 1_000),
+            span(height: 40_000, offset: 30_000, distance: 1_000),
+            span(height: 43_702, offset: 33_702, distance: 1_000),
+        ])
+        #expect(corrections == [.none, .none, .none])
+    }
+
+    @Test("a conversation nobody has moved is not pinned to the bottom by a re-measure")
+    func reMeasureDoesNotPinToBottom() {
+        // The same premise from the other side: without a commit behind it, a height change
+        // must not drag a reader to the newest message either.
+        let place = ConversationReaderPlace()
+        park(place, height: 40_000, offset: 30_000, distance: 1_000)
+        #expect(feed(place, [span(height: 43_702, offset: 30_000, distance: 4_702)]) == [.none])
+    }
+
+    @Test("a window opened after a still run does not shut on the stillness before it")
+    func windowIgnoresEarlierStillness() {
+        // A commit arrives against a conversation that has been sitting still, and the first
+        // reading after it carries an unchanged height — the scroll view reporting an offset
+        // change before the new rows have been measured. The window must survive that, or it
+        // covers nothing.
+        let place = ConversationReaderPlace()
+        place.hasMoved = true
+        park(place, height: 45_882, offset: 44_300, distance: 1_000)
+        place.contentDidChange()
+        let corrections = feed(place, [
+            span(height: 45_882, offset: 44_300, distance: 1_000),
+            span(height: 80_338, offset: 44_300, distance: 35_456),
+        ])
+        #expect(corrections == [.none, .offset(78_756)])
+    }
+
+    @Test("the window closes once the height has settled")
+    func windowCloses() {
+        let place = ConversationReaderPlace()
+        place.hasMoved = true
+        park(place, height: 40_000, offset: 30_000, distance: 1_000)
+        place.contentDidChange()
+        // The commit's own settling run, then three readings that agree.
+        _ = feed(place, [
+            span(height: 60_000, offset: 30_000, distance: 21_000),
+            span(height: 50_000, offset: 49_000, distance: 1_000),
+            span(height: 50_000, offset: 49_000, distance: 1_000),
+            span(height: 50_000, offset: 49_000, distance: 1_000),
+        ])
+        // A keyboard, after the window closed.
+        #expect(feed(place, [span(height: 53_702, offset: 52_702, distance: 1_000)]) == [.none])
+    }
+
     // MARK: - A conversation nobody has moved
 
     @Test("content arriving after the first layout lands on the newest message")
@@ -68,6 +161,7 @@ struct ConversationReaderPlaceTests {
         // The report: a thread primes with its opener alone, and the replies land a relay
         // round trip later against a height the stack had never measured.
         let place = ConversationReaderPlace()
+        place.contentDidChange()
         let corrections = feed(place, [
             span(height: 600, offset: -116, distance: -558),
             span(height: 12_240, offset: 66, distance: 11_300),
@@ -78,6 +172,7 @@ struct ConversationReaderPlaceTests {
     @Test("a height that settles in instalments lands on the newest message every time")
     func settlingGoesToTheBottom() {
         let place = ConversationReaderPlace()
+        place.contentDidChange()
         let corrections = feed(place, [
             span(height: 600, offset: -116, distance: -558),
             span(height: 4_000, offset: 66, distance: 3_100),
@@ -91,14 +186,10 @@ struct ConversationReaderPlaceTests {
     func atBottomStaysAtBottom() {
         let place = ConversationReaderPlace()
         place.hasMoved = true
-        let corrections = feed(place, [
-            span(height: 5_000, offset: 4_000, distance: 0),
-            // Still there — this is the reading the reference is taken from.
-            span(height: 5_000, offset: 4_000, distance: 0),
-            // A message arrives.
-            span(height: 5_400, offset: 4_000, distance: 400),
-        ])
-        #expect(corrections == [.none, .none, .bottom])
+        park(place, height: 5_000, offset: 4_000, distance: 0)
+        // A message arrives.
+        place.contentDidChange()
+        #expect(feed(place, [span(height: 5_400, offset: 4_000, distance: 400)]) == [.bottom])
     }
 
     // MARK: - A reader who has moved
@@ -109,14 +200,12 @@ struct ConversationReaderPlaceTests {
         // whole page backwards.
         let place = ConversationReaderPlace()
         place.hasMoved = true
-        let corrections = feed(place, [
-            span(height: 45_882, offset: 44_300, distance: 1_000),
-            span(height: 45_882, offset: 44_300, distance: 1_000),
-            span(height: 80_338, offset: 44_300, distance: 35_456),
-        ])
+        park(place, height: 45_882, offset: 44_300, distance: 1_000)
+        place.contentDidChange()
+        let corrections = feed(place, [span(height: 80_338, offset: 44_300, distance: 35_456)])
         // 44_300 + (35_456 - 1_000): the offset at which the distance to the newest
         // message is the one they had.
-        #expect(corrections == [.none, .none, .offset(78_756)])
+        #expect(corrections == [.offset(78_756)])
     }
 
     @Test("a settling run aims at one reference instead of chasing itself")
@@ -126,10 +215,8 @@ struct ConversationReaderPlaceTests {
         // the reader actually had, not the one the previous correction produced.
         let place = ConversationReaderPlace()
         place.hasMoved = true
-        _ = feed(place, [
-            span(height: 40_000, offset: 30_000, distance: 1_000),
-            span(height: 40_000, offset: 30_000, distance: 1_000),
-        ])
+        park(place, height: 40_000, offset: 30_000, distance: 1_000)
+        place.contentDidChange()
         let corrections = feed(place, [
             span(height: 60_000, offset: 30_000, distance: 21_000),
             span(height: 70_000, offset: 50_000, distance: 11_000),
@@ -149,12 +236,9 @@ struct ConversationReaderPlaceTests {
     func toleranceHoldsStill() {
         let place = ConversationReaderPlace()
         place.hasMoved = true
-        let corrections = feed(place, [
-            span(height: 40_000, offset: 30_000, distance: 1_000),
-            span(height: 40_000, offset: 30_000, distance: 1_000),
-            span(height: 40_000.3, offset: 30_000, distance: 1_000.3),
-        ])
-        #expect(corrections == [.none, .none, .none])
+        park(place, height: 40_000, offset: 30_000, distance: 1_000)
+        place.contentDidChange()
+        #expect(feed(place, [span(height: 40_000.3, offset: 30_000, distance: 1_000.3)]) == [.none])
     }
 
     // MARK: - Who is allowed to move the list
@@ -164,30 +248,24 @@ struct ConversationReaderPlaceTests {
         let place = ConversationReaderPlace()
         place.hasMoved = true
         place.isScrolling = true
-        let corrections = feed(place, [
-            span(height: 40_000, offset: 30_000, distance: 1_000),
-            span(height: 40_000, offset: 30_000, distance: 1_000),
-            span(height: 60_000, offset: 30_000, distance: 21_000),
-        ])
-        #expect(corrections == [.none, .none, .none])
+        park(place, height: 40_000, offset: 30_000, distance: 1_000)
+        place.contentDidChange()
+        #expect(feed(place, [span(height: 60_000, offset: 30_000, distance: 21_000)]) == [.none])
     }
 
     @Test("a drag mid-settle still updates where the reader is")
     func draggingUpdatesTheReference() {
         // The reference is taken from readings where the height held still, and those
         // happen during a drag too — otherwise a reader who scrolled and then received a
-        // page would be restored to where they were before the drag.
+        // page would be restored to where they were before the drag. That has to hold with
+        // a settling window open, which is exactly when a page is arriving.
         let place = ConversationReaderPlace()
         place.hasMoved = true
+        park(place, height: 40_000, offset: 30_000, distance: 1_000)
+        place.contentDidChange()
         place.isScrolling = true
-        _ = feed(place, [
-            span(height: 40_000, offset: 30_000, distance: 1_000),
-            span(height: 40_000, offset: 25_000, distance: 6_000),
-        ])
+        _ = feed(place, [span(height: 40_000, offset: 25_000, distance: 6_000)])
         place.isScrolling = false
-        let corrections = feed(place, [
-            span(height: 60_000, offset: 25_000, distance: 26_000),
-        ])
-        #expect(corrections == [.offset(45_000)]) // 25_000 + (26_000 - 6_000)
+        #expect(feed(place, [span(height: 60_000, offset: 25_000, distance: 26_000)]) == [.offset(45_000)])
     }
 }

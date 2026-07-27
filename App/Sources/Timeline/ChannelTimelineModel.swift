@@ -33,6 +33,13 @@ final class ChannelTimelineModel {
     /// rather than per render pass, since a list touches its items several times in
     /// one layout.
     private(set) var items: [ConversationItem] = []
+    /// Bumped whenever the rendered content changes: the item set, or anything drawn
+    /// inside a row that can change its height. ``ConversationScaffold`` restores the
+    /// reader's place across the settling that follows one of these, and across nothing
+    /// else — a `LazyVStack` re-measures unchanged content whenever the container moves,
+    /// so its reported height cannot stand in for this (see ``ConversationReaderPlace``).
+    private(set) var contentRevision = 0
+
     /// Surviving reaction groups for each loaded row, keyed by message id. Re-read
     /// on the same observation as the rows, so a react, a withdrawal, or a peer's
     /// reaction updates the chips live without a second pipeline.
@@ -105,7 +112,11 @@ final class ChannelTimelineModel {
     let typing: any EphemeralPublishing
     /// Marks the channel read as messages come into view (mark-on-view). `nil` in
     /// tests that do not exercise read state.
-    private let readStateMarking: (any ReadStateMarking)?
+    ///
+    /// Internal like its neighbours above, so ``markReadIfNeeded()`` can read it from
+    /// `ChannelTimelineModel+ReadState.swift`: a `private` member is reachable only from
+    /// the file that declares it.
+    let readStateMarking: (any ReadStateMarking)?
     private let pageSize: Int
     /// The local identity's hex pubkey, for own-reaction highlighting and the
     /// delete affordance on own pending/failed rows. `nil` degrades to no highlight
@@ -143,7 +154,9 @@ final class ChannelTimelineModel {
     /// The newest rendered `created_at` this view has already marked read, so a scroll
     /// back through older history (which never changes the newest rendered row) re-marks
     /// nothing and only a genuinely newer *viewable* message advances the frontier.
-    @ObservationIgnored private var lastMarkedReadAt: Int64 = 0
+    ///
+    /// Written from `ChannelTimelineModel+ReadState.swift` and nowhere else.
+    @ObservationIgnored var lastMarkedReadAt: Int64 = 0
 
     init(
         channel: String,
@@ -240,32 +253,6 @@ final class ChannelTimelineModel {
         } catch {
             // Ends on cancellation or teardown; last snapshot stays on screen.
         }
-    }
-
-    /// Marks the channel read up to the newest *rendered* message, once per advance —
-    /// mark-on-view. Fires the moment the channel opens and again whenever a newer
-    /// message becomes viewable while the view is up; a scroll back through older
-    /// history leaves the newest rendered row unchanged, so it re-marks nothing.
-    ///
-    /// The newest *rendered* row, not the newest loaded one. While the tail is frozen
-    /// the reader can see nothing past the boundary, and the NIP-RS frontier is
-    /// grow-only and shared with every other device — so advancing it past held-back
-    /// arrivals is not recoverable: the pill said "3 new messages" while the sidebar row
-    /// for the same channel dropped to zero unread and un-bolded, and backing out lost
-    /// the marker everywhere.
-    ///
-    /// Called from ``rebuild()``, so it tracks the rendered set for any reason it
-    /// advances — an arrival, the channel opening, an older page, or the freeze
-    /// releasing — and the `lastMarkedReadAt` guard makes every redundant call free.
-    ///
-    /// Fire-and-forget so the observation loop never blocks on the publish, and
-    /// grow-only on the engine side so a redundant call is a no-op.
-    private func markReadIfNeeded() {
-        guard let readStateMarking,
-              let newest = rows.last?.createdAt, newest > lastMarkedReadAt else { return }
-        lastMarkedReadAt = newest
-        let channel = self.channel
-        Task { await readStateMarking.markRead(channel: channel, upTo: newest) }
     }
 
     /// Reads one page off the main actor. `channel`, `store`, and `pageSize` are
@@ -374,7 +361,10 @@ final class ChannelTimelineModel {
         // was already rendered, would still invalidate the list it was held back from.
         if rows != split.rendered { rows = split.rendered }
         let grouped = ConversationGrouping.items(for: split.rendered)
-        if items != grouped { items = grouped }
+        if items != grouped {
+            items = grouped
+            contentRevision += 1
+        }
         jump.hold(count: split.held.count, firstID: split.held.first?.id)
         markReadIfNeeded()
     }
@@ -387,14 +377,23 @@ final class ChannelTimelineModel {
     // commit the store raises, including commits that change nothing a reader can see.
 
     func applyReactions(_ groups: [String: [ReactionGroup]]) {
-        if reactionGroups != groups { reactionGroups = groups }
+        if reactionGroups != groups {
+            reactionGroups = groups
+            contentRevision += 1
+        }
     }
 
     func applyMentions(_ mentions: [String: MentionRefList]) {
-        if mentionRefs != mentions { mentionRefs = mentions }
+        if mentionRefs != mentions {
+            mentionRefs = mentions
+            contentRevision += 1
+        }
     }
 
     func applyThreadParticipants(_ participants: [String: ThreadParticipants]) {
-        if replyParticipants != participants { replyParticipants = participants }
+        if replyParticipants != participants {
+            replyParticipants = participants
+            contentRevision += 1
+        }
     }
 }
