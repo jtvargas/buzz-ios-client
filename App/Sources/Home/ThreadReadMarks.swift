@@ -22,8 +22,9 @@ import SwiftUI
 ///
 /// The `created_at` of the newest reply the reader had on screen. Grow-only, so replies
 /// arriving while the thread is open advance it and an older snapshot cannot walk it back.
-/// A thread counts as unseen again the moment a reply lands past that mark, which is what
-/// makes the count self-correcting rather than a dismissal.
+/// A thread counts as unseen again the moment *somebody else's* reply lands past that mark,
+/// which is what makes the count self-correcting rather than a dismissal. Whose reply it is
+/// matters as much as when it arrived: see ``hasUnseen(_:latestReplyByOthersAt:)``.
 @MainActor
 @Observable
 final class ThreadReadMarks {
@@ -71,16 +72,35 @@ final class ThreadReadMarks {
 
     /// Whether this thread still holds something the reader has not seen on this device.
     ///
-    /// `latestReplyAt` is the newest reply in the thread, the reader's own included — so a
-    /// thread the reader replied in last is settled by the mark their own reply set.
-    func hasUnseen(_ rootID: String, latestReplyAt: Int64) -> Bool {
-        latestReplyAt > marks[rootID] ?? 0
+    /// # Why the argument is the newest reply *by somebody else*
+    ///
+    /// A mark is written from the newest reply that was on screen, which is very often the
+    /// reader's own — reply in a thread and the row you just sent is the row that moves the
+    /// mark. That makes the mark and the newest reply overall the *same event* seen from two
+    /// sides, so comparing one against the other only works while the two stay in step. They
+    /// come apart the moment a reply of the reader's lands somewhere the mark cannot follow
+    /// it: read the thread on the phone (mark ← the peer's reply), answer it from the
+    /// desktop, and the newest reply overall now outruns the phone's mark by a message the
+    /// reader wrote themselves. The thread reappears under Threads, on their own words, and
+    /// the only way to clear it is to open something they have already read.
+    ///
+    /// So the comparison is against the last thing somebody *else* said. Nothing the reader
+    /// writes can push a thread back into the count, from any device, which is the same rule
+    /// the store's own `new_count` has always applied to replies — this makes the device's
+    /// half of the arithmetic agree with the relay's half instead of quietly contradicting it.
+    ///
+    /// - Parameter latestReplyByOthersAt: the newest reply written by anybody but the reader,
+    ///   or `nil` when there is no such reply. `nil` is never unseen: a thread the reader
+    ///   alone has spoken in holds nothing they can be behind on.
+    func hasUnseen(_ rootID: String, latestReplyByOthersAt: Int64?) -> Bool {
+        guard let latestReplyByOthersAt else { return false }
+        return latestReplyByOthersAt > marks[rootID] ?? 0
     }
 
     /// The Threads card's number: unread threads the store found, less the ones already
     /// read on this device.
     func unseenCount(among threads: [UnreadThread]) -> Int {
-        threads.count { hasUnseen($0.rootID, latestReplyAt: $0.latestReplyAt) }
+        threads.count { hasUnseen($0.rootID, latestReplyByOthersAt: $0.latestReplyByOthersAt) }
     }
 
     /// `marks` trimmed to ``capacity``, keeping the most recently active threads.
