@@ -78,3 +78,44 @@ jobs:
             -destination "platform=iOS Simulator,name=$DEVICE" \
             -skipPackagePluginValidation \
             CODE_SIGNING_ALLOWED=NO
+
+  conversation-ui:
+    name: Conversation UI tests (iOS Simulator)
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select Xcode 26
+        run: |
+          sudo xcode-select -s "$(ls -d /Applications/Xcode_26*.app | sort -V | tail -1)"
+          xcodebuild -version
+      - name: Install XcodeGen
+        run: which xcodegen || brew install xcodegen
+      - name: Generate project
+        run: xcodegen generate
+      - name: Ensure an iOS simulator exists
+        run: |
+          if ! xcrun simctl list devices available | grep -q "iPhone"; then
+            sudo xcodebuild -runFirstLaunch
+            xcodebuild -downloadPlatform iOS
+          fi
+          xcrun simctl list devices available
+      # The suite drives a real software keyboard: focusing the composer is what moves the
+      # scroll view, and that is the whole defect class. A simulator with a hardware keyboard
+      # attached never shows one, and every shape would fail on the "no software keyboard"
+      # assertion rather than on anything about the app.
+      - name: Detach the hardware keyboard
+        run: |
+          defaults write com.apple.iphonesimulator ConnectHardwareKeyboard -bool false || true
+      # Its own job, and deliberately not part of `app`: this is minutes of real UI driving
+      # against eight conversation shapes, where that one is seconds of unit tests. Keeping
+      # them apart means the fast gate stays fast and a slow shape cannot mask a unit failure.
+      - name: Test
+        run: |
+          DEVICE=$(xcrun simctl list devices available | sed -n 's/^ *\(iPhone [^(]*\)(.*/\1/p' | head -1 | xargs)
+          echo "Testing on simulator: $DEVICE"
+          xcodebuild test \
+            -project Hive.xcodeproj \
+            -scheme ConversationUITests \
+            -destination "platform=iOS Simulator,name=$DEVICE" \
+            -skipPackagePluginValidation \
+            CODE_SIGNING_ALLOWED=NO

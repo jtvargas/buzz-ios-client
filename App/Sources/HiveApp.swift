@@ -10,16 +10,34 @@ struct HiveApp: App {
 
     var body: some Scene {
         WindowGroup {
-            if let environment = environment.value {
-                RootView()
-                    .environment(environment)
-                    .task { await environment.bootstrap() }
+            #if DEBUG
+            // A launch argument opens the real conversation surface on a seeded throwaway
+            // store, so the scroll shapes can be driven from a UI test without a relay. Off
+            // unless asked for, and compiled out of release entirely — see
+            // ``ConversationFixture``.
+            if let fixture = ConversationFixture.requested {
+                ConversationFixtureHost(options: fixture)
             } else {
-                LaunchFailureView(message: environment.failure ?? "The app could not start.")
+                launch
             }
+            #else
+            launch
+            #endif
         }
         .onChange(of: scenePhase) { _, phase in
             environment.value?.handleScenePhase(phase)
+        }
+    }
+
+    /// The normal launch: the composition root, or the one failure a user cannot resolve.
+    @ViewBuilder
+    private var launch: some View {
+        if let environment = environment.value {
+            RootView()
+                .environment(environment)
+                .task { await environment.bootstrap() }
+        } else {
+            LaunchFailureView(message: environment.failure ?? "The app could not start.")
         }
     }
 }

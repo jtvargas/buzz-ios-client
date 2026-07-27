@@ -23,7 +23,15 @@ struct ChannelTimelineView: View {
     private let channel: ChannelListRow
     private let channelID: String
     private let store: BuzzEventStore
-    private let engine: SyncEngine
+    /// The three collaborators this view's own `body` needs, named rather than reached for
+    /// through a `SyncEngine`. Typing and read-state are handed to the model and not kept
+    /// here, because nothing below reads them.
+    ///
+    /// `sender` and `opener` are carried so a thread pushed from a row is built with the same
+    /// collaborators as this screen; `presenceStore` backs the channel-details sheet.
+    private let sender: any MessageSending
+    private let opener: any ThreadOpening
+    private let presenceStore: PresenceStore
     private let selfPubkey: String?
     /// The peer this conversation was opened with, when it was reached by opening a direct
     /// message rather than from the sidebar. Only ever consulted while the roster has
@@ -36,6 +44,7 @@ struct ChannelTimelineView: View {
     /// per page loaded.
     private static let topSentinelHeight: CGFloat = 44
 
+    /// The production initialiser: the engine is every collaborator below.
     init(
         channel: ChannelListRow,
         store: BuzzEventStore,
@@ -43,25 +52,60 @@ struct ChannelTimelineView: View {
         selfPubkey: String?,
         knownPeer: String? = nil
     ) {
-        self.channel = channel
-        channelID = channel.id
-        self.store = store
-        self.engine = engine
-        self.selfPubkey = selfPubkey
-        self.knownPeer = knownPeer
-        let presenceStore = engine.presenceStore
-        _model = State(initialValue: ChannelTimelineModel(
-            channel: channel.id,
+        self.init(
+            channel: channel,
             store: store,
             sender: engine,
             typing: engine,
             readStateMarking: engine,
+            opener: engine,
+            presence: engine.presenceStore,
+            selfPubkey: selfPubkey,
+            knownPeer: knownPeer
+        )
+    }
+
+    /// The same view with its collaborators named.
+    ///
+    /// ``ChannelTimelineModel`` was always written against `MessageSending`,
+    /// `EphemeralPublishing` and `ReadStateMarking`; only this initialiser reached for the
+    /// concrete engine, and a `SyncEngine` cannot exist without a relay socket. That put the
+    /// scroll surface out of reach of a UI test, so the thirteen shapes that found the
+    /// `#49`/`#50`/`#52` defects lived outside the repo, gated nothing, and exercised a
+    /// *copy* of this screen that was free to drift from it.
+    ///
+    /// This initialiser exists so a test drives **this** view. It adds no behaviour.
+    init(
+        channel: ChannelListRow,
+        store: BuzzEventStore,
+        sender: any MessageSending,
+        typing: any EphemeralPublishing,
+        readStateMarking: (any ReadStateMarking)?,
+        opener: any ThreadOpening,
+        presence: PresenceStore,
+        selfPubkey: String?,
+        knownPeer: String? = nil
+    ) {
+        self.channel = channel
+        channelID = channel.id
+        self.store = store
+        self.sender = sender
+        self.opener = opener
+        presenceStore = presence
+        self.selfPubkey = selfPubkey
+        self.knownPeer = knownPeer
+        _model = State(initialValue: ChannelTimelineModel(
+            channel: channel.id,
+            store: store,
+            sender: sender,
+            typing: typing,
+            readStateMarking: readStateMarking,
             selfPubkey: selfPubkey
         ))
-        _presence = State(initialValue: PresenceModel(store: presenceStore))
+        _presence = State(initialValue: PresenceModel(store: presence))
         _typing = State(initialValue: ChannelTypingModel(
             channel: channel.id,
-            store: presenceStore,
+            store: presence,
             selfPubkey: selfPubkey
         ))
     }
@@ -110,7 +154,7 @@ struct ChannelTimelineView: View {
             ChannelDetailsView(
                 channel: channel,
                 store: store,
-                presenceStore: engine.presenceStore
+                presenceStore: presenceStore
             )
         }
         // The same modifier a thread uses, so the two surfaces cannot present a
@@ -121,7 +165,9 @@ struct ChannelTimelineView: View {
                 root: route.root,
                 channel: route.channel,
                 store: store,
-                engine: engine,
+                sender: sender,
+                opener: opener,
+                presence: presenceStore,
                 selfPubkey: selfPubkey
             )
         }
