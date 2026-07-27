@@ -2,19 +2,25 @@ import BuzzKit
 import SwiftUI
 
 /// Recent thread activity across every channel: where the conversation is, who is in it,
-/// and what was asked.
+/// what was asked, and the last thing said about it.
 ///
-/// # What one row says, and what it deliberately does not
+/// # What one row says
 ///
-/// Where (`#channel`), who (`Jonathan, Jarvis, and 3 others`), and the opener itself, drawn
-/// by the same ``TimelineRowView`` the channel and the thread draw it with — so a message
-/// looks the same wherever it is read, and the replies strip under it is the real one, with
-/// the real faces and the real count.
+/// Where (`#channel`), who (`Jonathan, Jarvis, and 3 others`), and then the two messages
+/// that bound the conversation — the opener and the thread's newest reply — each drawn by
+/// the same ``TimelineRowView`` the channel and the thread draw them with, so a message
+/// looks the same wherever it is read and the replies strip under the opener is the real
+/// one, with the real faces and the real count.
 ///
-/// It does **not** draw the newest reply. That was here first and it was most of what made
-/// the screen hard to read: two messages, two attributions and two timestamps per row, three
-/// rows to a screen. A summary answers "what is this about"; reading the answer is what
-/// opening the thread is for.
+/// The newest reply was taken *out* of this row in #56 and JT has asked for it back, so it
+/// is worth writing down why the second attempt is not the first one again. What made the
+/// original unreadable was not that there were two messages; it was that only one of them
+/// was bounded. The opener went through ``ThreadSummary`` and the reply was handed to the
+/// renderer whole, so a single long answer set the height of the row and the two messages
+/// were drawn in two different shapes — a full row above, a name-and-snippet below — which
+/// left nothing on screen agreeing about what a message looks like. Both messages now take
+/// the same cut, the same line bound and the same row, and the height a row can reach is a
+/// number stated in one place rather than whatever the last person typed.
 ///
 /// # The two ways in, and why a row needs both
 ///
@@ -22,6 +28,12 @@ import SwiftUI
 /// "What did I miss" is answered by the newest reply, so **Reply** lands there instead, with
 /// the composer ready. Making the row do only one of those forces everyone who wanted the
 /// other to arrive in the wrong place and scroll.
+///
+/// **Reply** sits under the newest reply rather than beside the heading. Beside the heading
+/// it was level with the channel name and a row's worth of blank space away from anything it
+/// acted on, which reads as an action on the *channel*; under the message it answers, it is
+/// where the reader's eye already is when they have finished reading the thing they want to
+/// reply to.
 struct ThreadsView: View {
     @Environment(\.entityNames) private var names
     /// This device's per-thread read marks. A thread already read here is no longer new,
@@ -79,6 +91,7 @@ struct ThreadsView: View {
                     channelTitle: channelTitle(for: activity),
                     people: model.people(in: activity),
                     openerMentions: model.mentions(for: activity.opener.id),
+                    replyMentions: model.mentions(for: activity.latestReply.id),
                     selfPubkey: selfPubkey,
                     names: names,
                     isUnseen: isUnseen(activity),
@@ -153,7 +166,14 @@ struct ThreadsView: View {
 
     /// Generous, and the reason the rule between rows is gone: with no hairline, the gap is
     /// the only thing saying where one thread ends and the next begins.
-    private static let rowInsets = EdgeInsets(top: 14, leading: 16, bottom: 14, trailing: 16)
+    ///
+    /// Wider than the 14 that shipped in #56, because what the gap has to separate has
+    /// changed. Then, two adjacent rows were two messages with a heading between them; now
+    /// they are four, and 14pt between the last message of one thread and the heading of the
+    /// next is *narrower* than the 12pt-plus-line-spacing between the two messages inside a
+    /// single row — so the boundary between two conversations would be the least visible gap
+    /// on the screen. Eighteen top and bottom makes it 36 between rows against 12 within one.
+    private static let rowInsets = EdgeInsets(top: 18, leading: 16, bottom: 18, trailing: 16)
 }
 
 /// The Threads screen as a navigation value.
@@ -168,13 +188,18 @@ struct ThreadsRoute: Hashable, Identifiable {
 
 // MARK: - Row
 
-/// One thread: where it is, who is in it, and the message that started it.
+/// One thread: where it is, who is in it, the message that started it, and the last one
+/// anybody has added to it.
 private struct ThreadActivityRow: View {
     let activity: ThreadActivity
     let channelTitle: String
     /// Everyone in the thread, the opener's author first.
     let people: [String]
     let openerMentions: [MentionRef]
+    /// The users the newest reply mentions. Resolved by the model in the same batched read
+    /// as the opener's: a reply drawn with no refs renders its `@`-tokens as raw text, or as
+    /// a pill that opens nobody.
+    let replyMentions: [MentionRef]
     let selfPubkey: String?
     let names: EntityNames
     /// Whether this thread holds replies the reader has not seen.
@@ -186,8 +211,24 @@ private struct ThreadActivityRow: View {
     @Environment(\.openConversation) private var openConversation
     @Environment(\.openURL) private var openURL
 
+    /// The gutter the two messages indent their content by, so the **Reply** button under
+    /// them can start on the same line their text does.
+    ///
+    /// A second `@ScaledMetric` over the same base constant rather than a value reached out
+    /// of ``TimelineRowView``: the property wrapper resolves against the environment of the
+    /// view that declares it, so there is nothing to read from another view even in
+    /// principle — and both are declared `relativeTo: .subheadline` against
+    /// ``MessageRowMetrics/avatarSize``, which is what keeps them equal at every text size.
+    @ScaledMetric(relativeTo: .subheadline)
+    private var avatarSize: CGFloat = MessageRowMetrics.avatarSize
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        // One spacing for the whole stack, and it is the gap the channel and the thread put
+        // between two messages. The two messages in this row are a conversation and should
+        // sit apart by what a conversation sits apart by; giving the heading and the button
+        // their own numbers would be three gaps to keep in step for no gain a reader can
+        // name.
+        VStack(alignment: .leading, spacing: MessageRowMetrics.betweenMessages) {
             header
             // The real message row — the same one the channel and the thread draw, so the
             // opener reads identically in all three places. Its own tap, and the replies
@@ -200,8 +241,26 @@ private struct ThreadActivityRow: View {
                 onRetry: { _ in },
                 onOpenThread: onOpen,
                 onOpenProfile: onOpenProfile,
-                contentLineLimit: Self.openerLineLimit
+                contentLineLimit: Self.messageLineLimit
             )
+            if let latestReply {
+                // Deliberately the same row type, with no rule, no indent and no smaller
+                // type: this is the conversation continuing, and #56's version — a caption
+                // name over a snippet, hung off a vertical rule — was a second, quieter way
+                // of drawing a message that a reader then had to learn. No replies strip
+                // under it either; ``ThreadSummary/summarisedReply(_:)`` is what guarantees
+                // that, and the strip that belongs to this thread is on the opener above.
+                TimelineRowView(
+                    row: latestReply,
+                    mentions: replyMentions,
+                    selfPubkey: selfPubkey,
+                    onRetry: { _ in },
+                    onOpenThread: onReply,
+                    onOpenProfile: onOpenProfile,
+                    contentLineLimit: Self.messageLineLimit
+                )
+            }
+            replyButton
         }
         // Every interactive range of a summarised message is a link run — the only run of
         // a `Text` a reader can press. Without this they reach the system, which cannot
@@ -224,7 +283,12 @@ private struct ThreadActivityRow: View {
         .accessibilityElement(children: .contain)
     }
 
-    /// Where this thread is, who is in it, and the way to its newest reply.
+    /// Where this thread is, who is in it, and whether it holds anything unread.
+    ///
+    /// No control on it. **Reply** used to end this line, which put a filled capsule level
+    /// with the channel name and gave the heading a trailing edge to fight the participant
+    /// list for — the names truncated to make room for a button that acts on a message two
+    /// rows below.
     private var header: some View {
         HStack(alignment: .center, spacing: 8) {
             VStack(alignment: .leading, spacing: 1) {
@@ -249,11 +313,51 @@ private struct ThreadActivityRow: View {
                         activity.newReplyCount == 1 ? "1 new reply" : "\(activity.newReplyCount) new replies"
                     )
             }
-            Button("Reply", action: onReply)
-                .buttonStyle(.glass)
-                .controlSize(.small)
-                .accessibilityHint("Opens the thread at its newest reply")
         }
+    }
+
+    /// The thread's newest reply, as a message this row can draw — or `nil` in the one shape
+    /// where drawing it would be drawing the opener twice.
+    ///
+    /// # A thread with exactly one reply draws that reply
+    ///
+    /// It is the shape most threads are in, and it is the shape where suppressing the reply
+    /// costs the most: the row would answer "what did I miss" with a face and the words
+    /// `1 reply`. The replies strip above is not a second copy of this message — it is a
+    /// count, a timestamp and up to four avatars, and it never contains a word anybody
+    /// wrote. Reading the two together is "one person answered, and here is what they
+    /// said", which is the whole of a short thread on one row and the best this screen
+    /// ever reads.
+    ///
+    /// # The opener being its own newest reply
+    ///
+    /// ``BuzzKit/ThreadActivity`` promises `latestReply` is never absent but says nothing
+    /// about it being a different message, and the read behind it would hand back the opener
+    /// if the `thread` projection ever held a row whose `root_id` equalled its `event_id`.
+    /// That needs an event carrying an `e` tag naming its own id, and an id is the SHA-256
+    /// of the serialization those tags are in — a fixed point of the hash, which is to say
+    /// it does not happen. The guard stays anyway because it is one comparison and the
+    /// failure it prevents is the kind that gets filed as a rendering bug: the same
+    /// sentence twice, under two avatars and two timestamps, with no hint that the data
+    /// rather than the view is what is odd. A store seeded directly by a test or a fixture
+    /// is not bound by SHA-256 either.
+    private var latestReply: TimelineRow? {
+        guard activity.latestReply.id != activity.opener.id else { return nil }
+        return ThreadSummary.summarisedReply(activity.latestReply)
+    }
+
+    /// The way into the thread with the composer already up, under the message it answers.
+    ///
+    /// Indented onto the content column rather than left on the row's leading edge, because
+    /// the leading edge is the avatar rail: a control starting there reads as a third
+    /// participant in the conversation. On the text column it lines up with the replies
+    /// strip under the opener, which is the other control in this row and the other way in.
+    private var replyButton: some View {
+        Button("Reply", action: onReply)
+            .buttonStyle(.glass)
+            .controlSize(.small)
+            .accessibilityHint("Opens the thread at its newest reply")
+            .padding(.leading, avatarSize + MessageRowMetrics.avatarGap)
     }
 
     /// The people in the thread, as this reader sees them named.
@@ -267,7 +371,14 @@ private struct ThreadActivityRow: View {
         Array(people.dropFirst().prefix(MessageRowMetrics.replyPreviewAvatars))
     }
 
-    /// Enough of the opener to know what the thread is about. The 2,000-character cap
+    /// Enough of a message to know what it says. The 2,000-character cap
     /// (``ThreadSummary/summarised(_:)``) bounds what is parsed; this bounds what is drawn.
-    private static let openerLineLimit = 6
+    ///
+    /// One number for both messages, for the reason ``ThreadSummary/characterLimit`` is one
+    /// number for both: they are the same kind of thing at the same size one above the
+    /// other, and cutting the reply shorter than the opener would say the reply matters
+    /// less — which is the opposite of what somebody opening this screen came for. Six lines
+    /// each is a worst case no real conversation reaches; the common row is two short
+    /// messages.
+    private static let messageLineLimit = 6
 }

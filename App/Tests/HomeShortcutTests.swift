@@ -48,17 +48,17 @@ struct HomeShortcutTests {
 
     // MARK: - Summarising a thread
 
-    @Test("the opener is cut at 2,000 characters, and marked where it was cut")
-    func openerCap() {
+    @Test("a shown message is cut at 2,000 characters, and marked where it was cut")
+    func messageCap() {
         let short = String(repeating: "a", count: 1999)
-        #expect(ThreadSummary.opener(short) == short)
+        #expect(ThreadSummary.cut(short) == short)
 
         let exact = String(repeating: "a", count: 2000)
         // At the limit, not over it: nothing is cut and nothing is claimed to be.
-        #expect(ThreadSummary.opener(exact) == exact)
+        #expect(ThreadSummary.cut(exact) == exact)
 
         let long = String(repeating: "a", count: 2001)
-        let cut = ThreadSummary.opener(long)
+        let cut = ThreadSummary.cut(long)
         #expect(cut.count == 2001)
         #expect(cut.hasSuffix("\u{2026}"))
         #expect(cut.dropLast() == String(repeating: "a", count: 2000))
@@ -67,8 +67,8 @@ struct HomeShortcutTests {
         // family emoji are far more than 2,000 UTF-16 units; a unit-based cut would land
         // mid-cluster and produce mojibake.
         let emoji = String(repeating: "👩‍👩‍👧‍👦", count: 2001)
-        #expect(ThreadSummary.opener(emoji).count == 2001)
-        #expect(ThreadSummary.opener(emoji).dropLast().allSatisfy { $0 == "👩‍👩‍👧‍👦" })
+        #expect(ThreadSummary.cut(emoji).count == 2001)
+        #expect(ThreadSummary.cut(emoji).dropLast().allSatisfy { $0 == "👩‍👩‍👧‍👦" })
     }
 
     @Test("the cut is applied to the row, so a huge opener is never parsed whole")
@@ -185,7 +185,7 @@ struct HomeShortcutTests {
         #expect(marks.unseenCount(among: model.unreadThreads) == 0)
     }
 
-    @Test("the Threads screen reads each thread's opener, its mentions, and its people")
+    @Test("the Threads screen reads each thread's two messages, their mentions, and its people")
     @MainActor
     func threadsModelLoads() async throws {
         let temp = TempStore()
@@ -223,8 +223,8 @@ struct HomeShortcutTests {
         #expect(thread.latestReply.content == "and again")
         #expect(thread.newReplyCount == 2)
         // The opener's own `p` tags, so its `@`-token resolves here exactly as it does in
-        // the thread this row opens. The newest reply is no longer drawn, so its mentions
-        // are no longer read.
+        // the thread this row opens. A reply that mentions nobody resolves to nothing, which
+        // is not the same as one whose refs were never read — see `ThreadsRowTests`.
         #expect(model.mentions(for: thread.opener.id).map(\.pubkey) == [reader.pubkey])
         #expect(model.mentions(for: thread.latestReply.id).isEmpty)
 

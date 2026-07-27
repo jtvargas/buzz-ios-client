@@ -15,8 +15,8 @@ import Observation
 final class ThreadsModel {
     /// Threads with replies, most recently active first.
     private(set) var threads: [ThreadActivity] = []
-    /// The users each shown message mentions, so the opener renders its `@`-tokens the same
-    /// way the thread behind it does.
+    /// The users each shown message mentions, so the two messages a row draws render their
+    /// `@`-tokens the same way the thread behind them does.
     private(set) var mentionRefs: [String: MentionRefList] = [:]
     /// Who has replied in each thread, in the order they first spoke — the row's subtitle,
     /// and the faces on its replies strip.
@@ -62,10 +62,13 @@ final class ThreadsModel {
                     limit: Self.limit
                 )) ?? []
                 // Batched reads over the whole page, the shape the timeline already uses —
-                // not one read per row. Only the openers are rendered here, so only their
-                // mentions are resolved.
-                let openers = activity.map(\.opener.id)
-                let mentions = (try? store.mentions(for: openers)) ?? [:]
+                // not one read per row. Both of a row's messages go into the one read,
+                // because both are rendered: a mention inside the newest reply that was
+                // never resolved draws as a raw `@`-token or as a pill that opens nobody.
+                // Fifty rows is one hundred ids, which is one `IN` clause, not a hundred
+                // trips to the reader.
+                let shown = activity.flatMap { [$0.opener.id, $0.latestReply.id] }
+                let mentions = (try? store.mentions(for: shown)) ?? [:]
                 let people = (try? store.threadParticipants(
                     for: activity.map(\.rootID),
                     limit: Self.participantLimit
@@ -112,26 +115,31 @@ final class ThreadsModel {
     }
 }
 
-/// How a thread's opener is shown in a summary row.
+/// How a thread's two messages — its opener and its newest reply — are shown in a summary
+/// row.
 enum ThreadSummary {
     /// JT's cap: "Show the original message, limited to 2,000 characters."
     ///
     /// A cap on the *string*, not only on the rendered lines, and that is the point —
     /// `lineLimit` alone still parses, styles and lays out a 60 KB message before
     /// throwing away all but four lines of it, fifty times over on one screen.
-    static let openerCharacterLimit = 2000
+    ///
+    /// One number for both messages a row draws, not one per message: they sit one above
+    /// the other in the same list at the same size, and a screen where the opener is cut
+    /// and the reply below it is not would read as a bug in the cut.
+    static let characterLimit = 2000
 
     /// `text` cut to the limit, with an ellipsis when anything was cut.
     ///
     /// Counted in `Character`s rather than UTF-8 bytes or UTF-16 units, because the limit
     /// is a statement about how much someone is being shown: cutting a family emoji in
     /// half at byte 2000 would satisfy a byte limit and produce mojibake.
-    static func opener(_ text: String) -> String {
-        guard text.count > openerCharacterLimit else { return text }
-        return String(text.prefix(openerCharacterLimit)) + "\u{2026}"
+    static func cut(_ text: String) -> String {
+        guard text.count > characterLimit else { return text }
+        return String(text.prefix(characterLimit)) + "\u{2026}"
     }
 
-    /// The opener as the summary row renders it: the real message row, over content cut to
+    /// A message as the summary row renders it: the real message row, over content cut to
     /// the limit.
     ///
     /// The cut is on the *row*, before the view sees it, because the row is what carries
@@ -139,24 +147,63 @@ enum ThreadSummary {
     /// style and lay out a 60 KB message fifty times on one screen. Both bodies are cut:
     /// the rich one is what renders when there is one.
     static func summarised(_ row: TimelineRow) -> TimelineRow {
-        let content = opener(row.content)
-        let rich = row.richContent.map(opener)
+        let content = cut(row.content)
+        let rich = row.richContent.map(cut)
         guard content != row.content || rich != row.richContent else { return row }
-        return TimelineRow(
+        return rebuilt(row, content: content, richContent: rich, replyCount: row.replyCount)
+    }
+
+    /// The newest reply as the summary row renders it: the same cut as the opener, over a
+    /// row that no longer claims a thread of its own.
+    ///
+    /// The tally is what has to go, not the participants. ``TimelineRowView`` draws its
+    /// replies strip on `replyCount > 0` and an `onOpenThread` it was given, so handing it
+    /// no faces would only empty the strip rather than remove it — and the reply *needs*
+    /// that handler, because its own tap is how the row offers "take me to what I missed".
+    /// Zeroing the tally is therefore the only lever, and it is the honest one: on this
+    /// surface the newest reply is a message being shown, not a thread root, and the strip
+    /// that belongs to this conversation is already under the opener above it.
+    ///
+    /// A reply usually arrives with a zero tally anyway, because NIP-10 keeps every reply's
+    /// `root` tag on the message that opened the thread. "Usually" is a property of the
+    /// clients seen so far rather than of the data: a reply whose own `root` names itself
+    /// projects as its own root and would otherwise grow a second strip here.
+    static func summarisedReply(_ row: TimelineRow) -> TimelineRow {
+        let summary = summarised(row)
+        guard summary.hasThread || summary.lastReplyAt != nil else { return summary }
+        return rebuilt(summary, content: summary.content, richContent: summary.richContent, replyCount: 0)
+    }
+
+    /// One message with some of its fields replaced.
+    ///
+    /// ``BuzzKit/TimelineRow``'s properties are all `let` and it offers no `with`-style
+    /// copy, so both transforms above would otherwise spell out the same fourteen arguments
+    /// — and a field added to the row would then have to be remembered in two places.
+    ///
+    /// `lastReplyAt` follows `replyCount` rather than being its own parameter: it is the
+    /// time of a reply the tally counts, and a row saying "no replies, last one an hour
+    /// ago" is not a state any caller should be able to ask for.
+    private static func rebuilt(
+        _ row: TimelineRow,
+        content: String,
+        richContent: String?,
+        replyCount: Int
+    ) -> TimelineRow {
+        TimelineRow(
             id: row.id,
             pubkey: row.pubkey,
             createdAt: row.createdAt,
             content: content,
             isEdited: row.isEdited,
             isDeleted: row.isDeleted,
-            richContent: rich,
+            richContent: richContent,
             delivery: row.delivery,
             authorName: row.authorName,
             authorPicture: row.authorPicture,
             parentID: row.parentID,
             rootID: row.rootID,
-            replyCount: row.replyCount,
-            lastReplyAt: row.lastReplyAt
+            replyCount: replyCount,
+            lastReplyAt: replyCount > 0 ? row.lastReplyAt : nil
         )
     }
 }
