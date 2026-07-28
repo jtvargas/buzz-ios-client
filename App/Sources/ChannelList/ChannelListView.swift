@@ -81,9 +81,8 @@ struct ChannelListView: View {
     }
 
     var body: some View {
-        // Derived once per pass and threaded down, so the resolver and the `#channel`
-        // map are each built one time rather than once for the environment and again
-        // for the rows.
+        // Derived once per pass and threaded down, so the resolver and the `#channel` map
+        // are each built one time rather than once for the environment and again for the rows.
         let names = entityNames
         let channelNames = ChannelNameMap(channels: model.channels)
 
@@ -91,14 +90,13 @@ struct ChannelListView: View {
             sidebar(names: names)
                 // The heading every other screen carries, naming the workspace this app is
                 // signed in to (§ ``CommunityIdentity``). It leads to the same account sheet
-                // the face at the trailing edge does — the two are one destination, and this
-                // is the larger target.
+                // the face at the trailing edge does, and is the larger target.
                 .conversationTitle(
-                    mark: .symbol(Self.communitySymbol),
-                    // Derived from the stored relay URL where it is used, rather than held
-                    // in a model: it is the same string on every pass and on every launch,
-                    // and an object whose only job is to hold a constant still has to be
-                    // created, injected and driven for it.
+                    mark: Self.communityMark,
+                    // Derived from the stored relay URL where it is used rather than held in
+                    // a model: it is the same string on every pass and on every launch, and
+                    // an object whose only job is to hold a constant still has to be created,
+                    // injected and driven for it.
                     title: CommunityIdentity.name(),
                     actionHint: "Double tap to show your account"
                 ) {
@@ -212,12 +210,15 @@ struct ChannelListView: View {
     }
 
     /// The mark on the home heading: one cell of the honeycomb, for the workspace as a whole
-    /// — which is neither a room (`#`) nor a person (a face). Filled and singular rather than
-    /// the outlined grid it was, because the bar draws its mark small and a mesh of hairlines
-    /// at that size reads as noise where a solid shape reads as a mark. Named here so a test
-    /// can check the system actually has it — a missing symbol renders as nothing at all,
-    /// silently.
+    /// — neither a room (`#`) nor a person (a face). Filled rather than the outlined grid it
+    /// was: the bar draws its mark small, where a mesh of hairlines reads as noise. Named so
+    /// a test can check the system has it — a missing symbol renders as nothing, silently.
     static let communitySymbol = "hexagon.fill"
+
+    /// The one heading drawn in the accent: the workspace's own name is what the colour is
+    /// *for*, where every other heading names a conversation inside it. Held here rather than
+    /// at the call site so a test can hold the rule.
+    static let communityMark = ConversationTitleBar.Mark.symbol(communitySymbol, accented: true)
 }
 
 // MARK: - Content
