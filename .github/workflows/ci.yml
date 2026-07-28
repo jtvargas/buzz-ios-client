@@ -103,9 +103,30 @@ jobs:
       # scroll view, and that is the whole defect class. A simulator with a hardware keyboard
       # attached never shows one, and every shape would fail on the "no software keyboard"
       # assertion rather than on anything about the app.
+      #
+      # The host default below is read by Simulator.app, which never runs on this runner. The
+      # device carries its own copy, and while that says a hardware keyboard was last seen,
+      # iOS shows no software keyboard at all — and the suite then passes *vacuously*, because
+      # a keyboard element still exists in the hierarchy with zero height. Measured locally on
+      # 2026-07-27: 32 readings, 0 failures, every focused reading with the keyboard taking
+      # 0pt from the readable band. `focusComposer` now asserts on that, so these device-side
+      # writes are what keep the suite from failing for an environment reason.
+      #
+      # Every line is best-effort: none of it may turn a real red into a green, and the
+      # assertion in the suite is what actually reports the state.
       - name: Detach the hardware keyboard
         run: |
           defaults write com.apple.iphonesimulator ConnectHardwareKeyboard -bool false || true
+          LINE=$(xcrun simctl list devices available | grep -m1 '^ *iPhone')
+          UDID=$(echo "$LINE" | sed -n 's/.*(\([0-9A-Fa-f-]\{36\}\)).*/\1/p')
+          echo "Preparing simulator: $LINE"
+          if [ -n "$UDID" ]; then
+            xcrun simctl boot "$UDID" || true
+            xcrun simctl bootstatus "$UDID" -b || true
+            xcrun simctl spawn "$UDID" defaults write com.apple.keyboard.preferences AutomaticMinimizationEnabled -bool false || true
+            xcrun simctl spawn "$UDID" defaults write com.apple.keyboard.preferences HardwareKeyboardLastSeen -bool false || true
+            xcrun simctl shutdown "$UDID" || true
+          fi
       # Its own job, and deliberately not part of `app`: this is minutes of real UI driving
       # against eight conversation shapes, where that one is seconds of unit tests. Keeping
       # them apart means the fast gate stays fast and a slow shape cannot mask a unit failure.
