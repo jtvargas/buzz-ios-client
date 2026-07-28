@@ -97,7 +97,7 @@ struct MessageMediaView: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(MessageMediaDescription.label(for: media, state: loadState))
         .accessibilityValue(MessageMediaDescription.value(for: media) ?? "")
-        .accessibilityHint(MessageMediaDescription.hint(for: media, state: loadState) ?? "")
+        .accessibilityHint(hint)
         .accessibilityAddTraits(traits)
         .accessibilityActions { accessibilityActivation }
         .task(id: token) { await load(token) }
@@ -107,6 +107,21 @@ struct MessageMediaView: View {
                 // attached to a child of the presented content does not take.
                 .navigationTransition(.zoom(sourceID: subject.id, in: zoom))
         }
+    }
+
+    /// Whether `source` is a subject that has already failed to load.
+    ///
+    /// Internal and pure so the rule can be exercised without a view host, exactly as
+    /// ``RemoteImageDisplay/drawn(resolved:request:cached:)`` is. It is that same identity
+    /// rule applied to the *absence* of a bitmap: `@State` survives a view whose inputs
+    /// changed, so a row recycled onto another message would otherwise keep showing the
+    /// previous message's failure notice over the new message's picture.
+    ///
+    /// A source that will not parse has failed before anything was attempted, which is why
+    /// this answers rather than asking whether a load ran.
+    nonisolated static func hasFailed(source: URL?, failed: URL?) -> Bool {
+        guard let source else { return true }
+        return failed == source
     }
 }
 
@@ -140,10 +155,16 @@ private extension MessageMediaView {
             }
             .buttonStyle(.plain)
         } else if hasFailed {
-            Button { retry() } label: {
+            if isRetryable {
+                Button { retry() } label: {
+                    MessageMediaFailureView(media: media)
+                }
+                .buttonStyle(.plain)
+            } else {
+                // A URL this app cannot parse has nothing to try again, so the notice is
+                // drawn without a control rather than with one that visibly does nothing.
                 MessageMediaFailureView(media: media)
             }
-            .buttonStyle(.plain)
         } else {
             MessageMediaLoadingView()
         }
@@ -158,7 +179,9 @@ private extension MessageMediaView {
                 Button("View image") { open(image) }
             }
         case (.image, .failed):
-            Button("Try again") { retry() }
+            if isRetryable {
+                Button("Try again") { retry() }
+            }
         default:
             EmptyView()
         }
@@ -197,10 +220,21 @@ private extension MessageMediaView {
     }
 
     var hasFailed: Bool {
-        // An unparseable URL has already failed and has nothing to attempt, so it is
-        // reported as such rather than compared against a source that does not exist.
-        guard let sourceURL else { return true }
-        return failedURL == sourceURL
+        MessageMediaView.hasFailed(source: sourceURL, failed: failedURL)
+    }
+
+    /// Whether a failure is worth offering a retry on.
+    ///
+    /// Everything that fails on the wire is: the media host on this deployment is
+    /// tailnet-only, so walking out of range fails every attachment at once and walking
+    /// back in fixes them. A URL that will not parse is the exception — there is nothing
+    /// to try — and it is the reason this is a question rather than a constant.
+    var isRetryable: Bool { sourceURL != nil }
+
+    /// The hint, suppressed where the element is not actually interactive.
+    var hint: String {
+        if loadState == .failed, !isRetryable { return "" }
+        return MessageMediaDescription.hint(for: media, state: loadState) ?? ""
     }
 
     var loadState: MessageMediaDescription.LoadState {
@@ -212,7 +246,7 @@ private extension MessageMediaView {
     var traits: AccessibilityTraits {
         switch (media.kind, loadState) {
         case (.image, .loaded): [.isImage, .isButton]
-        case (.image, .failed): [.isButton]
+        case (.image, .failed): isRetryable ? [.isButton] : []
         case (.image, .loading): [.isImage]
         // A placeholder for something that cannot be played is static text, and saying
         // "button" over it would promise an action there is not one of.
