@@ -188,7 +188,30 @@ final class ConversationScrollTests: XCTestCase {
             "no software keyboard — on a simulator, disable I/O > Keyboard > Connect Hardware Keyboard"
         )
         Thread.sleep(forTimeInterval: 1.5)
-        return max(0, before - readableBand(app).height)
+        let allowance = max(0, before - readableBand(app).height)
+        // The suite's own non-vacuity check, and it is not theoretical: on 2026-07-27 every
+        // shape in both tests reported `allowance=0` and the run passed with 32 readings and
+        // 0 failures, because the *software* keyboard never appeared. `waitForExistence`
+        // above does not catch that — a keyboard element exists in the hierarchy with zero
+        // height when iOS believes a hardware keyboard is attached — so every assertion held
+        // by comparing a resting layout against itself.
+        //
+        // On a headless simulator the host-side `ConnectHardwareKeyboard` default is not
+        // enough; the device carries its own:
+        //
+        //     xcrun simctl spawn <udid> defaults write com.apple.keyboard.preferences \
+        //         AutomaticMinimizationEnabled -bool false
+        //     xcrun simctl spawn <udid> defaults write com.apple.keyboard.preferences \
+        //         HardwareKeyboardLastSeen -bool false
+        //
+        // followed by a device reboot.
+        XCTAssertGreaterThan(
+            allowance,
+            0,
+            "the keyboard took no room from the readable band, so this shape asserted nothing "
+                + "— see the note here for the simulator defaults that raise a software keyboard"
+        )
+        return allowance
     }
 
     // MARK: - The report, asserted
