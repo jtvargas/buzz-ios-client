@@ -44,7 +44,7 @@ struct ChannelRowView: View {
                 // `.fontWeight(_:)`, which is the one thing the app's typeface cannot
                 // honour: Lato ships as static cuts, so a weight asked for by trait comes
                 // back regular and every row in the sidebar would have read as read.
-                .font(.hive(.subheadline, weight: row.indicator.isUnread ? .semibold : .regular))
+                .font(.hive(.headline, weight: row.indicator.isUnread ? .semibold : .regular))
                 .foregroundStyle(row.indicator.isUnread ? .primary : .secondary)
                 .lineLimit(1)
                 .truncationMode(.tail)

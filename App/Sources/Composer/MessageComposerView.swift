@@ -134,7 +134,7 @@ struct MessageComposerView: View {
             .padding(Self.shellPadding)
             // The *only* glass in this view, now that the two controls have given theirs
             // up — see the note at the top.
-            .glassEffect(.regular.interactive(), in: .rect(cornerRadius: Self.cornerRadius))
+            .glassEffect(.clear.interactive(), in: .rect(cornerRadius: Self.cornerRadius))
         }
         // The float: 12pt in from each side, 8pt clear of the bottom.
         .padding(.horizontal, 12)
