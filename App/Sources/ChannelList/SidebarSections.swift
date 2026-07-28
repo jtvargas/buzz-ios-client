@@ -29,6 +29,24 @@ enum SidebarSection: String, CaseIterable, Hashable, Sendable, Identifiable {
         }
     }
 
+    /// The SF Symbol that makes this section recognizable before its title is read.
+    var symbol: String {
+        switch self {
+        case .starred: "star.fill"
+        case .channels: "number"
+        case .directMessages: "bubble.left.and.text.bubble.right.fill"
+        case .agents: "sparkles"
+        }
+    }
+
+    /// The 32-point column that keeps every header title on one leading edge.
+    ///
+    /// The widest current glyph is `bubble.left.and.text.bubble.right.fill`; at the
+    /// header's `.title3` bold configuration it fits inside 32 points. The app test
+    /// measures every section glyph with that same configuration, so changing a symbol
+    /// or its weight cannot silently make this column too narrow.
+    static let symbolColumnWidth: CGFloat = 32
+
     /// The `UserDefaults` key behind this section's expansion state.
     ///
     /// The exact strings are pinned by a test: renaming one silently discards the

@@ -2,6 +2,7 @@
 @testable import Hive
 import Foundation
 import Testing
+import UIKit
 
 /// The Phase-5 §8 sidebar contract: section classification from rosters, order inside
 /// a section, the unread-versus-mention decision, the author prefix, and the persisted
@@ -156,6 +157,22 @@ extension SidebarSectionsTests {
         #expect(SidebarSection.channels.title == "Channels")
         #expect(SidebarSection.directMessages.title == "Direct Messages")
         #expect(SidebarSection.agents.title == "Agents")
+        #expect(SidebarSection.starred.symbol == "star.fill")
+        #expect(SidebarSection.channels.symbol == "number")
+        #expect(SidebarSection.directMessages.symbol == "bubble.left.and.text.bubble.right.fill")
+        #expect(SidebarSection.agents.symbol == "sparkles")
+    }
+
+    @Test("the sidebar symbol column contains every title3 bold glyph")
+    func symbolColumnWidth() throws {
+        let configuration = UIImage.SymbolConfiguration(textStyle: .title3)
+            .applying(UIImage.SymbolConfiguration(weight: .bold))
+        let images = try SidebarSection.allCases.map { section in
+            try #require(UIImage(systemName: section.symbol, withConfiguration: configuration))
+        }
+        let widest = try #require(images.map(\.size.width).max())
+
+        #expect(SidebarSection.symbolColumnWidth >= widest)
     }
 }
 

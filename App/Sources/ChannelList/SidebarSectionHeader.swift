@@ -48,12 +48,11 @@ struct SidebarSectionHeader: View {
             withAnimation(.snappy(duration: 0.22)) { isExpanded.toggle() }
         } label: {
             HStack(spacing: 8) {
-                Image(systemName: "chevron.right")
-                    .font(.hiveSymbol(.footnote, weight: .bold))
-                    .foregroundStyle(.secondary)
-                    .rotationEffect(.degrees(isExpanded ? 90 : 0))
-                    .animation(.snappy(duration: 0.22), value: isExpanded)
-                    .frame(width: 14)
+                Image(systemName: section.symbol)
+                    .font(.hiveSymbol(.title3, weight: .bold))
+                    .foregroundStyle(.primary)
+                    .frame(width: SidebarSection.symbolColumnWidth)
+                    .accessibilityHidden(true)
                 Text(section.title)
                     .font(.hive(.title3, weight: .bold))
                     .foregroundStyle(.primary)
@@ -64,6 +63,12 @@ struct SidebarSectionHeader: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 0)
+                Image(systemName: "chevron.right")
+                    .font(.hiveSymbol(.footnote, weight: .bold))
+                    .foregroundStyle(.secondary)
+                    .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                    .animation(.snappy(duration: 0.22), value: isExpanded)
+                    .frame(width: 14)
             }
             .padding(.top, Self.aboveTitle)
             // A section heading is a control, so it carries a full-height target.
