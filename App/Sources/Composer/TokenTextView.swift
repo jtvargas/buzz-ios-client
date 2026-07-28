@@ -37,6 +37,10 @@ struct TokenTextView: UIViewRepresentable {
         // and `adjustsFontForContentSizeCategory` re-resolves a *scaled* font only. See
         // ``HiveTypography/uiFont(_:weight:)``.
         view.font = HiveTypography.uiFont(.body)
+        // The caret and the selection handles. They come from the view's tint, which the
+        // window tint already supplies — named here as well so the composer is the app's
+        // colour from its first frame rather than from whenever that lands.
+        view.tintColor = HiveAccent.uiColor
         view.adjustsFontForContentSizeCategory = true
         view.textContainerInset = UIEdgeInsets(top: 9, left: 11, bottom: 9, right: 11)
         view.textContainer.lineFragmentPadding = 0
@@ -269,7 +273,11 @@ struct TokenTextView: UIViewRepresentable {
             // a reader should not have to learn two visual languages for them.
             for token in document.tokens where NSMaxRange(token.range) <= storage.length {
                 storage.addAttributes([
-                    .foregroundColor: UIColor.tintColor,
+                    // The catalogue's accent by name, not `UIColor.tintColor`: this text
+                    // view is UIKit, and on iOS UIKit does not read the asset catalogue's
+                    // accent — a token drawn in `.tintColor` is the system blue unless a
+                    // window tint says otherwise. See ``HiveAccent``.
+                    .foregroundColor: HiveAccent.uiColor,
                     .font: mentionFont,
                     Self.mentionEntity: token.entityID,
                 ], range: token.range)

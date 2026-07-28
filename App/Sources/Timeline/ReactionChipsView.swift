@@ -86,12 +86,12 @@ private struct ReactionChip: View {
             .frame(height: height)
             .background(
                 Capsule().fill(
-                    group.reactedBySelf ? Color.accentColor.opacity(0.18) : Color.secondary.opacity(0.12)
+                    group.reactedBySelf ? Color.hiveAccent.opacity(0.18) : Color.secondary.opacity(0.12)
                 )
             )
             .overlay(
                 Capsule().strokeBorder(
-                    group.reactedBySelf ? Color.accentColor.opacity(0.6) : Color.secondary.opacity(0.25),
+                    group.reactedBySelf ? Color.hiveAccent.opacity(0.6) : Color.secondary.opacity(0.25),
                     lineWidth: 1
                 )
             )

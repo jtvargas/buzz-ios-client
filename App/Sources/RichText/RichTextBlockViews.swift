@@ -88,7 +88,7 @@ private struct RichListRow: View {
     private func symbol(_ name: String, isOn: Bool) -> some View {
         Image(systemName: name)
             .font(.hiveSymbol(.body))
-            .foregroundStyle(isOn ? Color.accentColor : Color.secondary)
+            .foregroundStyle(isOn ? Color.hiveAccent : Color.secondary)
             .frame(minWidth: 16, alignment: .trailing)
             // The message around this is one combined VoiceOver element, so this label
             // is read inside the sentence — which is the only way the state reaches
