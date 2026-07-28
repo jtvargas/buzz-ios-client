@@ -16,7 +16,7 @@ struct TypingIndicatorView: View {
                     ProgressView()
                         .controlSize(.mini)
                     Text(text)
-                        .font(.caption)
+                        .font(.hive(.caption))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                     Spacer(minLength: 0)

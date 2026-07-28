@@ -49,17 +49,17 @@ struct SidebarSectionHeader: View {
         } label: {
             HStack(spacing: 8) {
                 Image(systemName: "chevron.right")
-                    .font(.footnote.weight(.bold))
+                    .font(.hiveSymbol(.footnote, weight: .bold))
                     .foregroundStyle(.secondary)
                     .rotationEffect(.degrees(isExpanded ? 90 : 0))
                     .animation(.snappy(duration: 0.22), value: isExpanded)
                     .frame(width: 14)
                 Text(section.title)
-                    .font(.title3.weight(.bold))
+                    .font(.hive(.title3, weight: .bold))
                     .foregroundStyle(.primary)
                 if !isExpanded {
                     Text("\(count)")
-                        .font(.subheadline.weight(.semibold))
+                        .font(.hive(.subheadline, weight: .semibold))
                         .monospacedDigit()
                         .foregroundStyle(.secondary)
                 }

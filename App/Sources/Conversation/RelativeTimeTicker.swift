@@ -61,7 +61,7 @@ struct MessageTimestampView: View {
     @Environment(\.relativeTimeTicker) private var ticker
 
     let date: Date
-    var font: Font = .caption
+    var font: Font = .hive(.caption)
 
     var body: some View {
         Text(MessageTimestamp.label(for: date, now: ticker?.now ?? Date()))

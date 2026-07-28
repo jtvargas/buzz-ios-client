@@ -35,12 +35,16 @@ struct ChannelRowView: View {
         HStack(spacing: 10) {
             leading
             Text(row.title)
-                .font(.subheadline)
                 // The Slack cue, and now the only one for ordinary unread: an unread name
                 // is heavier and at full strength, a read one is quiet. There is no
                 // separate dot — the name *is* the indicator, which is what leaves the
                 // badge to mean one thing only.
-                .fontWeight(row.indicator.isUnread ? .semibold : .regular)
+                //
+                // The weight is chosen while the font is built rather than layered on with
+                // `.fontWeight(_:)`, which is the one thing the app's typeface cannot
+                // honour: Lato ships as static cuts, so a weight asked for by trait comes
+                // back regular and every row in the sidebar would have read as read.
+                .font(.hive(.subheadline, weight: row.indicator.isUnread ? .semibold : .regular))
                 .foregroundStyle(row.indicator.isUnread ? .primary : .secondary)
                 .lineLimit(1)
                 .truncationMode(.tail)
@@ -78,7 +82,7 @@ struct ChannelRowView: View {
             .frame(width: Self.glyphSize, height: Self.glyphSize)
             .overlay {
                 Image(systemName: row.isPrivate ? "lock.fill" : "number")
-                    .font(.subheadline.weight(.semibold))
+                    .font(.hiveSymbol(.subheadline, weight: .semibold))
                     .foregroundStyle(row.indicator.isUnread ? Color.primary : Color.secondary)
             }
             .accessibilityHidden(true)
@@ -139,7 +143,7 @@ private struct SidebarMentionBadge: View {
     var body: some View {
         if let text = indicator.badgeText {
             Text(text)
-                .font(.caption2.weight(.bold))
+                .font(.hive(.caption2, weight: .bold))
                 .monospacedDigit()
                 .foregroundStyle(.white)
                 .padding(.horizontal, 6)

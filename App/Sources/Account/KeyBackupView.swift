@@ -50,7 +50,7 @@ struct KeyBackupView: View {
                     Image(systemName: copiedNpub ? "checkmark" : "doc.on.doc")
                 } label: {
                     Text(model.npub)
-                        .font(.footnote.monospaced())
+                        .font(.hiveMono(.footnote))
                         .lineLimit(1)
                         .truncationMode(.middle)
                 }
@@ -69,7 +69,7 @@ struct KeyBackupView: View {
         Section {
             if let nsec = model.revealedNsec {
                 Text(nsec)
-                    .font(.footnote.monospaced())
+                    .font(.hiveMono(.footnote))
                     .textSelection(.enabled)
                 Button {
                     setPasteboardWithExpiry(nsec)
@@ -94,7 +94,7 @@ struct KeyBackupView: View {
                 .disabled(model.isAuthenticating)
                 if model.revealFailed {
                     Text("Couldn't verify it's you. The secret key stays hidden.")
-                        .font(.footnote)
+                        .font(.hive(.footnote))
                         .foregroundStyle(.red)
                 }
             }

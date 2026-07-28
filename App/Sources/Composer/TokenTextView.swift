@@ -33,7 +33,10 @@ struct TokenTextView: UIViewRepresentable {
         let view = UITextView()
         view.delegate = context.coordinator
         view.backgroundColor = .clear
-        view.font = .preferredFont(forTextStyle: .body)
+        // The app's typeface, through `UIFontMetrics` — a `UIFont` does not scale itself,
+        // and `adjustsFontForContentSizeCategory` re-resolves a *scaled* font only. See
+        // ``HiveTypography/uiFont(_:weight:)``.
+        view.font = HiveTypography.uiFont(.body)
         view.adjustsFontForContentSizeCategory = true
         view.textContainerInset = UIEdgeInsets(top: 9, left: 11, bottom: 9, right: 11)
         view.textContainer.lineFragmentPadding = 0
@@ -97,7 +100,12 @@ struct TokenTextView: UIViewRepresentable {
         context _: Context
     ) -> CGSize? {
         guard let width = proposal.width else { return nil }
-        let lineHeight = UIFont.preferredFont(forTextStyle: .body).lineHeight
+        // Measured off the face the composer actually draws in, not off the system's.
+        // Lato's line height is about 2% above San Francisco's at the same point size,
+        // and this number sets both the growth floor and the six-line ceiling — taken
+        // from the wrong face, the bar rests a hair short of one line of its own text
+        // and hands over to scrolling a hair before six of them are on screen.
+        let lineHeight = HiveTypography.uiFont(.body).lineHeight
         let chrome = uiView.textContainerInset.top + uiView.textContainerInset.bottom
         let measured = uiView
             .sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude))
@@ -272,14 +280,21 @@ struct TokenTextView: UIViewRepresentable {
 
         private var baseAttributes: [NSAttributedString.Key: Any] {
             [
-                .font: UIFont.preferredFont(forTextStyle: .body),
+                .font: HiveTypography.uiFont(.body),
                 .foregroundColor: UIColor.label,
             ]
         }
 
+        /// The inserted mention's own cut.
+        ///
+        /// Named through ``HiveTypography/uiFont(_:weight:)`` rather than derived from the
+        /// base font's point size, which is what this used to do. Both routes give the same
+        /// size — they scale off the same style — but a point size is all `UIFont.systemFont`
+        /// can be given, and there is no equivalent for a static family: asking Lato-Regular
+        /// for semibold by trait returns Lato-Regular, so the token would have been tinted
+        /// and nothing else.
         private var mentionFont: UIFont {
-            let baseFont = UIFont.preferredFont(forTextStyle: .body)
-            return UIFont.systemFont(ofSize: baseFont.pointSize, weight: .semibold)
+            HiveTypography.uiFont(.body, weight: .semibold)
         }
 
         private static let mentionEntity = NSAttributedString.Key("HiveMentionEntity")

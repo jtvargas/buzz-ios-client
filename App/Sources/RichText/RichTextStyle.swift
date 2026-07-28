@@ -60,9 +60,29 @@ enum RichTextStyle {
     }
 
     /// Produces the presentation `AttributedString` for one inline: every resolved
-    /// mention/channel run gains the accent colour and the right weight *relative to
-    /// `base`* (so it still scales with Dynamic Type), while plain runs inherit the
-    /// view's environment font and colour untouched.
+    /// mention/channel run gains the accent colour and the right weight *at `base`*
+    /// (so it still scales with Dynamic Type), every code span is pinned to the
+    /// monospaced face, and plain runs inherit the view's environment font and colour
+    /// untouched.
+    ///
+    /// # Why `base` is a text style and not a `Font`
+    ///
+    /// It used to be a `Font`, and every weight here was `base.weight(…)`. That is the
+    /// one construction the app's typeface cannot honour: Lato is a set of static cuts,
+    /// so a weight asked for by trait is dropped and the descriptor hands the regular
+    /// face straight back (``HiveTypography``). Every mention, channel reference and
+    /// link in every message would have drawn at body weight — no error, no warning,
+    /// just the tint doing all the work. Taking the *style* instead means the weight is
+    /// named while the font is being built, which is the only way to reach a real cut.
+    ///
+    /// # Why code is set here rather than left to the intent
+    ///
+    /// A code span carries `inlinePresentationIntent.code`, and `Text` renders that as
+    /// monospaced by asking the run's font for its fixed-width member. Lato's family has
+    /// none, so on a Lato base that request is dropped exactly like the weight — and an
+    /// inline `` `--flag` `` would have quietly become proportional Lato in the middle of
+    /// a sentence about a command. The face is named here so the guarantee does not
+    /// depend on a family the app does not ship.
     ///
     /// `interactive` is what separates a message being read from a one-line preview
     /// of one. When it is set, an entity run also gains the `link` that carries its
@@ -75,21 +95,23 @@ enum RichTextStyle {
     /// attribute writes preserve indices, so every range stays valid.
     static func styled(
         _ attributed: AttributedString,
-        base: Font,
+        base: Font.TextStyle,
         interactive: Bool = false
     ) -> AttributedString {
         var output = attributed
-        let runs = output.runs.map { ($0.range, $0.mention, $0.channel, $0.link) }
-        for (range, mention, channel, link) in runs {
+        let runs = output.runs.map {
+            ($0.range, $0.mention, $0.channel, $0.link, $0.inlinePresentationIntent)
+        }
+        for (range, mention, channel, link, intent) in runs {
             if let mention {
                 output[range].foregroundColor = tint
-                output[range].font = base.weight(mention.isSelf ? selfMentionWeight : mentionWeight)
+                output[range].font = .hive(base, weight: mention.isSelf ? selfMentionWeight : mentionWeight)
                 output[range].link = interactive
                     ? mention.pubkey.flatMap { RichTextTarget.user(pubkey: $0).url }
                     : nil
             } else if let channel {
                 output[range].foregroundColor = tint
-                output[range].font = base.weight(channelWeight)
+                output[range].font = .hive(base, weight: channelWeight)
                 output[range].link = interactive
                     ? channel.channelID.flatMap { RichTextTarget.channel(id: $0).url }
                     : nil
@@ -97,8 +119,12 @@ enum RichTextStyle {
                 // A web, email, or internal link: the same treatment a mention gets,
                 // so interactive text reads as one visual language rather than two.
                 output[range].foregroundColor = tint
-                output[range].font = base.weight(linkWeight)
+                output[range].font = .hive(base, weight: linkWeight)
                 if !interactive { output[range].link = nil }
+            } else if intent?.contains(.code) == true {
+                // Never an entity run: both the entity pass and the autolink scan refuse
+                // code, so this branch is reached by exactly the spans it is meant for.
+                output[range].font = .hiveMono(base)
             }
         }
         return interactive ? spaced(output) : output

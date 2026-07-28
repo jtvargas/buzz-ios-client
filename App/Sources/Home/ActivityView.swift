@@ -10,7 +10,7 @@ struct ActivityView: View {
     var body: some View {
         NavigationStack {
             Text("WIP")
-                .font(.title3.weight(.semibold))
+                .font(.hive(.title3, weight: .semibold))
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 // The same heading as every other screen, and the one place it is a label

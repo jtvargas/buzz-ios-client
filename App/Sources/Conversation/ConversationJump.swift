@@ -154,9 +154,9 @@ private struct JumpPillLabel: View {
     var body: some View {
         HStack(spacing: 6) {
             Image(systemName: "arrow.down")
-                .font(.caption.weight(.bold))
+                .font(.hiveSymbol(.caption, weight: .bold))
             Text(text)
-                .font(.caption.weight(.semibold))
+                .font(.hive(.caption, weight: .semibold))
                 // The count changes under a still pill; without this the whole label
                 // reflows by a fraction of a point as the digits change width.
                 .monospacedDigit()

@@ -122,7 +122,7 @@ private extension RichTextView {
     /// second target competing for the same tap.
     var snippet: some View {
         Text(RichTextStyle.styled(message.flattenedInline(), base: .body))
-            .font(.body)
+            .font(.hive(.body))
             .lineLimit(1)
             .truncationMode(.tail)
     }
@@ -132,14 +132,16 @@ private extension RichTextView {
         switch block {
         case let .paragraph(text):
             RichTextInline.text(text, base: .body)
-                .font(.body)
+                .font(.hive(.body))
                 .frame(maxWidth: .infinity, alignment: .leading)
 
         case let .heading(level, text):
-            let font = Self.headingFont(level)
-            RichTextInline.text(text, base: font)
-                .font(font)
-                .fontWeight(.semibold)
+            let style = Self.headingStyle(level)
+            // Semibold named while the font is built, not a `.fontWeight(.semibold)`
+            // over it: the app's typeface drops a weight asked for by trait, so the
+            // modifier this replaces drew every heading at body weight.
+            RichTextInline.text(text, base: style)
+                .font(.hive(style, weight: .semibold))
                 .frame(maxWidth: .infinity, alignment: .leading)
 
         case let .quote(text):
@@ -148,7 +150,7 @@ private extension RichTextView {
                     .fill(Color.secondary.opacity(0.5))
                     .frame(width: 3)
                 RichTextInline.text(text, base: .body)
-                    .font(.body)
+                    .font(.hive(.body))
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -165,8 +167,9 @@ private extension RichTextView {
         }
     }
 
-    /// A Dynamic-Type-scaling heading font per markdown level.
-    static func headingFont(_ level: Int) -> Font {
+    /// The system text style a markdown heading level is set at — a style rather than a
+    /// built font, because the inline pass needs to name a weight against it.
+    static func headingStyle(_ level: Int) -> Font.TextStyle {
         switch level {
         case 1: .title2
         case 2: .title3
@@ -226,11 +229,11 @@ private struct RichListRow: View {
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
             Text(marker)
-                .font(.body)
+                .font(.hive(.body))
                 .foregroundStyle(.secondary)
                 .frame(minWidth: 16, alignment: .trailing)
             RichTextInline.text(content, base: .body)
-                .font(.body)
+                .font(.hive(.body))
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
@@ -247,7 +250,9 @@ private struct RichCodeBlock: View {
 
     var body: some View {
         Text(code)
-            .font(.system(.callout, design: .monospaced))
+            // Still the system's monospaced face, and now said so explicitly: Lato is
+            // not a code face and has no fixed-width member for `.monospaced()` to find.
+            .font(.hiveMono(.callout))
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(10)
             .background(
@@ -257,7 +262,7 @@ private struct RichCodeBlock: View {
             .overlay(alignment: .topTrailing) {
                 if let language, !language.isEmpty {
                     Text(language)
-                        .font(.caption2)
+                        .font(.hive(.caption2))
                         .foregroundStyle(.secondary)
                         .padding(6)
                         .accessibilityHidden(true)

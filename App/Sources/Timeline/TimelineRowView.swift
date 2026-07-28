@@ -236,7 +236,7 @@ struct TimelineRowView: View {
     private var content: some View {
         if row.isDeleted {
             Text("message deleted")
-                .font(.body)
+                .font(.hive(.body))
                 .italic()
                 .foregroundStyle(.secondary)
         } else {

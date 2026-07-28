@@ -105,7 +105,7 @@ extension TimelineRowView {
                 .fixedSize()
             if row.isReply {
                 Image(systemName: "arrowshape.turn.up.left")
-                    .font(.caption2)
+                    .font(.hiveSymbol(.caption2))
                     .foregroundStyle(.secondary)
                     .accessibilityLabel("Reply")
             }
@@ -122,7 +122,7 @@ extension TimelineRowView {
     @ViewBuilder
     private var name: some View {
         let label = Text(authorName)
-            .font(.subheadline.weight(.bold))
+            .font(.hive(.subheadline, weight: .bold))
             .foregroundStyle(.primary)
             // One line: a 200-character display name is somebody else's choice, and it
             // must not shove the timestamp off the screen.

@@ -96,12 +96,12 @@ struct ProfileSheetView: View {
                 size: Self.avatarSize
             )
             Text(names.name(for: pubkey))
-                .font(.title2.weight(.semibold))
+                .font(.hive(.title2, weight: .semibold))
                 .multilineTextAlignment(.center)
                 .lineLimit(2)
             HStack(spacing: 8) {
                 Text(kindLabel)
-                    .font(.subheadline)
+                    .font(.hive(.subheadline))
                     .foregroundStyle(.secondary)
                 Text(verbatim: "·")
                     .foregroundStyle(.tertiary)
@@ -109,7 +109,7 @@ struct ProfileSheetView: View {
             }
             if let secondary = names.secondaryLabel(for: pubkey), secondary != kindLabel {
                 Text(secondary)
-                    .font(.footnote)
+                    .font(.hive(.footnote))
                     .foregroundStyle(.secondary)
                     .textSelection(.enabled)
             }
@@ -130,7 +130,7 @@ struct ProfileSheetView: View {
                 .fill(PresenceDot.tint(isOnline: presence.isOnline(pubkey)))
                 .frame(width: 8, height: 8)
             Text(presence.isOnline(pubkey) ? "Online" : "Offline")
-                .font(.subheadline)
+                .font(.hive(.subheadline))
                 .foregroundStyle(.secondary)
         }
         .accessibilityElement(children: .combine)
@@ -148,7 +148,7 @@ struct ProfileSheetView: View {
             action(pubkey)
         } label: {
             Label("Message", systemImage: "bubble.left.and.text.bubble.right")
-                .font(.body.weight(.semibold))
+                .font(.hive(.body, weight: .semibold))
                 .frame(maxWidth: .infinity, minHeight: 44)
         }
         .buttonStyle(.glassProminent)
@@ -165,7 +165,7 @@ struct ProfileSheetView: View {
     private var keyRow: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(names.isAgent(pubkey) ? "Agent key" : "Public key")
-                .font(.caption.weight(.semibold))
+                .font(.hive(.caption, weight: .semibold))
                 .foregroundStyle(.secondary)
             Button {
                 UIPasteboard.general.string = displayKey
@@ -173,12 +173,12 @@ struct ProfileSheetView: View {
             } label: {
                 HStack(spacing: 10) {
                     Text(Self.middleTruncated(displayKey))
-                        .font(.caption.monospaced())
+                        .font(.hiveMono(.caption))
                         .foregroundStyle(.primary)
                         .lineLimit(1)
                     Spacer(minLength: 8)
                     Image(systemName: didCopyKey ? "checkmark" : "doc.on.doc")
-                        .font(.caption.weight(.semibold))
+                        .font(.hiveSymbol(.caption, weight: .semibold))
                         .foregroundStyle(didCopyKey ? AnyShapeStyle(.green) : AnyShapeStyle(.tint))
                         .contentTransition(.symbolEffect(.replace))
                 }

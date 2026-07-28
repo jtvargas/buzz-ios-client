@@ -192,7 +192,7 @@ struct MessageComposerView: View {
         .overlay(alignment: .topLeading) {
             if document.text.isEmpty {
                 Text(placeholder)
-                    .font(.body)
+                    .font(.hive(.body))
                     .foregroundStyle(.tertiary)
                     // Aligned to the text container's own insets, so the placeholder
                     // sits exactly where the first glyph will.
@@ -237,7 +237,7 @@ struct MessageComposerView: View {
     private var attachButton: some View {
         Button(action: presentWorkInProgress) {
             Image(systemName: "plus")
-                .font(.body.weight(.semibold))
+                .font(.hiveSymbol(.body, weight: .semibold))
                 .foregroundStyle(.secondary)
                 .frame(width: hitTarget, height: hitTarget)
         }
@@ -260,7 +260,7 @@ struct MessageComposerView: View {
     private var sendButton: some View {
         Button(action: send) {
             Image(systemName: "arrow.up")
-                .font(.body.weight(.semibold))
+                .font(.hiveSymbol(.body, weight: .semibold))
                 .foregroundStyle(canSend ? Self.onAccent : Color.secondary)
                 .frame(width: controlDiameter, height: controlDiameter)
                 .background(sendDisc, in: .circle)

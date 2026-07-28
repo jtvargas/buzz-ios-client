@@ -49,7 +49,7 @@ private struct ReactionChip: View {
             HStack(spacing: 4) {
                 Text(group.emoji)
                 Text("\(group.count)")
-                    .font(.caption2.weight(.semibold))
+                    .font(.hive(.caption2, weight: .semibold))
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
             }
@@ -113,9 +113,9 @@ private struct AddReactionButton: View {
             HStack(spacing: 1) {
                 Image(systemName: "face.smiling")
                 Image(systemName: "plus")
-                    .font(.system(size: 8, weight: .bold))
+                    .font(.hiveSymbol(fixedSize: 8, weight: .bold))
             }
-            .font(.caption)
+            .font(.hiveSymbol(.caption))
             .foregroundStyle(.secondary)
             .padding(.horizontal, 8)
             .frame(height: height)
