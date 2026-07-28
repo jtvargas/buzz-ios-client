@@ -4,15 +4,38 @@ on:
   pull_request:
   push:
     branches: [main]
+  # Weekly cold canary: a scheduled run restores no cache, so a cached green
+  # that a cold build would not reproduce shows up within a week.
+  schedule:
+    - cron: "0 7 * * 1"
+  workflow_dispatch:
+    inputs:
+      no_cache:
+        description: "Build cold — restore no cache (use when a result looks wrong)"
+        type: boolean
+        default: false
 
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  # Restored by every run, written only by a merge to main. See the app job.
+  CACHE_PATHS: |
+    .dd/Build
+    .dd/ModuleCache.noindex
+    .dd/SourcePackages
+
 jobs:
   packages:
-    name: SPM tests (macOS)
+    # NostrCore and BuzzKit have no build dependency on each other, so they
+    # run as two jobs rather than two steps.
+    name: SPM tests (${{ matrix.package }})
     runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        package: [NostrCore, BuzzKit]
     steps:
       - uses: actions/checkout@v4
       # Release is the blocking gate: recent Swift toolchains (observed on
@@ -21,13 +44,20 @@ jobs:
       # async closure — the determinism-injection pattern the connection
       # tests rely on. The defect is environmental (reproduced with zero
       # project code); release compiles the thunks away and runs the same
-      # assertions. Debug stays as a non-blocking sentinel so a fixed
-      # toolchain is noticed.
-      - name: NostrCore tests (release)
-        run: swift test -c release --package-path Packages/NostrCore
-      - name: BuzzKit tests (release)
-        run: swift test -c release --package-path Packages/BuzzKit
-      - name: NostrCore tests (debug, non-blocking toolchain sentinel)
+      # assertions.
+      - name: Tests (release)
+        run: swift test -c release --package-path Packages/${{ matrix.package }}
+
+  toolchain-sentinel:
+    # Debug is not a gate — it watches for the -Onone defect above being
+    # fixed. A merge to main notices that within one commit, so pull
+    # requests do not pay for it.
+    name: NostrCore debug sentinel (non-blocking)
+    if: github.event_name != 'pull_request'
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: NostrCore tests (debug)
         continue-on-error: true
         run: swift test --package-path Packages/NostrCore
 
@@ -51,6 +81,33 @@ jobs:
           ls -d /Applications/Xcode*.app
           sudo xcode-select -s "$(ls -d /Applications/Xcode_26*.app | sort -V | tail -1)"
           xcodebuild -version
+          echo "XCODE_BUILD=$(xcodebuild -version | tail -1 | awk '{print $NF}')" >> "$GITHUB_ENV"
+
+      # Restoring a build directory does not skip the build — every source
+      # file is still compiled or revalidated by content, so a changed file
+      # is always recompiled. Measured locally: a cold build is 32s; the same
+      # build over a restored directory, with every source file given a fresh
+      # timestamp and Hive.xcodeproj deleted and regenerated, is 14s.
+      #
+      # All three directories are needed. Build alone gets 28s (SwiftPM
+      # re-clones the dependencies), Build + ModuleCache 24s.
+      #
+      # Pull requests restore but never save: a pull request cannot poison
+      # what the next one restores. The key carries the exact Xcode build so
+      # a toolchain change forces a cold build on its own. To disable the
+      # whole mechanism, set the restore step's `if:` to false.
+      - name: Restore build cache
+        if: github.event_name != 'schedule' && github.event.inputs.no_cache != 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.CACHE_PATHS }}
+          # Package.resolved is gitignored here and dependencies are pinned
+          # `exact:`, so the manifests are what a resolution depends on.
+          key: hive-dd-${{ env.XCODE_BUILD }}-${{ hashFiles('Packages/*/Package.swift', 'project.yml') }}-${{ github.sha }}
+          restore-keys: |
+            hive-dd-${{ env.XCODE_BUILD }}-${{ hashFiles('Packages/*/Package.swift', 'project.yml') }}-
+            hive-dd-${{ env.XCODE_BUILD }}-
+
       - name: Install XcodeGen
         run: which xcodegen || brew install xcodegen
       - name: Generate project
@@ -68,6 +125,9 @@ jobs:
             xcodebuild -downloadPlatform iOS
           fi
           xcrun simctl list devices available
+      # COMPILER_INDEX_STORE_ENABLE=NO: index data powers Xcode's editor and
+      # is never read on a runner. Measured on an app build-for-testing, cold:
+      # 48s emitting it, 32-37s not.
       - name: Test
         run: |
           DEVICE=$(xcrun simctl list devices available | sed -n 's/^ *\(iPhone [^(]*\)(.*/\1/p' | head -1 | xargs)
@@ -77,4 +137,14 @@ jobs:
             -scheme Hive \
             -destination "platform=iOS Simulator,name=$DEVICE" \
             -skipPackagePluginValidation \
+            -derivedDataPath .dd \
+            COMPILER_INDEX_STORE_ENABLE=NO \
             CODE_SIGNING_ALLOWED=NO
+
+      # Only a merge to main writes a cache, and only when the tests passed.
+      - name: Save build cache
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.CACHE_PATHS }}
+          key: hive-dd-${{ env.XCODE_BUILD }}-${{ hashFiles('Packages/*/Package.swift', 'project.yml') }}-${{ github.sha }}

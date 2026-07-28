@@ -6,6 +6,9 @@ xcuserdata/
 *.xcuserstate
 *.xcscmblueprint
 DerivedData/
+# CI passes -derivedDataPath .dd so the cache has a stable path; running the
+# same command locally puts ~900 MB here.
+.dd/
 build/
 *.moved-aside
 *.pbxuser
