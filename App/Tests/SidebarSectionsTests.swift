@@ -242,7 +242,6 @@ extension SidebarSectionsTests {
         let row = build(rows, names: resolver, starred: ["general"]).sections[0].rows[0]
         #expect(row.title == "General")
         #expect(row.isPrivate)
-        #expect(row.members == [me, agent, other])
         #expect(row.indicator == .unread)
         #expect(row.isStarred)
         #expect(row.section == .starred)

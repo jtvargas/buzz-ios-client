@@ -133,9 +133,6 @@ struct SidebarRow: Identifiable {
     /// the row's swipe action and its heading agree without either consulting the store
     /// of stars a second time.
     let isStarred: Bool
-    /// The channel's roster, so the row's presence dot is a set test rather than a
-    /// lookup back into a model.
-    let members: Set<String>
 
     var id: String { channel.id }
     /// A starred conversation is filed under its star rather than under its kind — the
@@ -192,8 +189,7 @@ struct SidebarContent {
                     unreadCount: channel.unreadCount,
                     mentionCount: channel.unreadMentionCount
                 ),
-                isStarred: starred.contains(channel.id),
-                members: names.members(of: channel.id)
+                isStarred: starred.contains(channel.id)
             )
             grouped[row.section, default: []].append(row)
         }

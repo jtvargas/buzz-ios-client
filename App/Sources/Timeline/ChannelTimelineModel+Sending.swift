@@ -75,16 +75,18 @@ extension ChannelTimelineModel {
     ///
     /// Fire-and-forget: typing is ephemeral (S-3), so a failure is dropped. The
     /// indicator carries the `["h", channel]` tag the relay requires for a channel-
-    /// scoped ephemeral (S-5); a non-member's typing would be rejected without it.
+    /// scoped ephemeral (S-5); a non-member's typing would be rejected without it. No
+    /// `e` marker: this composer writes at the channel's own level, and a reader in one
+    /// of its threads must not be told the channel's traffic is theirs.
     func handleTyping(_ text: String) {
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         let instant = clock()
         if let last = lastTypingPublish, instant - last < typingThrottle { return }
         lastTypingPublish = instant
 
-        let channel = self.channel
+        let tags = OutboundTags.typing(channel: channel, thread: nil)
         let typing = self.typing
-        Task { await typing.publishEphemeral(kind: .typing, content: "", tags: [["h", channel]]) }
+        Task { await typing.publishEphemeral(kind: .typing, content: "", tags: tags) }
     }
 
     private func restore(document: MentionDraft, error: OutboxError) {

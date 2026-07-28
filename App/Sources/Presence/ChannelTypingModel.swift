@@ -1,30 +1,38 @@
 import BuzzKit
 import Observation
 
-/// Who is typing in one channel, live from ``PresenceStore``.
+/// Who is typing in one conversation, live from ``PresenceStore``.
 ///
-/// Typing is channel-scoped (S-5). The device's own typing is excluded — the relay
-/// fans an ephemeral back to its author, and a composer must never render "you are
-/// typing" to yourself.
+/// Typing is scoped (S-5): to a channel, or to one thread inside it. A thread's model
+/// names its root and hears that thread alone — which is new, and is what a thread
+/// showing nobody while an agent wrote in it used to cost. A channel's model carries no
+/// `thread` and hears the whole channel, threads included: on the channel screen a
+/// reader cannot tell which thread the work is in, and silence would be a worse answer
+/// than "somebody is writing". See ``BuzzKit/PresenceStore/TypingAudience``.
+///
+/// The device's own typing is excluded — the relay fans an ephemeral back to its author,
+/// and a composer must never render "you are typing" to yourself.
 @MainActor
 @Observable
 final class ChannelTypingModel {
-    /// The pubkeys of others typing in this channel, ordered.
+    /// The pubkeys of others typing in this scope, ordered.
     private(set) var typers: [String] = []
 
     private let channel: String
+    private let thread: String?
     private let store: PresenceStore
     private let selfPubkey: String?
 
-    init(channel: String, store: PresenceStore, selfPubkey: String?) {
+    init(channel: String, thread: String? = nil, store: PresenceStore, selfPubkey: String?) {
         self.channel = channel
+        self.thread = thread
         self.store = store
         self.selfPubkey = selfPubkey
     }
 
-    /// Consumes the channel's typing stream until cancelled. Attach with `.task`.
+    /// Consumes the scope's typing stream until cancelled. Attach with `.task`.
     func run() async {
-        for await list in await store.typing(in: channel) {
+        for await list in await store.typing(in: channel, thread: thread) {
             typers = list.filter { $0 != selfPubkey }
         }
     }
