@@ -159,7 +159,7 @@ extension SidebarSectionsTests {
         #expect(SidebarSection.agents.title == "Agents")
         #expect(SidebarSection.starred.symbol == "star.fill")
         #expect(SidebarSection.channels.symbol == "number")
-        #expect(SidebarSection.directMessages.symbol == "bubble.left.and.text.bubble.right.fill")
+        #expect(SidebarSection.directMessages.symbol == "bubble.left.and.text.bubble.right")
         #expect(SidebarSection.agents.symbol == "sparkles")
     }
 
