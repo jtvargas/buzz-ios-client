@@ -2,38 +2,13 @@ import BuzzKit
 import Foundation
 import SwiftUI
 
-/// The small views a message row hangs off itself — its long-press preview, the
-/// "N replies" affordance, and the failed-send strip. Split out of
-/// `TimelineRowView.swift` so that file is about the row's own hierarchy.
-
-/// A tight preview for the long-press menu: the author and message content sized to
-/// their content. Supplying it makes the lift a compact rounded card instead of the
-/// default full-width row snapshot, which read as a large square bubble.
-struct MessagePreview: View {
-    let row: TimelineRow
-    /// The already-resolved author name, passed in rather than re-resolved so the
-    /// preview cannot name someone differently from the row it lifted off.
-    let authorName: String
-    let bodyText: String
-    let resolver: MessageMentionResolver
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(authorName)
-                .font(.hive(.subheadline, weight: .bold))
-            if row.isDeleted {
-                Text("message deleted")
-                    .font(.hive(.body))
-                    .italic()
-                    .foregroundStyle(.secondary)
-            } else {
-                RichTextView(text: bodyText, media: row.media, resolver: resolver)
-            }
-        }
-        .padding(12)
-        .frame(maxWidth: 320, alignment: .leading)
-    }
-}
+/// The small views a message row hangs off itself — the "N replies" affordance and the
+/// failed-send strip. Split out of `TimelineRowView.swift` so that file is about the row's
+/// own hierarchy.
+///
+/// A third one used to live here: `MessagePreview`, the compact card the long-press context
+/// menu lifted in place of the default full-width row snapshot. It is gone with the menu —
+/// the actions are a sheet now, and a sheet lifts nothing.
 
 /// The "N replies" affordance under a message that has a thread: who has answered,
 /// then how many times, then when the last one landed.

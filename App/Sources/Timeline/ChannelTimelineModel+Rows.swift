@@ -89,9 +89,14 @@ extension ChannelTimelineModel {
         }
     }
 
-    /// Drops an own pending or failed row — the context-menu "delete".
+    /// Drops an own pending or failed row — the actions sheet's "Delete".
     func delete(_ eventID: String) {
         let sender = self.sender
         Task { try? await sender.discard(eventID) }
     }
 }
+
+/// Every requirement is already declared above and in `+Sending`; naming the protocol is
+/// what lets ``MessageActionsSheet`` read and act on a row without the surface threading
+/// five closures through the presentation.
+extension ChannelTimelineModel: MessageActing {}

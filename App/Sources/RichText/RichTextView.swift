@@ -33,7 +33,7 @@ enum RichTextRenderMode {
 /// Everything a `Text` gives for free is still the system's: Dynamic Type, wrapping,
 /// emphasis, and VoiceOver, which reads the message as one sentence. Text selection
 /// is deliberately not enabled — the body's own tap opens the thread, and Copy lives
-/// in the long-press menu.
+/// in the actions sheet a long press opens.
 struct RichTextView: View {
     @Environment(\.colorScheme) private var colorScheme
     /// Whatever the surface installed — the row's arbitrating handler in a timeline,

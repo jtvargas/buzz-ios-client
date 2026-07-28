@@ -1,6 +1,5 @@
 import BuzzKit
 import SwiftUI
-import UIKit
 
 /// One timeline message, in Slack's hierarchy: a rounded-square avatar, the author's
 /// name in bold with the time beside it, then the content (markdown with a plain
@@ -30,10 +29,10 @@ import UIKit
 /// observes the shared 15-second clock, so an ageing `3 min ago` re-evaluates one
 /// `Text` instead of the message.
 ///
-/// A long-press menu offers a quick-reaction palette and Copy, plus Retry/Delete on
-/// an own pending or failed row. The same row renders in the channel timeline and
-/// inside a thread; `onOpenThread` is supplied only in the channel, where a threaded
-/// message can be opened, and omitted inside the thread it already shows.
+/// A long press asks the surface to open ``MessageActionsSheet`` — the quick reactions, the
+/// emoji picker, and the actions. The same row renders in the channel timeline and inside a
+/// thread; `onOpenThread` is supplied only in the channel, where a threaded message can be
+/// opened, and omitted inside the thread it already shows.
 struct TimelineRowView: View {
     @Environment(\.channelNameMap) private var channelNameMap
     /// The app's one identity resolver. Internal rather than private because the row's
@@ -44,6 +43,9 @@ struct TimelineRowView: View {
     /// The stack's own navigation, for a pressed `#`-channel or internal message link.
     @Environment(\.openConversation) private var openConversation
     @State private var arbitration = RowTapArbitration()
+    /// Bumped by each recognised long press, purely so the haptic below has a trigger. A
+    /// context menu played one of these for free; a sheet does not.
+    @State private var longPresses = 0
 
     /// The avatar's point size, and so the width the content column is indented by, at
     /// this reader's text size. Scaled against `.subheadline` — the name beside it — so
@@ -69,17 +71,22 @@ struct TimelineRowView: View {
     /// The local identity's hex pubkey, for self-mention emphasis. `nil` degrades to
     /// no self-emphasis (keyless fallback).
     var selfPubkey: String?
-    /// Whether this is the local identity's own send, gating Delete/Retry in the menu.
-    var isOwn: Bool = false
+    /// Re-queue a failed send — the action on the strip under the row.
+    ///
+    /// The row no longer asks whether the message is the local identity's own: only an own
+    /// send can be pending or failed, and Delete, which was the other thing that answer
+    /// gated, has moved to the actions sheet.
     let onRetry: (String) -> Void
     /// Send a fresh reaction with this emoji.
     var onReact: (String) -> Void = { _ in }
     /// Toggle an existing chip (add, or withdraw an own reaction).
     var onToggleReaction: (ReactionGroup) -> Void = { _ in }
-    /// Discard this own pending/failed row.
-    var onDelete: (String) -> Void = { _ in }
     /// Open this message's thread; absent when already inside a thread.
     var onOpenThread: (() -> Void)?
+    /// Open the actions sheet for this message. Absent on a surface that presents no sheet —
+    /// the Threads screen's summaries — where the row then keeps its plain tap and a long
+    /// press does nothing, rather than arming a gesture with nowhere to go.
+    var onLongPress: (() -> Void)?
     /// Show the author's profile — raised by the avatar and by the name, so the row
     /// asks and the surface presents. Absent on a surface with nowhere to present it,
     /// where the identity then renders as plain text rather than as a dead control.
@@ -137,9 +144,10 @@ struct TimelineRowView: View {
         .animation(.default, value: row.delivery)
         .animation(.default, value: isAuthorOnline)
         .contentShape(.rect)
-        .onTapGesture {
-            scheduleRowTap()
-        }
+        .gesture(pressGesture)
+        // What the context menu this replaced played on recognition, and what tells a reader
+        // the sheet is coming before it has drawn a pixel.
+        .sensoryFeedback(.impact(weight: .medium), trigger: longPresses)
         // Every interactive range of a message — mention, channel, link, email,
         // internal link — is a link run, because that is the only run of a `Text` a
         // reader can press (see ``RichTextTarget``). They all arrive here. Marking the
@@ -165,10 +173,12 @@ struct TimelineRowView: View {
         .accessibilityAction(named: "Open thread") {
             onOpenThread?()
         }
-        .contextMenu {
-            menuItems
-        } preview: {
-            MessagePreview(row: row, authorName: authorName, bodyText: bodyText, resolver: resolver)
+        // By ear there is no press to hold, so the sheet is offered as a rotor action — and
+        // only where there is one to open, so a surface without it grows no dead action.
+        .accessibilityActions {
+            if let onLongPress {
+                Button("Message actions", action: onLongPress)
+            }
         }
     }
 
@@ -191,6 +201,39 @@ struct TimelineRowView: View {
     }
 
     // MARK: - Tap arbitration
+
+    /// How long a press has to be held before it is the actions sheet rather than a tap.
+    /// Shorter than `LongPressGesture`'s own half-second default, which reads as a hesitation
+    /// on a message; long enough that the flick that starts a scroll is not one.
+    private static let longPressDuration: TimeInterval = 0.35
+
+    /// A tap and a long press over the same row, resolved by the system rather than by the
+    /// arbitration below.
+    ///
+    /// `exclusively(before:)` and not two separately attached gestures, and that is the whole
+    /// reason this is a computed gesture instead of an `onTapGesture` beside an
+    /// `onLongPressGesture`: SwiftUI's `TapGesture` has **no maximum duration**. A press held
+    /// for a second and then lifted satisfies it, so with both attached the sheet would open
+    /// on recognition and the thread would be pushed behind it on release. Exclusive
+    /// composition gives the long press first refusal and only evaluates the tap when the
+    /// press ended too early to be recognised.
+    ///
+    /// The `guard` is not a nicety: without a sheet to open, an armed long press would win
+    /// the press and swallow the tap, which is the Threads screen's rows losing their only
+    /// way into a thread.
+    private var pressGesture: AnyGesture<Void> {
+        let tap = TapGesture().onEnded { scheduleRowTap() }
+        guard let onLongPress, !row.isDeleted else { return AnyGesture(tap) }
+        return AnyGesture(
+            LongPressGesture(minimumDuration: Self.longPressDuration)
+                .onEnded { _ in
+                    longPresses += 1
+                    onLongPress()
+                }
+                .exclusively(before: tap)
+                .map { _ in () }
+        )
+    }
 
     /// Opens the thread on the *next* main-actor turn, so any control the same tap also
     /// landed on has already claimed it by the time this runs.
@@ -278,38 +321,6 @@ struct TimelineRowView: View {
             channels: channelNameMap,
             selfPubkey: selfPubkey
         )
-    }
-
-    /// The long-press menu: a quick-reaction palette and Copy on any live message,
-    /// plus Retry (on a failed send) and Delete on an own pending/failed row.
-    @ViewBuilder
-    private var menuItems: some View {
-        if !row.isDeleted {
-            ControlGroup {
-                ForEach(ReactionPalette.common, id: \.self) { emoji in
-                    Button(emoji) { onReact(emoji) }
-                }
-            }
-            Button {
-                UIPasteboard.general.string = row.content
-            } label: {
-                Label("Copy", systemImage: "doc.on.doc")
-            }
-        }
-        if isOwn, row.delivery != .sent {
-            if case .failed = row.delivery {
-                Button {
-                    onRetry(row.id)
-                } label: {
-                    Label("Retry", systemImage: "arrow.clockwise")
-                }
-            }
-            Button(role: .destructive) {
-                onDelete(row.id)
-            } label: {
-                Label("Delete", systemImage: "trash")
-            }
-        }
     }
 }
 
