@@ -34,7 +34,7 @@ enum SidebarSection: String, CaseIterable, Hashable, Sendable, Identifiable {
         switch self {
         case .starred: "star.fill"
         case .channels: "number"
-        case .directMessages: "bubble.left.and.text.bubble.right.fill"
+        case .directMessages: "bubble.left.and.text.bubble.right"
         case .agents: "sparkles"
         }
     }
@@ -42,7 +42,7 @@ enum SidebarSection: String, CaseIterable, Hashable, Sendable, Identifiable {
     /// The column that keeps every header title on one leading edge.
     ///
     /// Measured, not chosen. The widest of the four is
-    /// `bubble.left.and.text.bubble.right.fill`, which renders **34.67 points** wide at the
+    /// `bubble.left.and.text.bubble.right`, which renders **34.67 points** wide at the
     /// header's `.title3` bold configuration — so this started at 32 and the test below
     /// failed it. That is the point of having the test: a SwiftUI `.frame` does not clip, so a
     /// column narrower than its glyph does not look wrong here, it silently pushes that one

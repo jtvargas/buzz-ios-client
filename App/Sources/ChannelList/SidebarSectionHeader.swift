@@ -49,12 +49,12 @@ struct SidebarSectionHeader: View {
         } label: {
             HStack(spacing: 8) {
                 Image(systemName: section.symbol)
-                    .font(.hiveSymbol(.title3, weight: .bold))
+                    .font(.hiveSymbol(.headline, weight: .bold))
                     .foregroundStyle(.primary)
                     .frame(width: SidebarSection.symbolColumnWidth)
                     .accessibilityHidden(true)
                 Text(section.title)
-                    .font(.hive(.title3, weight: .bold))
+                    .font(.hive(.headline, weight: .bold))
                     .foregroundStyle(.primary)
                 if !isExpanded {
                     Text("\(count)")
