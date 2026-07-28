@@ -45,11 +45,8 @@ struct ConversationScaffold<Content: View, Bar: View, Accessory: View>: View {
     /// Whether the newest row is in view. The owner freezes its rendered tail while
     /// this is `false`, so an arriving message cannot move the reader's place.
     @Binding var isAtBottom: Bool
-    /// Whether the newest row is far enough below to be worth offering a way back to it.
-    /// A separate, wider band than the freeze's — see ``farFromBottom(_:container:)``.
-    @Binding var isFarFromBottom: Bool
-    /// Bumped by the owner to force a jump — an own send, or one of the affordances
-    /// above the composer.
+    /// Bumped by the owner to force a jump — an own send, or the affordance above the
+    /// composer.
     var jumpToken: Int = 0
     /// Where that jump lands. Read when ``jumpToken`` changes, so the owner sets both
     /// before bumping.
@@ -127,24 +124,14 @@ struct ConversationScaffold<Content: View, Bar: View, Accessory: View>: View {
     /// about one row height (which is what this was) put both edges inside a 3pt drag of
     /// each other, so a reader sitting just outside it could flip the state, lose the
     /// freeze, and get no re-freeze because they were still inside the band.
+    ///
+    /// A third, wider band — half a viewport — used to be projected beside these two, for
+    /// the `↓ Latest` pill. It is gone with the pill: it was the only distance this shell
+    /// read that no scroll decision depended on, and the state it fed had exactly one
+    /// reader (see ``ConversationJumpState/control``).
     private static var awayFromBottomSlack: CGFloat { 120 }
-    /// The floor under the band that offers a way back to the newest message, for a
-    /// viewport short enough that half of it is less than about two messages.
-    private static var farFromBottomFloor: CGFloat { 240 }
     /// About a screen, so the older page lands before the reader reaches the end.
     private static var topTrigger: CGFloat { 800 }
-
-    /// Whether the newest row is far enough below to be worth a floating control.
-    ///
-    /// Deliberately *not* ``awayFromBottomSlack``. That band is about one message, which
-    /// is the right distance to stop moving someone's place at and far too eager for a
-    /// button: it would appear the moment a reader nudged up to re-read the last thing
-    /// said, and then sit on top of it. Half a viewport is the distance at which
-    /// scrolling back is a journey rather than a flick, and taking it from the container
-    /// rather than a constant keeps that true on an iPad and in a landscape split.
-    private static func farFromBottom(_ distance: CGFloat, container: CGFloat) -> Bool {
-        distance >= max(farFromBottomFloor, container / 2)
-    }
 
     var body: some View {
         // Every scroll this file performs goes through this proxy, because every one of them
@@ -186,7 +173,6 @@ struct ConversationScaffold<Content: View, Bar: View, Accessory: View>: View {
             return Edges(
                 atBottom: distance <= Self.atBottomSlack,
                 awayFromBottom: distance >= Self.awayFromBottomSlack,
-                farFromBottom: Self.farFromBottom(distance, container: geometry.containerSize.height),
                 nearTop: geometry.visibleRect.minY <= Self.topTrigger
             )
         } action: { _, edges in
@@ -198,14 +184,6 @@ struct ConversationScaffold<Content: View, Bar: View, Accessory: View>: View {
             } else if edges.awayFromBottom, isAtBottom {
                 isAtBottom = false
             }
-            // One threshold rather than a second hysteresis loop: what this decides is
-            // whether a button is offered, and the crossing is animated. The bands above
-            // need their gap because releasing the freeze *moves* the reader.
-            //
-            // Written only on a real crossing. `Edges` compares equal on most scrolled
-            // frames, but `nearTop` can flip under an unchanged bottom distance, and an
-            // equal write still notifies every observer of this state.
-            if isFarFromBottom != edges.farFromBottom { isFarFromBottom = edges.farFromBottom }
             if edges.nearTop { onReachedTop() }
         }
         // The owner's commit, ahead of the readings it produces: `onChange` runs in the
@@ -314,7 +292,8 @@ struct ConversationScaffold<Content: View, Bar: View, Accessory: View>: View {
     /// They used to be a row and an edge: a particular message went through this proxy, and
     /// "the newest message" went to `ScrollPosition`'s bottom edge. The edge half is gone,
     /// because it resolves against `contentSize.height` — see ``newestID`` for what that
-    /// number is worth here. An own send or `↓ Latest` could land the reader past the end of
+    /// number is worth here. Anything aimed at the newest message — an own send, and the
+    /// `↓ Latest` pill that used to offer the trip — could land the reader past the end of
     /// the content with nothing on screen, and did.
     ///
     /// The asymmetry that remains is real and is why this takes the proxy rather than
@@ -351,7 +330,6 @@ struct ConversationScaffold<Content: View, Bar: View, Accessory: View>: View {
     private struct Edges: Equatable {
         let atBottom: Bool
         let awayFromBottom: Bool
-        let farFromBottom: Bool
         let nearTop: Bool
     }
 }

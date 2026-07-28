@@ -124,11 +124,6 @@ struct ChannelTimelineView: View {
             // back into `State` on every set, which would invalidate this whole view
             // on each scroll threshold crossing.
             isAtBottom: Binding(get: { model.isAtBottom }, set: { model.isAtBottom = $0 }),
-            // The pill's own state, so this crossing reaches the pill and not the list.
-            isFarFromBottom: Binding(
-                get: { model.jump.isFarFromBottom },
-                set: { model.jump.isFarFromBottom = $0 }
-            ),
             jumpToken: model.jumpToken,
             jumpTarget: model.jumpTarget,
             contentRevision: model.contentRevision,
@@ -270,8 +265,7 @@ struct ChannelTimelineView: View {
             // moves it invalidates that view alone rather than this body and its list.
             ConversationJumpControls(
                 state: model.jump,
-                onJumpToNew: { model.jumpToNewMessages() },
-                onJumpToLatest: { model.jumpToLatest() }
+                onJumpToNew: { model.jumpToNewMessages() }
             )
             MentionSuggestionsView(
                 document: $model.mentionDraft,
