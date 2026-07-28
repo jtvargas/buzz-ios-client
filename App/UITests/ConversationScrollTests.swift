@@ -14,219 +14,40 @@ import XCTest
 /// the shipping `ThreadView` and `ChannelTimelineView`, reached through the initialisers that
 /// name their collaborators instead of taking a `SyncEngine`.
 ///
-/// # Why every measurement is a row frame
-///
-/// The defect class is precisely that the scroll view's own numbers are wrong. A `LazyVStack`
-/// estimates the height of every row it has not measured, so `contentSize` and `contentOffset`
-/// are guesses — Apple's guidance for lazy stacks now says so outright — and a conversation can
-/// report a content height of 143 255 points holding a few thousand. An assertion built on
-/// those numbers passes while the screen is blank; that mistake is the reason three claims
-/// about this bug class had to be retracted.
-///
-/// So nothing here reads the scroll view. Every fact comes from where the message rows actually
-/// are on the display, which is the only measure that cannot be wrong about what the reader
-/// sees.
-///
-/// # Why the readable band is not the window
-///
-/// A row hidden behind the keyboard is not on screen. An earlier version of this measurement
-/// filtered on window bounds alone, and scored shapes as holding while every row sat under the
-/// keyboard. The band below is bounded by whichever of the keyboard and the composer reaches
-/// highest, taken from those elements' own frames.
-final class ConversationScrollTests: XCTestCase {
-    override func setUp() {
-        continueAfterFailure = true
-    }
-
-    // MARK: - The shapes
-
-    private struct Shape {
-        let name: String
-        let arguments: [String]
-    }
-
-    /// A thread is loaded whole and is usually short; a channel is long and paginates. The
-    /// variable that decides whether this bug class appears at all is a message taller than the
-    /// viewport, and where it sits.
-    private static let shapes: [Shape] = [
-        Shape(name: "thread-8-longlast", arguments: thread(messages: 8, longLines: 60)),
-        Shape(name: "thread-8-longmid", arguments: thread(messages: 8, longLines: 60, longFromEnd: 4)),
-        Shape(name: "thread-8-longopener", arguments: thread(messages: 8, longLines: 60, longFromEnd: 8)),
-        Shape(name: "thread-12-longlast", arguments: thread(messages: 12, longLines: 60)),
-        Shape(name: "thread-8-plain", arguments: thread(messages: 8)),
-        // The thread as it really opens: the opener alone from the store, the replies a relay
-        // round trip later. This is the shape behind the "channels open blank" report in #49.
-        Shape(name: "thread-8-longlast-primed", arguments: thread(messages: 8, longLines: 60, primed: 1)),
-        Shape(name: "channel-50-longlast", arguments: channel(messages: 50, longLines: 60)),
-        Shape(name: "channel-50-plain", arguments: channel(messages: 50)),
-    ]
-
-    private static func thread(
-        messages: Int,
-        longLines: Int = 0,
-        longFromEnd: Int = 1,
-        primed: Int? = nil
-    ) -> [String] {
-        arguments(surface: "thread", messages: messages, longLines: longLines, longFromEnd: longFromEnd, primed: primed)
-    }
-
-    private static func channel(messages: Int, longLines: Int = 0) -> [String] {
-        // `-spread` widens the range of ordinary row heights, which is what decides how wrong
-        // the stack's average is for the rows it has not measured.
-        arguments(surface: "channel", messages: messages, longLines: longLines, longFromEnd: 1, primed: nil)
-            + ["-spread"]
-    }
-
-    private static func arguments(
-        surface: String,
-        messages: Int,
-        longLines: Int,
-        longFromEnd: Int,
-        primed: Int?
-    ) -> [String] {
-        var arguments = ["-fixtureConversation", surface, "-messages=\(messages)"]
-        if longLines > 0 {
-            arguments.append("-longLines=\(longLines)")
-            arguments.append("-longFromEnd=\(longFromEnd)")
-        }
-        if let primed { arguments.append("-primed=\(primed)") }
-        return arguments
-    }
-
-    // MARK: - Reading the screen
-
-    // MARK: - Reading the screen
-
-    private struct Row {
-        let index: Int
-        let frame: CGRect
-    }
-
-    private func launch(_ arguments: [String]) -> XCUIApplication {
-        let app = XCUIApplication()
-        app.launchArguments = arguments
-        app.launch()
-        XCTAssertFalse(
-            app.otherElements["fixtureFailure"].exists || app.staticTexts["fixtureFailure"].exists,
-            "the fixture could not build its conversation"
-        )
-        // The first messages have to be on screen before anything is measured, or the suite is
-        // racing the store rather than testing the surface.
-        XCTAssertTrue(
-            firstRowAppears(in: app),
-            "no message row ever appeared — the fixture seeded nothing, or the surface did not render it"
-        )
-        return app
-    }
-
-    private func firstRowAppears(in app: XCUIApplication) -> Bool {
-        let deadline = Date().addingTimeInterval(15)
-        while Date() < deadline {
-            if !rendered(app).isEmpty { return true }
-            Thread.sleep(forTimeInterval: 0.25)
-        }
-        return false
-    }
-
-    /// Every fixture message the surface has rendered, on screen or not.
-    ///
-    /// Matched on the content the fixture wrote rather than on an accessibility identifier
-    /// added for the test: the rows under test are the shipping rows, and asking them to carry
-    /// a test-only marker is how the thing you measure stops being the thing you ship.
-    private func rendered(_ app: XCUIApplication) -> [Row] {
-        app.staticTexts.allElementsBoundByIndex.compactMap { element in
-            let label = element.label
-            guard label.hasPrefix("Message ") else { return nil }
-            let digits = label.dropFirst("Message ".count).prefix { $0.isNumber }
-            guard let index = Int(digits) else { return nil }
-            return Row(index: index, frame: element.frame)
-        }.sorted { $0.index < $1.index }
-    }
-
-    /// The band a reader can actually read: below the navigation bar, above whichever of the
-    /// keyboard and the composer reaches highest.
-    private func readableBand(_ app: XCUIApplication) -> CGRect {
-        let window = app.windows.firstMatch.frame
-        var bottom = window.maxY
-        let keyboard = app.keyboards.element
-        if keyboard.exists, keyboard.frame.height > 0 {
-            bottom = min(bottom, keyboard.frame.minY)
-        }
-        for field in app.textViews.allElementsBoundByIndex where field.frame.height > 0 {
-            bottom = min(bottom, field.frame.minY)
-        }
-        return CGRect(x: window.minX, y: window.minY, width: window.width, height: max(0, bottom - window.minY))
-    }
-
-    private func readable(_ app: XCUIApplication) -> [Row] {
-        let band = readableBand(app)
-        return rendered(app).filter { row in
-            row.frame.height > 0 && row.frame.maxY > band.minY && row.frame.minY < band.maxY
-        }
-    }
-
-    private func describe(_ app: XCUIApplication) -> String {
-        let band = readableBand(app)
-        let shown = readable(app).map { "m\($0.index)@\(Int($0.frame.minY))h\(Int($0.frame.height))" }
-        return "readable=\(Int(band.minY))..\(Int(band.maxY)) shown=[\(shown.joined(separator: " "))]"
-    }
-
-    /// Focuses the composer and returns how much room the keyboard took from the readable
-    /// band.
-    ///
-    /// Measured as the band's own shrink rather than `app.keyboards.element.frame.height`. Those
-    /// two disagree — 311 against 243 on iOS 26, because the reported keyboard element excludes
-    /// the bar above the keys — and the number that matters here is how far the content is
-    /// *entitled* to move, which is the inset the surface actually received.
-    private func focusComposer(_ app: XCUIApplication) -> CGFloat {
-        let before = readableBand(app).height
-        let field = app.textViews.firstMatch
-        XCTAssertTrue(field.waitForExistence(timeout: 5), "no composer field on screen")
-        field.tap()
-        XCTAssertTrue(
-            app.keyboards.element.waitForExistence(timeout: 5),
-            "no software keyboard — on a simulator, disable I/O > Keyboard > Connect Hardware Keyboard"
-        )
-        Thread.sleep(forTimeInterval: 1.5)
-        let allowance = max(0, before - readableBand(app).height)
-        // The suite's own non-vacuity check, and it is not theoretical: on 2026-07-27 every
-        // shape in both tests reported `allowance=0` and the run passed with 32 readings and
-        // 0 failures, because the *software* keyboard never appeared. `waitForExistence`
-        // above does not catch that — a keyboard element exists in the hierarchy with zero
-        // height when iOS believes a hardware keyboard is attached — so every assertion held
-        // by comparing a resting layout against itself.
-        //
-        // On a headless simulator the host-side `ConnectHardwareKeyboard` default is not
-        // enough; the device carries its own:
-        //
-        //     xcrun simctl spawn <udid> defaults write com.apple.keyboard.preferences \
-        //         AutomaticMinimizationEnabled -bool false
-        //     xcrun simctl spawn <udid> defaults write com.apple.keyboard.preferences \
-        //         HardwareKeyboardLastSeen -bool false
-        //
-        // followed by a device reboot.
-        XCTAssertGreaterThan(
-            allowance,
-            0,
-            "the keyboard took no room from the readable band, so this shape asserted nothing "
-                + "— see the note here for the simulator defaults that raise a software keyboard"
-        )
-        return allowance
-    }
-
-    // MARK: - The report, asserted
-
+/// The shapes themselves, and how a row's place is read off the display, live in
+/// ``ConversationScrollHarness``, which is where a second suite driving the same shapes through
+/// something other than a rising keyboard would take them from.
+final class ConversationScrollTests: ConversationScrollHarness {
     /// The owner's report, exactly: open a conversation, touch nothing, tap the composer.
     ///
-    /// Three assertions per shape, one per way this has actually failed:
+    /// Four assertions per shape, one per way this has actually failed:
     ///
     /// 1. **A message is readable** — before the tap, after it, and still five seconds later.
     ///    The blank conversation was a dead end, not a flash.
-    /// 2. **The newest message is still readable** after the keyboard arrives. Losing it behind
-    ///    the keyboard is the opposite failure and the one residual `#52` shipped with.
-    /// 3. **Nothing moved further than the keyboard.** The reader may be carried up by the
-    ///    inset the keyboard added, and by nothing more — "the content goes up, pushed too much
-    ///    up" was thousands of points against a 311-point keyboard.
+    /// 2. **The newest message's bottom edge clears the keyboard.** Not "is it readable" — see
+    ///    below for why that question could not fail.
+    /// 3. **It moved by the keyboard's own inset, neither less nor more.** Both directions,
+    ///    also for the reason below.
+    ///
+    /// # Why assertions 2 and 3 are written the way they are
+    ///
+    /// Because the two they replace were structurally incapable of failing on the defect this
+    /// test exists for, and did not fail on it for four pull requests.
+    ///
+    /// They were `readable(app).contains(newest)` and `abs(moved) <= allowance + 8`.
+    /// ``readable(_:)`` scores a row that *intersects* the band, and the shapes that matter here
+    /// rest on a message taller than the screen — so a newest message with its last 311 points
+    /// buried under the keyboard still counted as readable. And a one-sided bound admits zero:
+    /// a conversation that did not move at all passed as "moved no further than the keyboard".
+    ///
+    /// The owner reported exactly that — *"the message list does not push up, the composer and
+    /// keyboard end up covering the latest message"* — while this test was green. Recovered from
+    /// its own logs afterwards: `thread-8-longlast` moved `m7 -1933 → -2244` against a 311-point
+    /// keyboard, and `thread-8-longlast-primed`, the same content delivered one relay round trip
+    /// later, moved `m7 -1933 → -1933`.
+    ///
+    /// So both are now stated as the thing the owner can see: the last message sits above the
+    /// composer, and it got there by following the keyboard.
     func testComposerFocusFromOpeningPosition() throws {
         for shape in Self.shapes {
             let app = launch(shape.arguments)
@@ -247,20 +68,26 @@ final class ConversationScrollTests: XCTestCase {
                 readable(app).isEmpty,
                 "\(shape.name): BLANK — no message readable after focusing the composer"
             )
-            XCTAssertTrue(
-                readable(app).contains { $0.index == newestBefore.index },
-                "\(shape.name): the newest message is no longer readable — it went behind the keyboard or off screen"
-            )
-            if let newestAfter = rendered(app).first(where: { $0.index == newestBefore.index }) {
-                let moved = newestBefore.frame.minY - newestAfter.frame.minY
-                XCTAssertLessThanOrEqual(
-                    abs(moved), allowance + 8,
-                    """
-                    \(shape.name): the newest message moved \(Int(moved))pt \
-                    where the keyboard took \(Int(allowance))pt
-                    """
-                )
+            guard let newestAfter = rendered(app).first(where: { $0.index == newestBefore.index }) else {
+                XCTFail("\(shape.name): the newest message stopped being rendered when the keyboard arrived")
+                continue
             }
+            let band = readableBand(app)
+            XCTAssertLessThanOrEqual(
+                newestAfter.frame.maxY, band.maxY + 8,
+                """
+                \(shape.name): the last \(Int(newestAfter.frame.maxY - band.maxY))pt of the newest \
+                message is under the composer and keyboard
+                """
+            )
+            let moved = newestBefore.frame.minY - newestAfter.frame.minY
+            XCTAssertEqual(
+                moved, allowance, accuracy: 8,
+                """
+                \(shape.name): the newest message moved \(Int(moved))pt \
+                where the keyboard took \(Int(allowance))pt
+                """
+            )
 
             Thread.sleep(forTimeInterval: 5)
             XCTAssertFalse(

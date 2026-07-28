@@ -110,6 +110,8 @@ struct ConversationScaffold<Content: View, Bar: View, Accessory: View>: View {
 
     @State private var position = ScrollPosition(idType: String.self)
     @State private var barHeight: CGFloat = 0
+    /// The height of the region above the keyboard, kept only to tell one reading from the next.
+    @State private var roomAboveTheKeyboard: CGFloat = 0
     /// Where the reader is and who put them there — see ``ConversationReaderPlace`` for
     /// what it corrects and why the anchors below are not enough on their own.
     @State private var place = ConversationReaderPlace()
@@ -145,6 +147,17 @@ struct ConversationScaffold<Content: View, Bar: View, Accessory: View>: View {
                 accessory
                     .padding(.horizontal, 12)
                     .padding(.bottom, barHeight + 6)
+            }
+            // The same fact the accessory relies on, read as a number: this stack's height *is*
+            // the room above the keyboard, so it shrinks when the keyboard comes up and is
+            // untouched by anything else in this shell — the composer is inset inside the scroll
+            // view, not beside this. See ``roomAboveTheKeyboardDidChange(using:)``.
+            .onGeometryChange(for: CGFloat.self) { geometry in
+                geometry.size.height
+            } action: { height in
+                let previous = roomAboveTheKeyboard
+                roomAboveTheKeyboard = height
+                if previous > 0, height != previous { roomAboveTheKeyboardDidChange(using: proxy) }
             }
             .onChange(of: jumpToken) { jump(using: proxy) }
         }
@@ -240,8 +253,9 @@ struct ConversationScaffold<Content: View, Bar: View, Accessory: View>: View {
         // and one with it removed, and the two shapes that came to rest with no message row
         // on screen at all both stop doing so.
         //
-        // What it was there for is now done by the correction above, which lands on a row
-        // instead of an edge.
+        // What it was there for is now done by the two corrections above — one for a declared
+        // content change, one for the keyboard taking room at the bottom — both of which land on
+        // a row instead of an edge.
         .defaultScrollAnchor(.bottom, for: .initialOffset)
         .defaultScrollAnchor(.bottom, for: .alignment)
         // Only the message list dismisses the keyboard, and this is applied inside
@@ -249,12 +263,58 @@ struct ConversationScaffold<Content: View, Bar: View, Accessory: View>: View {
         .scrollDismissesKeyboard(.interactively)
         .safeAreaBar(edge: .bottom) {
             bar
-                .onGeometryChange(for: CGFloat.self) { proxy in
-                    proxy.size.height
+                .onGeometryChange(for: CGFloat.self) { geometry in
+                    geometry.size.height
                 } action: { height in
                     barHeight = height
                 }
         }
+    }
+
+    /// The keyboard came up or went away.
+    ///
+    /// Points came off the bottom of the scrollable region, and nothing in this shell puts them
+    /// back: `defaultScrollAnchor(.bottom, for: .sizeChanges)` is the modifier that would, and it
+    /// is deliberately absent for the reason written where it used to be. So the message being
+    /// replied to slides under the composer the moment it is tapped — the owner's report.
+    ///
+    /// Most conversations never need this: a scroll view resting *against* its bottom has its
+    /// `contentOffset` clamped up when an inset takes room there, so the content follows for
+    /// free. The ones that do not are those whose content landed *after* the first layout, which
+    /// is how every real thread in this app opens — and which is why the report was "weird". The
+    /// measurements are with the decision, in
+    /// ``ConversationReaderPlace/keyboardRoomDidChange(isAtBottom:)``, along with the rule: land
+    /// on the newest row when that is where the reader is, and leave a reader in history exactly
+    /// where they are — the owner's own scope, *"if the user has scrolled up at all, no push"*.
+    ///
+    /// # Why this reads a view that is not the scroll view
+    ///
+    /// Because reading the scroll view's own bottom inset was built first, and it **hangs the
+    /// app**. One `onScrollGeometryChange(for:)` over `containerSize.height` and
+    /// `contentInsets.bottom` covers this in a single callback and passed the whole eight-shape
+    /// focus suite — a keyboard is one change. But a `scrollTo` issued from inside a
+    /// scroll-geometry callback re-enters layout, so a *stream* of changes does not survive it:
+    /// driven by a composer growing under typing, both tests died on the first `typeText`, runner
+    /// killed for being unresponsive.
+    ///
+    /// So the trigger is the height of the `ZStack` in ``body`` — the room above the keyboard by
+    /// construction, the same fact the accessory's placement already relies on. An ordinary layout
+    /// reading of a view that is not the scroll view, so a scroll issued from it cannot come back
+    /// around. The first reading is skipped: that is the view being measured at all, and the
+    /// opening position belongs to the `.initialOffset` anchor, which re-pinning would race.
+    ///
+    /// # What is not wired to this, and why
+    ///
+    /// The composer growing under a long draft takes room off the same edge and wants the same
+    /// decision — the other half of the owner's report — and is **not** connected here. Measured
+    /// across all eight shapes on iPhone 17 Pro / iOS 26 against a composer that grows 61 points,
+    /// seven move the newest message 59 points unaided, for the clamping reason above; the eighth,
+    /// `thread-8-longlast-primed`, moves 0. Wiring the bar's geometry here fixed that shape and
+    /// then killed the growth suite as unresponsive — twice, at the same point, with 42% RAM free
+    /// and no crash report on either side. Two identical failures is where this stops being an
+    /// implementation detail: the diagnosis is open, and the shipped surface is what it was.
+    private func roomAboveTheKeyboardDidChange(using proxy: ScrollViewProxy) {
+        apply(place.keyboardRoomDidChange(isAtBottom: isAtBottom), using: proxy)
     }
 
     /// The three numbers ``ConversationReaderPlace`` reads, taken from one layout so they

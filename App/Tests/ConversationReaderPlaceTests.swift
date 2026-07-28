@@ -268,6 +268,79 @@ struct ConversationReaderPlaceTests {
         #expect(feed(place, [span(height: 60_000, offset: 30_000, distance: 21_000)]) == [.none])
     }
 
+    // MARK: - The keyboard taking room at the bottom
+
+    @Test("a keyboard lands a conversation nobody has moved on its newest message")
+    func keyboardRoomPinsAnUnmovedReader() {
+        // The owner's report: tapping the composer raised the keyboard over the newest
+        // message. The keyboard takes points off the bottom of the scrollable region, and
+        // nothing was putting them back.
+        let place = ConversationReaderPlace()
+        park(place, height: 5_000, offset: 4_000, distance: 0)
+        #expect(place.keyboardRoomDidChange(isAtBottom: true) == .bottom)
+    }
+
+    @Test("a reader who came back to the newest message is carried too")
+    func keyboardRoomPinsAReaderAtTheBottom() {
+        // `hasMoved` is sticky for the life of the conversation — one drag sets it and
+        // nothing clears it — so it cannot be the whole predicate. A reader who scrolled up
+        // and then came back down is at the newest message and wants the same behaviour as
+        // one who never left.
+        let place = ConversationReaderPlace()
+        place.hasMoved = true
+        park(place, height: 5_000, offset: 4_000, distance: 0)
+        #expect(place.keyboardRoomDidChange(isAtBottom: true) == .bottom)
+    }
+
+    @Test("a reader parked in history is not moved by the keyboard")
+    func keyboardRoomLeavesHistoryAlone() {
+        // The owner's own scope — "if the user has scrolled up at all, no push is required" —
+        // and the failure mode this whole file exists to prevent: what they are reading is
+        // nowhere near the bottom edge, so taking room at an end they are not looking at may
+        // not move them.
+        let place = ConversationReaderPlace()
+        place.hasMoved = true
+        park(place, height: 40_000, offset: 30_000, distance: 9_000)
+        #expect(place.keyboardRoomDidChange(isAtBottom: false) == .none)
+    }
+
+    @Test("the keyboard is ignored while the reader is scrolling")
+    func keyboardRoomWaitsForTheDragToEnd() {
+        // A finger on the list outranks it, exactly as it does on a content change: a
+        // correction mid-drag fights the reader. This is also the interactive keyboard
+        // dismissal, where the room above the keyboard changes on every frame of a drag.
+        let place = ConversationReaderPlace()
+        place.isScrolling = true
+        #expect(place.keyboardRoomDidChange(isAtBottom: true) == .none)
+    }
+
+    @Test("room being given back is the same decision as room being taken")
+    func keyboardRoomIsSymmetric() {
+        // The decision is about where the reader is, not about which way the room went — a
+        // keyboard dismissed gives the region its points back, and the newest message belongs
+        // against the composer either way.
+        let place = ConversationReaderPlace()
+        place.hasMoved = true
+        park(place, height: 5_000, offset: 4_000, distance: 0)
+        #expect(place.keyboardRoomDidChange(isAtBottom: true) == .bottom)
+        park(place, height: 40_000, offset: 30_000, distance: 9_000)
+        #expect(place.keyboardRoomDidChange(isAtBottom: false) == .none)
+    }
+
+    @Test("the keyboard changing is not a content change")
+    func keyboardRoomOpensNoSettlingWindow() {
+        // The re-pin is immediate and self-contained. If it opened a settling window instead,
+        // every keyboard raise would arm the correction path for sixty readings — and that path
+        // corrects height changes the stack invented, which is how a reader in history gets
+        // moved 800 points by a 311-point keyboard.
+        let place = ConversationReaderPlace()
+        place.hasMoved = true
+        park(place, height: 40_000, offset: 30_000, distance: 1_000)
+        _ = place.keyboardRoomDidChange(isAtBottom: true)
+        // A re-measure with no commit behind it, immediately after: still nothing.
+        #expect(feed(place, [span(height: 43_702, offset: 33_702, distance: 1_000)]) == [.none])
+    }
+
     @Test("a drag mid-settle still updates where the reader is")
     func draggingUpdatesTheReference() {
         // The reference is taken from readings where the height held still, and those
