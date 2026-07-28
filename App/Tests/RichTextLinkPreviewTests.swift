@@ -155,4 +155,18 @@ struct RichTextLinkPreviewTests {
     func labelAcrossRuns() throws {
         #expect(previewCards("[the **scroll** fix](https://example.com/a)").first?.title == "the scroll fix")
     }
+
+    @Test("link kinds use stable SF Symbols")
+    func symbols() {
+        #expect(LinkPreviewIcon.symbol(for: .githubPullRequest) == "arrow.triangle.pull")
+        #expect(LinkPreviewIcon.symbol(for: .githubIssue) == "smallcircle.filled.circle")
+        #expect(LinkPreviewIcon.symbol(for: .githubRepository) == "book.closed")
+        #expect(LinkPreviewIcon.symbol(for: .linearIssue) == "smallcircle.filled.circle")
+        #expect(LinkPreviewIcon.symbol(for: .googleDriveFile) == "doc")
+        #expect(LinkPreviewIcon.symbol(for: .googleDriveFolder) == "folder")
+        #expect(LinkPreviewIcon.symbol(for: .googleDocument) == "doc.text")
+        #expect(LinkPreviewIcon.symbol(for: .googleSpreadsheet) == "tablecells")
+        #expect(LinkPreviewIcon.symbol(for: .googlePresentation) == "rectangle.on.rectangle")
+        #expect(LinkPreviewIcon.symbol(for: .web) == "network")
+    }
 }

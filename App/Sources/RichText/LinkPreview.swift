@@ -21,10 +21,6 @@ import Foundation
 ///   (`desktop/src/shared/lib/linkPreview.ts`). Matching that rule is also what makes the
 ///   two clients agree about which links unfurl and what the card says.
 ///
-/// The one thing that *is* fetched is the site's favicon — see ``LinkPreviewIcon`` — and
-/// only because it is a fixed-size image in a fixed-size slot, so it can arrive late
-/// without moving anything.
-///
 /// # The shape of a card
 ///
 /// A caption line and a title, and which of the two carries the domain depends on how
@@ -68,8 +64,7 @@ struct LinkPreview: Equatable, Hashable, Sendable {
     /// The card's headline.
     let title: String
 
-    /// The host, without a leading `www.` — the caption of an ordinary web card, and the
-    /// domain a favicon is asked of.
+    /// The host, without a leading `www.` — the caption of an ordinary web card.
     var host: String {
         Self.normalizedHost(url) ?? ""
     }
@@ -109,8 +104,7 @@ extension LinkPreview {
         self.init(kind: .web, url: url, provider: nil, typeLabel: nil, title: Self.webTitle(url))
     }
 
-    /// The host in the form the card shows and the favicon is asked of, or `nil` when
-    /// there is not one.
+    /// The host in the form the card shows, or `nil` when there is not one.
     static func normalizedHost(_ url: URL) -> String? {
         guard let host = url.host()?.lowercased(), !host.isEmpty else { return nil }
         let trimmed = host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
