@@ -22,8 +22,34 @@ enum RichTextStyle {
     /// The horizontal indent applied per nested-list level.
     static let nestedIndent: CGFloat = 16
 
-    /// Vertical spacing between a message's blocks.
+    /// The ordinary gap between two blocks of a message. See ``RichTextSpacing`` for
+    /// the pairs that want more or less than this.
     static let blockSpacing: CGFloat = 6
+
+    // MARK: - Tables
+
+    /// The widest a single table cell may be laid out before its text wraps inside the
+    /// column, at the default text size.
+    ///
+    /// A cap is not decoration. Inside the table's horizontal scroll view a cell is
+    /// offered unlimited width, so without one a cell holding a paragraph becomes a
+    /// single line thousands of points long — a column nobody can read and a scroll
+    /// nobody can reach the end of. Around a phone's readable measure, so an ordinary
+    /// cell never wraps and a pathological one wraps instead of running away.
+    static let tableCellMaxWidth: CGFloat = 260
+
+    /// Inset between a table cell's text and its column edges. Generous horizontally
+    /// because that gap is doing the work column rules would otherwise do.
+    static let tableCellPadding = CGSize(width: 10, height: 6)
+
+    /// The table's own outline and the rules between its rows.
+    static let tableBorderRadius: CGFloat = 8
+
+    // MARK: - Rules
+
+    /// The vertical padding around a thematic break, and around the divider drawn under
+    /// a level-1 heading.
+    static let ruleSpacing: CGFloat = 4
 
     /// How far the pill is grown beyond the glyphs it sits behind. Horizontal is the
     /// "comfortable padding"; vertical is deliberately small, because a taller pill
@@ -78,7 +104,7 @@ enum RichTextStyle {
         base: Font,
         interactive: Bool = false
     ) -> AttributedString {
-        var output = attributed
+        var output = emphasised(attributed, base: base)
         let runs = output.runs.map { ($0.range, $0.mention, $0.channel, $0.link) }
         for (range, mention, channel, link) in runs {
             if let mention {
@@ -102,6 +128,42 @@ enum RichTextStyle {
             }
         }
         return interactive ? spaced(output) : output
+    }
+
+    /// Turns the emphasis the *parse* stage recorded as intent into attributes a
+    /// SwiftUI `Text` is guaranteed to draw: a struck run, a code span's monospaced
+    /// face, and a `<u>` underline.
+    ///
+    /// Bold and italic are deliberately absent. `Text` resolves
+    /// `InlinePresentationIntent.stronglyEmphasized` and `.emphasized` itself, and
+    /// re-stating them as a `font` here would replace the environment's font instead
+    /// of decorating it — which is how a bold word ends up refusing to scale with
+    /// Dynamic Type. The three below are stated because leaving them to the intent was
+    /// not reliably drawing anything: a strikethrough and a code span rendered
+    /// identically to plain body text, so `~~wrong~~` read as a correction that had not
+    /// been made.
+    ///
+    /// A code span's face is composed rather than assigned, so `**`x`**` keeps its
+    /// weight: monospaced first, then whatever emphasis the same run also carries.
+    private static func emphasised(_ attributed: AttributedString, base: Font) -> AttributedString {
+        var output = attributed
+        let runs = output.runs.map { ($0.range, $0.inlinePresentationIntent, $0.underline) }
+        for (range, intent, underline) in runs {
+            if underline == true {
+                output[range].underlineStyle = .single
+            }
+            guard let intent else { continue }
+            if intent.contains(.strikethrough) {
+                output[range].strikethroughStyle = .single
+            }
+            if intent.contains(.code) {
+                var font = base.monospaced()
+                if intent.contains(.stronglyEmphasized) { font = font.bold() }
+                if intent.contains(.emphasized) { font = font.italic() }
+                output[range].font = font
+            }
+        }
+        return output
     }
 
     /// Holds every pill off the text beside it, by adding ``pillAdvance`` of kerning

@@ -36,13 +36,26 @@ enum ChannelAttribute: AttributedStringKey {
     static let name = "com.buzz.hive.channel"
 }
 
+/// Marks a run that was wrapped in `<u>…</u>`.
+///
+/// Its own attribute rather than SwiftUI's `underlineStyle` because the parse stage is
+/// deliberately free of SwiftUI: the value AST carries what the author *meant* and
+/// ``RichTextStyle`` decides what that looks like, exactly as it already does for a
+/// mention. `InlinePresentationIntent` cannot carry it — CommonMark has no underline,
+/// so there is no intent to reuse.
+enum UnderlineAttribute: AttributedStringKey {
+    typealias Value = Bool
+    static let name = "com.buzz.hive.underline"
+}
+
 extension AttributeScopes {
-    /// The app's custom attribute scope: mention and channel entity tokens, layered
-    /// beside Foundation's own attributes (inline presentation intent, link) that
-    /// the parser also sets.
+    /// The app's custom attribute scope: mention and channel entity tokens plus the
+    /// `<u>` underline, layered beside Foundation's own attributes (inline
+    /// presentation intent, link) that the parser also sets.
     struct HiveAttributes: AttributeScope {
         let mention: MentionAttribute
         let channel: ChannelAttribute
+        let underline: UnderlineAttribute
     }
 
     var hive: HiveAttributes.Type { HiveAttributes.self }

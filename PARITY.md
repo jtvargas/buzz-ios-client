@@ -41,7 +41,7 @@ This is the living checklist for the headline milestone: feature parity with the
 | Presence | — | ✅ | Live dots in rows, sidebar and DM heading; own heartbeat published |
 | Typing indicators | — | ✅ | Shown above the composer; own typing throttled |
 | Message edits (kind:40003) and deletions | `channels` | ◐ | Both are projected and rendered when they arrive; the app can author neither. The menu's Delete discards an own message still in the outbox |
-| Rich content rendering (kind:40002) | `channels`/`forum` | ✅ | Markdown subset plus interactive mentions, channel mentions, URLs, emails and `buzz://message` links |
+| Rich content rendering (kind:40002) | `channels`/`forum` | ◐ | Headings, paragraphs, quotes, fenced code, nested lists, GFM tables (scrolled horizontally, never clipped), thematic rules, task/radio items, bold/italic/strike/code/`<u>`, plus interactive mentions, channel mentions, URLs, emails and `buzz://message` links. Not rendered: inline images/video (see *Media upload*), LaTeX, and upstream's `[1]` citation badge — the badge would eat `list[0]` in ordinary text |
 | Cross-device read state (NIP-RS) | — | ✅ | Published and adopted, NIP-44 encrypted to self |
 | Channel mutes/stars/sections | `home`/`settings` | ◐ | Sidebar sections ship; no mutes or stars |
 | Agent activity observer | `activity` | ☐ | The agent directory (kind 10100) is projected and agents have their own sidebar section, but there is no activity surface |
