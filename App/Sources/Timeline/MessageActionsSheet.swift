@@ -187,7 +187,7 @@ private struct MessageActionsSheet: View {
                 .frame(maxWidth: .infinity)
                 .frame(height: Self.paletteHeight)
                 .background(
-                    isMine ? Color.accentColor.opacity(0.18) : .clear,
+                    isMine ? Color.hiveAccent.opacity(0.18) : .clear,
                     in: .rect(cornerRadius: 12)
                 )
                 .contentShape(.rect)

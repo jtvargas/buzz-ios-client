@@ -24,11 +24,13 @@ struct HomeShortcutTests {
         #expect(HomeShortcut.later.countLabel(1) == "1 item")
     }
 
-    @Test("a card with something in it is bordered, and an empty one is not")
+    @Test("a card with something in it is drawn in the accent, and an empty one is not")
     func borderFollowsTheCount() {
-        // The rule the card draws its accent border from. Asserted here rather than against
-        // a rendered card, because a stroke is not something a test can read back — and
-        // stated as a fact about the *count* so no card can ever be the exception.
+        // The rule the card picks its border colour from — both cards are bordered, and
+        // this is what decides which of them is bordered in the accent. Asserted here
+        // rather than against a rendered card, because a stroke is not something a test can
+        // read back — and stated as a fact about the *count* so no card is ever the
+        // exception.
         #expect(!HomeShortcutCard.hasSomethingWaiting(0))
         #expect(HomeShortcutCard.hasSomethingWaiting(1))
         #expect(HomeShortcutCard.hasSomethingWaiting(12))

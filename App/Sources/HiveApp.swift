@@ -29,6 +29,15 @@ struct HiveApp: App {
                 // scroll assertion measured against San Francisco while the shipping app
                 // draws Lato is a test measuring a screen nobody has.
                 .environment(\.font, .hive(.body))
+                // The accent, put into the environment explicitly rather than left to the
+                // catalogue's global — which does not reach either framework on iOS, see
+                // ``HiveAccent``. Every SwiftUI control that has not been tinted by hand —
+                // a `Button`'s label, a `Link`, a `Toggle`, the swipe actions, the caret
+                // SwiftUI hands to its own text fields — reads it from here.
+                .tint(.hiveAccent)
+                // And the same colour on the window underneath, for what UIKit draws:
+                // the composer's caret and selection handles, menus, alerts.
+                .hiveWindowTint()
         }
         .onChange(of: scenePhase) { _, phase in
             environment.value?.handleScenePhase(phase)

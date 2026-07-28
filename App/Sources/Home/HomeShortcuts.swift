@@ -9,8 +9,10 @@ import SwiftUI
 /// what they are: a small set of destinations above the list, rather than the first two
 /// entries in it.
 ///
-/// The cards share the row equally rather than sitting at a fixed size, so two of them fill
-/// the width the list already uses and a third would simply divide it again.
+/// The cards sit at their own size at the leading edge rather than dividing the width
+/// between them. Two cards stretched across the screen read as a banner — a thing the
+/// screen is *about* — and these are shortcuts above the list, not its headline. Slack
+/// draws them the same way, and leaves the same air to their trailing side.
 struct HomeShortcutCards: View {
     /// The number on each card. Every card has one — see ``HomeShortcutCard/count``.
     let count: (HomeShortcut) -> Int
@@ -22,10 +24,14 @@ struct HomeShortcutCards: View {
                 Button { press(shortcut) } label: {
                     HomeShortcutCard(shortcut: shortcut, count: count(shortcut))
                 }
-                // `.plain`, so the card's own fill is the whole button: any bordered style
-                // would draw a second, system background around a card that has one.
+                // `.plain`, so the card's own border is the whole button: any bordered
+                // style would draw a second, system background inside a card that is
+                // already drawing its own edge.
                 .buttonStyle(.plain)
             }
+            // What keeps the pair at the leading edge. Without it the `HStack` centres
+            // two cards that no longer fill the row.
+            Spacer(minLength: 0)
         }
     }
 
@@ -33,7 +39,13 @@ struct HomeShortcutCards: View {
     private static let betweenCards: CGFloat = 10
 }
 
-/// One shortcut card: a tinted glyph, the destination's name, and what is waiting in it.
+/// One shortcut card: a bold glyph, the destination's name, and what is waiting in it.
+///
+/// Drawn as an outline — a border and nothing else. The card is a small destination beside
+/// a list of conversations, and a filled tile with a tinted glyph in it competes with the
+/// messages below for the eye. Colour is spent in exactly one place, on the border of a
+/// card that has something in it, so that the one card worth looking at is the one that
+/// carries the only colour on the screen.
 struct HomeShortcutCard: View {
     let shortcut: HomeShortcut
     /// The number under the title. Always drawn, zero included: the card exists to answer
@@ -45,51 +57,35 @@ struct HomeShortcutCard: View {
     let count: Int
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            RoundedRectangle(cornerRadius: 8)
-                .fill(Color.accentColor.opacity(0.14))
-                .frame(width: Self.glyphSize, height: Self.glyphSize)
-                .overlay {
-                    Image(systemName: shortcut.symbol)
-                        .font(.hiveSymbol(.subheadline, weight: .semibold))
-                        .foregroundStyle(Color.accentColor)
-                }
+        VStack(alignment: .leading, spacing: Self.betweenLines) {
+            Image(systemName: shortcut.symbol)
+                // Bold and unfilled, in the text's own colour: at this size a glyph in the
+                // regular weight reads as thinner than the word under it, which is what
+                // made the card look assembled out of two different things.
+                .font(.hiveSymbol(.title3, weight: .bold))
+                .foregroundStyle(.primary)
                 .accessibilityHidden(true)
-            Spacer(minLength: 0)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(shortcut.title)
-                    .font(.hive(.subheadline, weight: .semibold))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                Text(shortcut.countLabel(count))
-                    .font(.hive(.caption))
-                    .monospacedDigit()
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
+            Spacer(minLength: Self.underGlyph)
+            Text(shortcut.title)
+                .font(.hive(.subheadline, weight: .semibold))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+            Text(shortcut.countLabel(count))
+                .font(.hive(.footnote))
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
         }
         .padding(Self.padding)
-        // Equal widths from the enclosing stack, one height for the row. A fixed minimum
-        // rather than a content height: the pair are meant to read as two squares above the
-        // list, and a height taken from three short lines of text would draw two letterbox
-        // strips instead.
-        .frame(maxWidth: .infinity, minHeight: Self.height, alignment: .leading)
-        .background {
-            RoundedRectangle(cornerRadius: Self.cornerRadius)
-                .fill(Color.secondary.opacity(0.10))
-        }
-        // The border is *added* to that fill rather than swapped for it: the fill is what
-        // makes a card a card, and trading it for a line would leave the card reading as
-        // less present at exactly the moment it has something in it.
-        //
+        // A size of its own, and one that grows with the type inside it: the frame is in
+        // `@ScaledMetric` points, so a reader at an accessibility size gets a bigger card
+        // rather than a clipped word.
+        .frame(width: width, height: height, alignment: .leading)
         // `strokeBorder` and not `stroke`, because `stroke` straddles the path — half its
-        // width would fall outside the card, growing the row in one state and not the other
-        // and clipping against the neighbouring card's edge.
+        // width would fall outside the card and clip against the neighbouring card's edge.
         .overlay {
-            if Self.hasSomethingWaiting(count) {
-                RoundedRectangle(cornerRadius: Self.cornerRadius)
-                    .strokeBorder(Color.accentColor, lineWidth: Self.borderWidth)
-            }
+            RoundedRectangle(cornerRadius: Self.cornerRadius)
+                .strokeBorder(border, lineWidth: Self.borderWidth)
         }
         .contentShape(.rect)
         .accessibilityElement(children: .combine)
@@ -97,7 +93,16 @@ struct HomeShortcutCard: View {
         .accessibilityAddTraits(.isButton)
     }
 
-    /// Whether this card is bordered: whether there is anything in it.
+    /// The card's edge: the accent when there is something in it, and a hairline otherwise.
+    ///
+    /// Every card is bordered, because the border is the card — what changes is only the
+    /// colour. Swapping a drawn edge for nothing would make an empty card read as absent
+    /// rather than empty, which is the question these cards exist to answer.
+    private var border: Color {
+        Self.hasSomethingWaiting(count) ? .hiveAccent : Self.restingBorder
+    }
+
+    /// Whether this card is drawn in the accent: whether there is anything in it.
     ///
     /// Written off the count and not off the shortcut. "Something is waiting here" is a fact
     /// about a card, not a fact about Threads, so a `case .threads` in the drawing would be a
@@ -115,17 +120,36 @@ struct HomeShortcutCard: View {
         "\(shortcut.title), \(shortcut.countLabel(count))"
     }
 
-    private static let glyphSize: CGFloat = 30
+    /// The card's size in the reader's own type size. One ratio for both dimensions, so a
+    /// card at an accessibility size is the same card, larger — not a wider one holding the
+    /// same three lines. Relative to `.subheadline`, the size the title is set in.
+    @ScaledMetric(relativeTo: .subheadline) private var typeScale: CGFloat = 1
+
+    private var width: CGFloat { Self.width * typeScale }
+    private var height: CGFloat { Self.height * typeScale }
+
     private static let padding: CGFloat = 12
-    /// Tall enough that the glyph, the name and the count read as three bands rather than a
-    /// cramped stack, and close enough to half the list's width that the pair read as the
-    /// square buttons they are meant to be.
-    private static let height: CGFloat = 104
-    private static let cornerRadius: CGFloat = 14
-    /// The accent line around a card with something in it. A hairline all but vanishes at
-    /// this radius on a device, and the 2pt a text field draws would make the card read as
-    /// something to fill in rather than somewhere to go.
-    private static let borderWidth: CGFloat = 1.5
+    /// Between the name and the count. Small — they are one statement read together — but
+    /// not nothing, which set them as tight as two lines of a wrapped sentence.
+    private static let betweenLines: CGFloat = 2
+    /// The least distance between the glyph and the title. The `Spacer` takes whatever is
+    /// left over above it, which is what puts the glyph at the top of the card and the two
+    /// lines of text at the bottom of it rather than spreading all three evenly.
+    private static let underGlyph: CGFloat = 8
+    /// Narrow enough that the pair occupy about two thirds of the row: they are a place to
+    /// go from, not the subject of the screen.
+    private static let width: CGFloat = 112
+    /// Slightly taller than wide, the proportion Slack's own shortcut cards carry — three
+    /// short bands, none of them cramped.
+    private static let height: CGFloat = 100
+    private static let cornerRadius: CGFloat = 12
+    /// One weight for both states, so a card does not change shape when its count does —
+    /// only its colour. Thinner than the 2pt a text field draws, which would make a card
+    /// read as something to fill in rather than somewhere to go.
+    private static let borderWidth: CGFloat = 1
+    /// The edge of a card with nothing in it: present, and quiet enough that the accent on
+    /// the card beside it is the only thing on the screen asking to be looked at.
+    private static let restingBorder = Color.primary.opacity(0.15)
 }
 
 /// The two shortcuts, and everything that differs between them.

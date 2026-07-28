@@ -120,7 +120,7 @@ struct ThreadActivityRow: View {
             Spacer(minLength: 8)
             if isUnseen {
                 Circle()
-                    .fill(Color.accentColor)
+                    .fill(Color.hiveAccent)
                     .frame(width: 8, height: 8)
                     .accessibilityLabel(
                         activity.newReplyCount == 1 ? "1 new reply" : "\(activity.newReplyCount) new replies"
