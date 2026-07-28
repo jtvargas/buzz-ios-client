@@ -104,10 +104,6 @@ struct ThreadView: View {
             // Hand-written rather than `$model.isAtBottom`, which would write the
             // model reference back into `State` on every scroll threshold crossing.
             isAtBottom: Binding(get: { model.isAtBottom }, set: { model.isAtBottom = $0 }),
-            isFarFromBottom: Binding(
-                get: { model.jump.isFarFromBottom },
-                set: { model.jump.isFarFromBottom = $0 }
-            ),
             jumpToken: model.jumpToken,
             jumpTarget: model.jumpTarget,
             contentRevision: model.contentRevision,
@@ -216,13 +212,12 @@ struct ThreadView: View {
         // invalidating this whole view where only the composer needed to hear about it.
         @Bindable var model = model
         return VStack(spacing: 8) {
-            // The channel's controls, reading the thread's own jump state — see the
+            // The channel's control, reading the thread's own jump state — see the
             // note on ``ChannelTimelineView``'s accessory for why the count is read
             // inside that view and not here.
             ConversationJumpControls(
                 state: model.jump,
-                onJumpToNew: { model.jumpToNewMessages() },
-                onJumpToLatest: { model.jumpToLatest() }
+                onJumpToNew: { model.jumpToNewMessages() }
             )
             MentionSuggestionsView(
                 document: $model.mentionDraft,

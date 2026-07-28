@@ -4,8 +4,8 @@ import NostrCore
 import Observation
 import Testing
 
-/// The two affordances above the composer: which one is offered, where pressing one
-/// lands, and what a press leaves behind.
+/// The affordance above the composer: when it is offered, where pressing it lands, and
+/// what the press leaves behind.
 ///
 /// Deliberately not here: how the pills look, and whether the scroll animation reads as
 /// smooth. Those were settled in a harness against the shipping ``ConversationScaffold``
@@ -16,37 +16,26 @@ import Testing
 @MainActor
 @Suite("Conversation jump controls", .timeLimit(.minutes(1)))
 struct ConversationJumpTests {
-    // MARK: - Which control is offered
+    // MARK: - When the control is offered
 
-    @Test("the unread pill wins over Latest, and neither shows at the bottom")
-    func controlPriority() {
+    @Test("the pill is offered for held-back arrivals and for nothing else")
+    func controlFollowsTheCountAlone() {
         let state = ConversationJumpState()
         #expect(state.control == nil)
 
-        // Far from the bottom with nothing waiting: the general offer.
-        state.isFarFromBottom = true
-        #expect(state.control == .latest)
+        // Held from about one message off the bottom, and at any distance past that:
+        // how far the reader has scrolled is no longer an input. `↓ Latest` was the
+        // only reader of the scaffold's half-viewport band and both are gone, so a
+        // reader parked in history with nothing waiting is offered nothing.
+        state.hold(count: 1, firstID: "a")
+        #expect(state.control == .unread(1))
 
-        // Something waiting: the specific one replaces it. Never both — this is one
-        // value, so two pills at once is not a state that can be expressed.
         state.hold(count: 3, firstID: "c")
         #expect(state.control == .unread(3))
 
-        // Back at the bottom by hand: the freeze releases, and the distance band closes.
+        // Released by hand, the way `jumpToNewMessages()` releases it.
         state.hold(count: 0, firstID: nil)
-        state.isFarFromBottom = false
         #expect(state.control == nil)
-    }
-
-    @Test("an unread count still shows its pill inside the Latest band")
-    func unreadShowsWithoutBeingFar() {
-        // The bands are different distances: arrivals are held from about one message
-        // off the bottom, where `↓ Latest` waits for half a viewport. A reader in
-        // between must still be told what arrived.
-        let state = ConversationJumpState()
-        state.hold(count: 1, firstID: "a")
-        #expect(state.isFarFromBottom == false)
-        #expect(state.control == .unread(1))
     }
 
     @Test("the pill counts in words a person reads")
@@ -106,7 +95,10 @@ struct ConversationJumpTests {
         #expect(model.rows.map(\.content) == ["read", "first new", "second new", "third new"])
     }
 
-    @Test("pressing Latest goes to the bottom and releases the freeze")
+    /// No control calls this any more. It stays because an own send does — see
+    /// ``ChannelTimelineModel/jumpToLatestIfNeeded()`` — and because it is where a press
+    /// that raced the reader back to the bottom lands.
+    @Test("a jump to the newest message goes to the bottom and releases the freeze")
     func latestGoesToTheBottom() async throws {
         let temp = TempStore()
         defer { temp.remove() }
@@ -119,7 +111,6 @@ struct ConversationJumpTests {
         let model = ChannelTimelineModel(channel: "room-1", store: store, sender: StubSender())
         model.primeIfNeeded()
         model.isAtBottom = false
-        model.jump.isFarFromBottom = true
 
         model.jumpToLatest()
         #expect(model.jumpTarget == .bottom)
