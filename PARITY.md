@@ -38,8 +38,8 @@ This is the living checklist for the headline milestone: feature parity with the
 | Pulse | `pulse` | ☐ | |
 | Custom emoji | `custom_emoji` | ☐ | Unicode emoji only |
 | Media upload | — | ☐ | Composer `+` is a placeholder; no attachments and no inline media |
-| Presence | — | ✅ | Live dots in rows, sidebar and DM heading; own heartbeat published |
-| Typing indicators | — | ✅ | Shown above the composer; own typing throttled |
+| Presence | — | ✅ | Live dots on message rows, direct-message sidebar rows, the DM heading and the member sheet; own heartbeat published. Channel rows carry none — presence is a fact about a person |
+| Typing indicators | — | ✅ | A glass pill over the conversation, just above the composer. Scoped like Desktop's: a channel and each of its threads are separate audiences, and both surfaces publish their own. An arriving message ends its author's typing rather than leaving it to lapse |
 | Message edits (kind:40003) and deletions | `channels` | ◐ | Both are projected and rendered when they arrive; the app can author neither. The menu's Delete discards an own message still in the outbox |
 | Rich content rendering (kind:40002) | `channels`/`forum` | ◐ | Headings, paragraphs, quotes, fenced code, nested lists, GFM tables (scrolled horizontally, never clipped), thematic rules, task/radio items, bold/italic/strike/code/`<u>`, plus interactive mentions, channel mentions, URLs, emails and `buzz://message` links. Not rendered: inline images/video (see *Media upload*), LaTeX, and upstream's `[1]` citation badge — the badge would eat `list[0]` in ordinary text |
 | Link previews | — | ◐ | A compact card under the message for each link it points at, capped at four: GitHub pull requests, issues and repositories, Linear issues and Google Docs/Sheets/Slides/Drive files by name, every other URL by host and path. Desktop's parsing rules exactly (`desktop/src/shared/lib/linkPreview.ts`), so the same message cards identically on both. Every word comes from the URL; the only fetch is the site's `/favicon.ico`. Not done: Desktop's authenticated title lookup for Google files, which returns a sign-in page unauthenticated |

@@ -59,12 +59,18 @@ struct ChannelRowView: View {
         .accessibilityValue(isOnline ? "Online" : "")
     }
 
-    /// A channel shows its glyph; a direct message shows who it is with.
+    /// A channel shows its glyph; a direct message shows who it is with, and whether
+    /// they are online.
+    ///
+    /// The dot is on the faces and on nothing else. Presence is a fact about a *person*,
+    /// and a channel's dot could only ever mean "somebody in here is online" — which in a
+    /// workspace whose agents hold a heartbeat is every channel, all the time, so the
+    /// list read as a column of green that distinguished nothing.
     @ViewBuilder
     private var leading: some View {
         switch row.conversation.kind {
         case .channel:
-            channelGlyph.overlay(alignment: .bottomTrailing) { presenceDot }
+            channelGlyph
         case .direct, .agent:
             AvatarView(
                 url: row.conversation.picture,
@@ -99,13 +105,11 @@ struct ChannelRowView: View {
         }
     }
 
-    /// A direct message is online when its peer is; a channel when anyone in its roster
-    /// is. One derivation, from the roster the shared directory already resolved.
+    /// Whether this row's peer is online. Only a direct message has one; a channel is
+    /// never "online", which is why nothing here folds in ``SidebarRow/members``.
     private var isOnline: Bool {
-        if let peer = row.conversation.peer {
-            return presence.isOnline(peer)
-        }
-        return !row.members.isDisjoint(with: presence.online)
+        guard let peer = row.conversation.peer else { return false }
+        return presence.isOnline(peer)
     }
 
     /// A spoken summary that folds the indicator in, so VoiceOver announces "2 mentions"

@@ -29,25 +29,31 @@ public extension PresenceStore {
         presenceSnapshotNow()
     }
 
-    // MARK: - Typing (per channel)
+    // MARK: - Typing (per channel, per thread)
 
-    /// A live feed of who is typing in one channel, seeded with the current snapshot.
-    /// Pubkeys are ordered, so two equal typer sets compare equal.
-    func typing(in channel: String) -> AsyncStream<[String]> {
+    /// A live feed of who is typing, seeded with the current snapshot. Pubkeys are
+    /// ordered and distinct, so two equal typer sets compare equal.
+    ///
+    /// `thread` names a thread root to listen to, and that feed carries only the people
+    /// writing in that thread. Omitted, the feed is the whole channel — everyone writing
+    /// anywhere in it, its threads included. The asymmetry is the point: see the note on
+    /// ``PresenceStore/TypingAudience``.
+    func typing(in channel: String, thread: String? = nil) -> AsyncStream<[String]> {
+        let audience = Self.audience(channel: channel, thread: thread)
         let (stream, continuation) = AsyncStream.makeStream(of: [String].self)
         let id = nextObserverID
         nextObserverID += 1
-        typingObservers[channel, default: [:]][id] = continuation
-        continuation.yield(typingSnapshotNow(channel))
+        typingObservers[audience, default: [:]][id] = continuation
+        continuation.yield(typingSnapshotNow(audience))
         continuation.onTermination = { [weak self] _ in
-            Task { await self?.removeTypingObserver(id, channel: channel) }
+            Task { await self?.removeTypingObserver(id, audience: audience) }
         }
         return stream
     }
 
-    /// The current typers in a channel, lapsed records already excluded.
-    func typingSnapshot(in channel: String) -> [String] {
-        typingSnapshotNow(channel)
+    /// The current typers for one audience, lapsed records already excluded.
+    func typingSnapshot(in channel: String, thread: String? = nil) -> [String] {
+        typingSnapshotNow(Self.audience(channel: channel, thread: thread))
     }
 }
 
@@ -66,22 +72,43 @@ extension PresenceStore {
         }
     }
 
-    /// Evicts lapsed typers for one channel, then yields a fresh typer list to its
-    /// observers only if it differs from the last one published.
-    func publishTyping(_ channel: String) {
-        evictTyping(channel)
-        let snapshot = typingSnapshotNow(channel)
-        let previous = lastPublishedTyping[channel] ?? []
+    /// Evicts lapsed typers in the scopes that changed, then yields a fresh typer list to
+    /// every audience those scopes belong to — the threads themselves and the channels
+    /// containing them.
+    ///
+    /// Takes the whole set rather than one scope at a time because two touched scopes in
+    /// one channel share that channel's audience, and publishing per scope would yield to
+    /// it twice for one batch.
+    func publishTyping(_ scopes: Set<TypingScope>) {
+        guard !scopes.isEmpty else { return }
+        for scope in scopes { evictTyping(scope) }
+        var audiences: Set<TypingAudience> = []
+        for scope in scopes { audiences.formUnion(TypingAudience.containing(scope)) }
+        for audience in audiences { publish(audience) }
+    }
+
+    /// Yields one audience's current typers to its observers, but only if the list
+    /// differs from the last one published to it.
+    private func publish(_ audience: TypingAudience) {
+        let snapshot = typingSnapshotNow(audience)
+        let previous = lastPublishedTyping[audience] ?? []
         guard previous != snapshot else { return }
         if snapshot.isEmpty {
-            lastPublishedTyping.removeValue(forKey: channel)
+            lastPublishedTyping.removeValue(forKey: audience)
         } else {
-            lastPublishedTyping[channel] = snapshot
+            lastPublishedTyping[audience] = snapshot
         }
-        guard let observers = typingObservers[channel] else { return }
+        guard let observers = typingObservers[audience] else { return }
         for continuation in observers.values {
             continuation.yield(snapshot)
         }
+    }
+
+    /// The audience a `(channel, thread)` pair names: one thread when a root is given,
+    /// the whole channel when none is.
+    static func audience(channel: String, thread: String?) -> TypingAudience {
+        guard let thread else { return .channel(channel) }
+        return .thread(TypingScope(channel: channel, thread: thread))
     }
 
     // MARK: - Snapshots
@@ -96,13 +123,16 @@ extension PresenceStore {
             .sorted { $0.pubkey < $1.pubkey }
     }
 
-    /// The live typers in one channel, lapsed records excluded, ordered by pubkey.
-    func typingSnapshotNow(_ channel: String) -> [String] {
+    /// The live typers one audience hears, lapsed records excluded, ordered by pubkey.
+    ///
+    /// Distinct: a channel's audience spans its threads, and one person can be writing in
+    /// two of them at once — which is one person typing, not two.
+    func typingSnapshotNow(_ audience: TypingAudience) -> [String] {
         let cutoff = now()
-        return typingRecords
-            .filter { $0.key.channel == channel && $0.value.deadline > cutoff }
+        let pubkeys = typingRecords
+            .filter { audience.admits($0.key.scope) && $0.value.deadline > cutoff }
             .map(\.value.pubkey)
-            .sorted()
+        return Set(pubkeys).sorted()
     }
 
     // MARK: - Eviction
@@ -112,10 +142,10 @@ extension PresenceStore {
         presenceRecords = presenceRecords.filter { $0.value.deadline > cutoff }
     }
 
-    func evictTyping(_ channel: String) {
+    func evictTyping(_ scope: TypingScope) {
         let cutoff = now()
         typingRecords = typingRecords.filter { key, record in
-            key.channel != channel || record.deadline > cutoff
+            key.scope != scope || record.deadline > cutoff
         }
     }
 
@@ -125,10 +155,10 @@ extension PresenceStore {
         presenceObservers.removeValue(forKey: id)
     }
 
-    func removeTypingObserver(_ id: Int, channel: String) {
-        typingObservers[channel]?.removeValue(forKey: id)
-        if typingObservers[channel]?.isEmpty == true {
-            typingObservers.removeValue(forKey: channel)
+    func removeTypingObserver(_ id: Int, audience: TypingAudience) {
+        typingObservers[audience]?.removeValue(forKey: id)
+        if typingObservers[audience]?.isEmpty == true {
+            typingObservers.removeValue(forKey: audience)
         }
     }
 }

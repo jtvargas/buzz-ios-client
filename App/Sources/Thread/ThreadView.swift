@@ -19,6 +19,9 @@ struct ThreadView: View {
     /// The same workspace roster the channel timeline reads, so a reply's presence dot
     /// and the profile sheet this view presents agree with the row that pushed it.
     @State private var presence: PresenceModel
+    /// Who is typing *in this thread*. A second model rather than a shared one: the
+    /// channel's and the thread's are different audiences — see ``ChannelTypingModel``.
+    @State private var typing: ChannelTypingModel
     /// Whose profile is open, if anyone's — set by a tap on a reply's avatar or name.
     @State private var profilePeer: ProfilePeer?
     /// The reply whose actions sheet is open, if any — set by a long press on a row.
@@ -63,6 +66,7 @@ struct ThreadView: View {
             sender: engine,
             opener: engine,
             presence: engine.presenceStore,
+            typing: engine,
             selfPubkey: selfPubkey,
             landingOn: landing,
             focusingComposer: focusesComposer
@@ -87,6 +91,7 @@ struct ThreadView: View {
         sender: any MessageSending,
         opener: any ThreadOpening,
         presence: PresenceStore,
+        typing: any EphemeralPublishing = NoopEphemeralPublisher(),
         selfPubkey: String?,
         landingOn landing: ThreadLanding = .latestReply,
         focusingComposer focusesComposer: Bool = false
@@ -100,9 +105,16 @@ struct ThreadView: View {
             store: store,
             sender: sender,
             opener: opener,
+            typing: typing,
             selfPubkey: selfPubkey
         ))
         _presence = State(initialValue: PresenceModel(store: presence))
+        _typing = State(initialValue: ChannelTypingModel(
+            channel: channel,
+            thread: root,
+            store: presence,
+            selfPubkey: selfPubkey
+        ))
     }
 
     var body: some View {
@@ -237,6 +249,11 @@ struct ThreadView: View {
                 document: $model.mentionDraft,
                 autocomplete: model.mentionAutocomplete
             )
+            // Scoped to this thread's root, so it says who is writing *here* — and says
+            // nothing about the channel's other traffic, which a reader inside a thread
+            // cannot see and did not ask about. The channel's own strip is the wide one:
+            // it covers its threads, because from there they are not distinguishable.
+            TypingIndicatorView(model: typing, nameFor: names.name(for:))
         }
     }
 
@@ -304,8 +321,8 @@ struct ThreadView: View {
 }
 
 /// The reply composer: a Liquid Glass capsule field and a prominent send button, the
-/// same treatment as the channel composer. Typing is signalled at the channel level,
-/// so this composer does not publish its own typing.
+/// same treatment as the channel composer — and, since Part 14, the same typing publish,
+/// scoped to this thread rather than to the channel around it.
 private struct ThreadComposerView: View {
     @Bindable var model: ThreadModel
 
@@ -315,6 +332,7 @@ private struct ThreadComposerView: View {
             autocomplete: model.mentionAutocomplete,
             placeholder: "Reply",
             sendAccessibilityLabel: "Send reply",
+            onTextChange: model.handleTyping,
             onSend: model.sendReply
         )
         .alert(

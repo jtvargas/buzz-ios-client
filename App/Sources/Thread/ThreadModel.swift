@@ -88,6 +88,17 @@ final class ThreadModel {
     private let store: BuzzEventStore
     private let sender: any MessageSending
     private let opener: any ThreadOpening
+    /// Where own typing goes. Internal for the same reason the channel timeline's is:
+    /// the publish itself lives in `ThreadModel+Typing.swift`.
+    let typing: any EphemeralPublishing
+    /// The minimum gap between own-typing publishes. The channel's number — a peer's
+    /// indicator lapses after 8 s, so anything under that keeps it alive without
+    /// publishing on every keystroke.
+    let typingThrottle: Duration
+    /// The monotonic clock the throttle measures against, injected so a test drives it.
+    let clock: @Sendable () -> ContinuousClock.Instant
+    /// When own typing was last published. Not observable: nothing renders it.
+    @ObservationIgnored var lastTypingPublish: ContinuousClock.Instant?
     /// The local identity's hex pubkey, for own-reaction highlighting and delete.
     let selfPubkey: String?
 
@@ -108,13 +119,19 @@ final class ThreadModel {
         store: BuzzEventStore,
         sender: any MessageSending,
         opener: any ThreadOpening,
-        selfPubkey: String?
+        typing: any EphemeralPublishing = NoopEphemeralPublisher(),
+        selfPubkey: String?,
+        typingThrottle: Duration = .seconds(3),
+        clock: @escaping @Sendable () -> ContinuousClock.Instant = { ContinuousClock.now }
     ) {
         self.root = root
         self.channel = channel
         self.store = store
         self.sender = sender
         self.opener = opener
+        self.typing = typing
+        self.typingThrottle = typingThrottle
+        self.clock = clock
         self.selfPubkey = selfPubkey
         mentionAutocomplete = MentionAutocompleteModel(
             channel: channel,

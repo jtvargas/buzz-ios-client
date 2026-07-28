@@ -173,6 +173,33 @@ struct RichTextBlockTests {
 
     // MARK: - Spacing
 
+    // MARK: - The heading ladder
+
+    @Test("each heading level is set larger than the one below it")
+    func headingLadderDescends() {
+        let sizes = (1 ... 6).map { HiveTypography.size(of: RichHeadingView.style($0)) }
+        #expect(sizes == sizes.sorted(by: >))
+        // Strictly: two levels at one size are two levels a reader cannot tell apart,
+        // which is what `###` and `####` both being 17pt used to be.
+        #expect(Set(sizes).count == 6)
+    }
+
+    @Test("the levels a message actually uses are larger than the text they introduce")
+    func headingsOutrankBody() {
+        let body = HiveTypography.size(of: .body)
+        // The regression this ladder exists for: `###` is the level a written-up answer
+        // reaches for most, and it used to be `.headline` — 17pt, body size exactly — so
+        // it read as a bold sentence rather than as a section.
+        for level in 1 ... 3 {
+            #expect(HiveTypography.size(of: RichHeadingView.style(level)) > body)
+        }
+        // Four leans on weight alone at body size, and the last two sit below it: six
+        // hashes is a label, not a heading. What must never happen again is a level in
+        // the first group being smaller than what it introduces.
+        #expect(HiveTypography.size(of: RichHeadingView.style(4)) == body)
+        #expect(HiveTypography.size(of: RichHeadingView.style(6)) < body)
+    }
+
     @Test("a heading takes its space from above and hugs what follows")
     func headingSpacing() {
         let heading = RichBlock.heading(level: 2, AttributedString("H"))

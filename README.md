@@ -50,8 +50,8 @@ What follows describes the app as it is on `main`, not as it is planned. Anythin
 
 **Presence and position**
 
-- **Presence** — a live online dot beside names, in the sidebar, and in a DM's heading.
-- **Typing indicators** above the composer.
+- **Presence** — a live online dot beside names, on a direct message's sidebar row, and in a DM's heading.
+- **Typing indicators** — a pill over the conversation just above the composer, scoped to what you are reading: a thread shows who is writing *in it*, and the channel around it shows who is writing there. It clears when the message lands rather than lingering afterwards.
 - **Cross-device read state** (NIP-RS), encrypted to yourself, so what you have read on the desktop is read here.
 - **Jump controls** — an arrival while you are reading history is held back and counted rather than moving you, and the `N new messages` pill lands you on the *first* of them; `↓ Latest` appears when you are a long way up with nothing new.
 - **Interactive keyboard dismissal** — drag down the message list and the keyboard follows your finger, with the composer staying attached to it. The gesture engages at the composer's top edge rather than the keyboard's, so the list and the composer read as one surface. (A drag that *begins* on the composer itself does not dismiss — see [ADR-0004](docs/adr/0004-conversation-ui-architecture.md) for why that is out of reach.)

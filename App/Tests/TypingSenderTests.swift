@@ -41,6 +41,35 @@ struct TypingSenderTests {
         })
     }
 
+    @Test("a thread's composer publishes typing tagged into its own thread")
+    func threadComposerPublishesIntoItsThread() async throws {
+        let temp = TempStore()
+        defer { temp.remove() }
+        let store = try temp.open()
+        let spy = RecordingEphemeralPublisher()
+        let model = ThreadModel(
+            root: "root-1",
+            channel: "room-1",
+            store: store,
+            sender: StubSender(),
+            opener: StubThreadOpener(store: store, events: []),
+            typing: spy,
+            selfPubkey: nil
+        )
+
+        model.handleTyping("re")
+
+        await waitUntil { await spy.count == 1 }
+        // The `h` scope the relay requires, plus the NIP-10 marker that places the
+        // indicator in this thread — the same shape the reply it precedes will carry, so
+        // a reader in the thread sees it and the channel does not.
+        let publishes = await spy.publishes
+        #expect(publishes.allSatisfy {
+            $0.kind == .typing && $0.content == ""
+                && $0.tags == [["h", "room-1"], ["e", "root-1", "", "reply"]]
+        })
+    }
+
     @Test("empty or whitespace input never publishes typing")
     func emptyNeverPublishes() async throws {
         let temp = TempStore()

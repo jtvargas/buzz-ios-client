@@ -67,6 +67,32 @@ struct TypingSubscriptionTests {
         #expect(await harness.presence.typingSnapshot(in: "room-2").isEmpty)
     }
 
+    @Test("the peer's own message on the same sub ends their typing, without waiting out the TTL")
+    func messageOnTheSubEndsTyping() async throws {
+        let socket = ScriptedRelay()
+        let database = TempDatabase()
+        defer { database.remove() }
+        let harness = try EngineHarness(path: database.path, identity: try PrivateKey(), relays: [socket])
+        let peer = try Fixture()
+
+        try await bootstrap(harness, socket)
+        try await harness.engine.subscribeChannelContent("room-1")
+        let request = await contentREQ(on: socket, channel: "room-1")
+
+        let typing = try peer.event(.typing, "", tags: [["h", "room-1"]], at: 1_700_000_000)
+        await socket.enqueue(EngineFrames.event(request.id, typing))
+        await socket.enqueue(EngineFrames.eose(request.id))
+        await waitUntil { await harness.presence.typingSnapshot(in: "room-1").contains(peer.pubkey) }
+
+        // The message the indicator was announcing. It arrives on the same standing
+        // subscription, and the sink reads it as the end of that typing — the whole
+        // point being that the strip does not sit under the message for another eight
+        // seconds saying it is still being written.
+        let message = try peer.message("here it is", in: "room-1", at: 1_700_000_001)
+        await socket.enqueue(EngineFrames.event(request.id, message))
+        await waitUntil { await harness.presence.typingSnapshot(in: "room-1").isEmpty }
+    }
+
     @Test("openChannelTyping is a shim over the standing content sub — idempotent, same id")
     func openTypingShimReturnsContentSub() async throws {
         let socket = ScriptedRelay()

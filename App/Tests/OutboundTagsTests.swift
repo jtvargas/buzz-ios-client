@@ -45,6 +45,22 @@ struct OutboundTagsTests {
         #expect(event.threadReference.rootID == "ROOT")
     }
 
+    @Test("typing at the channel's own level carries the h scope and no e marker")
+    func channelTyping() throws {
+        #expect(OutboundTags.typing(channel: "room-1", thread: nil) == [["h", "room-1"]])
+    }
+
+    @Test("typing in a thread scopes exactly as the reply it precedes")
+    func threadTyping() throws {
+        let tags = OutboundTags.typing(channel: "room-1", thread: "ROOT")
+        #expect(tags == OutboundTags.reply(channel: "room-1", root: "ROOT", parent: "ROOT"))
+
+        // What a reader's scope resolves to: the thread, not the channel.
+        let event = try signed(.typing, tags: tags)
+        #expect(event.groupID == "room-1")
+        #expect(event.threadReference.rootID == "ROOT")
+    }
+
     @Test("a reaction references only its target, which the projector reads as such")
     func reaction() throws {
         let tags = OutboundTags.reaction(target: "TARGET")

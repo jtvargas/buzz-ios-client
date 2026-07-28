@@ -135,13 +135,10 @@ struct ChannelTimelineView: View {
         ) {
             list
         } bar: {
-            // One bottom bar, not two insets: stacked safe-area insets place the
-            // last-applied one closest to the screen edge, which would put the typing
-            // strip *below* the composer.
-            VStack(spacing: 4) {
-                TypingIndicatorView(model: typing, nameFor: authorName)
-                ComposerView(model: model)
-            }
+            // The composer alone. The typing pill was here, stacked above it, and the
+            // bar's height is the list's bottom inset — so somebody starting to type
+            // re-inset the conversation and moved the reader. It is an accessory now.
+            ComposerView(model: model)
         } accessory: {
             accessory
         }
@@ -282,6 +279,10 @@ struct ChannelTimelineView: View {
                 document: $model.mentionDraft,
                 autocomplete: model.mentionAutocomplete
             )
+            // Last, so it sits closest to the composer — the thing it is about — and so
+            // the suggestion panel, which is the taller and more urgent of the two,
+            // grows upwards away from it rather than pushing it off the bar.
+            TypingIndicatorView(model: typing, nameFor: authorName)
         }
     }
 

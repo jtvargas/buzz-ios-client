@@ -33,6 +33,22 @@ extension SyncEngine: EventSink {
             if !readStateEvents.isEmpty {
                 await applyIncomingReadState(readStateEvents)
             }
+
+            // A message is the end of its author's typing where it landed. Only the
+            // newly-inserted ones: a reconnect replays messages already in the log, and
+            // re-clearing on those would silence an indicator that has since started
+            // again for real. See ``PresenceStore/messagesArrived(_:)``.
+            //
+            // Both message kinds, not just kind 9: a rich message is a message somebody
+            // finished writing too, and a client that publishes them would otherwise
+            // leave its typing to lapse on the clock. An *edit* is deliberately not here
+            // — revising a message says nothing about whether a new one is being written.
+            let messages = batch.filter {
+                ($0.kind == .channelMessage || $0.kind == .richMessage) && insertedIDs.contains($0.id)
+            }
+            if !messages.isEmpty {
+                await presence.messagesArrived(messages)
+            }
         }
 
         // A membership change is group state that does not ride the live fan-out, so

@@ -46,6 +46,18 @@ enum OutboundTags {
         return addingMentions(pubkeys, sender: sender, to: tags)
     }
 
+    /// A typing indicator's tags: the channel `h` scope, and — inside a thread — the
+    /// same NIP-10 markers the reply it precedes will carry.
+    ///
+    /// Deliberately built from ``reply(channel:root:parent:mentioning:sender:)`` rather
+    /// than written out again: an indicator that scoped differently from the message it
+    /// announces would raise the strip in one place and land the reply in another. The
+    /// agent harness builds its own the same way (`buzz-acp`'s `build_typing_event`).
+    static func typing(channel: String, thread root: String?) -> [[String]] {
+        guard let root else { return [["h", channel]] }
+        return reply(channel: channel, root: root, parent: root)
+    }
+
     /// A NIP-25 reaction's tags: a single `e` referencing the target message. The
     /// projector reads the last `e` as the target and the event content as the
     /// emoji, matching `build_reaction`. Bare `["e", target]`, no `h` or `p` — the
