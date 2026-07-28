@@ -29,7 +29,8 @@ Architecture decisions live in [`docs/adr/`](docs/adr/) — read them before pro
 1. Branch from `main`; keep PRs focused.
 2. `make test` (package tests, release config, native on macOS), `make build` (app on simulator), `make lint`. App tests run from Xcode or `xcodebuild test` against an iOS 26 simulator.
 3. CI must be green. Three jobs run on every PR, against the merge ref: **SPM tests** (NostrCore and BuzzKit, release config), **SwiftLint**, and **app tests on an iOS Simulator**. `make format` (SwiftFormat) is available but is *not* a CI gate.
-4. Parity work: check the corresponding row in [PARITY.md](PARITY.md) and the upstream `docs/nips/` spec for the feature.
+4. The **conversation shape gate** (`make uitest`) is not one of them. It drives eight conversation shapes through a real keyboard and takes 10–20 minutes, so it runs by hand rather than on every PR: locally when your work touches the conversation shell, the message list, the composer, or the keyboard — or on a clean machine through the manually-triggered [Conversation UI](.github/workflows/conversation-ui.yml) workflow.
+5. Parity work: check the corresponding row in [PARITY.md](PARITY.md) and the upstream `docs/nips/` spec for the feature.
 
 Package tests run in release configuration on purpose: current toolchains abort `-Onone` runs in the connection suites, an environmental codegen defect. The assertions are the same either way — see the comment in `Makefile` and the non-blocking debug sentinel job in `.github/workflows/ci.yml`.
 
