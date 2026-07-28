@@ -54,11 +54,17 @@ struct MessageMediaViewer: View {
 
     var body: some View {
         GeometryReader { proxy in
-            ZStack {
-                Color.black
+            // The picture runs edge to edge and the button does not. Both children of one
+            // stack, with only the picture ignoring the safe area: an overlay on a view
+            // that has already ignored it inherits the same full-bleed frame, which puts
+            // the button under the clock.
+            ZStack(alignment: .topTrailing) {
+                Color.black.ignoresSafeArea()
                 content
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .ignoresSafeArea()
+                doneButton
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
             // Keyed by the pixel size rather than by the geometry: the target is derived
             // from the screen's *longest* edge, so a rotation cannot change it and cannot
             // re-run a decode that would produce the identical bitmap.
@@ -66,8 +72,6 @@ struct MessageMediaViewer: View {
                 await load(pixelSize: pixelSize(for: proxy.size))
             }
         }
-        .ignoresSafeArea()
-        .overlay(alignment: .topTrailing) { doneButton }
         .preferredColorScheme(.dark)
     }
 }
@@ -126,7 +130,7 @@ private extension MessageMediaViewer {
         .buttonStyle(.glass)
         .accessibilityLabel("Done")
         .padding(.trailing, 16)
-        .padding(.top, 8)
+        .padding(.top, 4)
     }
 }
 
