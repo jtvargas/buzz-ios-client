@@ -243,7 +243,7 @@ struct TimelineRowView: View {
             // One engine for both kind-40002 rich markdown and plain kind-9 content:
             // block layout, safe links, and resolved @mention / #channel tokens, so a
             // message renders identically on every surface (WS-1 #7/#9).
-            RichTextView(text: bodyText, resolver: resolver)
+            RichTextView(text: bodyText, media: row.media, resolver: resolver)
                 // Applied here rather than inside the renderer: it is a property of a
                 // message being read in a timeline, not of the markdown, and the
                 // channel-list snippet wants its single line tight.

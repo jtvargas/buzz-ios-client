@@ -312,9 +312,23 @@ public actor BuzzEventStore {
         }
     }
 
+    /// The stored `tags` JSON as tags again, or none of them when it will not decode.
+    ///
+    /// Shared with the timeline read, which resolves a message's `imeta` attachments from
+    /// the same column: two decoders over one stored shape is two ways for a malformed
+    /// tag array to mean different things on different screens.
+    ///
+    /// Malformed JSON yields `[]` rather than throwing. The column is written by
+    /// ``encodeTags(_:)`` from an already-decoded event, so a failure here means the file
+    /// was corrupted underneath us — and a message that renders without its tags is a
+    /// better answer to that than a read that fails and takes the conversation with it.
+    static func decodeTags(_ json: String) -> [[String]] {
+        (try? JSONDecoder().decode([[String]].self, from: Data(json.utf8))) ?? []
+    }
+
     static func decode(_ row: Row) -> NostrEvent {
         let tagsJSON: String = row["tags"]
-        let tags = (try? JSONDecoder().decode([[String]].self, from: Data(tagsJSON.utf8))) ?? []
+        let tags = decodeTags(tagsJSON)
         return NostrEvent(
             id: row["id"],
             pubkey: row["pubkey"],

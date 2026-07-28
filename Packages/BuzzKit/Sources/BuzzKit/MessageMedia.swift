@@ -10,6 +10,35 @@ import Foundation
 public enum MessageMediaKind: String, Sendable, Hashable, Codable {
     case image
     case video
+
+    /// What a URL is, as far as anything that draws it is concerned, or `nil` when
+    /// nothing here can say.
+    ///
+    /// The MIME type decides when there is one; the path extension decides otherwise.
+    ///
+    /// A declared `video/*` that is not one this app can play resolves to `nil` rather
+    /// than falling through to the extension — the author said what it is, and guessing
+    /// past that from a `.mp4` in the path would be second-guessing the tag.
+    ///
+    /// Public because classification is asked twice, and the second caller is not the
+    /// `imeta` parse: a message's text can place a picture at a URL no tag describes,
+    /// and the renderer has to know what to draw there. The two must agree, so there is
+    /// one of these rather than an app-side copy of the extension list.
+    public init?(url: String, mimeType: String? = nil) {
+        if let mimeType {
+            if mimeType.hasPrefix("image/") { self = .image; return }
+            if mimeType.hasPrefix("video/") {
+                guard mimeType == "video/mp4" else { return nil }
+                self = .video
+                return
+            }
+        }
+        let path = (URL(string: url)?.path ?? url).lowercased()
+        if path.hasSuffix(".mp4") { self = .video; return }
+        let imageExtensions = [".png", ".jpg", ".jpeg", ".gif", ".webp", ".heic", ".bmp"]
+        guard imageExtensions.contains(where: path.hasSuffix) else { return nil }
+        self = .image
+    }
 }
 
 /// One attachment a message carries, as described by its own `imeta` tag (NIP-92).
@@ -98,7 +127,7 @@ public extension MessageMedia {
             }
 
             guard let url = fields["url"], !url.isEmpty, !seen.contains(url) else { continue }
-            guard let kind = classify(url: url, mimeType: fields["m"]) else { continue }
+            guard let kind = MessageMediaKind(url: url, mimeType: fields["m"]) else { continue }
             seen.insert(url)
 
             media.append(
@@ -123,21 +152,5 @@ public extension MessageMedia {
               width.isFinite, height.isFinite
         else { return nil }
         return CGSize(width: width, height: height)
-    }
-
-    /// The MIME type decides when there is one; the path extension decides otherwise.
-    ///
-    /// A declared `video/*` that is not one this app can play resolves to `nil` rather
-    /// than falling through to the extension — the author said what it is, and guessing
-    /// past that from a `.mp4` in the path would be second-guessing the tag.
-    private static func classify(url: String, mimeType: String?) -> MessageMediaKind? {
-        if let mimeType {
-            if mimeType.hasPrefix("image/") { return .image }
-            if mimeType.hasPrefix("video/") { return mimeType == "video/mp4" ? .video : nil }
-        }
-        let path = (URL(string: url)?.path ?? url).lowercased()
-        if path.hasSuffix(".mp4") { return .video }
-        let imageExtensions = [".png", ".jpg", ".jpeg", ".gif", ".webp", ".heic", ".bmp"]
-        return imageExtensions.contains(where: path.hasSuffix) ? .image : nil
     }
 }

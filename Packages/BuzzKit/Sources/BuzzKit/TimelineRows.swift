@@ -4,11 +4,11 @@ import NostrCore
 
 /// Reading particular messages by id, through the timeline's own row query.
 ///
-/// Its own file so ``Timeline.swift`` stays the two paging reads and the query pieces
-/// they share. The pieces themselves — `timelineColumns`, `eventBranch`, `makeRows` — are
-/// internal rather than private for exactly this: a third caller reading the same row
-/// shape must select the same columns and build the same struct, or it is a second
-/// definition of what a message is.
+/// Its own file so ``Timeline.swift`` stays the row shape and the two paging reads. The
+/// pieces this shares with them — `timelineColumns`, `eventBranch`, `makeRows`, in
+/// ``TimelineQuery.swift`` — are internal rather than private for exactly this: a third
+/// caller reading the same row shape must select the same columns and build the same
+/// struct, or it is a second definition of what a message is.
 extension BuzzEventStore {
     /// Particular messages by id, in no guaranteed order.
     ///

@@ -1,3 +1,4 @@
+import BuzzKit
 import SwiftUI
 
 /// How ``RichTextView`` lays a message out.
@@ -67,8 +68,18 @@ struct RichTextView: View {
 
     /// Parses and resolves `text` through the memo, then renders it. The convenience
     /// the timeline uses — a cache hit on a re-render is cheap.
-    init(text: String, resolver: MentionResolver, mode: RichTextRenderMode = .full) {
-        self.init(RichMessageCache.message(for: text, resolver: resolver), mode: mode)
+    ///
+    /// `media` is the row's `imeta` attachments, which describe the URLs the text
+    /// places rather than adding anything to it, and which are part of the memo's key:
+    /// two messages reading `![image](…)` and nothing else have the same text and
+    /// different pictures.
+    init(
+        text: String,
+        media: [MessageMedia] = [],
+        resolver: MentionResolver,
+        mode: RichTextRenderMode = .full
+    ) {
+        self.init(RichMessageCache.message(for: text, media: media, resolver: resolver), mode: mode)
     }
 
     var body: some View {
@@ -193,6 +204,13 @@ private extension RichTextView {
 
         case .rule:
             RichRuleView()
+
+        case .media:
+            // The picture itself arrives with the media renderer. Nothing is drawn until
+            // then — deliberately nothing, rather than a reserved empty box, because a
+            // frame with no content in it reads as a message that failed to load rather
+            // than as one whose renderer has not landed.
+            EmptyView()
         }
     }
 
