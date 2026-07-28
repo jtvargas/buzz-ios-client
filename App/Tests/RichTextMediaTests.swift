@@ -116,8 +116,20 @@ struct RichTextMediaTests {
         )
 
         let attachment = try #require(attached(parsed.first))
-        #expect(attachment.aspectRatio == 16.0 / 9.0)
+        // The declared size, which is what the reservation is actually built from and is
+        // exact: two integers that survive the round trip without arithmetic.
+        #expect(attachment.pixelSize == CGSize(width: 1600, height: 900))
         #expect(attachment.alt == "the release chart")
+
+        // The ratio to a tolerance rather than `== 16.0 / 9.0`. That exact comparison
+        // held locally — `1600.0 / 900.0` and `16.0 / 9.0` are bit-identical here under
+        // both `-Onone` and `-O`, compared by `bitPattern` — and failed twice on CI on
+        // this same commit, printing two values whose descriptions were character for
+        // character the same. I could not account for that difference, and an equality
+        // that depends on it was never the property worth pinning: a reservation cannot
+        // be a unit in the seventeenth significant digit wrong.
+        let ratio = try #require(attachment.aspectRatio)
+        #expect(abs(ratio - 16.0 / 9.0) < 0.000_001)
     }
 
     @Test("an entry naming a different URL describes nothing")
