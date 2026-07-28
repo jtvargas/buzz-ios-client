@@ -98,9 +98,18 @@ enum UnreadIndicator: Hashable, Sendable {
     case unread
     /// How many unread messages mention the local identity: a numeric badge.
     case mention(Int)
+    /// How many unread messages are waiting in a one-to-one conversation: the same badge,
+    /// counting all of them.
+    ///
+    /// A DM has nobody else in it. Every message in one is addressed to you whether or not
+    /// it spells your name, so the mention rule — which exists to pick your messages out of
+    /// a room's traffic — has nothing to pick out and would leave a DM with only a bolded
+    /// name. Separate from ``mention(_:)`` because the two are the same badge saying
+    /// different things, and a screen reader has to say which.
+    case directUnread(Int)
 
-    /// The indicator for a channel's unread count and how many of those unread messages
-    /// address the local identity.
+    /// The indicator for a conversation's unread count and how many of those unread
+    /// messages address the local identity.
     ///
     /// Both numbers come from one ``BuzzKit/ChannelListRow``, counted over the same set
     /// by the same query — so the badge cannot claim more mentions than the row has
@@ -108,8 +117,12 @@ enum UnreadIndicator: Hashable, Sendable {
     /// exactly like a mention in the newest one. (Until Part 6 the answer could only be
     /// read from the *newest* message's `p` tags, so an older unread mention showed as a
     /// plain dot and the badge borrowed the unread count for its number.)
-    static func resolve(unreadCount: Int, mentionCount: Int) -> UnreadIndicator {
+    ///
+    /// - Parameter isDirect: whether this is a one-to-one conversation — with a person or
+    ///   with an agent. Both are rooms of two, so both count every message.
+    static func resolve(unreadCount: Int, mentionCount: Int, isDirect: Bool) -> UnreadIndicator {
         guard unreadCount > 0 else { return .caughtUp }
+        if isDirect { return .directUnread(unreadCount) }
         return mentionCount > 0 ? .mention(mentionCount) : .unread
     }
 
@@ -119,8 +132,10 @@ enum UnreadIndicator: Hashable, Sendable {
     /// The badge's text, capped so a very busy channel never widens the row. `nil` for
     /// the states that draw no badge.
     var badgeText: String? {
-        guard case let .mention(count) = self else { return nil }
-        return count > 99 ? "99+" : "\(count)"
+        switch self {
+        case .caughtUp, .unread: nil
+        case let .mention(count), let .directUnread(count): count > 99 ? "99+" : "\(count)"
+        }
     }
 
     /// The spoken form, folded into the row's combined label so VoiceOver does not
@@ -130,6 +145,7 @@ enum UnreadIndicator: Hashable, Sendable {
         case .caughtUp: nil
         case .unread: "unread"
         case let .mention(count): count == 1 ? "1 mention" : "\(count) mentions"
+        case let .directUnread(count): count == 1 ? "1 new message" : "\(count) new messages"
         }
     }
 }
@@ -207,12 +223,18 @@ struct SidebarContent {
     ) -> SidebarContent {
         var grouped: [SidebarSection: [SidebarRow]] = [:]
         for channel in channels {
+            let conversation = names.conversation(for: channel)
             let row = SidebarRow(
                 channel: channel,
-                conversation: names.conversation(for: channel),
+                conversation: conversation,
                 indicator: .resolve(
                     unreadCount: channel.unreadCount,
-                    mentionCount: channel.unreadMentionCount
+                    mentionCount: channel.unreadMentionCount,
+                    // The one thing that decides which rule a row is counted by, taken from
+                    // the same resolved identity the row is titled and filed by — so a
+                    // conversation cannot be a DM in the sidebar's heading and a channel in
+                    // its badge.
+                    isDirect: conversation.isDirect
                 ),
                 isStarred: starred.contains(channel.id)
             )

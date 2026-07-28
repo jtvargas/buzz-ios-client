@@ -181,18 +181,19 @@ extension SidebarSectionsTests {
 extension SidebarSectionsTests {
     @Test("a bold name for ordinary unread, a numeric badge for the messages addressed to you")
     func unreadVersusMention() {
-        #expect(UnreadIndicator.resolve(unreadCount: 0, mentionCount: 0) == .caughtUp)
+        #expect(UnreadIndicator.resolve(unreadCount: 0, mentionCount: 0, isDirect: false) == .caughtUp)
         // A mention with nothing unread is already read: no indicator at all. The counts
         // come from one query over one set, so this state should not arise — it is
         // resolved rather than trusted, because a badge on a read row is unexplainable.
-        #expect(UnreadIndicator.resolve(unreadCount: 0, mentionCount: 2) == .caughtUp)
-        #expect(UnreadIndicator.resolve(unreadCount: 3, mentionCount: 0) == .unread)
+        #expect(UnreadIndicator.resolve(unreadCount: 0, mentionCount: 2, isDirect: false) == .caughtUp)
+        #expect(UnreadIndicator.resolve(unreadCount: 3, mentionCount: 0, isDirect: false) == .unread)
         // The badge shows the *mention* count, not the unread count it is a subset of.
-        #expect(UnreadIndicator.resolve(unreadCount: 5, mentionCount: 2) == .mention(2))
+        #expect(UnreadIndicator.resolve(unreadCount: 5, mentionCount: 2, isDirect: false) == .mention(2))
 
         #expect(UnreadIndicator.caughtUp.isUnread == false)
         #expect(UnreadIndicator.unread.isUnread)
         #expect(UnreadIndicator.mention(1).isUnread)
+        #expect(UnreadIndicator.directUnread(1).isUnread)
 
         // Only the badge draws a number, and it is capped so a busy channel never
         // widens the row.
@@ -200,11 +201,60 @@ extension SidebarSectionsTests {
         #expect(UnreadIndicator.unread.badgeText == nil)
         #expect(UnreadIndicator.mention(7).badgeText == "7")
         #expect(UnreadIndicator.mention(100).badgeText == "99+")
+        // The same badge, and the same cap: a DM that has been talking all day is a
+        // number, not a wider row.
+        #expect(UnreadIndicator.directUnread(7).badgeText == "7")
+        #expect(UnreadIndicator.directUnread(100).badgeText == "99+")
 
         #expect(UnreadIndicator.caughtUp.accessibilityDescription == nil)
         #expect(UnreadIndicator.unread.accessibilityDescription == "unread")
         #expect(UnreadIndicator.mention(1).accessibilityDescription == "1 mention")
         #expect(UnreadIndicator.mention(2).accessibilityDescription == "2 mentions")
+        // Spoken as what it counts. "3 mentions" on a DM would be a claim about three
+        // messages naming you, which is not what a DM's badge counts.
+        #expect(UnreadIndicator.directUnread(1).accessibilityDescription == "1 new message")
+        #expect(UnreadIndicator.directUnread(3).accessibilityDescription == "3 new messages")
+    }
+
+    @Test("a one-to-one conversation counts every unread message, not just the ones naming you")
+    func directMessagesCountEverything() {
+        // The rule itself: the same counts resolve differently in a room of two, because a
+        // message in one is addressed to you whether or not it says so.
+        #expect(UnreadIndicator.resolve(unreadCount: 3, mentionCount: 0, isDirect: true) == .directUnread(3))
+        // A mention inside a DM changes nothing — the badge already counts that message.
+        #expect(UnreadIndicator.resolve(unreadCount: 3, mentionCount: 1, isDirect: true) == .directUnread(3))
+        // And a DM with nothing unread is still caught up.
+        #expect(UnreadIndicator.resolve(unreadCount: 0, mentionCount: 0, isDirect: true) == .caughtUp)
+    }
+
+    @Test("the badge follows the row's kind: every message in a DM or an agent DM, mentions in a channel")
+    func indicatorFollowsConversationKind() {
+        let rows = [
+            channel("dm", lastMessageAt: 3_000, unreadCount: 4),
+            channel("agent-dm", lastMessageAt: 2_500, unreadCount: 2),
+            channel("general", name: "General", lastMessageAt: 2_000, unreadCount: 4),
+        ]
+        let resolver = names(
+            entities: [
+                DirectoryEntity(pubkey: me, profileName: "Me"),
+                DirectoryEntity(pubkey: peer, profileName: "Peer"),
+                DirectoryEntity(pubkey: agent, agentName: "Jarvis", isAgent: true),
+            ],
+            // A two-member roster including the reader is what makes a conversation a DM —
+            // the same derivation the title and the section come from.
+            rosters: ["dm": [me, peer], "agent-dm": [me, agent], "general": [me, peer, other]],
+            channels: rows,
+            selfPubkey: me
+        )
+
+        let byID = Dictionary(uniqueKeysWithValues: build(rows, names: resolver)
+            .sections.flatMap(\.rows).map { ($0.id, $0.indicator) })
+        #expect(byID["dm"] == .directUnread(4))
+        // An agent DM is a room of two as well, and reads the same way.
+        #expect(byID["agent-dm"] == .directUnread(2))
+        // Unchanged where the rule still means something: four unread in a channel that
+        // never named you is a bold name and no badge.
+        #expect(byID["general"] == .unread)
     }
 
     @Test("the indicator is the row's own unread and mention counts, not a guess from one message")
