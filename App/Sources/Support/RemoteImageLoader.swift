@@ -2,7 +2,7 @@ import CryptoKit
 import ImageIO
 import UIKit
 
-/// Loads, downsamples, caches, and de-duplicates avatar image requests.
+/// Loads, downsamples, caches, and de-duplicates remote image requests.
 ///
 /// An actor so the caches and the in-flight table are mutated without a lock, and so a
 /// burst of rows asking for the same artwork while scrolling shares one fetch and one
@@ -16,8 +16,21 @@ import UIKit
 ///   the length of a network round trip, a percent-decode of the whole payload, and an
 ///   ImageIO or Core Graphics raster.
 /// - Cache *hits* never reach the actor at all — see ``cachedImage(for:pixelSize:)``.
-actor AvatarLoader {
-    static let shared = AvatarLoader()
+///
+/// # Why there is more than one of these
+///
+/// The pipeline is shared; the *budget* is not. An avatar decodes to a 34-pt tile —
+/// ~13 KB of bitmap — and a screen holds a dozen of them. A message picture decodes to
+/// the 320×240-pt box ``MessageMediaLayout`` reserves, which on a 3× screen is ~2.7 MB,
+/// two hundred times as much. Sharing one cost-bounded cache between them means one
+/// scroll through a picture-heavy channel evicts every face in the conversation, and the
+/// avatars then re-decode on the way back. So each caller owns an instance with a cache
+/// sized for what it stores — ``shared`` for avatars, ``messageMedia`` for attachments —
+/// and they share every line of the fetch, downsample, de-duplication and negative-cache
+/// logic below.
+actor RemoteImageLoader {
+    /// The loader avatars are drawn through: many small tiles, a small budget.
+    static let shared = RemoteImageLoader()
 
     /// Decoded images, keyed by source identity and target pixel size.
     ///
@@ -25,17 +38,17 @@ actor AvatarLoader {
     /// actor can peek synchronously while rendering. That peek is the difference between a
     /// row scrolling back in showing its picture immediately and showing one frame of
     /// monogram first, because `.task` runs *after* the frame it was attached to.
-    private nonisolated let cache: AvatarImageCache
+    private nonisolated let cache: RemoteImageCache
     private var inFlight: [String: Task<Outcome, Never>] = [:]
-    private var failures = AvatarFailureCache()
+    private var failures = RemoteImageFailureCache()
     private let session: URLSession
 
-    init(session: URLSession = AvatarLoader.makeSession(), cache: AvatarImageCache = AvatarImageCache()) {
+    init(session: URLSession = RemoteImageLoader.makeSession(), cache: RemoteImageCache = RemoteImageCache()) {
         self.session = session
         self.cache = cache
     }
 
-    /// The session avatars are fetched on.
+    /// The session images are fetched on.
     ///
     /// `URLCache.shared` is left in place — the relay serves media as
     /// `cache-control: public, max-age=31536000, immutable`, so the URL loading system
@@ -62,7 +75,7 @@ actor AvatarLoader {
         /// media is the *thumbnail* whenever one was tried. Carried so the failure is
         /// remembered against the thing that failed rather than against the original it
         /// was derived from, which is fetched at other sizes and may be perfectly good.
-        case failed(AvatarFailureCache.Reason, url: URL)
+        case failed(RemoteImageFailureCache.Reason, url: URL)
 
         /// The image, if there is one. Failures are filed by whichever caller started the
         /// attempt, so a caller that merely joined one in flight needs only this.
@@ -74,16 +87,16 @@ actor AvatarLoader {
         }
     }
 
-    /// The already-decoded avatar for `url` at `pixelSize`, without suspending.
+    /// The already-decoded image for `url` at `pixelSize`, without suspending.
     ///
     /// `nonisolated` and synchronous on purpose: a view's `body` can consult it while
-    /// laying out, so an avatar that is already in memory is drawn in the same frame the
+    /// laying out, so artwork that is already in memory is drawn in the same frame the
     /// row appears in rather than one frame later.
     nonisolated func cachedImage(for url: URL, pixelSize: CGFloat) -> UIImage? {
         cache.image(forKey: Self.cacheKey(url: url, pixelSize: pixelSize))
     }
 
-    /// The downsampled avatar for `url` at `pixelSize`: from cache when present, otherwise
+    /// The downsampled image for `url` at `pixelSize`: from cache when present, otherwise
     /// fetched and decoded once even under concurrent callers, and `nil` when there is no
     /// image to be had.
     func image(for url: URL, pixelSize: CGFloat) async -> UIImage? {
@@ -153,12 +166,12 @@ actor AvatarLoader {
 
 // MARK: - Keys
 
-extension AvatarLoader {
-    /// A short, stable identity for an avatar source.
+extension RemoteImageLoader {
+    /// A short, stable identity for an image source.
     ///
     /// `absoluteString` is the obvious answer, and is exactly what an `https://` URL uses.
     /// A `data:` URI, though, *is* its own payload and may run to megabytes, so using it
-    /// verbatim would park a copy of every inline avatar's bytes in the key tables of both
+    /// verbatim would park a copy of every inline payload's bytes in the key tables of both
     /// caches. Data URIs are therefore identified by a digest of the URI: short,
     /// collision-free in practice, and stable across launches.
     nonisolated static func identity(of url: URL) -> String {
@@ -173,7 +186,7 @@ extension AvatarLoader {
     /// calls, each parsing a format string and allocating, then an array and a join, for
     /// ~0.2 ms regardless of how large the payload being digested was. This runs on the
     /// main actor inside a view's `body` (``cachedImage(for:pixelSize:)``) on every pass
-    /// for a `data:` avatar that is not in the cache, so it is worth not spending.
+    /// for a `data:` source that is not in the cache, so it is worth not spending.
     private nonisolated static func hexadecimal(_ digest: SHA256.Digest) -> String {
         var text = ""
         text.reserveCapacity(SHA256.Digest.byteCount * 2)
@@ -199,7 +212,7 @@ extension AvatarLoader {
 
 // MARK: - Resolving
 
-extension AvatarLoader {
+extension RemoteImageLoader {
     /// The image `url` resolves to: a `data:` URI's own payload, or a fetch of the relay's
     /// thumbnail falling back to the original.
     ///
@@ -229,7 +242,7 @@ extension AvatarLoader {
 
 // MARK: - Fetching
 
-extension AvatarLoader {
+extension RemoteImageLoader {
     /// Fetches and decodes, preferring the relay's thumbnail and falling back to the
     /// original exactly once.
     ///
@@ -279,7 +292,7 @@ extension AvatarLoader {
 
 // MARK: - Decoding
 
-extension AvatarLoader {
+extension RemoteImageLoader {
     /// The image a `data:` payload decodes to.
     ///
     /// ImageIO for raster mediatypes, and the bounded SVG tile renderer for
@@ -332,14 +345,14 @@ extension AvatarLoader {
     }
 }
 
-/// A thread-safe, cost-bounded store of decoded avatars.
+/// A thread-safe, cost-bounded store of decoded images.
 ///
 /// `NSCache` is documented as safe to add to, remove from, and query from several threads
 /// without taking a lock, and it evicts under memory pressure on its own. It is not marked
 /// `Sendable`, so the `@unchecked` conformance here asserts exactly that documented
-/// guarantee and nothing more — which is what lets ``AvatarLoader`` hold this
+/// guarantee and nothing more — which is what lets ``RemoteImageLoader`` hold this
 /// `nonisolated` and answer cache hits without a hop.
-final class AvatarImageCache: @unchecked Sendable {
+final class RemoteImageCache: @unchecked Sendable {
     private let cache = NSCache<NSString, UIImage>()
 
     /// - Parameters:

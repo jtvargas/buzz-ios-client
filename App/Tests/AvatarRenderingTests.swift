@@ -42,7 +42,7 @@ extension AvatarRenderingTests {
         let data = Self.pngData(size: 1254)
         #expect(data.count > 1000)
 
-        let thumbnail = try #require(AvatarLoader.downsample(data, maxPixelSize: 108))
+        let thumbnail = try #require(RemoteImageLoader.downsample(data, maxPixelSize: 108))
         #expect(thumbnail.size == CGSize(width: 108, height: 108))
         // The point of the exercise: the decoded bitmap is the tile, not the source. A
         // 1254-square would be 6.3 MB; this is 47 KB.
@@ -52,18 +52,18 @@ extension AvatarRenderingTests {
 
     @Test("a source smaller than the request is not upscaled")
     func doesNotUpscale() throws {
-        let thumbnail = try #require(AvatarLoader.downsample(Self.pngData(size: 64), maxPixelSize: 320))
+        let thumbnail = try #require(RemoteImageLoader.downsample(Self.pngData(size: 64), maxPixelSize: 320))
         #expect(thumbnail.size == CGSize(width: 64, height: 64))
     }
 
     @Test("bytes no decoder can read produce nil, including the relay's 404 body")
     func rejectsUndecodableBytes() {
-        #expect(AvatarLoader.downsample(Data(), maxPixelSize: 108) == nil)
-        #expect(AvatarLoader.downsample(Data(#"{"error":"not_found"}"#.utf8), maxPixelSize: 108) == nil)
-        #expect(AvatarLoader.downsample(Data([0xDE, 0xAD, 0xBE, 0xEF]), maxPixelSize: 108) == nil)
+        #expect(RemoteImageLoader.downsample(Data(), maxPixelSize: 108) == nil)
+        #expect(RemoteImageLoader.downsample(Data(#"{"error":"not_found"}"#.utf8), maxPixelSize: 108) == nil)
+        #expect(RemoteImageLoader.downsample(Data([0xDE, 0xAD, 0xBE, 0xEF]), maxPixelSize: 108) == nil)
         // The diagnosis in one assertion: ImageIO ships no SVG decoder, so the owner's
         // avatar is invisible to this path no matter how it is delivered.
-        #expect(AvatarLoader.downsample(Self.ownerSVG, maxPixelSize: 108) == nil)
+        #expect(RemoteImageLoader.downsample(Self.ownerSVG, maxPixelSize: 108) == nil)
     }
 }
 

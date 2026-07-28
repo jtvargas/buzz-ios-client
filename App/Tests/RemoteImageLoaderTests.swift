@@ -9,8 +9,8 @@ import UIKit
 /// nothing here touches a network — but the *decisions* under test (prefer the thumbnail,
 /// fall back once, then stop asking) are exactly the ones that only show up in request
 /// traffic.
-@Suite("Avatar loader")
-struct AvatarLoaderTests {
+@Suite("Remote image loader")
+struct RemoteImageLoaderTests {
     static let digest = "d30e51a434671057056169000e6c181056fc4c63232056eeda5cc7094189828e"
 
     static var originalPath: String { "/media/\(digest).png" }
@@ -18,12 +18,12 @@ struct AvatarLoaderTests {
 
     /// A loader whose session answers only from the stub, and whose caches start empty so
     /// one test's hit cannot become another's.
-    static func makeLoader() -> AvatarLoader {
+    static func makeLoader() -> RemoteImageLoader {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [StubAvatarProtocol.self]
-        return AvatarLoader(
+        return RemoteImageLoader(
             session: URLSession(configuration: configuration),
-            cache: AvatarImageCache()
+            cache: RemoteImageCache()
         )
     }
 
@@ -34,7 +34,7 @@ struct AvatarLoaderTests {
 
 // MARK: - Fetch strategy
 
-extension AvatarLoaderTests {
+extension RemoteImageLoaderTests {
     @Test("a small avatar is fetched from the thumbnail, and the original is never asked for")
     func prefersThumbnail() async throws {
         let host = "prefers-thumb" + StubAvatarProtocol.hostSuffix
@@ -84,7 +84,7 @@ extension AvatarLoaderTests {
 
 // MARK: - Failure suppression
 
-extension AvatarLoaderTests {
+extension RemoteImageLoaderTests {
     @Test("a source that 404s is not requested again on the next pass")
     func remembersNotFound() async throws {
         let host = "all-missing" + StubAvatarProtocol.hostSuffix
@@ -162,7 +162,7 @@ extension AvatarLoaderTests {
 
 // MARK: - Data URIs
 
-extension AvatarLoaderTests {
+extension RemoteImageLoaderTests {
     @Test("the owner's SVG avatar resolves through the loader without a request")
     func resolvesInlineSVG() async throws {
         let host = "inline" + StubAvatarProtocol.hostSuffix
@@ -187,22 +187,22 @@ extension AvatarLoaderTests {
     func decodesRasterAndRejectsGarbage() throws {
         let png = AvatarRenderingTests.pngData(size: 256).base64EncodedString()
         let raster = try #require(DataURI(string: "data:image/png;base64,\(png)"))
-        let image = try #require(AvatarLoader.decode(raster, pixelSize: 108))
+        let image = try #require(RemoteImageLoader.decode(raster, pixelSize: 108))
         #expect(image.size == CGSize(width: 108, height: 108))
 
         let svg = try #require(DataURI(string: AvatarSourceTests.ownerAvatar))
-        #expect(AvatarLoader.decode(svg, pixelSize: 108) != nil)
+        #expect(RemoteImageLoader.decode(svg, pixelSize: 108) != nil)
 
         // A mediatype that lies about raster bytes still renders, because the payload
         // sniffs as XML.
         let mislabelled = try #require(DataURI(string: "data:image/png,%3Csvg%20viewBox%3D" +
             "%220%200%208%208%22%3E%3Crect%20width%3D%228%22%20height%3D%228%22%20" +
             "fill%3D%22%23000%22%2F%3E%3C%2Fsvg%3E"))
-        #expect(AvatarLoader.decode(mislabelled, pixelSize: 32) != nil)
+        #expect(RemoteImageLoader.decode(mislabelled, pixelSize: 32) != nil)
 
         // Eight bytes of 'A' are not an image and do not sniff as XML.
         let broken = try #require(DataURI(string: "data:image/png;base64,QUFBQUFBQUE="))
-        #expect(AvatarLoader.decode(broken, pixelSize: 108) == nil)
+        #expect(RemoteImageLoader.decode(broken, pixelSize: 108) == nil)
     }
 
     @Test("a data URI resolves through the same off-actor path a fetch does")
@@ -216,7 +216,7 @@ extension AvatarLoaderTests {
         // One entry point for both kinds of source, and it is `nonisolated async` — which is
         // what keeps a four-megabyte URI's percent-decode and raster off the loader, where it
         // was a head-of-line block for every other avatar on screen.
-        let outcome = await AvatarLoader.resolve(
+        let outcome = await RemoteImageLoader.resolve(
             url,
             thumbnail: nil,
             pixelSize: 108,
@@ -232,7 +232,7 @@ extension AvatarLoaderTests {
         // A payload nothing can read fails against the URI itself, which is the only URL
         // there was to attempt.
         let brokenURL = try #require(URL(string: "data:image/png;base64,QUFBQUFBQUE="))
-        let failure = await AvatarLoader.resolve(
+        let failure = await RemoteImageLoader.resolve(
             brokenURL,
             thumbnail: nil,
             pixelSize: 108,
@@ -248,10 +248,10 @@ extension AvatarLoaderTests {
 
     @Test("the XML sniff only fires for documents that open like one")
     func sniffsXML() {
-        #expect(AvatarLoader.looksLikeXML(Data("<svg/>".utf8)))
-        #expect(AvatarLoader.looksLikeXML(Data("  \n<?xml version='1.0'?>".utf8)))
-        #expect(AvatarLoader.looksLikeXML(Data("<html/>".utf8)) == false)
-        #expect(AvatarLoader.looksLikeXML(Data()) == false)
-        #expect(AvatarLoader.looksLikeXML(Data([0x89, 0x50, 0x4E, 0x47])) == false)
+        #expect(RemoteImageLoader.looksLikeXML(Data("<svg/>".utf8)))
+        #expect(RemoteImageLoader.looksLikeXML(Data("  \n<?xml version='1.0'?>".utf8)))
+        #expect(RemoteImageLoader.looksLikeXML(Data("<html/>".utf8)) == false)
+        #expect(RemoteImageLoader.looksLikeXML(Data()) == false)
+        #expect(RemoteImageLoader.looksLikeXML(Data([0x89, 0x50, 0x4E, 0x47])) == false)
     }
 }
