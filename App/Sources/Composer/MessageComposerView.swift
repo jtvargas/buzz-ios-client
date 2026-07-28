@@ -134,14 +134,7 @@ struct MessageComposerView: View {
             .padding(Self.shellPadding)
             // The *only* glass in this view, now that the two controls have given theirs
             // up — see the note at the top.
-            //
-            // Still plain, not `.interactive()`, and that is a deliberate departure from
-            // WWDC25 323's "for containers with interactive elements, add the interactive
-            // modifier". The material is identical either way; `.interactive()` adds only
-            // the scale, bounce and shimmer, and a surface whose whole middle is a caret
-            // target must not bounce when you tap to place the caret. The controls carry
-            // the reaction instead.
-            .glassEffect(.regular, in: .rect(cornerRadius: Self.cornerRadius))
+            .glassEffect(.regular.interactive(), in: .rect(cornerRadius: Self.cornerRadius))
         }
         // The float: 12pt in from each side, 8pt clear of the bottom.
         .padding(.horizontal, 12)
