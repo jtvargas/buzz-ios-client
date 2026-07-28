@@ -72,9 +72,25 @@ struct RichTextLinkPreviewTests {
         #expect(found.map(\.title) == ["/one", "/two", "/three"])
     }
 
-    @Test("one URL written twice is one card")
+    /// The count is the obvious half. The title is the half that broke: joining runs by
+    /// "the last candidate has this URL" rather than by adjacency splices the two link
+    /// runs — with the words between them dropped — into `https://…/ahttps://…/a`, which
+    /// parses as a URL, differs from the target, and is therefore taken for a label the
+    /// author wrote and printed on the card.
+    @Test("one URL written twice is one card, titled from one of them")
     func duplicateURL() throws {
-        #expect(previewCards("https://example.com/a and again https://example.com/a").count == 1)
+        let found = previewCards("https://example.com/a and again https://example.com/a")
+
+        #expect(found.count == 1)
+        #expect(found.first?.title == "/a")
+    }
+
+    @Test("a link named twice around emphasis keeps each mention whole")
+    func repeatedLinkAroundEmphasis() throws {
+        let found = previewCards("[the **scroll** fix](https://example.com/a) — again: https://example.com/a")
+
+        #expect(found.count == 1)
+        #expect(found.first?.title == "the scroll fix")
     }
 
     /// The shape that actually occurs: named in the sentence, then pasted on its own

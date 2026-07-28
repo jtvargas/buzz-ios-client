@@ -125,21 +125,34 @@ enum RichTextLinkPreview {
         items.flatMap { links(in: $0.content) + links(in: $0.children) }
     }
 
-    /// The links in one inline, consecutive runs sharing a target joined back together.
+    /// The links in one inline, *adjacent* runs sharing a target joined back together.
     ///
     /// The joining is the point: `[**bold** label](url)` is two runs of one link, because
     /// a run boundary falls wherever *any* attribute changes. Read run by run it would
     /// yield two candidates whose labels are each half of the title the author wrote.
+    ///
+    /// Adjacency is what `previous` tracks, and it is load-bearing rather than tidy. Runs
+    /// partition the string, so two runs are adjacent exactly when nothing came between
+    /// them in this loop — and a sentence naming one link twice ("…/a and again …/a") puts
+    /// plain text between two runs carrying the same URL. Comparing against the last
+    /// *candidate* instead would splice those two into `https://…/ahttps://…/a`, which
+    /// parses as a URL, differs from the target, and would therefore be shown as the
+    /// card's title.
     private static func links(in text: AttributedString) -> [Candidate] {
         var candidates: [Candidate] = []
+        var previous: URL?
         for run in text.runs {
-            guard let url = run.link else { continue }
+            guard let url = run.link else {
+                previous = nil
+                continue
+            }
             let piece = String(text[run.range].characters)
-            if let last = candidates.last, last.url == url {
+            if previous == url, let last = candidates.last {
                 candidates[candidates.count - 1] = Candidate(url: url, text: last.text + piece)
             } else {
                 candidates.append(Candidate(url: url, text: piece))
             }
+            previous = url
         }
         return candidates
     }
