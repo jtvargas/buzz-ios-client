@@ -50,9 +50,12 @@ enum RichTextSpacing {
     /// its border should not touch the sentence introducing it — is the same reason a
     /// photograph does. Two attachments in a row then sit at that same gap, which reads
     /// as one set of pictures rather than as two messages.
+    ///
+    /// A link card is the same object again: a bordered rectangle, appended after the
+    /// message, and a stack of them reads as one set of references at this gap.
     private static func isBoxed(_ block: RichBlock) -> Bool {
         switch block {
-        case .code, .table, .media: true
+        case .code, .table, .media, .linkPreview: true
         default: false
         }
     }

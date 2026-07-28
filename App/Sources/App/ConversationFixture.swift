@@ -55,6 +55,12 @@ enum ConversationFixture {
         /// How many messages the first synchronous read finds, with the rest arriving after
         /// the first layout — a thread whose replies land a relay round trip later.
         var primed = Int.max
+        /// Hangs a set of links off the newest message, so the link cards can be looked at.
+        ///
+        /// Off by default and never passed by the scroll suite, deliberately: a card adds
+        /// height to a row, and the shapes are about what a `LazyVStack` estimates. This is
+        /// a way to *see* the cards on a simulator, not a shape.
+        var links = false
 
         /// Parses the arguments the test launched us with, or `nil` for a normal run.
         ///
@@ -76,6 +82,7 @@ enum ConversationFixture {
             if let from = value("longFromEnd") { options.longFromEnd = max(1, from) }
             if let primed = value("primed") { options.primed = max(1, primed) }
             options.spread = arguments.contains("-spread")
+            options.links = arguments.contains("-links")
             return options
         }
     }
@@ -114,7 +121,7 @@ enum ConversationFixture {
             }
             let event = try NostrEvent.signed(
                 kind: .channelMessage,
-                content: body(index: index, lines: lines),
+                content: body(index: index, lines: lines, links: options.links && fromEnd == 1),
                 tags: tags,
                 // Fixed and one minute apart, so day separators and ordering are stable.
                 createdAt: Date(timeIntervalSince1970: TimeInterval(1_700_000_000 + index * 60)),
@@ -133,15 +140,25 @@ enum ConversationFixture {
         1 + (index * 7) % (spread ? 25 : 9)
     }
 
-    private static func body(index: Int, lines: Int) -> String {
-        (0 ..< lines)
+    private static func body(index: Int, lines: Int, links: Bool = false) -> String {
+        let text = (0 ..< lines)
             .map { line in
                 line == 0
                     ? "Message \(index) line 0"
                     : "Message \(index) line \(line) — filler text to give this row a real measured height."
             }
             .joined(separator: "\n")
+        return links ? text + "\n\n" + linkSampler : text
     }
+
+    /// One of each card the renderer can draw: a provider with a real name, an authored
+    /// label over a provider, an ordinary URL with a path, and a bare domain.
+    private static let linkSampler = """
+    https://github.com/jtvargas/buzz-ios-client/pull/61
+    [the scroll fix](https://linear.app/acme/issue/ENG-1421/fix-the-scroll)
+    https://developer.apple.com/documentation/swiftui/scrollposition
+    https://example.com
+    """
 
     // MARK: - Store
 

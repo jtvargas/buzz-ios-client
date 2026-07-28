@@ -166,21 +166,7 @@ private extension RichTextView {
                 .frame(maxWidth: .infinity, alignment: .leading)
 
         case let .heading(level, text):
-            let style = Self.headingStyle(level)
-            VStack(alignment: .leading, spacing: 0) {
-                // Semibold named while the font is built, not a `.fontWeight(.semibold)`
-                // over it: the app's typeface drops a weight asked for by trait, so the
-                // modifier this replaces drew every heading at body weight.
-                RichTextInline.text(text, base: style)
-                    .font(.hive(style, weight: .semibold))
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                // A rule under a level-1 heading and no other, matching upstream's
-                // `autoAddDividerLineAfterH1`. It is what makes a `#` title read as the
-                // top of a document rather than as a slightly larger sentence.
-                if level == 1 {
-                    RichRuleView()
-                }
-            }
+            RichHeadingView(level: level, text: text)
 
         case let .quote(text):
             HStack(alignment: .top, spacing: 8) {
@@ -215,17 +201,14 @@ private extension RichTextView {
             // push the thread behind it, which is the defect the reaction chips'
             // `onOpenPalette` exists to avoid.
             MessageMediaView(media: media, onTap: { claimRowTap?() })
-        }
-    }
 
-    /// The system text style a markdown heading level is set at — a style rather than a
-    /// built font, because the inline pass needs to name a weight against it.
-    static func headingStyle(_ level: Int) -> Font.TextStyle {
-        switch level {
-        case 1: .title2
-        case 2: .title3
-        case 3: .headline
-        default: .subheadline
+        case let .linkPreview(preview):
+            // The surface's own `openURL`, captured above — *not* the flashing wrapper
+            // this view installs below. Handing the card the wrapper would light the
+            // pill on the matching link in the text when the card was pressed, which is
+            // feedback on the wrong object; the card dims itself instead. Either way the
+            // URL travels through the row's arbitrating action, so the tap is claimed.
+            LinkPreviewCardView(preview: preview) { openURL(preview.url) }
         }
     }
 }
