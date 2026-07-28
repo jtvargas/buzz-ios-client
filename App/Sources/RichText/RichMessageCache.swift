@@ -1,15 +1,24 @@
+import BuzzKit
 import Foundation
 
 extension RichMessage {
-    /// Parses `text` into blocks, links what it contains, and resolves its entities
-    /// against `resolver`. The full pipeline, done as one value transform: parse
-    /// (pure) → autolink (pure) → entity pass (pure).
+    /// Parses `text` into blocks, lifts out the pictures it places, links what it
+    /// contains, and resolves its entities against `resolver`. The full pipeline, done as
+    /// one value transform: parse (pure) → media (pure) → autolink (pure) → entity pass
+    /// (pure).
     ///
-    /// Autolinking runs *before* the entity pass, not after, so a detected URL or
+    /// `media` is what the message's `imeta` tags describe, and it *describes* rather
+    /// than contributes: an entry naming a URL the text never places draws nothing. See
+    /// ``RichTextMedia``.
+    ///
+    /// The media stage runs before autolinking so an image node's characters are gone
+    /// before anything can make a second, tappable copy of the picture out of them.
+    /// Autolinking then runs before the entity pass, not after, so a detected URL or
     /// email is already a link by the time `@`/`#` are scanned — which is what stops
     /// `https://host/#anchor` resolving an anchor as a channel reference.
-    static func make(_ text: String, resolver: MentionResolver) -> RichMessage {
-        let blocks = RichTextParser.parse(text).mapInlines(RichTextAutolink.apply)
+    static func make(_ text: String, media: [MessageMedia] = [], resolver: MentionResolver) -> RichMessage {
+        let parsed = RichTextMedia.lift(RichTextParser.parse(text), describedBy: media)
+        let blocks = parsed.mapInlines(RichTextAutolink.apply)
         let resolved = RichTextEntities.resolve(blocks, with: resolver)
         return RichMessage(blocks: resolved)
     }
@@ -19,34 +28,50 @@ extension RichMessage {
 /// long timeline never re-parses or re-resolves the same content: a row that leaves
 /// and re-enters the viewport reuses the message it produced before.
 ///
-/// Keyed on `(resolverIdentity, text)`, not text alone — a profile/roster change or
-/// an identity switch changes the resolver's identity, so the same text re-resolves
-/// instead of serving a stale render. Cheap to get wrong (a text-only key would
-/// freeze a mention's name at first sight); this gets it right.
+/// Keyed on `(resolverIdentity, text, media)`, not text alone — every input to
+/// ``RichMessage/make(_:media:resolver:)`` is in the key, because the memo is only sound
+/// if the key names the whole function's domain.
+///
+/// - A profile/roster change or an identity switch changes the resolver's identity, so
+///   the same text re-resolves instead of serving a stale render. Cheap to get wrong (a
+///   text-only key would freeze a mention's name at first sight).
+/// - The attachments belong in it for a sharper reason: they come from the message's
+///   *tags*, and two different messages routinely share their text. `![image](url)` is
+///   what a composer writes for every upload, so two photos posted with no caption have
+///   byte-identical bodies and different pictures. On a text-only key the second would
+///   be served the first one's — the same wrong picture, from cache, on the surface
+///   where it is least likely to be noticed as a bug and most likely to be somebody
+///   else's photograph.
 @MainActor
 enum RichMessageCache {
-    /// A structured cache key keeps identity and content as separate fields. Message
-    /// text and profile/channel names are untrusted and may contain any scalar, so a
-    /// delimiter-joined string cannot represent the pair without collisions.
+    /// A structured cache key keeps every field separate. Message text, profile and
+    /// channel names, and an attachment's URL and alt are all untrusted and may contain
+    /// any scalar, so a delimiter-joined string cannot represent the tuple without
+    /// collisions.
     private final class Key: NSObject {
         let resolverIdentity: String
         let text: String
+        let media: [MessageMedia]
 
-        init(resolverIdentity: String, text: String) {
+        init(resolverIdentity: String, text: String, media: [MessageMedia]) {
             self.resolverIdentity = resolverIdentity
             self.text = text
+            self.media = media
         }
 
         override var hash: Int {
             var hasher = Hasher()
             hasher.combine(resolverIdentity)
             hasher.combine(text)
+            hasher.combine(media)
             return hasher.finalize()
         }
 
         override func isEqual(_ object: Any?) -> Bool {
             guard let other = object as? Key else { return false }
-            return resolverIdentity == other.resolverIdentity && text == other.text
+            return resolverIdentity == other.resolverIdentity
+                && text == other.text
+                && media == other.media
         }
     }
 
@@ -61,10 +86,14 @@ enum RichMessageCache {
         return cache
     }()
 
-    static func message(for text: String, resolver: MentionResolver) -> RichMessage {
-        let key = Key(resolverIdentity: resolver.identity, text: text)
+    static func message(
+        for text: String,
+        media: [MessageMedia] = [],
+        resolver: MentionResolver
+    ) -> RichMessage {
+        let key = Key(resolverIdentity: resolver.identity, text: text, media: media)
         if let cached = cache.object(forKey: key) { return cached.message }
-        let message = RichMessage.make(text, resolver: resolver)
+        let message = RichMessage.make(text, media: media, resolver: resolver)
         cache.setObject(Box(message), forKey: key)
         return message
     }

@@ -47,7 +47,7 @@ enum SVGAvatarRenderer {
         let origin: CGPoint
 
         /// Fits `viewBox` into a box whose longest edge is `pixelSize`, preserving aspect
-        /// ratio — the same contract as ``AvatarLoader/downsample(_:maxPixelSize:)``, so a
+        /// ratio — the same contract as ``RemoteImageLoader/downsample(_:maxPixelSize:)``, so a
         /// vector and a raster avatar of the same shape come out the same size.
         ///
         /// `nil` for a degenerate or non-finite viewBox, which is also the guard against a

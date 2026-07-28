@@ -13,10 +13,10 @@ import Foundation
 /// remembering for a while; a transport error is a property of the moment and is
 /// forgotten quickly.
 ///
-/// A plain value type rather than an actor or a class: it is owned by ``AvatarLoader``,
+/// A plain value type rather than an actor or a class: it is owned by ``RemoteImageLoader``,
 /// which already serialises access, and being a `struct` makes the eviction and expiry
 /// rules testable without any concurrency at all.
-struct AvatarFailureCache: Sendable {
+struct RemoteImageFailureCache: Sendable {
     /// Why a load produced no image.
     enum Reason: Sendable, Equatable {
         /// The server answered, and the answer was "no such blob".

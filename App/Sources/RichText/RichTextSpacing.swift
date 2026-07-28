@@ -44,9 +44,15 @@ enum RichTextSpacing {
     }
 
     /// Whether a block draws its own frame, and so wants clear space around it.
+    ///
+    /// Media joins code and tables rather than earning a gap of its own. All three are
+    /// bounded rectangles with a visible edge, and the reason a code block wants air —
+    /// its border should not touch the sentence introducing it — is the same reason a
+    /// photograph does. Two attachments in a row then sit at that same gap, which reads
+    /// as one set of pictures rather than as two messages.
     private static func isBoxed(_ block: RichBlock) -> Bool {
         switch block {
-        case .code, .table: true
+        case .code, .table, .media: true
         default: false
         }
     }

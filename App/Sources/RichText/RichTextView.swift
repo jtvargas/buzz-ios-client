@@ -1,3 +1,4 @@
+import BuzzKit
 import SwiftUI
 
 /// How ``RichTextView`` lays a message out.
@@ -39,6 +40,10 @@ struct RichTextView: View {
     /// the system's otherwise. Read here so this view can flash the pill on the way
     /// through without having to know what happens next.
     @Environment(\.openURL) private var openURL
+    /// The surrounding row's tap claim, when there is a row. An attachment is a view
+    /// rather than a link run, so it never reaches the arbitrating `OpenURLAction`
+    /// above and has to claim the tap itself — see ``ClaimRowTapAction``.
+    @Environment(\.claimRowTap) private var claimRowTap
 
     /// The interactive range currently flashing, by target URL string.
     @State private var flashing: String?
@@ -67,8 +72,18 @@ struct RichTextView: View {
 
     /// Parses and resolves `text` through the memo, then renders it. The convenience
     /// the timeline uses — a cache hit on a re-render is cheap.
-    init(text: String, resolver: MentionResolver, mode: RichTextRenderMode = .full) {
-        self.init(RichMessageCache.message(for: text, resolver: resolver), mode: mode)
+    ///
+    /// `media` is the row's `imeta` attachments, which describe the URLs the text
+    /// places rather than adding anything to it, and which are part of the memo's key:
+    /// two messages reading `![image](…)` and nothing else have the same text and
+    /// different pictures.
+    init(
+        text: String,
+        media: [MessageMedia] = [],
+        resolver: MentionResolver,
+        mode: RichTextRenderMode = .full
+    ) {
+        self.init(RichMessageCache.message(for: text, media: media, resolver: resolver), mode: mode)
     }
 
     var body: some View {
@@ -193,6 +208,13 @@ private extension RichTextView {
 
         case .rule:
             RichRuleView()
+
+        case let .media(media):
+            // `onTap` is the row's claim, not the viewer's trigger — the attachment
+            // presents that itself. Without it a press would open the picture *and*
+            // push the thread behind it, which is the defect the reaction chips'
+            // `onOpenPalette` exists to avoid.
+            MessageMediaView(media: media, onTap: { claimRowTap?() })
         }
     }
 

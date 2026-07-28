@@ -17,7 +17,7 @@ enum RelayMediaURL {
     ///
     /// Fixed by the relay's encoder, which calls `image::thumbnail(320, 320)` and writes
     /// JPEG. Aspect ratio is preserved, so this is the same "longest edge" quantity
-    /// ``AvatarLoader/downsample(_:maxPixelSize:)`` asks ImageIO for, and a request at or
+    /// ``RemoteImageLoader/downsample(_:maxPixelSize:)`` asks ImageIO for, and a request at or
     /// below it is a downsample rather than an upscale. Every avatar the app draws today
     /// fits: the largest is the 96-pt profile header, 288 px on a 3× screen, which
     /// `AvatarSourceTests` pins to the two size constants rather than to this comment.

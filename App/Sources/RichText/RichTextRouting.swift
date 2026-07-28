@@ -56,7 +56,38 @@ struct OpenConversationAction {
     }
 }
 
+/// Tells the surrounding row that a control inside the message body has just handled a
+/// tap, so the row's own deferred tap does not also fire.
+///
+/// # Why this exists when links already arbitrate
+///
+/// Every *interactive range of text* — mention, channel, link, email — is a `link` run,
+/// so all of them travel through the row's `OpenURLAction`, which claims the tap on the
+/// way past (see ``TimelineRowView``). An attachment is not a link run and never reaches
+/// that action: it is a view, it presents its own viewer, and it has nothing to hand to
+/// `openURL`. Without a claim of its own, tapping a picture would open the viewer *and*
+/// push the thread behind it — the same defect the reaction chips have `onOpenPalette`
+/// to avoid.
+///
+/// An environment action rather than another parameter on ``RichTextView`` because the
+/// renderer is shared: the sidebar snippet and the Threads summary draw the same message
+/// on surfaces with no row tap to suppress, and they should inject nothing rather than
+/// pass a closure that does nothing.
+struct ClaimRowTapAction {
+    private let handler: () -> Void
+
+    init(_ handler: @escaping () -> Void) {
+        self.handler = handler
+    }
+
+    func callAsFunction() {
+        handler()
+    }
+}
+
 extension EnvironmentValues {
     /// Injected beside the navigation stack that owns the path. `nil` by default.
     @Entry var openConversation: OpenConversationAction?
+    /// Injected by a row that arbitrates its own tap. `nil` on a surface that does not.
+    @Entry var claimRowTap: ClaimRowTapAction?
 }

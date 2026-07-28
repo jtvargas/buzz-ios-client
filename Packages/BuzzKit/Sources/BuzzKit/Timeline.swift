@@ -36,6 +36,25 @@ public struct TimelineRow: Sendable, Hashable, Identifiable {
     public let replyCount: Int
     /// When the newest non-deleted reply landed, for "last reply 5m ago".
     public let lastReplyAt: Int64?
+    /// What this message's `imeta` tags (NIP-92) describe, in the order they were
+    /// authored.
+    ///
+    /// # Why the row carries it instead of the renderer parsing tags
+    ///
+    /// These are *descriptions*, not a list of things to draw. A reference client
+    /// positions an attachment where its URL appears in the message text and looks the
+    /// `imeta` up by that URL, so what the renderer needs is an answer to "what is known
+    /// about this URL" at the moment it meets one — which is a lookup over an already
+    /// parsed list, not a tag scan per render.
+    ///
+    /// Parsed here, once per read, rather than by whatever draws the message: a
+    /// conversation re-renders on every profile change and every arriving event, and
+    /// re-parsing a JSON tag array on each of those is work with a known answer. It also
+    /// keeps the row the whole truth about a message — the renderer never reaches back
+    /// past it into the log.
+    ///
+    /// Empty for a message with no attachments, which is nearly all of them.
+    public let media: [MessageMedia]
 
     public init(
         id: String,
@@ -51,7 +70,8 @@ public struct TimelineRow: Sendable, Hashable, Identifiable {
         parentID: String?,
         rootID: String?,
         replyCount: Int,
-        lastReplyAt: Int64?
+        lastReplyAt: Int64?,
+        media: [MessageMedia] = []
     ) {
         self.id = id
         self.pubkey = pubkey
@@ -67,6 +87,7 @@ public struct TimelineRow: Sendable, Hashable, Identifiable {
         self.rootID = rootID
         self.replyCount = replyCount
         self.lastReplyAt = lastReplyAt
+        self.media = media
     }
 
     public var isReply: Bool { parentID != nil }
@@ -230,165 +251,5 @@ extension BuzzEventStore {
             "kind": EventKind.channelMessage.rawValue,
         ])
         return makeRows(rows)
-    }
-
-    // MARK: - Shared query pieces
-
-    /// One column list so the branches and every outer select cannot drift. Internal
-    /// rather than private because `TimelineRows.swift` selects the same list.
-    static let timelineColumns = """
-    id, pubkey, created_at, content, edited, deleted, rich,
-    display_name, picture, parent_id, root_id, reply_count, last_reply_at,
-    state, last_error
-    """
-
-    /// The keyset paging predicate over a `(created_at, id)` cursor. Descending id
-    /// in the tiebreak so it matches the query's `ORDER BY … id DESC`.
-    private static func page(_ timestamp: String, _ identifier: String) -> String {
-        """
-        (:hasCursor = 0
-         OR \(timestamp) < :ts
-         OR (\(timestamp) = :ts AND \(identifier) < :id))
-        """
-    }
-
-    /// A message from the log, with its author, edits, deletion state, and thread
-    /// position resolved.
-    ///
-    /// Authority is applied here, at read time, not at ingest. The projector stored
-    /// every edit and deletion without judging it; this is where the judgment
-    /// lands, because it needs the target's author (`e.pubkey`) and, for an
-    /// agent-authored message, its verified NIP-OA owner (`eo.owner_pubkey`). A
-    /// hosted Buzz relay enforces the same rules server-side; a plain NIP-29 relay
-    /// may not, and without these predicates any member there could rewrite or
-    /// blank another member's messages on every screen.
-    ///
-    /// The reply tallies exclude deleted replies, so a thread whose only reply was
-    /// removed stops advertising one.
-    static func eventBranch(where predicate: String) -> String {
-        """
-        SELECT e.id                AS id,
-               e.pubkey            AS pubkey,
-               e.created_at        AS created_at,
-               e.content           AS content,
-               (SELECT ed.content FROM edit ed
-                 WHERE ed.target_id = e.id
-                   AND (ed.pubkey = e.pubkey OR ed.pubkey = eo.owner_pubkey)
-                 ORDER BY ed.created_at DESC, ed.event_id DESC
-                 LIMIT 1)          AS edited,
-               \(deletionApplies(target: "e.id", author: "e.pubkey", owner: "eo.owner_pubkey")) AS deleted,
-               rc.payload          AS rich,
-               p.display_name      AS display_name,
-               p.picture           AS picture,
-               t.parent_id         AS parent_id,
-               t.root_id           AS root_id,
-               (SELECT COUNT(*) FROM thread tc
-                 WHERE tc.root_id = e.id
-                   AND NOT \(deletionApplies(
-                       target: "tc.event_id",
-                       author: "tc.pubkey",
-                       owner: "(SELECT owner_pubkey FROM event_owner WHERE event_id = tc.event_id)"
-                   ))) AS reply_count,
-               (SELECT MAX(tl.created_at) FROM thread tl
-                 WHERE tl.root_id = e.id
-                   AND NOT \(deletionApplies(
-                       target: "tl.event_id",
-                       author: "tl.pubkey",
-                       owner: "(SELECT owner_pubkey FROM event_owner WHERE event_id = tl.event_id)"
-                   ))) AS last_reply_at,
-               'sent'              AS state,
-               NULL                AS last_error
-        FROM event e
-        LEFT JOIN rich_content rc ON rc.target_id = e.id
-        LEFT JOIN profile p ON p.pubkey = e.pubkey
-        LEFT JOIN thread t ON t.event_id = e.id
-        LEFT JOIN event_owner eo ON eo.event_id = e.id
-        WHERE \(predicate)
-        """
-    }
-
-    /// The read-time deletion-authority predicate, widened per NIP-OA.
-    ///
-    /// A target renders deleted when a deletion names it and that deletion is
-    /// authorized: a kind-9005 relay tombstone from anyone the relay accepted, the
-    /// target author's own kind-5, or a kind-5 from the target author's verified
-    /// owner. `owner` is the SQL expression yielding that owner pubkey, or NULL
-    /// when the target carries no verified attestation — in which case the owner
-    /// clause is a comparison against NULL and never matches.
-    ///
-    /// Internal rather than private so the channel-list read
-    /// (``fetchChannelList(_:)``) applies the *same* authority when it excludes a
-    /// deleted newest message, instead of forking a second predicate that could
-    /// drift from this one.
-    static func deletionApplies(target: String, author: String, owner: String) -> String {
-        """
-        EXISTS (
-            SELECT 1 FROM deletion d
-             WHERE d.target_id = \(target)
-               AND (d.kind = \(EventKind.groupDeleteEvent.rawValue)
-                    OR d.deleted_by = \(author)
-                    OR d.deleted_by = \(owner))
-        )
-        """
-    }
-
-    /// A message signed and queued but not yet acknowledged by the relay. It
-    /// carries no reply tally: nothing can have replied to it yet.
-    ///
-    /// A pending row is excluded the moment its event lands in the log — the two
-    /// share an id, so once the log holds it (a relay echo that beat the OK, or the
-    /// relaunch reconcile that stored it before the drain confirmed — the T3
-    /// recovery state) the event branch renders it as `.sent` and this branch must
-    /// not render a second, `.pending` copy of the same message.
-    private static func outboxBranch(where predicate: String) -> String {
-        """
-        SELECT o.event_id  AS id,
-               o.pubkey    AS pubkey,
-               o.created_at AS created_at,
-               o.content   AS content,
-               NULL        AS edited,
-               0           AS deleted,
-               NULL        AS rich,
-               p.display_name AS display_name,
-               p.picture      AS picture,
-               o.parent_id AS parent_id,
-               o.root_id   AS root_id,
-               0           AS reply_count,
-               NULL        AS last_reply_at,
-               o.state     AS state,
-               o.last_error AS last_error
-        FROM outbox o
-        LEFT JOIN profile p ON p.pubkey = o.pubkey
-        WHERE NOT EXISTS (SELECT 1 FROM event WHERE event.id = o.event_id)
-          -- Messages only: a queued reaction or withdrawal rides the same durable
-          -- outbox but must never render as a pending message. `:kind` is the
-          -- channel-message kind both timeline callers already bind.
-          AND o.kind = :kind
-          AND (\(predicate))
-        """
-    }
-
-    static func makeRows(_ rows: [Row]) -> [TimelineRow] {
-        rows.map(makeRow)
-    }
-
-    private static func makeRow(_ row: Row) -> TimelineRow {
-        let edited: String? = row["edited"]
-        return TimelineRow(
-            id: row["id"],
-            pubkey: row["pubkey"],
-            createdAt: row["created_at"],
-            content: edited ?? row["content"],
-            isEdited: edited != nil,
-            isDeleted: row["deleted"] ?? false,
-            richContent: row["rich"],
-            delivery: Delivery(state: row["state"], lastError: row["last_error"]),
-            authorName: row["display_name"],
-            authorPicture: row["picture"],
-            parentID: row["parent_id"],
-            rootID: row["root_id"],
-            replyCount: row["reply_count"] ?? 0,
-            lastReplyAt: row["last_reply_at"]
-        )
     }
 }

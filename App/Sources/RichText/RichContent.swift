@@ -1,3 +1,4 @@
+import BuzzKit
 import Foundation
 
 /// One block of rendered message content — the unit the renderer lays out on its
@@ -29,6 +30,22 @@ enum RichBlock: Equatable, Sendable {
     /// A thematic break — a rule across the message, from a line of `---`, `***`,
     /// `___`, or the reference renderer's own `⸻`.
     case rule
+    /// A picture or a video, drawn where the message put it.
+    ///
+    /// # Why a block and not an inline
+    ///
+    /// The reference renderers place an attachment at the markdown image its author
+    /// wrote — `![alt](url)` — and describe it from the `imeta` tag that names the same
+    /// URL (see ``RichTextMedia``). Inline in their text flow; a block here, because a
+    /// picture in a conversation takes a line of its own at any size a phone offers, and
+    /// an inline that always breaks is a block that has to be measured twice.
+    ///
+    /// The associated value is a whole ``MessageMedia`` rather than a URL on purpose:
+    /// the renderer needs the declared aspect ratio *before* it asks for a byte, or the
+    /// row grows when the picture lands and takes the reader's place in the conversation
+    /// with it. A case carrying only a URL would make that impossible to get right and
+    /// easy to not notice.
+    case media(MessageMedia)
 }
 
 /// What a list item draws in place of its list's own bullet or number.
@@ -111,6 +128,13 @@ extension [RichBlock] {
                 .table(table.mapCells(transform))
             case .rule:
                 block // a rule has no inline to transform
+            case .media:
+                // Nothing here is text. The alt an author wrote is carried on the
+                // ``MessageMedia`` for VoiceOver and for the failure placeholder, not as
+                // an inline — autolinking it would make a tappable link out of a caption
+                // that names a URL, and the entity pass would resolve an `@` in it into
+                // a mention of somebody who was never in this message.
+                block
             }
         }
     }

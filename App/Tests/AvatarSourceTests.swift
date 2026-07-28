@@ -210,7 +210,7 @@ extension AvatarSourceTests {
     @Test("a recorded failure suppresses requests until its own lifetime is up")
     func failureLifetimes() {
         let start = Date(timeIntervalSince1970: 1_000_000)
-        var cache = AvatarFailureCache()
+        var cache = RemoteImageFailureCache()
         cache.record("gone", reason: .notFound, now: start)
         cache.record("broken", reason: .undecodable, now: start)
         cache.record("offline", reason: .transport, now: start)
@@ -237,7 +237,7 @@ extension AvatarSourceTests {
     @Test("re-recording a key refreshes its expiry without adding an entry")
     func reRecordRefreshes() {
         let start = Date(timeIntervalSince1970: 1_000_000)
-        var cache = AvatarFailureCache()
+        var cache = RemoteImageFailureCache()
         cache.record("offline", reason: .transport, now: start)
         cache.record("offline", reason: .transport, now: start.addingTimeInterval(20))
 
@@ -249,13 +249,13 @@ extension AvatarSourceTests {
     @Test("the cache holds its bound, evicting the oldest recorded first")
     func boundedCapacity() {
         let start = Date(timeIntervalSince1970: 1_000_000)
-        var cache = AvatarFailureCache()
-        let overflow = AvatarFailureCache.capacity + 50
+        var cache = RemoteImageFailureCache()
+        let overflow = RemoteImageFailureCache.capacity + 50
         for index in 0 ..< overflow {
             cache.record("key-\(index)", reason: .notFound, now: start)
         }
 
-        #expect(cache.count == AvatarFailureCache.capacity)
+        #expect(cache.count == RemoteImageFailureCache.capacity)
         // The first 50 were pushed out; the last 50 are still held.
         #expect(cache.isSuppressed("key-0", now: start) == false)
         #expect(cache.isSuppressed("key-49", now: start) == false)
@@ -266,7 +266,7 @@ extension AvatarSourceTests {
     @Test("removeAll forgets everything, so a retry is a real retry")
     func removeAllClears() {
         let start = Date(timeIntervalSince1970: 1_000_000)
-        var cache = AvatarFailureCache()
+        var cache = RemoteImageFailureCache()
         cache.record("gone", reason: .notFound, now: start)
         cache.removeAll()
 
@@ -280,20 +280,20 @@ extension AvatarSourceTests {
 extension AvatarSourceTests {
     @Test("two sizes of one avatar are two cache entries, and a data URI is not its own key")
     func cacheKeys() throws {
-        let small = AvatarLoader.cacheKey(url: Self.mediaURL, pixelSize: 108)
-        let large = AvatarLoader.cacheKey(url: Self.mediaURL, pixelSize: 288)
+        let small = RemoteImageLoader.cacheKey(url: Self.mediaURL, pixelSize: 108)
+        let large = RemoteImageLoader.cacheKey(url: Self.mediaURL, pixelSize: 288)
         #expect(small != large)
         #expect(small.hasPrefix(Self.mediaURL.absoluteString))
 
         // A data URI is identified by a digest, not by its own bytes: a megabyte of inline
         // avatar must not become a megabyte of dictionary key.
         let dataURL = try #require(URL(string: Self.ownerAvatar))
-        let identity = AvatarLoader.identity(of: dataURL)
+        let identity = RemoteImageLoader.identity(of: dataURL)
         #expect(identity.count == 69) // "data:" plus 64 hexadecimal characters
         #expect(identity.hasPrefix("data:"))
         #expect(identity != dataURL.absoluteString)
         // Stable, so the same avatar hits the same entry on every pass.
-        #expect(AvatarLoader.identity(of: dataURL) == identity)
+        #expect(RemoteImageLoader.identity(of: dataURL) == identity)
 
         // The digest is spelled out by hand — `String(format: "%02x")` thirty-two times was
         // the measured cost of this call, and it is paid on the main actor inside `body`.
@@ -308,8 +308,8 @@ extension AvatarSourceTests {
 // MARK: - What is drawn
 
 extension AvatarSourceTests {
-    private static func request(_ url: String?, _ pixelSize: CGFloat) -> AvatarView.Request {
-        AvatarView.Request(url: url.flatMap(URL.init(string:)), pixelSize: pixelSize)
+    private static func request(_ url: String?, _ pixelSize: CGFloat) -> RemoteImageRequest {
+        RemoteImageRequest(url: url.flatMap(URL.init(string:)), pixelSize: pixelSize)
     }
 
     private static func tile(_ color: UIColor) -> UIImage {
@@ -325,7 +325,7 @@ extension AvatarSourceTests {
         let other = "https://host.net/media/\(String(repeating: "b", count: 64)).png"
         let resolvedImage = Self.tile(.systemRed)
         let cachedImage = Self.tile(.systemBlue)
-        let resolved = AvatarView.Resolved(request: Self.request(subject, 102), image: resolvedImage)
+        let resolved = RemoteImageResolved(request: Self.request(subject, 102), image: resolvedImage)
 
         // Computed outside the `#expect`s: a closure that counts its own calls is not
         // `Sendable`, and the macro's expansion sends what it is handed.
@@ -338,29 +338,31 @@ extension AvatarSourceTests {
 
         // The exact request: resolved state answers, and the cache is not even consulted —
         // for a `data:` avatar that lookup digests the whole URI on the main actor.
-        let exact = AvatarView.drawn(resolved: resolved, request: Self.request(subject, 102), cached: peeking)
+        let exact = RemoteImageDisplay.drawn(resolved: resolved, request: Self.request(subject, 102), cached: peeking)
         #expect(exact === resolvedImage)
         #expect(peeks == 0)
 
         // One Dynamic Type step changes the pixel size of every avatar on screen at once,
         // because it is derived from a `@ScaledMetric`. The cache answers for the new size
         // when it can…
-        let resized = AvatarView.drawn(resolved: resolved, request: Self.request(subject, 153), cached: peeking)
+        let resized = RemoteImageDisplay.drawn(resolved: resolved, request: Self.request(subject, 153), cached: peeking)
         #expect(resized === cachedImage)
         #expect(peeks == 1)
         // …and when it cannot, the bitmap in hand is drawn while the new size decodes. The
         // frame is fixed and the content is `.scaledToFill()`, so redrawing it at another
         // resolution costs nothing — and refusing to was a whole list of monograms until a
         // full round of decodes came back.
-        let resizedCold = AvatarView.drawn(resolved: resolved, request: Self.request(subject, 153), cached: empty)
+        let resizedCold = RemoteImageDisplay.drawn(
+            resolved: resolved, request: Self.request(subject, 153), cached: empty
+        )
         #expect(resizedCold === resolvedImage)
 
         // A different subject is the one thing the identity check must refuse: a row reused
         // for another author draws its monogram, never the previous author's face.
-        let stale = AvatarView.drawn(resolved: resolved, request: Self.request(other, 102), cached: empty)
+        let stale = RemoteImageDisplay.drawn(resolved: resolved, request: Self.request(other, 102), cached: empty)
         #expect(stale == nil)
         // And no artwork at all is the monogram, whatever is still resolved.
-        let artless = AvatarView.drawn(resolved: resolved, request: Self.request(nil, 102), cached: peeking)
+        let artless = RemoteImageDisplay.drawn(resolved: resolved, request: Self.request(nil, 102), cached: peeking)
         #expect(artless == nil)
     }
 }

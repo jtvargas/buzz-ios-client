@@ -27,7 +27,7 @@ struct MessagePreview: View {
                     .italic()
                     .foregroundStyle(.secondary)
             } else {
-                RichTextView(text: bodyText, resolver: resolver)
+                RichTextView(text: bodyText, media: row.media, resolver: resolver)
             }
         }
         .padding(12)
