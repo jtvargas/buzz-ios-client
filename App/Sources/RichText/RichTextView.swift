@@ -40,6 +40,10 @@ struct RichTextView: View {
     /// the system's otherwise. Read here so this view can flash the pill on the way
     /// through without having to know what happens next.
     @Environment(\.openURL) private var openURL
+    /// The surrounding row's tap claim, when there is a row. An attachment is a view
+    /// rather than a link run, so it never reaches the arbitrating `OpenURLAction`
+    /// above and has to claim the tap itself — see ``ClaimRowTapAction``.
+    @Environment(\.claimRowTap) private var claimRowTap
 
     /// The interactive range currently flashing, by target URL string.
     @State private var flashing: String?
@@ -205,12 +209,12 @@ private extension RichTextView {
         case .rule:
             RichRuleView()
 
-        case .media:
-            // The picture itself arrives with the media renderer. Nothing is drawn until
-            // then — deliberately nothing, rather than a reserved empty box, because a
-            // frame with no content in it reads as a message that failed to load rather
-            // than as one whose renderer has not landed.
-            EmptyView()
+        case let .media(media):
+            // `onTap` is the row's claim, not the viewer's trigger — the attachment
+            // presents that itself. Without it a press would open the picture *and*
+            // push the thread behind it, which is the defect the reaction chips'
+            // `onOpenPalette` exists to avoid.
+            MessageMediaView(media: media, onTap: { claimRowTap?() })
         }
     }
 

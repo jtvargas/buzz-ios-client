@@ -158,6 +158,10 @@ struct TimelineRowView: View {
             }
             return .handled
         })
+        // The same claim, for the one thing in a message body that is not a link run.
+        // An attachment is a view: it presents its own viewer and hands nothing to
+        // `openURL`, so it would otherwise open the picture and push the thread too.
+        .environment(\.claimRowTap, ClaimRowTapAction { claimTap() })
         .accessibilityAction(named: "Open thread") {
             onOpenThread?()
         }
