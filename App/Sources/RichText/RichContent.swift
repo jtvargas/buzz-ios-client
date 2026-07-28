@@ -24,19 +24,45 @@ enum RichBlock: Equatable, Sendable {
     /// A numbered list starting at `start`; each element is one item, which may own
     /// nested lists. `start` is the first item's authored number.
     case orderedList(start: Int, [RichListItem])
+    /// A GFM pipe table, cells already split and inline-parsed.
+    case table(RichTable)
+    /// A thematic break — a rule across the message, from a line of `---`, `***`,
+    /// `___`, or the reference renderer's own `⸻`.
+    case rule
 }
 
-/// One item of a list: its own inline content and any nested lists indented beneath
-/// it. The `children` are themselves ``RichBlock`` list nodes, so an item can carry
-/// arbitrarily deep (bounded) sub-lists that the renderer indents per depth.
+/// What a list item draws in place of its list's own bullet or number.
+///
+/// A property of the *item*, not of the list, and that is the whole reason it exists
+/// here rather than as a third list case on ``RichBlock``: `- [ ] done` and `- plain`
+/// are one authored list, and splitting it into a task block and a bullet block would
+/// break it in two on screen at the exact point the author was mid-thought.
+enum RichListMarker: Equatable, Sendable {
+    /// A GFM task item, `- [ ] todo` / `- [x] done`, or the reference renderer's bare
+    /// `[ ] todo`. The associated value is whether it is ticked.
+    case checkbox(Bool)
+    /// The reference renderer's bare `( ) one` / `(x) one`. Not CommonMark, not GFM —
+    /// carried because upstream draws it and a message written against upstream must
+    /// not read as literal punctuation here.
+    case radio(Bool)
+}
+
+/// One item of a list: its own inline content, an optional marker that replaces the
+/// list's bullet or number, and any nested lists indented beneath it. The `children`
+/// are themselves ``RichBlock`` list nodes, so an item can carry arbitrarily deep
+/// (bounded) sub-lists that the renderer indents per depth.
 struct RichListItem: Equatable, Sendable {
     /// The item's inline content (emphasis, links, resolved entity tokens).
     let content: AttributedString
+    /// A checkbox or radio marker drawn instead of the list's own marker, or `nil` for
+    /// an ordinary item. See ``RichListMarker``.
+    let marker: RichListMarker?
     /// Nested list blocks indented under this item, empty for a leaf item.
     let children: [RichBlock]
 
-    init(content: AttributedString, children: [RichBlock] = []) {
+    init(content: AttributedString, marker: RichListMarker? = nil, children: [RichBlock] = []) {
         self.content = content
+        self.marker = marker
         self.children = children
     }
 }
@@ -81,6 +107,10 @@ extension [RichBlock] {
                 .bulletList(items.map { $0.mapInlines(transform) })
             case let .orderedList(start, items):
                 .orderedList(start: start, items.map { $0.mapInlines(transform) })
+            case let .table(table):
+                .table(table.mapCells(transform))
+            case .rule:
+                block // a rule has no inline to transform
             }
         }
     }
@@ -90,6 +120,10 @@ extension RichListItem {
     /// This item with `transform` applied to its own content and, recursively, to
     /// every inline of the lists nested under it.
     func mapInlines(_ transform: (AttributedString) -> AttributedString) -> RichListItem {
-        RichListItem(content: transform(content), children: children.mapInlines(transform))
+        RichListItem(
+            content: transform(content),
+            marker: marker,
+            children: children.mapInlines(transform)
+        )
     }
 }

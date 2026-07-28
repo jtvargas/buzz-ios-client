@@ -28,7 +28,24 @@ extension RichMessage {
             return inline(of: items)
         case let .orderedList(_, items):
             return inline(of: items)
+        case let .table(table):
+            return joined(table.cellsInReadingOrder)
+        case .rule:
+            // A rule is a shape, not words. Flattening it to punctuation would put a
+            // stray `—` in a sidebar preview where the message's own first sentence
+            // belongs.
+            return AttributedString()
         }
+    }
+
+    /// `pieces` concatenated with a single space between the non-empty ones.
+    private static func joined(_ pieces: [AttributedString]) -> AttributedString {
+        var result = AttributedString()
+        for piece in pieces where !piece.characters.isEmpty {
+            if !result.characters.isEmpty { result.append(AttributedString(" ")) }
+            result.append(piece)
+        }
+        return result
     }
 
     private static func inline(of items: [RichListItem]) -> AttributedString {

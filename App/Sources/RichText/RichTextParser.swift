@@ -43,6 +43,13 @@ enum RichTextParser {
             } else if trimmed.isEmpty {
                 flushParagraph()
                 index += 1
+            } else if isThematicBreak(trimmed) {
+                // Before the list scanner on purpose: `- - -` and `***` are both a rule
+                // and (by the first character alone) a bullet, and CommonMark resolves
+                // the ambiguity in the rule's favour.
+                flushParagraph()
+                blocks.append(.rule)
+                index += 1
             } else if let heading = heading(trimmed) {
                 flushParagraph()
                 blocks.append(heading)
@@ -50,6 +57,9 @@ enum RichTextParser {
             } else if trimmed.hasPrefix(">") {
                 flushParagraph()
                 blocks.append(quoteBlock(lines, from: &index))
+            } else if isTableStart(lines, at: index) {
+                flushParagraph()
+                blocks.append(tableBlock(lines, from: &index))
             } else if listLine(line) != nil {
                 flushParagraph()
                 blocks.append(contentsOf: listBlocks(lines, from: &index))
@@ -105,5 +115,21 @@ enum RichTextParser {
         // separate from inline parsing.
         guard rest.hasPrefix(" ") else { return nil }
         return .heading(level: level, InlineMarkdown.render(rest.trimmingCharacters(in: .whitespaces)))
+    }
+
+    /// Whether `trimmed` is a thematic break: CommonMark's three-or-more `-`, `*`, or
+    /// `_` (spaces between them allowed, nothing else on the line), or the reference
+    /// renderer's own `⸻`.
+    ///
+    /// The `_` and `*` forms are a superset of what upstream draws — its `HrLine`
+    /// matches dashes and `⸻` only. Accepting all three costs nothing and cannot
+    /// swallow text: a line of nothing but rule characters has no content to lose, and
+    /// `***bold***` is disqualified by the letters in it.
+    static func isThematicBreak(_ trimmed: String) -> Bool {
+        let stripped = trimmed.filter { !$0.isWhitespace }
+        guard let first = stripped.first, stripped.allSatisfy({ $0 == first }) else { return false }
+        if first == "\u{2E3B}" { return true } // ⸻, upstream's own rule character
+        guard first == "-" || first == "*" || first == "_" else { return false }
+        return stripped.count >= 3
     }
 }

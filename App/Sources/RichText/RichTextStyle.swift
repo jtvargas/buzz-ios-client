@@ -22,8 +22,34 @@ enum RichTextStyle {
     /// The horizontal indent applied per nested-list level.
     static let nestedIndent: CGFloat = 16
 
-    /// Vertical spacing between a message's blocks.
+    /// The ordinary gap between two blocks of a message. See ``RichTextSpacing`` for
+    /// the pairs that want more or less than this.
     static let blockSpacing: CGFloat = 6
+
+    // MARK: - Tables
+
+    /// The widest a single table cell may be laid out before its text wraps inside the
+    /// column, at the default text size.
+    ///
+    /// A cap is not decoration. Inside the table's horizontal scroll view a cell is
+    /// offered unlimited width, so without one a cell holding a paragraph becomes a
+    /// single line thousands of points long — a column nobody can read and a scroll
+    /// nobody can reach the end of. Around a phone's readable measure, so an ordinary
+    /// cell never wraps and a pathological one wraps instead of running away.
+    static let tableCellMaxWidth: CGFloat = 260
+
+    /// Inset between a table cell's text and its column edges. Generous horizontally
+    /// because that gap is doing the work column rules would otherwise do.
+    static let tableCellPadding = CGSize(width: 10, height: 6)
+
+    /// The table's own outline and the rules between its rows.
+    static let tableBorderRadius: CGFloat = 8
+
+    // MARK: - Rules
+
+    /// The vertical padding around a thematic break, and around the divider drawn under
+    /// a level-1 heading.
+    static let ruleSpacing: CGFloat = 4
 
     /// How far the pill is grown beyond the glyphs it sits behind. Horizontal is the
     /// "comfortable padding"; vertical is deliberately small, because a taller pill
@@ -75,14 +101,9 @@ enum RichTextStyle {
     /// just the tint doing all the work. Taking the *style* instead means the weight is
     /// named while the font is being built, which is the only way to reach a real cut.
     ///
-    /// # Why code is set here rather than left to the intent
-    ///
-    /// A code span carries `inlinePresentationIntent.code`, and `Text` renders that as
-    /// monospaced by asking the run's font for its fixed-width member. Lato's family has
-    /// none, so on a Lato base that request is dropped exactly like the weight — and an
-    /// inline `` `--flag` `` would have quietly become proportional Lato in the middle of
-    /// a sentence about a command. The face is named here so the guarantee does not
-    /// depend on a family the app does not ship.
+    /// Emphasis the parse stage recorded as intent — struck, underlined, and code —
+    /// is stated as attributes first, by ``emphasised(_:base:)``, for the same reason:
+    /// what `Text` resolves from an intent alone is not enough once the family is Lato.
     ///
     /// `interactive` is what separates a message being read from a one-line preview
     /// of one. When it is set, an entity run also gains the `link` that carries its
@@ -98,11 +119,9 @@ enum RichTextStyle {
         base: Font.TextStyle,
         interactive: Bool = false
     ) -> AttributedString {
-        var output = attributed
-        let runs = output.runs.map {
-            ($0.range, $0.mention, $0.channel, $0.link, $0.inlinePresentationIntent)
-        }
-        for (range, mention, channel, link, intent) in runs {
+        var output = emphasised(attributed, base: base)
+        let runs = output.runs.map { ($0.range, $0.mention, $0.channel, $0.link) }
+        for (range, mention, channel, link) in runs {
             if let mention {
                 output[range].foregroundColor = tint
                 output[range].font = .hive(base, weight: mention.isSelf ? selfMentionWeight : mentionWeight)
@@ -121,13 +140,57 @@ enum RichTextStyle {
                 output[range].foregroundColor = tint
                 output[range].font = .hive(base, weight: linkWeight)
                 if !interactive { output[range].link = nil }
-            } else if intent?.contains(.code) == true {
-                // Never an entity run: both the entity pass and the autolink scan refuse
-                // code, so this branch is reached by exactly the spans it is meant for.
-                output[range].font = .hiveMono(base)
             }
         }
         return interactive ? spaced(output) : output
+    }
+
+    /// Turns the emphasis the *parse* stage recorded as intent into attributes a
+    /// SwiftUI `Text` is guaranteed to draw: a struck run, a code span's monospaced
+    /// face, and a `<u>` underline.
+    ///
+    /// Bold and italic are deliberately absent. `Text` resolves
+    /// `InlinePresentationIntent.stronglyEmphasized` and `.emphasized` itself, and
+    /// re-stating them as a `font` here would replace the environment's font instead
+    /// of decorating it — which is how a bold word ends up refusing to scale with
+    /// Dynamic Type. The three below are stated because leaving them to the intent was
+    /// not reliably drawing anything: a strikethrough and a code span rendered
+    /// identically to plain body text, so `~~wrong~~` read as a correction that had not
+    /// been made.
+    ///
+    /// A code span's face is composed rather than assigned, so `**`x`**` keeps its
+    /// weight: monospaced first, then whatever emphasis the same run also carries.
+    ///
+    /// The face is *named* rather than reached for with `.monospaced()`. `Text` renders
+    /// a `.code` run by asking the run's font for the fixed-width member of its own
+    /// family, and the app's family is Lato, which has none — so on a Lato base that
+    /// request is dropped exactly the way a weight trait is (``HiveTypography``), and an
+    /// inline `` `--flag` `` would have quietly set in proportional Lato in the middle of
+    /// a sentence about a command. ``HiveTypography/hiveMono(_:weight:)`` is the system's
+    /// monospaced face, which does carry a full weight axis, so the two emphasis
+    /// modifiers below still compose onto it.
+    private static func emphasised(
+        _ attributed: AttributedString,
+        base: Font.TextStyle
+    ) -> AttributedString {
+        var output = attributed
+        let runs = output.runs.map { ($0.range, $0.inlinePresentationIntent, $0.underline) }
+        for (range, intent, underline) in runs {
+            if underline == true {
+                output[range].underlineStyle = .single
+            }
+            guard let intent else { continue }
+            if intent.contains(.strikethrough) {
+                output[range].strikethroughStyle = .single
+            }
+            if intent.contains(.code) {
+                var font = Font.hiveMono(base)
+                if intent.contains(.stronglyEmphasized) { font = font.bold() }
+                if intent.contains(.emphasized) { font = font.italic() }
+                output[range].font = font
+            }
+        }
+        return output
     }
 
     /// Holds every pill off the text beside it, by adding ``pillAdvance`` of kerning

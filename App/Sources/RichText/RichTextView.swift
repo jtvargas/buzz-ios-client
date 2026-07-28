@@ -100,10 +100,18 @@ struct RichTextView: View {
 // MARK: - Layout
 
 private extension RichTextView {
+    /// Every block, stacked, with the gap between each pair decided by
+    /// ``RichTextSpacing`` rather than by one spacing for the whole stack.
+    ///
+    /// `spacing: 0` and a leading pad per block, because a `VStack`'s own spacing is a
+    /// single number and the gap a message wants depends on *which two* blocks meet: a
+    /// heading claims space above and hugs what follows, a code block or a table wants
+    /// clear air on both sides, and two paragraphs of the same thought want neither.
     var full: some View {
-        VStack(alignment: .leading, spacing: RichTextStyle.blockSpacing) {
-            ForEach(Array(message.blocks.enumerated()), id: \.offset) { _, block in
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(message.blocks.enumerated()), id: \.offset) { index, block in
                 blockView(block)
+                    .padding(.top, gapAbove(index))
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -127,6 +135,13 @@ private extension RichTextView {
             .truncationMode(.tail)
     }
 
+    /// The gap above the block at `index`, or nothing at all above the first one — a
+    /// message's first block sits flush against the attribution line above it.
+    func gapAbove(_ index: Int) -> CGFloat {
+        guard index > 0 else { return 0 }
+        return RichTextSpacing.gap(after: message.blocks[index - 1], before: message.blocks[index])
+    }
+
     @ViewBuilder
     func blockView(_ block: RichBlock) -> some View {
         switch block {
@@ -137,12 +152,20 @@ private extension RichTextView {
 
         case let .heading(level, text):
             let style = Self.headingStyle(level)
-            // Semibold named while the font is built, not a `.fontWeight(.semibold)`
-            // over it: the app's typeface drops a weight asked for by trait, so the
-            // modifier this replaces drew every heading at body weight.
-            RichTextInline.text(text, base: style)
-                .font(.hive(style, weight: .semibold))
-                .frame(maxWidth: .infinity, alignment: .leading)
+            VStack(alignment: .leading, spacing: 0) {
+                // Semibold named while the font is built, not a `.fontWeight(.semibold)`
+                // over it: the app's typeface drops a weight asked for by trait, so the
+                // modifier this replaces drew every heading at body weight.
+                RichTextInline.text(text, base: style)
+                    .font(.hive(style, weight: .semibold))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                // A rule under a level-1 heading and no other, matching upstream's
+                // `autoAddDividerLineAfterH1`. It is what makes a `#` title read as the
+                // top of a document rather than as a slightly larger sentence.
+                if level == 1 {
+                    RichRuleView()
+                }
+            }
 
         case let .quote(text):
             HStack(alignment: .top, spacing: 8) {
@@ -164,6 +187,12 @@ private extension RichTextView {
 
         case let .orderedList(start, items):
             RichListView(items: items, ordered: true, start: start)
+
+        case let .table(table):
+            RichTableView(table: table)
+
+        case .rule:
+            RichRuleView()
         }
     }
 
@@ -176,97 +205,5 @@ private extension RichTextView {
         case 3: .headline
         default: .subheadline
         }
-    }
-}
-
-// MARK: - Lists
-
-/// A (possibly nested) list. Renders each item's marker + content, then recurses
-/// into that item's child lists indented one level deeper.
-private struct RichListView: View {
-    let items: [RichListItem]
-    let ordered: Bool
-    let start: Int
-    var depth: Int = 0
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            ForEach(Array(items.enumerated()), id: \.offset) { index, item in
-                VStack(alignment: .leading, spacing: 2) {
-                    RichListRow(marker: marker(index), content: item.content)
-                    ForEach(Array(item.children.enumerated()), id: \.offset) { _, child in
-                        childList(child)
-                    }
-                }
-            }
-        }
-        .padding(.leading, depth == 0 ? 0 : RichTextStyle.nestedIndent)
-    }
-
-    private func marker(_ index: Int) -> String {
-        ordered ? "\(start + index)." : "•"
-    }
-
-    @ViewBuilder
-    private func childList(_ block: RichBlock) -> some View {
-        switch block {
-        case let .bulletList(items):
-            RichListView(items: items, ordered: false, start: 1, depth: depth + 1)
-        case let .orderedList(start, items):
-            RichListView(items: items, ordered: true, start: start, depth: depth + 1)
-        default:
-            EmptyView() // children are only ever nested lists
-        }
-    }
-}
-
-/// One list item's row: a fixed-width marker column so wrapped item text stays
-/// aligned under the first line rather than under the marker.
-private struct RichListRow: View {
-    let marker: String
-    let content: AttributedString
-
-    var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 6) {
-            Text(marker)
-                .font(.hive(.body))
-                .foregroundStyle(.secondary)
-                .frame(minWidth: 16, alignment: .trailing)
-            RichTextInline.text(content, base: .body)
-                .font(.hive(.body))
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-    }
-}
-
-// MARK: - Code
-
-/// A fenced code block: monospaced, on a subtle fill, its raw text never inline- or
-/// entity-parsed. Long lines wrap rather than scroll, so the block never fights the
-/// timeline's vertical scroll.
-private struct RichCodeBlock: View {
-    let code: String
-    let language: String?
-
-    var body: some View {
-        Text(code)
-            // Still the system's monospaced face, and now said so explicitly: Lato is
-            // not a code face and has no fixed-width member for `.monospaced()` to find.
-            .font(.hiveMono(.callout))
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(10)
-            .background(
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(Color.secondary.opacity(0.12))
-            )
-            .overlay(alignment: .topTrailing) {
-                if let language, !language.isEmpty {
-                    Text(language)
-                        .font(.hive(.caption2))
-                        .foregroundStyle(.secondary)
-                        .padding(6)
-                        .accessibilityHidden(true)
-                }
-            }
     }
 }
