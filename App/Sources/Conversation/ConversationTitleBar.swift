@@ -48,7 +48,12 @@ struct ConversationTitleBar: ViewModifier {
         /// No mark; the name stands on its own.
         case none
         /// An SF Symbol — `number` for a channel, `text.append` for a thread.
-        case symbol(String)
+        ///
+        /// `accented` spends the app's colour on the glyph, and is off everywhere but the
+        /// workspace's own heading: the accent marks the one heading that names *this app's*
+        /// community, where a `#` or a thread glyph names a conversation inside it. A colour
+        /// that appeared on every heading would say nothing about any of them.
+        case symbol(String, accented: Bool = false)
         /// The peer's picture, falling back to their monogram. A person is recognised by
         /// their face before their name, which a glyph cannot do.
         case avatar(url: URL?, seed: String, initials: String)
@@ -144,7 +149,12 @@ struct ConversationTitleBar: ViewModifier {
             VStack(alignment: .leading, spacing: Self.betweenLines) {
                 Text(title)
                     .font(.hive(.subheadline, weight: .bold))
-                    .foregroundStyle(.primary)
+                    // `Color.primary`, not the hierarchical `.primary`. The heading is a
+                    // `Button`, and a hierarchical style inside a control resolves against
+                    // the control's *tint* — so the moment the app was given its accent
+                    // every heading in the app turned amber, name and glyph together.
+                    // `Color.primary` is the label colour itself and does not follow a tint.
+                    .foregroundStyle(Color.primary)
                     .lineLimit(1)
                     .truncationMode(.tail)
                 if let subtitle {
@@ -166,13 +176,17 @@ struct ConversationTitleBar: ViewModifier {
         switch mark {
         case .none:
             EmptyView()
-        case let .symbol(name):
+        case let .symbol(name, accented):
             Image(systemName: name)
                 // A step above the name rather than two: at `.title3` the `#` was the
                 // loudest thing in the bar and hung below the second line's baseline, which
                 // is most of what read as the heading being crammed.
                 .font(.hiveSymbol(.body, weight: .semibold))
-                .foregroundStyle(.secondary)
+                // Named colours rather than hierarchical ones, for the reason above the
+                // name: inside a control the hierarchy resolves against the tint. The accent
+                // is therefore asked for by name where it is wanted, and refused everywhere
+                // else — which is the only way a glyph can be *the* accented one.
+                .foregroundStyle(accented ? Color.hiveAccent : Color.secondary)
                 .accessibilityHidden(true)
         case let .avatar(url, seed, initials):
             AvatarView(url: url, seed: seed, monogram: initials, size: Self.avatarSize)
@@ -189,7 +203,7 @@ struct ConversationTitleBar: ViewModifier {
             }
             Text(subtitle.text)
                 .font(.hive(.caption2))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Color.secondary)
                 .lineLimit(1)
                 .truncationMode(.tail)
         }

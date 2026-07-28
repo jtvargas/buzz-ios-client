@@ -33,6 +33,21 @@ struct HomeNavigationTests {
         #expect(UIImage(systemName: ChannelListView.communitySymbol) != nil)
     }
 
+    @Test("the workspace's own heading is the only one drawn in the accent")
+    func onlyTheHomeHeadingIsAccented() {
+        // The accent says "this is the community you are in". Once the app was given its
+        // colour, every heading took it — a `Button`'s label resolves a hierarchical style
+        // against the tint — and a colour that is on all four headings distinguishes none of
+        // them. So it is asked for by name, in one place, and refused in the others.
+        #expect(ChannelListView.communityMark == .symbol(ChannelListView.communitySymbol, accented: true))
+        // The other three headings — Activity, a thread, a channel — write their mark plainly
+        // as `.symbol(name)`, so the *default* is what keeps them out of the accent. Pinned
+        // here because flipping that default would recolour three screens silently.
+        for symbol in [ActivityView.symbol, ThreadView.threadSymbol, "number"] {
+            #expect(ConversationTitleBar.Mark.symbol(symbol) == .symbol(symbol, accented: false))
+        }
+    }
+
     // MARK: - Who is allowed to hide the tab bar
 
     /// The four states the channel list's stack can be in, and the bar in each.
