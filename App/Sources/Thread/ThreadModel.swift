@@ -375,3 +375,8 @@ extension ThreadModel {
         Task { try? await sender.discard(eventID) }
     }
 }
+
+/// The same five the channel's model already had — see the note on
+/// ``ChannelTimelineModel``'s conformance. It is what lets one actions sheet serve both
+/// surfaces.
+extension ThreadModel: MessageActing {}

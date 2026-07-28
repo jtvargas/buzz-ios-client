@@ -2,7 +2,7 @@ import BuzzKit
 import SwiftUI
 
 /// A thread: its opener, a divider, then every reply oldest-first, each with its
-/// reaction chips and long-press menu, and a reply composer floating below. Reads are
+/// reaction chips and actions sheet, and a reply composer floating below. Reads are
 /// live from the store; opening fetches the thread's replies once so it fills even
 /// before live fan-out catches up.
 ///
@@ -21,6 +21,8 @@ struct ThreadView: View {
     @State private var presence: PresenceModel
     /// Whose profile is open, if anyone's — set by a tap on a reply's avatar or name.
     @State private var profilePeer: ProfilePeer?
+    /// The reply whose actions sheet is open, if any — set by a long press on a row.
+    @State private var messageActions: MessageActionTarget?
     /// This device's per-thread read marks. Absent on a surface reached without them (the
     /// conversation fixture), where nothing is recorded.
     @Environment(\.threadReadMarks) private var threadReads
@@ -38,6 +40,12 @@ struct ThreadView: View {
     /// because that row's tap is the question "what is this about".
     private let landing: ThreadLanding
 
+    /// Whether the reply composer takes the keyboard once this thread has settled on screen.
+    ///
+    /// Set by the actions sheet's "Reply in thread" and by nothing else — see
+    /// ``focusComposerWhenSettled()`` for why it waits rather than firing on appearance.
+    private let focusesComposer: Bool
+
     /// The production initialiser: the engine is all three of the collaborators below.
     init(
         root: String,
@@ -45,7 +53,8 @@ struct ThreadView: View {
         store: BuzzEventStore,
         engine: SyncEngine,
         selfPubkey: String?,
-        landingOn landing: ThreadLanding = .latestReply
+        landingOn landing: ThreadLanding = .latestReply,
+        focusingComposer focusesComposer: Bool = false
     ) {
         self.init(
             root: root,
@@ -55,7 +64,8 @@ struct ThreadView: View {
             opener: engine,
             presence: engine.presenceStore,
             selfPubkey: selfPubkey,
-            landingOn: landing
+            landingOn: landing,
+            focusingComposer: focusesComposer
         )
     }
 
@@ -78,10 +88,12 @@ struct ThreadView: View {
         opener: any ThreadOpening,
         presence: PresenceStore,
         selfPubkey: String?,
-        landingOn landing: ThreadLanding = .latestReply
+        landingOn landing: ThreadLanding = .latestReply,
+        focusingComposer focusesComposer: Bool = false
     ) {
         channelID = channel
         self.landing = landing
+        self.focusesComposer = focusesComposer
         _model = State(initialValue: ThreadModel(
             root: root,
             channel: channel,
@@ -132,9 +144,12 @@ struct ThreadView: View {
             action: { dismiss() }
         )
         .profileSheet(peer: $profilePeer, presence: presence)
+        // The channel's sheet, minus "Reply in thread": this *is* the thread.
+        .messageActionsSheet(target: $messageActions, actions: model)
         // After the first render, so the scaffold's `onChange(of: jumpToken)` is installed
         // and the bump is a transition it sees — see ``ThreadModel/landOnOpener()``.
         .task { if landing == .opener { model.landOnOpener() } }
+        .task { await focusComposerWhenSettled() }
         .task { await model.run() }
         .task { await presence.run() }
         // Mark-on-view, the same discipline the channel's read state follows — and the
@@ -182,13 +197,12 @@ struct ThreadView: View {
                 reactions: model.reactions(for: row.id),
                 mentions: model.mentions(for: row.id),
                 selfPubkey: model.selfPubkey,
-                isOwn: model.isOwn(row),
                 onRetry: { model.retry($0) },
                 onReact: { model.react($0, on: row.id) },
                 onToggleReaction: { model.toggleReaction($0, on: row.id) },
-                onDelete: { model.delete($0) },
                 // No `onOpenThread`: a reply inside a thread has nowhere further to go,
                 // which is also why no row here draws a reply preview.
+                onLongPress: { messageActions = MessageActionTarget(row: row, isOwn: model.isOwn(row)) },
                 onOpenProfile: { profilePeer = ProfilePeer(pubkey: $0) }
             )
             // The shared constant rather than a bare `.padding(.horizontal)`, so a reply
@@ -262,6 +276,31 @@ struct ThreadView: View {
     private func releaseComposer() {
         model.mentionAutocomplete.dismissComposer()
     }
+
+    /// Raises the reply composer's keyboard for a thread opened by "Reply in thread" — and
+    /// waits for the push to finish first.
+    ///
+    /// The wait is the whole content of this function. ``TokenTextView`` applies focus only
+    /// once its view is in a window, because `becomeFirstResponder` before that fails
+    /// silently and leaves SwiftUI's flag and UIKit's responder disagreeing; and
+    /// ``ConversationKeyboardRelease`` records the other half of the same asymmetry — a
+    /// keyboard that arrives while the view is *not* settled leaves the root's bottom safe
+    /// area at the home-indicator value, because SwiftUI's keyboard avoidance is driven by
+    /// the keyboard appearing under a view that is on screen. A `.task` runs at the *start*
+    /// of the push, which is neither of those moments.
+    ///
+    /// `UINavigationController`'s push is a third of a second; this clears it with room and
+    /// is still short enough that the keyboard reads as part of the same movement.
+    private func focusComposerWhenSettled() async {
+        guard focusesComposer else { return }
+        try? await Task.sleep(for: Self.composerFocusDelay)
+        guard !Task.isCancelled else { return }
+        model.mentionAutocomplete.isComposerFocused = true
+    }
+
+    /// How long the composer waits before taking the keyboard. See
+    /// ``focusComposerWhenSettled()``.
+    private static let composerFocusDelay: Duration = .milliseconds(450)
 }
 
 /// The reply composer: a Liquid Glass capsule field and a prominent send button, the

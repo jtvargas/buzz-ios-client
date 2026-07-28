@@ -43,7 +43,7 @@ What follows describes the app as it is on `main`, not as it is planned. Anythin
 - **A mention of you is emphasised**, so your own name stands out from every other mention in the message.
 - **Mention autocomplete** for `@people` and `#channels`, anchored to the caret, so it works mid-sentence and on any line of a multiline draft.
 - **A composer that grows** to six lines and then scrolls, with a draft that survives a failed send.
-- **Reactions** — a six-emoji palette, reachable from the long-press menu *or* from an add-reaction pill under the message; chips with counts, and your own reaction highlighted and withdrawable by tapping its chip.
+- **Reactions** — a long press opens a sheet with five quick reactions, the full emoji picker, and the message's actions; the same five are on an add-reaction pill under the message. Chips carry counts, and your own reaction is highlighted and withdrawable by tapping its chip.
 - **Long-press menu**: react, copy, retry a failed send, and discard one of your own messages that has not been sent.
 - **Optimistic send** through a durable outbox that survives relaunch. A message in flight is dimmed; one the relay rejected says so with the reason it gave — "Not delivered (rate-limited) — tap to retry". An over-long message is caught before it is sent, with the limit named and the draft handed back.
 - **Message edits and deletions** authored elsewhere are applied to what you see.

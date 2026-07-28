@@ -25,7 +25,7 @@ This is the living checklist for the headline milestone: feature parity with the
 | Home (channel list, unreads) | `home` | ✅ | Sidebar: Channels / Direct Messages / Agents, collapsible and persisted; last message, time, unread indicator |
 | Channels (timeline, composer) | `channels` | ✅ | One shared shell for channel, thread and DM |
 | Threads | `channels` | ✅ | Replies row with participant faces; heading pops back to the conversation |
-| Reactions | `channels` | ✅ | Six-emoji palette, chips with counts, own reaction withdrawable |
+| Reactions | `channels` | ✅ | A long press opens a sheet: five quick reactions with the full emoji picker beside them, then Reply in thread, Copy Message and Remind Me. Chips with counts under the message, own reaction withdrawable |
 | Direct messages | `channels` | ✅ | A DM is a channel whose roster is exactly two members including you; opened or created from the profile sheet |
 | Activity feed (mentions/replies/reactions) | `activity` | ☐ | A tab exists and is a placeholder; nothing is collected behind it |
 | Search | `search` | ☐ | No in-app search |

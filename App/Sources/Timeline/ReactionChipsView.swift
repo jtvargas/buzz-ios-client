@@ -1,9 +1,38 @@
 import BuzzKit
 import SwiftUI
 
-/// The quick-reaction palette offered in a message's long-press menu.
+/// The reactions offered without opening the full picker, in the owner's order.
+///
+/// One list, read by both places that offer a shortcut — the actions sheet a long press
+/// opens, and the add-reaction pill at the end of a message's chips — so the five a reader
+/// learns in one are the five they find in the other.
+///
+/// 👍🏻 carries its skin tone deliberately. A reaction groups on the exact emoji string, so
+/// this palette and the chip it raises have to be the same characters or a message collects
+/// two thumbs that do not add up.
 enum ReactionPalette {
-    static let common = ["👍", "❤️", "😂", "🎉", "🙏", "🔥"]
+    static let common = ["🤔", "👀", "👍🏻", "❤️", "✅"]
+
+    /// What choosing `emoji` on a message already carrying `groups` means.
+    ///
+    /// The palette and the picker both go through this rather than each reaching for
+    /// `react`, and the reason is the second press: an emoji the reader has already sent is
+    /// theirs to *withdraw*, and calling `react` again would queue a second identical kind-7
+    /// that the relay is entitled to keep. The chips under a message have always toggled;
+    /// this is the same rule, applied where the emoji is chosen from a list instead of
+    /// pressed as an existing chip.
+    static func choice(for emoji: String, in groups: [ReactionGroup]) -> Choice {
+        guard let group = groups.first(where: { $0.emoji == emoji }) else { return .add(emoji) }
+        return .toggle(group)
+    }
+
+    /// The two things a chosen emoji can mean.
+    enum Choice: Equatable {
+        /// Nobody has sent this emoji on this message yet.
+        case add(String)
+        /// It is already here — `toggleReaction` adds the reader to it, or takes them off.
+        case toggle(ReactionGroup)
+    }
 }
 
 /// The reaction row under a message: the surviving reactions as Slack-style capsule
@@ -82,7 +111,7 @@ private struct ReactionChip: View {
 
 /// The compact "add reaction" pill: a capsule the size of a chip, a smiley with a
 /// small plus, opening the quick-reaction palette on tap. Sits at the end of the
-/// reaction row so a message can always be reacted to without the long-press menu.
+/// reaction row so a message can always be reacted to without opening the actions sheet.
 ///
 /// # Why the tap is observed with a gesture
 ///

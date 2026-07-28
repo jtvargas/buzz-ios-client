@@ -3,10 +3,10 @@ import SwiftUI
 
 /// A channel's timeline: newest at the bottom, older pages loaded at the top by
 /// keyset cursor, day separators between local days, and a floating composer with the
-/// "who is typing" strip above it. Messages carry reaction chips and a long-press menu
-/// (react, copy, and retry/delete on own pending/failed rows); a threaded message
-/// opens its thread. Reads are live from the store; presence and typing are live from
-/// the engine's ``PresenceStore``; the composer sends and signals typing through it.
+/// "who is typing" strip above it. Messages carry reaction chips, and a long press opens
+/// ``MessageActionsSheet``; a threaded message opens its thread. Reads are live from the
+/// store; presence and typing are live from the engine's ``PresenceStore``; the composer
+/// sends and signals typing through it.
 ///
 /// The list, the header's placement, the bar, and the keyboard/safe-area arithmetic all
 /// belong to ``ConversationScaffold`` — this view supplies the four slots and nothing
@@ -17,6 +17,8 @@ struct ChannelTimelineView: View {
     @State private var typing: ChannelTypingModel
     @State private var openedThread: ThreadRoute?
     @State private var showsChannelDetails = false
+    /// The message whose actions sheet is open, if any — set by a long press on a row.
+    @State private var messageActions: MessageActionTarget?
     /// Whose profile is open, if anyone's — set by a tap on a row's avatar or name.
     @State private var profilePeer: ProfilePeer?
     @Environment(\.entityNames) private var names
@@ -164,6 +166,15 @@ struct ChannelTimelineView: View {
         // The same modifier a thread uses, so the two surfaces cannot present a
         // different profile sheet for the same tap.
         .profileSheet(peer: $profilePeer, presence: presence)
+        // Likewise the same actions sheet, from the same long press. The channel is the
+        // surface that offers "Reply in thread", because it is the one with a thread to
+        // push — and that reply is a request to *write*, so the composer takes the keyboard
+        // on arrival.
+        .messageActionsSheet(
+            target: $messageActions,
+            actions: model,
+            onReplyInThread: { open(thread: $0, focusingComposer: true) }
+        )
         .navigationDestination(item: $openedThread) { route in
             ThreadView(
                 root: route.root,
@@ -172,7 +183,8 @@ struct ChannelTimelineView: View {
                 sender: sender,
                 opener: opener,
                 presence: presenceStore,
-                selfPubkey: selfPubkey
+                selfPubkey: selfPubkey,
+                focusingComposer: route.focusesComposer
             )
         }
         .task { await model.run() }
@@ -240,12 +252,11 @@ struct ChannelTimelineView: View {
             mentions: model.mentions(for: row.id),
             replyParticipants: model.participants(for: row.id),
             selfPubkey: selfPubkey,
-            isOwn: model.isOwn(row),
             onRetry: { model.retry($0) },
             onReact: { model.react($0, on: row.id) },
             onToggleReaction: { model.toggleReaction($0, on: row.id) },
-            onDelete: { model.delete($0) },
             onOpenThread: row.isDeleted ? nil : { open(thread: row) },
+            onLongPress: { messageActions = MessageActionTarget(row: row, isOwn: model.isOwn(row)) },
             onOpenProfile: { profilePeer = ProfilePeer(pubkey: $0) }
         )
         // The shared constant, not a bare `.padding(.horizontal)`: the day separator starts
@@ -344,9 +355,13 @@ struct ChannelTimelineView: View {
 
     /// Opens the thread a row belongs to: its own id when it is the opener, its
     /// root when it is a (broadcast) reply.
-    private func open(thread row: TimelineRow) {
+    ///
+    /// `focusingComposer` is set only by the actions sheet's "Reply in thread". The row's own
+    /// tap and its replies strip are someone going to *read*, and raising a keyboard over
+    /// what they came to read is the wrong answer to both.
+    private func open(thread row: TimelineRow, focusingComposer: Bool = false) {
         let root = row.rootID ?? row.id
-        openedThread = ThreadRoute(root: root, channel: channelID)
+        openedThread = ThreadRoute(root: root, channel: channelID, focusesComposer: focusingComposer)
     }
 
     /// A typer's name, through the injected directory — the same answer the sidebar,
@@ -355,31 +370,4 @@ struct ChannelTimelineView: View {
     private func authorName(_ pubkey: String) -> String {
         names.name(for: pubkey)
     }
-}
-
-/// A pushed thread: its root id, the channel it lives in, and where it should land. No
-/// title — the thread resolves its own heading through the shared directory, so a DM's
-/// thread cannot be labelled with the group name the pushing view happened to be showing.
-struct ThreadRoute: Hashable, Identifiable {
-    let root: String
-    let channel: String
-    /// Where the thread opens. Defaults to the newest reply, which is where a thread
-    /// reached from a message in its own channel should open — the reader is already
-    /// looking at the opener.
-    var anchor: ThreadLanding = .latestReply
-
-    /// Deliberately the root alone, not the anchor with it. A thread is one destination
-    /// however it was reached, and folding the anchor in would let the same thread be
-    /// pushed twice onto the same stack.
-    var id: String { root }
-}
-
-/// Where a thread rests when it opens.
-enum ThreadLanding: Hashable, Sendable {
-    /// The newest reply — a conversation's resting position, and where someone who came
-    /// to catch up wants to be.
-    case latestReply
-    /// The message that started the thread, for someone who came to find out what it is
-    /// about.
-    case opener
 }
