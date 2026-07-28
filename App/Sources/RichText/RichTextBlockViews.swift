@@ -97,6 +97,46 @@ private struct RichListRow: View {
     }
 }
 
+// MARK: - Headings
+
+/// A markdown heading, and the rule a level-1 heading draws under itself.
+///
+/// Its own view rather than a case body in ``RichTextView`` because it is the one block
+/// whose rendering branches on its own content, and that branch belongs with the thing
+/// it is about.
+struct RichHeadingView: View {
+    let level: Int
+    let text: AttributedString
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Semibold named while the font is built, not a `.fontWeight(.semibold)`
+            // over it: the app's typeface drops a weight asked for by trait, so the
+            // modifier this replaces drew every heading at body weight.
+            RichTextInline.text(text, base: Self.style(level))
+                .font(.hive(Self.style(level), weight: .semibold))
+                .frame(maxWidth: .infinity, alignment: .leading)
+            // A rule under a level-1 heading and no other, matching upstream's
+            // `autoAddDividerLineAfterH1`. It is what makes a `#` title read as the
+            // top of a document rather than as a slightly larger sentence.
+            if level == 1 {
+                RichRuleView()
+            }
+        }
+    }
+
+    /// The system text style a markdown heading level is set at — a style rather than a
+    /// built font, because the inline pass needs to name a weight against it.
+    static func style(_ level: Int) -> Font.TextStyle {
+        switch level {
+        case 1: .title2
+        case 2: .title3
+        case 3: .headline
+        default: .subheadline
+        }
+    }
+}
+
 // MARK: - Code
 
 /// A fenced code block: monospaced, on a subtle fill, its raw text never inline- or

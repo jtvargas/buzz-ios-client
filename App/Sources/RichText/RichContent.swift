@@ -46,6 +46,18 @@ enum RichBlock: Equatable, Sendable {
     /// with it. A case carrying only a URL would make that impossible to get right and
     /// easy to not notice.
     case media(MessageMedia)
+    /// A card for a link the message points at, appended after everything the author
+    /// wrote — see ``RichTextLinkPreview``.
+    ///
+    /// # Why a block and not something the paragraph carries
+    ///
+    /// A card is not where its link is. The link stays exactly where the author typed it,
+    /// still a pressable run in the sentence; the card is a separate object drawn at the
+    /// end of the message, the way both reference clients draw theirs and the way an
+    /// attachment already behaves here. Modelling it as a block is what lets
+    /// ``RichTextSpacing`` reason about the air around it and the memo cache carry it,
+    /// with no second render path to keep in step.
+    case linkPreview(LinkPreview)
 }
 
 /// What a list item draws in place of its list's own bullet or number.
@@ -128,6 +140,11 @@ extension [RichBlock] {
                 .table(table.mapCells(transform))
             case .rule:
                 block // a rule has no inline to transform
+            case .linkPreview:
+                // Derived from the message's links rather than authored, and appended
+                // after both passes that use this walk have already run. There is no
+                // inline in it to transform.
+                block
             case .media:
                 // Nothing here is text. The alt an author wrote is carried on the
                 // ``MessageMedia`` for VoiceOver and for the failure placeholder, not as

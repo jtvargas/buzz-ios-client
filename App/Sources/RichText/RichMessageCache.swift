@@ -3,9 +3,9 @@ import Foundation
 
 extension RichMessage {
     /// Parses `text` into blocks, lifts out the pictures it places, links what it
-    /// contains, and resolves its entities against `resolver`. The full pipeline, done as
-    /// one value transform: parse (pure) → media (pure) → autolink (pure) → entity pass
-    /// (pure).
+    /// contains, resolves its entities against `resolver`, and appends a card for each
+    /// link it points at. The full pipeline, done as one value transform: parse (pure) →
+    /// media (pure) → autolink (pure) → entity pass (pure) → link previews (pure).
     ///
     /// `media` is what the message's `imeta` tags describe, and it *describes* rather
     /// than contributes: an entry naming a URL the text never places draws nothing. See
@@ -16,11 +16,16 @@ extension RichMessage {
     /// Autolinking then runs before the entity pass, not after, so a detected URL or
     /// email is already a link by the time `@`/`#` are scanned — which is what stops
     /// `https://host/#anchor` resolving an anchor as a channel reference.
+    ///
+    /// The card pass runs last, over the finished blocks, because it reads *links* rather
+    /// than text: by then every URL the message contains is a link run and every one it
+    /// only appears to contain — inside a code span, inside a fence, under a picture — is
+    /// not. See ``RichTextLinkPreview``.
     static func make(_ text: String, media: [MessageMedia] = [], resolver: MentionResolver) -> RichMessage {
         let parsed = RichTextMedia.lift(RichTextParser.parse(text), describedBy: media)
         let blocks = parsed.mapInlines(RichTextAutolink.apply)
         let resolved = RichTextEntities.resolve(blocks, with: resolver)
-        return RichMessage(blocks: resolved)
+        return RichMessage(blocks: RichTextLinkPreview.append(to: resolved))
     }
 }
 

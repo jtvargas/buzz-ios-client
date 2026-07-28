@@ -38,6 +38,12 @@ extension RichMessage {
             return AttributedString()
         case let .media(media):
             return AttributedString(noun(for: media.kind))
+        case .linkPreview:
+            // Nothing, and for the opposite reason to a picture's. A card is a *second*
+            // rendering of a link whose text is still in the message, so the snippet
+            // already has it; adding the card's title would print the same link twice in
+            // the one truncated line a sidebar row gets.
+            return AttributedString()
         }
     }
 
