@@ -39,13 +39,20 @@ enum SidebarSection: String, CaseIterable, Hashable, Sendable, Identifiable {
         }
     }
 
-    /// The 32-point column that keeps every header title on one leading edge.
+    /// The column that keeps every header title on one leading edge.
     ///
-    /// The widest current glyph is `bubble.left.and.text.bubble.right.fill`; at the
-    /// header's `.title3` bold configuration it fits inside 32 points. The app test
-    /// measures every section glyph with that same configuration, so changing a symbol
-    /// or its weight cannot silently make this column too narrow.
-    static let symbolColumnWidth: CGFloat = 32
+    /// Measured, not chosen. The widest of the four is
+    /// `bubble.left.and.text.bubble.right.fill`, which renders **34.67 points** wide at the
+    /// header's `.title3` bold configuration — so this started at 32 and the test below
+    /// failed it. That is the point of having the test: a SwiftUI `.frame` does not clip, so a
+    /// column narrower than its glyph does not look wrong here, it silently pushes that one
+    /// symbol out into the 8-point gap and sets "Direct Messages" closer to its icon than
+    /// "Channels" is to the `#`.
+    ///
+    /// The test measures every section glyph at that same configuration and asserts this
+    /// contains it, so changing a symbol, the text style, or the weight cannot quietly
+    /// reintroduce the overlap.
+    static let symbolColumnWidth: CGFloat = 36
 
     /// The `UserDefaults` key behind this section's expansion state.
     ///

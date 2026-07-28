@@ -14,7 +14,7 @@ enum LinkPreviewIcon {
     /// SF Symbols, so they inherit the card's colour and Dynamic Type; named per kind
     /// rather than one generic mark, because on the cards this app draws most often —
     /// a pull request from CI, a repository — the shape is the useful half of the card
-    /// before any pixel arrives from the network.
+    /// before the words on it are read.
     static func symbol(for kind: LinkPreview.Kind) -> String {
         switch kind {
         case .githubPullRequest: "arrow.triangle.pull"
