@@ -12,7 +12,7 @@ struct EngineStatePill: View {
                 .fill(color)
                 .frame(width: 8, height: 8)
             Text(label)
-                .font(.caption.weight(.medium))
+                .font(.hive(.caption, weight: .medium))
         }
         .foregroundStyle(.secondary)
         .accessibilityElement(children: .ignore)

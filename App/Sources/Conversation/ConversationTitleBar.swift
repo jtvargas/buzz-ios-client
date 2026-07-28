@@ -143,7 +143,7 @@ struct ConversationTitleBar: ViewModifier {
             markView
             VStack(alignment: .leading, spacing: Self.betweenLines) {
                 Text(title)
-                    .font(.subheadline.weight(.bold))
+                    .font(.hive(.subheadline, weight: .bold))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
                     .truncationMode(.tail)
@@ -171,7 +171,7 @@ struct ConversationTitleBar: ViewModifier {
                 // A step above the name rather than two: at `.title3` the `#` was the
                 // loudest thing in the bar and hung below the second line's baseline, which
                 // is most of what read as the heading being crammed.
-                .font(.body.weight(.semibold))
+                .font(.hiveSymbol(.body, weight: .semibold))
                 .foregroundStyle(.secondary)
                 .accessibilityHidden(true)
         case let .avatar(url, seed, initials):
@@ -188,7 +188,7 @@ struct ConversationTitleBar: ViewModifier {
                     .accessibilityHidden(true)
             }
             Text(subtitle.text)
-                .font(.caption2)
+                .font(.hive(.caption2))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .truncationMode(.tail)

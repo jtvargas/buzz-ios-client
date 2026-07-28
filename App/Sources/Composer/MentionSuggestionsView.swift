@@ -83,11 +83,11 @@ private struct MentionSuggestionRow: View {
             mark
             VStack(alignment: .leading, spacing: 1) {
                 Text(title)
-                    .font(.subheadline.weight(.medium))
+                    .font(.hive(.subheadline, weight: .medium))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
                 Text(suggestion.secondaryLabel)
-                    .font(.caption)
+                    .font(.hive(.caption))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
@@ -120,7 +120,7 @@ private struct MentionSuggestionRow: View {
             )
         case .channel:
             Image(systemName: "number")
-                .font(.footnote.weight(.semibold))
+                .font(.hiveSymbol(.footnote, weight: .semibold))
                 .foregroundStyle(.tint)
                 // Same footprint and corner ratio as ``AvatarView``'s rounded square,
                 // so the two kinds of row align without sharing a code path.
@@ -135,12 +135,12 @@ private struct MentionSuggestionRow: View {
     private var trailingBadge: some View {
         if suggestion.isAgent {
             Image(systemName: "sparkles")
-                .font(.caption)
+                .font(.hiveSymbol(.caption))
                 .foregroundStyle(.tint)
                 .accessibilityLabel("Agent")
         } else if suggestion.isPrivateChannel {
             Image(systemName: "lock")
-                .font(.caption)
+                .font(.hiveSymbol(.caption))
                 .foregroundStyle(.secondary)
                 .accessibilityLabel("Private channel")
         }

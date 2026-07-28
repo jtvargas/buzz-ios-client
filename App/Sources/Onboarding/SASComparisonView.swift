@@ -21,19 +21,19 @@ struct SASComparisonView: View {
         VStack(spacing: 28) {
             VStack(spacing: 8) {
                 Image(systemName: "lock.shield")
-                    .font(.system(size: 44))
+                    .font(.hiveSymbol(fixedSize: 44))
                     .foregroundStyle(.tint)
                     .accessibilityHidden(true)
                 Text("Check your desktop")
-                    .font(.title3.weight(.semibold))
+                    .font(.hive(.title3, weight: .semibold))
                 Text("You're about to move your identity to this device. Confirm your desktop shows the same code.")
-                    .font(.subheadline)
+                    .font(.hive(.subheadline))
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
             }
 
             Text(groupedCode)
-                .font(.system(size: 48, weight: .bold, design: .monospaced))
+                .font(.hiveMono(fixedSize: 48, weight: .bold))
                 .kerning(2)
                 .padding(.vertical, 20)
                 .frame(maxWidth: .infinity)

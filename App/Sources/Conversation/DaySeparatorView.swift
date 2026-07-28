@@ -37,7 +37,7 @@ struct DaySeparatorView: View {
             // the whole row width, so a long localised date can wrap instead of being
             // pushed off a narrow screen at the accessibility text sizes.
             Text(label)
-                .font(.subheadline.weight(.bold))
+                .font(.hive(.subheadline, weight: .bold))
                 .foregroundStyle(.primary)
             Rectangle()
                 .fill(Color.secondary.opacity(0.25))

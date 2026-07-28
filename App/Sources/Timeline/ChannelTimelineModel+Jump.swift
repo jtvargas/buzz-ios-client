@@ -3,12 +3,16 @@ import Foundation
 
 // MARK: - Jumps
 
-/// Where the two affordances above the composer take the reader, kept beside the model
+/// Where the affordance above the composer takes the reader, kept beside the model
 /// rather than in it so the model file stays about the observation, pagination, and the
 /// freeze itself.
 extension ChannelTimelineModel {
     /// Releases the frozen tail, renders everything loaded, and asks the view to
-    /// scroll to the newest row — `↓ Latest`, and an own send.
+    /// scroll to the newest row.
+    ///
+    /// No control offers this any more — `↓ Latest` is gone. It stays because an own send
+    /// still needs it (``jumpToLatestIfNeeded()``), and because it is where
+    /// ``jumpToNewMessages()`` lands a press that raced the reader back to the bottom.
     ///
     /// The freeze is exactly the inverse of ``isAtBottom``, so setting that releases
     /// it — asserted, not waited for. The scaffold's geometry callback confirms the

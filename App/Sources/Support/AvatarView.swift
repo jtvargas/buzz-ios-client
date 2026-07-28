@@ -182,7 +182,11 @@ struct AvatarView: View {
             .fill(Color(hue: Self.hue(for: seed), saturation: 0.5, brightness: 0.8).gradient)
             .overlay {
                 Text(monogram)
-                    .font(.system(size: size * (monogram.count > 1 ? 0.34 : 0.42), weight: .semibold))
+                    // Deliberately the non-scaling overload: `size` is already a
+                    // `@ScaledMetric` at every caller, so a font that scaled again would
+                    // compound the two and push the initials out of their own tile at the
+                    // accessibility sizes. Same behaviour `.system(size:)` had here.
+                    .font(.hive(fixedSize: size * (monogram.count > 1 ? 0.34 : 0.42), weight: .semibold))
                     .foregroundStyle(.white)
                     .minimumScaleFactor(0.5)
                     .lineLimit(1)

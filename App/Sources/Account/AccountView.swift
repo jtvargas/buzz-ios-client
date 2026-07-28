@@ -70,7 +70,7 @@ struct AccountView: View {
             }
             .disabled(model.isSaving || !model.hasLoaded)
             if let saveError = model.saveError {
-                Text(saveError).font(.footnote).foregroundStyle(.red)
+                Text(saveError).font(.hive(.footnote)).foregroundStyle(.red)
             }
         }
     }
@@ -88,7 +88,7 @@ struct AccountView: View {
                     Image(systemName: copiedNpub ? "checkmark" : "doc.on.doc")
                 } label: {
                     Text(model.npub)
-                        .font(.footnote.monospaced())
+                        .font(.hiveMono(.footnote))
                         .lineLimit(1)
                         .truncationMode(.middle)
                 }
@@ -137,7 +137,7 @@ struct AccountView: View {
 
             if signOutFailed {
                 Text("Couldn't remove your key from this device. You're still signed in — please try again.")
-                    .font(.footnote)
+                    .font(.hive(.footnote))
                     .foregroundStyle(.red)
             }
         }

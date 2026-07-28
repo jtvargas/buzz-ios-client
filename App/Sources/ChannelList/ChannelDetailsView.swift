@@ -40,7 +40,7 @@ struct ChannelDetailsView: View {
                 Section("Developer") {
                     LabeledContent("Channel ID") {
                         Text(channel.id)
-                            .font(.caption.monospaced())
+                            .font(.hiveMono(.caption))
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                             .textSelection(.enabled)
@@ -76,10 +76,10 @@ private extension ChannelDetailsView {
                     size: 76
                 )
                 Text(conversation.title)
-                    .font(.title3.weight(.semibold))
+                    .font(.hive(.title3, weight: .semibold))
                 if let subtitle = peerSubtitle(conversation) {
                     Text(subtitle)
-                        .font(.subheadline)
+                        .font(.hive(.subheadline))
                         .foregroundStyle(.secondary)
                 }
                 if let peer = conversation.peer {
@@ -87,7 +87,7 @@ private extension ChannelDetailsView {
                         presence.isOnline(peer) ? "Online" : "Offline",
                         systemImage: presence.isOnline(peer) ? "circle.fill" : "circle"
                     )
-                    .font(.caption)
+                    .font(.hive(.caption))
                     .foregroundStyle(presence.isOnline(peer) ? .green : .secondary)
                 }
             }
@@ -164,10 +164,10 @@ private struct MemberRow: View {
             AvatarView(url: picture, seed: pubkey, monogram: initials, size: 32)
             VStack(alignment: .leading, spacing: 1) {
                 Text(name)
-                    .font(.body.weight(.medium))
+                    .font(.hive(.body, weight: .medium))
                 if let role, !role.isEmpty {
                     Text(role.capitalized)
-                        .font(.caption)
+                        .font(.hive(.caption))
                         .foregroundStyle(.secondary)
                 }
             }

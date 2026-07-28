@@ -76,7 +76,7 @@ struct PairingFlowView: View {
                     .overlay(RoundedRectangle(cornerRadius: 20).strokeBorder(.tint, lineWidth: 2))
                     .padding(.horizontal)
                 Text("Point the camera at the pairing QR on your desktop.")
-                    .font(.footnote)
+                    .font(.hive(.footnote))
                     .foregroundStyle(.secondary)
             } else {
                 ContentUnavailableView(
@@ -88,7 +88,7 @@ struct PairingFlowView: View {
 
             if let scanError = model.scanError {
                 Text(scanError)
-                    .font(.footnote)
+                    .font(.hive(.footnote))
                     .foregroundStyle(.red)
                     .multilineTextAlignment(.center)
                 Button("Scan again") { scannerID += 1; pasteLink = "" }
@@ -104,7 +104,7 @@ struct PairingFlowView: View {
     private func pasteFallback(_ model: PairingModel) -> some View {
         VStack(spacing: 8) {
             Text("Or paste the pairing link")
-                .font(.caption)
+                .font(.hive(.caption))
                 .foregroundStyle(.secondary)
             HStack {
                 TextField("nostrpair://…", text: $pasteLink)
@@ -132,10 +132,10 @@ struct PairingFlowView: View {
     private var completed: some View {
         VStack(spacing: 16) {
             Image(systemName: "checkmark.seal.fill")
-                .font(.system(size: 56))
+                .font(.hiveSymbol(fixedSize: 56))
                 .foregroundStyle(.green)
             Text("You're paired!")
-                .font(.title3.weight(.semibold))
+                .font(.hive(.title3, weight: .semibold))
             Text("Your identity is now on this device.")
                 .foregroundStyle(.secondary)
         }

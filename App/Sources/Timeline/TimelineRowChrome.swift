@@ -20,10 +20,10 @@ struct MessagePreview: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(authorName)
-                .font(.subheadline.weight(.bold))
+                .font(.hive(.subheadline, weight: .bold))
             if row.isDeleted {
                 Text("message deleted")
-                    .font(.body)
+                    .font(.hive(.body))
                     .italic()
                     .foregroundStyle(.secondary)
             } else {
@@ -70,7 +70,7 @@ struct RepliesButton: View {
             HStack(spacing: 8) {
                 if !participants.isEmpty { faces }
                 Text(count == 1 ? "1 reply" : "\(count) replies")
-                    .fontWeight(.semibold)
+                    .font(.hive(.caption, weight: .semibold))
                     .foregroundStyle(.tint)
                 if let lastReplyAt {
                     Text(ThreadSummaryDateFormatter.label(for: lastReplyAt))
@@ -78,7 +78,7 @@ struct RepliesButton: View {
                 }
                 Spacer(minLength: 0)
             }
-            .font(.caption)
+            .font(.hive(.caption))
             .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
             .contentShape(.rect)
         }
@@ -161,7 +161,7 @@ struct RetryStrip: View {
             HStack(spacing: 6) {
                 Image(systemName: "exclamationmark.circle.fill")
                 Text(label)
-                    .font(.caption)
+                    .font(.hive(.caption))
             }
             .foregroundStyle(.red)
         }

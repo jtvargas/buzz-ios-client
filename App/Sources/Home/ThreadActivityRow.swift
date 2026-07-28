@@ -106,12 +106,12 @@ struct ThreadActivityRow: View {
         HStack(alignment: .center, spacing: 8) {
             VStack(alignment: .leading, spacing: 1) {
                 Text(channelTitle)
-                    .font(.subheadline.weight(.bold))
+                    .font(.hive(.subheadline, weight: .bold))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
                 if let participants = ThreadParticipantSummary.text(names: peopleNames) {
                     Text(participants)
-                        .font(.caption)
+                        .font(.hive(.caption))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .truncationMode(.tail)

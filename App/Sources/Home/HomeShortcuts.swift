@@ -51,18 +51,18 @@ struct HomeShortcutCard: View {
                 .frame(width: Self.glyphSize, height: Self.glyphSize)
                 .overlay {
                     Image(systemName: shortcut.symbol)
-                        .font(.subheadline.weight(.semibold))
+                        .font(.hiveSymbol(.subheadline, weight: .semibold))
                         .foregroundStyle(Color.accentColor)
                 }
                 .accessibilityHidden(true)
             Spacer(minLength: 0)
             VStack(alignment: .leading, spacing: 1) {
                 Text(shortcut.title)
-                    .font(.subheadline.weight(.semibold))
+                    .font(.hive(.subheadline, weight: .semibold))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
                 Text(shortcut.countLabel(count))
-                    .font(.caption)
+                    .font(.hive(.caption))
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
                     .lineLimit(1)

@@ -25,7 +25,7 @@ struct OnboardingView: View {
                     actions
                     if let error {
                         Text(error.message)
-                            .font(.footnote)
+                            .font(.hive(.footnote))
                             .foregroundStyle(.red)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .accessibilityLabel("Error: \(error.message)")
@@ -49,11 +49,11 @@ struct OnboardingView: View {
     private var header: some View {
         VStack(spacing: 8) {
             Image(systemName: "hexagon.fill")
-                .font(.system(size: 56))
+                .font(.hiveSymbol(fixedSize: 56))
                 .foregroundStyle(.tint)
                 .accessibilityHidden(true)
             Text("Connect your identity to start messaging on the Buzz relay.")
-                .font(.subheadline)
+                .font(.hive(.subheadline))
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
         }
@@ -63,7 +63,7 @@ struct OnboardingView: View {
     private var relaySection: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("RELAY")
-                .font(.caption2.weight(.semibold))
+                .font(.hive(.caption2, weight: .semibold))
                 .foregroundStyle(.secondary)
             TextField("ws://host:port", text: $relayURLString)
                 .textContentType(.URL)
@@ -74,7 +74,7 @@ struct OnboardingView: View {
                 .padding(12)
                 .glassEffect(.regular, in: .rect(cornerRadius: 12))
             Text("Used when creating a new identity or pasting a key. Scanning a QR uses the relay from your desktop.")
-                .font(.caption2)
+                .font(.hive(.caption2))
                 .foregroundStyle(.secondary)
         }
     }

@@ -2,22 +2,25 @@ import SwiftUI
 
 /// Where a jump asks the scroll view to land.
 enum ConversationJumpTarget: Equatable {
-    /// The newest message: `↓ Latest`, and an own send that would otherwise arrive out
-    /// of sight.
+    /// The newest message: an own send that would otherwise arrive out of sight, and the
+    /// fallback for a press that raced the reader back to the bottom.
     case bottom
     /// One particular message, by id — the *first* arrival the reader has not seen.
     case message(String)
 }
 
 /// Which control a conversation is offering above its composer, if any.
+///
+/// One case since `↓ Latest` was withdrawn, and still an enum rather than the bare `Int?`
+/// it is now isomorphic to: everything downstream reads a named answer, and a second
+/// affordance would be a case here instead of a re-typing of `control`, the animation's
+/// `value:`, and the tests.
 enum ConversationJumpControl: Equatable {
     /// Arrivals are waiting behind the frozen tail: `N new messages`.
     case unread(Int)
-    /// Nothing new, but the newest message is a long way below: `↓ Latest`.
-    case latest
 }
 
-/// The jump controls' state, held apart from the rows a conversation renders.
+/// The jump control's state, held apart from the rows a conversation renders.
 ///
 /// # Why its own object rather than two more properties on the timeline model
 ///
@@ -37,18 +40,18 @@ final class ConversationJumpState {
     /// The oldest of those arrivals: where the pill lands the reader, rather than at the
     /// bottom past everything it just announced.
     private(set) var firstUnreadID: String?
-    /// Whether the newest message is far enough below to be worth a control of its own.
-    /// A wider band than the one that freezes the tail — see ``ConversationScaffold``.
-    var isFarFromBottom = false
 
     /// The one control to show, or none.
     ///
-    /// The unread pill wins every tie: it is the specific answer to "what happened while
-    /// I was reading", where `↓ Latest` is only the general one. Two floating controls
-    /// stacked over a conversation is the state this enum exists to make unrepresentable.
+    /// Distance no longer reaches this. `↓ Latest` was offered on a half-viewport band and
+    /// answered a question the scroll view already answers — so it sat over the conversation
+    /// for as long as someone read history, which is the whole time it had nothing to say.
+    /// What is left appears only because something arrived, and leaves when it is read.
+    ///
+    /// That is also why the scaffold no longer projects a second distance band: this was its
+    /// only reader.
     var control: ConversationJumpControl? {
-        if unreadCount > 0 { return .unread(unreadCount) }
-        return isFarFromBottom ? .latest : nil
+        unreadCount > 0 ? .unread(unreadCount) : nil
     }
 
     /// Records what the tail is holding back: how many, and the oldest one's id.
@@ -66,44 +69,49 @@ final class ConversationJumpState {
     }
 }
 
-/// What floats above the composer while the reader is not at the bottom: `N new
-/// messages` when arrivals are waiting behind the freeze, `↓ Latest` when there is
-/// simply a long way to fall, and nothing otherwise.
+/// What floats above the composer while arrivals are waiting behind the freeze, and
+/// nothing at all otherwise.
 ///
-/// One view for both, and the only view that reads ``ConversationJumpState`` — which is
-/// what keeps a change of count away from the message list.
+/// The only view that reads ``ConversationJumpState``, which is what keeps a change of
+/// count away from the message list.
 struct ConversationJumpControls: View {
     let state: ConversationJumpState
     /// Land on the first arrival the reader has not seen.
     let onJumpToNew: () -> Void
-    /// Land on the newest message.
-    let onJumpToLatest: () -> Void
 
     var body: some View {
         Group {
-            switch state.control {
-            case let .unread(count):
+            if case let .unread(count) = state.control {
                 NewMessagesPill(count: count, action: onJumpToNew)
                     .transition(.scale(scale: 0.9).combined(with: .opacity))
-            case .latest:
-                LatestPill(action: onJumpToLatest)
-                    .transition(.scale(scale: 0.9).combined(with: .opacity))
-            case nil:
-                EmptyView()
             }
         }
-        // Scoped to which control is showing, never to the list's content: an ambient
-        // animation here would animate row insertion in a bottom-anchored list.
+        // Scoped to whether the control is showing, never to the list's content: an
+        // ambient animation here would animate row insertion in a bottom-anchored list.
         .animation(.smooth(duration: 0.2), value: state.control)
     }
 }
 
-/// The "N new messages" affordance: shown when the reader has scrolled up and the
-/// conversation is holding new arrivals back, so nothing moves under them until they
-/// ask.
+/// The `N new messages` affordance: shown when the reader has scrolled up and the
+/// conversation is holding new arrivals back, so nothing moves under them until they ask.
 ///
-/// Prominent, because it reports something that happened rather than offering a way to
-/// travel — and because it must read as the one control when it replaces ``LatestPill``.
+/// # Why plain glass, and why smaller
+///
+/// It was `.glassProminent`, which was an argument about rank: it had to read as *the* one
+/// control in the spot `↓ Latest` otherwise occupied. Nothing shares the spot now, so the
+/// tint buys no clarity and spends the surface's only accent on something a reader is free
+/// to ignore — the amber capsule was the loudest thing on screen over a conversation it was
+/// merely annotating.
+///
+/// The size comes from Slack's jump pill, the reference the owner supplied: a compact
+/// capsule of caption-sized text rather than a button. `.controlSize(.small)` is part of
+/// that and not decoration — a button style's own insets sit *outside* the label, so the
+/// padding and the height floor below cannot reach them, and `.small` is the only lever
+/// that does. Same pairing as ``ThreadActivityRow``'s reply button.
+///
+/// Unmeasured, deliberately: Liquid Glass rendering is on the owner's device pass rather
+/// than in a test, as ADR-0004 records. If it still reads large, `.controlSize` is the line
+/// to move.
 struct NewMessagesPill: View {
     let count: Int
     let action: () -> Void
@@ -117,51 +125,28 @@ struct NewMessagesPill: View {
     var body: some View {
         let label = Self.label(count: count)
         return Button(action: action) {
-            JumpPillLabel(text: label)
+            // Inlined from a `JumpPillLabel` that existed so this pill and `↓ Latest` could
+            // not drift apart in metrics. With one pill the shared type was a second place
+            // to look for one set of numbers.
+            HStack(spacing: 4) {
+                Image(systemName: "arrow.down")
+                    .font(.hiveSymbol(.caption2, weight: .semibold))
+                Text(label)
+                    .font(.hive(.caption2, weight: .semibold))
+                    // The count changes under a still pill; without this the whole label
+                    // reflows by a fraction of a point as the digits change width.
+                    .monospacedDigit()
+            }
+            .padding(.horizontal, 10)
+            // A floor rather than a height. The label keeps its intrinsic size wherever
+            // that is taller, so an accessibility text size grows the capsule instead of
+            // being clipped inside it — which a `.frame(height:)` here would do.
+            .frame(minHeight: 28)
         }
-        .buttonStyle(.glassProminent)
+        .buttonStyle(.glass)
+        .controlSize(.small)
         .clipShape(.capsule)
         .accessibilityLabel(label)
         .accessibilityHint("Double tap to jump to the first new message")
-    }
-}
-
-/// The `↓ Latest` affordance: shown when the newest message is far below and nothing is
-/// waiting behind the freeze, so the only thing to offer is the way back.
-///
-/// Plain glass rather than prominent: it is always available while the reader is up in
-/// history, and a tinted capsule sitting over a conversation for as long as someone
-/// reads it is louder than what it does.
-struct LatestPill: View {
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            JumpPillLabel(text: "Latest")
-        }
-        .buttonStyle(.glass)
-        .clipShape(.capsule)
-        .accessibilityLabel("Latest")
-        .accessibilityHint("Double tap to jump to the newest message")
-    }
-}
-
-/// The arrow and the words inside either pill, so the two cannot drift apart in metrics
-/// while swapping places in the same spot on screen.
-private struct JumpPillLabel: View {
-    let text: String
-
-    var body: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "arrow.down")
-                .font(.caption.weight(.bold))
-            Text(text)
-                .font(.caption.weight(.semibold))
-                // The count changes under a still pill; without this the whole label
-                // reflows by a fraction of a point as the digits change width.
-                .monospacedDigit()
-        }
-        .padding(.horizontal, 12)
-        .frame(minHeight: 32)
     }
 }

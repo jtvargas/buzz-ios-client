@@ -24,7 +24,11 @@ enum RichTextInline {
     ///
     /// See ``RichTextSegments`` for why an inline is no longer a single
     /// `Text(attributedString)`.
-    static func text(_ attributed: AttributedString, base: Font) -> Text {
+    ///
+    /// `base` is the *style* the block is set at, not a built font: see
+    /// ``RichTextStyle/styled(_:base:interactive:)`` for why the weights a mention and a
+    /// code span need can only be reached while the font is being built.
+    static func text(_ attributed: AttributedString, base: Font.TextStyle) -> Text {
         let styled = RichTextStyle.styled(attributed, base: base, interactive: true)
         return RichTextSegments.segments(of: styled).reduce(Text("")) { text, segment in
             guard let link = segment.link else {
