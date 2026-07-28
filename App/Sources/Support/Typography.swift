@@ -130,17 +130,29 @@ enum HiveTypography {
     /// The `UIFont` behind the same choice, for the surfaces UIKit still draws: the
     /// navigation bar's title, the tab bar's item labels, and the composer's text
     /// view. Scaled through `UIFontMetrics` because a `UIFont` does not scale itself.
-    static func uiFont(_ style: UIFont.TextStyle, weight: Font.Weight = .regular) -> UIFont {
+    ///
+    /// `traits` exists for the tests. `scaledFont(for:)` resolves against whatever the
+    /// current trait collection is *at the moment it is called*, and in a test process
+    /// there is no window backing that — the size comes back unmoved however the content
+    /// size category is staged, so the one property worth asserting here cannot be seen
+    /// without naming the traits. The unscaled face is what gets handed over either way:
+    /// a font `UIFontMetrics` has already scaled must never be given back to it, which
+    /// UIKit answers with an exception rather than a wrong size.
+    static func uiFont(
+        _ style: UIFont.TextStyle,
+        weight: Font.Weight = .regular,
+        compatibleWith traits: UITraitCollection? = nil
+    ) -> UIFont {
         let size = UIFontDescriptor.preferredFontDescriptor(
             withTextStyle: style,
             compatibleWith: UITraitCollection(preferredContentSizeCategory: .large)
         ).pointSize
+        let metrics = UIFontMetrics(forTextStyle: style)
         guard isAvailable, let lato = UIFont(name: face(for: weight).rawValue, size: size) else {
-            return UIFontMetrics(forTextStyle: style).scaledFont(
-                for: .systemFont(ofSize: size, weight: weight.uiKit)
-            )
+            let system = UIFont.systemFont(ofSize: size, weight: weight.uiKit)
+            return metrics.scaledFont(for: system, compatibleWith: traits)
         }
-        return UIFontMetrics(forTextStyle: style).scaledFont(for: lato)
+        return metrics.scaledFont(for: lato, compatibleWith: traits)
     }
 
     /// A text style's point size at the default content size — the base

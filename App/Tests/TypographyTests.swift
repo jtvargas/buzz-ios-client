@@ -152,8 +152,15 @@ struct TypographyTests {
         // to agree about the size a mention is inserted at.
         #expect(semibold.pointSize == body.pointSize)
 
-        let large = UIFontMetrics(forTextStyle: .body).scaledFont(
-            for: body,
+        // Asked for again under a larger content size, not scaled a second time. A font
+        // `UIFontMetrics` has already scaled cannot be handed back to it — UIKit raises
+        // `NSInvalidArgumentException` rather than returning a wrong answer, and an
+        // uncaught exception in a test *bundle* takes the whole run down with it, so
+        // this reads as a green summary over a run that stopped early. The property is
+        // the same one either way: the size this returns has to move with the reader's
+        // setting.
+        let large = HiveTypography.uiFont(
+            .body,
             compatibleWith: UITraitCollection(preferredContentSizeCategory: .accessibilityExtraExtraExtraLarge)
         )
         #expect(large.pointSize > body.pointSize)
