@@ -2,8 +2,7 @@ import BuzzKit
 import SwiftUI
 
 /// One sidebar row, Slack-style: the channel's glyph or the peer's avatar, the resolved
-/// name, and — when unread messages address you — a mention badge. One line, nothing
-/// else.
+/// name, and — when unread messages address you — a red badge. One line, nothing else.
 ///
 /// # Why there is no preview and no timestamp
 ///
@@ -49,7 +48,7 @@ struct ChannelRowView: View {
                 .lineLimit(1)
                 .truncationMode(.tail)
             Spacer(minLength: 8)
-            SidebarMentionBadge(indicator: row.indicator)
+            SidebarUnreadBadge(indicator: row.indicator)
         }
         .padding(.vertical, 4)
         .frame(minHeight: 40)
@@ -130,18 +129,21 @@ struct ChannelRowView: View {
 
 // MARK: - Indicator
 
-/// The mention badge: how many unread messages in this conversation are addressed to
-/// you.
+/// The unread badge: how many unread messages in this conversation are addressed to you.
 ///
-/// Nothing is drawn for ordinary unread — the bolded name already said so. A badge that
-/// appeared for both would be a badge meaning "something happened", and the whole point
-/// of this one is that it means "something happened *to you*".
+/// In a channel that is the ones that mention you. In a DM it is all of them — a room of
+/// two has nobody else to be talking to — so the badge means the same thing in both places
+/// and ``UnreadIndicator`` is what decides which count answers it.
+///
+/// Nothing is drawn for a channel's ordinary unread — the bolded name already said so. A
+/// badge that appeared for that too would be a badge meaning "something happened", and the
+/// whole point of this one is that it means "something happened *to you*".
 ///
 /// Red rather than the app tint, which is the one place this list departs from its own
 /// palette on purpose: a red count on a conversation row is what Slack and every system
 /// app on this phone use for "these are yours and you have not read them", and a badge
 /// that reads as decoration is a badge people walk past.
-private struct SidebarMentionBadge: View {
+private struct SidebarUnreadBadge: View {
     let indicator: UnreadIndicator
 
     var body: some View {
