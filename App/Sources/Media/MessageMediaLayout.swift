@@ -23,6 +23,14 @@ enum MessageMediaLayout {
     /// a message and starts being the message — and on an iPad, where a row is several
     /// hundred points wide, an uncapped attachment would run past the readable measure the
     /// text beside it keeps to.
+    ///
+    /// Upstream's rule is `min(screenWidth × 0.72, 320)`; the second half is taken and the
+    /// first is not. Its 72% is measured against the *screen*, which on a phone leaves an
+    /// attachment ~216 points wide inside a message column that is already ~300 — a
+    /// picture inset from text that was not, for no reason the reader can see. Here the
+    /// width offered is the message column's own, which the row has already inset past the
+    /// avatar gutter, so a picture lines up with the words above it and the cap does the
+    /// rest on a wide screen.
     static let maximumWidth: CGFloat = 320
 
     /// The tallest an attachment is drawn inline.
