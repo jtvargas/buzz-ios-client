@@ -42,7 +42,12 @@ extension SyncEngine {
         }
         let generation = readyGeneration
         readyWorkInFlight = true
-        let task: Task<Void, Never> = Task { [weak self] in await self?.onReady(generation: generation) }
+        let task: Task<Void, Never>
+        if directoryClient == nil {
+            task = Task { [weak self] in await self?.onReady(generation: generation) }
+        } else {
+            task = Task { [weak self] in await self?.onReadyAuthoritative(generation: generation) }
+        }
         onReadyTask = task
         await task.value
     }
@@ -59,33 +64,19 @@ extension SyncEngine {
         // run's claim. See ``SyncEngine/readyWorkInFlight``.
         defer { if generation == readyGeneration { readyWorkInFlight = false } }
 
+        // Backwards-compatible test seam for existing scripted WebSocket
+        // harnesses. Production always injects the authoritative HTTP client.
         let discovered = await discover(generation: generation)
         guard isCurrent(generation) else { return }
-
         let known = (try? await store.knownChannels()) ?? []
         guard isCurrent(generation) else { return }
-
         let channels = discovered.union(known)
 
-        // Ensure a standing content subscription for every discovered/known channel
-        // *before* the head reconcile: registration is a cheap socket REQ that returns
-        // at once, so live channel traffic starts flowing while the (possibly slow,
-        // HTTP-paged) reconcile runs. This is the only live path for channel-scoped
-        // events — the global REQ never receives them. Add-only: departures are handled
-        // by membership events and relay CLOSEs, not a discovery gap.
         await ensureChannelSubscriptions(channels)
         guard isCurrent(generation) else { return }
 
-        // With the rosters discovered, pull the relay's current-presence snapshot in a
-        // detached task so the who's-online roster fills at launch — but never awaited
-        // here. The snapshot is a one-shot query that can go unanswered (a relay that
-        // does not synthesize presence), and awaiting it would stall the reconcile and
-        // drain — the timeline's critical path — behind an enhancement. The generation
-        // guard inside abandons it if a reconnect supersedes this socket.
         Task { [weak self] in await self?.requestPresenceSnapshot(generation: generation) }
 
-        // Sorted so the reconcile order — and therefore the scripted HTTP request
-        // order in tests — is deterministic.
         for channel in channels.sorted() {
             guard isCurrent(generation) else { return }
             await reconcile(channel, generation: generation)

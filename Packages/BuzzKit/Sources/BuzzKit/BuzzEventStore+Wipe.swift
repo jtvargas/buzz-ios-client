@@ -28,6 +28,8 @@ public extension BuzzEventStore {
             try db.execute(sql: "DELETE FROM event") // ON DELETE CASCADE clears event_tag
             try db.execute(sql: "DELETE FROM outbox")
             try db.execute(sql: "DELETE FROM channel_sync")
+            try db.execute(sql: "DELETE FROM channel_access")
+            try db.execute(sql: "DELETE FROM channel_directory_request")
             try db.execute(sql: "DELETE FROM read_state")
             for table in Schema.projectionTables {
                 try db.execute(sql: "DELETE FROM \(table)")

@@ -117,6 +117,12 @@ extension SyncEngine {
                     await send(fresh)
                 }
             }
+            if case .failed? = resolution {
+                // A terminal write refusal is often the first signal that an
+                // already-open screen lost access. Reconcile its directory state
+                // promptly so the UI becomes read-only.
+                requestDirectoryRefresh()
+            }
             // .confirmed / .awaitingReauth / .failed / .exhausted / .retrying are
             // already recorded by the store; the timing (redrain, re-auth) is the
             // engine's, and a fresh `.ready` drives it.

@@ -234,8 +234,14 @@ final class AppEnvironment {
         let connection = RelayConnection(url: websocketURL, signer: signer)
         let subscriptions = SubscriptionManager(connection: connection, signer: signer)
         let presence = PresenceStore()
+        let httpTransport = URLSessionHTTPTransport()
         let windowClient = WindowClient(
-            transport: URLSessionHTTPTransport(),
+            transport: httpTransport,
+            queryURL: queryURL,
+            signer: signer
+        )
+        let directoryClient = ChannelDirectoryClient(
+            transport: httpTransport,
             queryURL: queryURL,
             signer: signer
         )
@@ -245,6 +251,7 @@ final class AppEnvironment {
             store: store,
             presence: presence,
             windowClient: windowClient,
+            directoryClient: directoryClient,
             signer: signer
         )
         self.engine = engine

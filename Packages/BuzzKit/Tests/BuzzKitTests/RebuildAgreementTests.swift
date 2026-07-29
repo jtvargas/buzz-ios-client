@@ -41,6 +41,9 @@ struct RebuildAgreementTests {
             // Replaceables, newest-first.
             try relay.event(.groupMetadata, #"{"name":"New"}"#, tags: [["d", "room-1"]], at: 2000),
             try relay.event(.groupMetadata, #"{"name":"Old"}"#, tags: [["d", "room-1"]], at: 900),
+            try relay.event(
+                .groupAdmins, "", tags: [["d", "room-1"], ["p", owner.pubkey, "owner"]], at: 2000
+            ),
             try author.event(.metadata, #"{"display_name":"Newer"}"#, at: 2000),
             try author.event(.metadata, #"{"display_name":"Older"}"#, at: 900),
             try agent.event(

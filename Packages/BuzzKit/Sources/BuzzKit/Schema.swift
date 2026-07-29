@@ -37,7 +37,8 @@ enum Schema {
     /// id identically in live ingest and an ordered replay.
     /// Version 4 adds the persisted Buzz agent directory (kind 10100), used by
     /// composer autocomplete to include eligible non-member agents.
-    static let projectionVersion = 4
+    /// Version 5 adds the relay-authored archived bit to channel metadata.
+    static let projectionVersion = 5
 
     /// The `meta` key under which the applied projection version is recorded.
     static let projectionVersionKey = "projection_version"
@@ -103,6 +104,35 @@ enum Schema {
         // addition, so a migration rather than a ``projectionVersion`` bump.
         migrator.registerMigration("v4.event-author") { db in
             try db.execute(sql: "CREATE INDEX event_author ON event(pubkey, kind, created_at DESC)")
+        }
+
+        // Relay directory membership is authoritative for whether a cached channel
+        // belongs in an identity's sidebar. This is precious local state: a failed
+        // or partial directory refresh must leave the last complete snapshot intact,
+        // and a projection rebuild must not erase it.
+        migrator.registerMigration("v5.channel-lifecycle") { db in
+            try db.execute(sql: """
+            CREATE TABLE channel_access (
+                identity_pubkey TEXT NOT NULL,
+                channel_id      TEXT NOT NULL,
+                state           TEXT NOT NULL,
+                updated_at      INTEGER NOT NULL,
+                PRIMARY KEY (identity_pubkey, channel_id)
+            )
+            """)
+            try db.execute(
+                sql: "CREATE INDEX channel_access_visible ON channel_access(identity_pubkey, state, channel_id)"
+            )
+            try db.execute(sql: """
+            CREATE TABLE channel_directory_request (
+                identity_pubkey TEXT PRIMARY KEY NOT NULL,
+                generation      INTEGER NOT NULL
+            )
+            """)
+
+            // Terminal relay refusals retain their content and reason, but must not
+            // advertise an action that can only repeat the same refusal.
+            try db.execute(sql: "ALTER TABLE outbox ADD COLUMN is_retryable INTEGER NOT NULL DEFAULT 1")
         }
 
         return migrator
@@ -223,6 +253,7 @@ enum Schema {
             about           TEXT,
             picture         TEXT,
             is_private      INTEGER NOT NULL DEFAULT 0,
+            is_archived     INTEGER NOT NULL DEFAULT 0,
             source_event_id TEXT NOT NULL,
             updated_at      INTEGER NOT NULL
         )
@@ -237,6 +268,19 @@ enum Schema {
         // lands the same roster under live ingest and under an ordered rebuild.
         try db.execute(sql: """
         CREATE TABLE channel_member (
+            channel_id        TEXT NOT NULL,
+            pubkey            TEXT NOT NULL,
+            role              TEXT,
+            source_created_at INTEGER NOT NULL,
+            source_event_id   TEXT NOT NULL,
+            PRIMARY KEY (channel_id, pubkey)
+        )
+        """)
+
+        // Relay-authored owner/admin roster (kind 39001). Kept separate from the
+        // membership roster because a relay may omit roles from kind 39002.
+        try db.execute(sql: """
+        CREATE TABLE channel_admin (
             channel_id        TEXT NOT NULL,
             pubkey            TEXT NOT NULL,
             role              TEXT,
@@ -389,7 +433,8 @@ enum Schema {
     /// keys bind them).
     static let projectionTables = [
         "thread_summary", "rich_content", "edit", "deletion", "event_owner",
-        "reaction", "thread", "agent_directory", "profile", "channel_member", "channel",
+        "reaction", "thread", "agent_directory", "profile",
+        "channel_admin", "channel_member", "channel",
     ]
 
     static func dropProjectionTables(_ db: Database) throws {

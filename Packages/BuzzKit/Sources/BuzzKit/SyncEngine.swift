@@ -1,6 +1,21 @@
 import Foundation
 import NostrCore
 
+/// Keeps the directory client's existential-backed collaborators behind one
+/// reference in the engine's stored state.
+final class ChannelDirectoryContext: @unchecked Sendable {
+    let client: ChannelDirectoryClient
+    var refreshGeneration = 0
+    var refreshInFlight = false
+    var refreshPending = false
+    var isForeground = true
+    var backstopGeneration = 0
+
+    init(client: ChannelDirectoryClient) {
+        self.client = client
+    }
+}
+
 /// The one actor that ties the whole client together: it owns the
 /// ``RelayConnection``, the ``SubscriptionManager``, the ``BuzzEventStore`` and its
 /// outbox, the ``WindowClient``, and the ``PresenceStore``, and drives them as a
@@ -97,6 +112,7 @@ public actor SyncEngine {
     let store: BuzzEventStore
     let presence: PresenceStore
     let windowClient: WindowClient
+    let directoryContext: ChannelDirectoryContext?
     let signer: any EventSigner
     let config: SyncEngineConfig
 
@@ -107,6 +123,27 @@ public actor SyncEngine {
     /// Sleeps the presence-sweep cadence. Injected on ``RelayConnection``'s
     /// principle so a test drives the sweep by hand rather than by the wall clock.
     let sleepFor: @Sendable (Duration) async throws -> Void
+    var directoryClient: ChannelDirectoryClient? { directoryContext?.client }
+    var directoryRefreshGeneration: Int {
+        get { directoryContext?.refreshGeneration ?? 0 }
+        set { directoryContext?.refreshGeneration = newValue }
+    }
+    var directoryRefreshInFlight: Bool {
+        get { directoryContext?.refreshInFlight ?? false }
+        set { directoryContext?.refreshInFlight = newValue }
+    }
+    var directoryRefreshPending: Bool {
+        get { directoryContext?.refreshPending ?? false }
+        set { directoryContext?.refreshPending = newValue }
+    }
+    var isForeground: Bool {
+        get { directoryContext?.isForeground ?? true }
+        set { directoryContext?.isForeground = newValue }
+    }
+    var directoryBackstopGeneration: Int {
+        get { directoryContext?.backstopGeneration ?? 0 }
+        set { directoryContext?.backstopGeneration = newValue }
+    }
 
     // MARK: - Observable engine state
 
@@ -165,6 +202,9 @@ public actor SyncEngine {
     /// only in ``stop()``.
     var channelContentSubscriptions: [String: SubscriptionID] = [:]
 
+    /// Monotonic request generation for authoritative directory reads. It is
+    /// independent of the socket generation because foreground, CLOSED, and
+    /// membership signals can start a newer read on the same socket.
     // MARK: - Tasks
 
     private var stateObserverTask: Task<Void, Never>?
@@ -201,6 +241,32 @@ public actor SyncEngine {
         self.store = store
         self.presence = presence
         self.windowClient = windowClient
+        directoryContext = nil
+        self.signer = signer
+        self.config = config
+        self.now = now
+        self.sleepFor = sleepFor
+    }
+
+    /// Production initializer with a relay-authoritative channel directory.
+    public init(
+        connection: RelayConnection,
+        subscriptions: SubscriptionManager,
+        store: BuzzEventStore,
+        presence: PresenceStore,
+        windowClient: WindowClient,
+        directoryClient: ChannelDirectoryClient,
+        signer: any EventSigner,
+        config: SyncEngineConfig = .default,
+        now: @escaping @Sendable () -> Date = { Date() },
+        sleepFor: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
+    ) {
+        self.connection = connection
+        self.subscriptions = subscriptions
+        self.store = store
+        self.presence = presence
+        self.windowClient = windowClient
+        directoryContext = ChannelDirectoryContext(client: directoryClient)
         self.signer = signer
         self.config = config
         self.now = now
@@ -254,6 +320,13 @@ public actor SyncEngine {
 
         let pubkey = try await signer.publicKey().hex
         selfPubkeyHex = pubkey
+        // Access becomes authoritative only when this engine has a directory
+        // client capable of immediately revalidating the one-time offline seed.
+        // Package harnesses that intentionally exercise the legacy discovery
+        // path must not opt into the access-filtered roster accidentally.
+        if directoryClient != nil {
+            try await store.seedChannelAccessIfNeeded(identity: pubkey)
+        }
 
         // Observe connection state before connecting so no transition into `.ready`
         // is missed. The stream replays the current value on subscribe.
@@ -285,6 +358,9 @@ public actor SyncEngine {
         )
 
         startPresenceSweep()
+        if directoryClient != nil {
+            startDirectoryBackstop()
+        }
 
         try await connection.connect()
     }
@@ -310,6 +386,8 @@ public actor SyncEngine {
     /// Forwards a scene-phase background to the connection, which arms its grace
     /// window. Nothing else in the app reaches the socket.
     public func enterBackground() async {
+        isForeground = false
+        directoryBackstopGeneration += 1
         await connection.background()
     }
 
@@ -317,7 +395,12 @@ public actor SyncEngine {
     /// released socket. A fresh `.ready` then re-runs discovery, reconcile, and the
     /// drain.
     public func enterForeground() async {
+        isForeground = true
+        startDirectoryBackstop()
         await connection.foreground()
+        if state == .running {
+            requestDirectoryRefresh()
+        }
     }
 
     // MARK: - Connection-state handling
@@ -337,7 +420,13 @@ public actor SyncEngine {
             channelStates.removeAll()
             onReadyTask?.cancel()
             readyWorkInFlight = true
-            onReadyTask = Task { [weak self] in await self?.onReady(generation: generation) }
+            if directoryContext == nil {
+                onReadyTask = Task { [weak self] in await self?.onReady(generation: generation) }
+            } else {
+                onReadyTask = Task { [weak self] in
+                    await self?.onReadyAuthoritative(generation: generation)
+                }
+            }
 
         case .suspended:
             state = .suspended
@@ -396,5 +485,30 @@ public actor SyncEngine {
                 await presence.sweep()
             }
         }
+    }
+
+    /// A foreground-only safety net for lifecycle changes whose best-effort
+    /// notifications were missed. Pull, reconnect, foreground, membership, and
+    /// CLOSED all trigger sooner; this merely bounds the stale interval.
+    private func startDirectoryBackstop() {
+        guard directoryClient != nil, isForeground, !isStopped else { return }
+        directoryBackstopGeneration += 1
+        let generation = directoryBackstopGeneration
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(60))
+            guard !Task.isCancelled else { return }
+            await self?.directoryBackstopFired(generation: generation)
+        }
+    }
+
+    private func directoryBackstopFired(generation: Int) {
+        guard generation == directoryBackstopGeneration,
+              isForeground,
+              !isStopped
+        else { return }
+        if state == .running {
+            requestDirectoryRefresh()
+        }
+        startDirectoryBackstop()
     }
 }

@@ -129,6 +129,7 @@ private struct ThreadSummaryButtonStyle: ButtonStyle {
 /// and a retry action that re-queues the message.
 struct RetryStrip: View {
     let reason: String?
+    var canRetry = true
     let onRetry: () -> Void
 
     var body: some View {
@@ -141,13 +142,16 @@ struct RetryStrip: View {
             .foregroundStyle(.red)
         }
         .buttonStyle(.plain)
-        .accessibilityHint("Double tap to retry sending")
+        .disabled(!canRetry)
+        .accessibilityHint(canRetry ? "Double tap to retry sending" : "This relay refusal is terminal")
     }
 
     private var label: String {
         if let reason, !reason.isEmpty {
-            return "Not delivered (\(reason)) — tap to retry"
+            return canRetry
+                ? "Not delivered (\(reason)) — tap to retry"
+                : "Not delivered (\(reason))"
         }
-        return "Not delivered — tap to retry"
+        return canRetry ? "Not delivered — tap to retry" : "Not delivered"
     }
 }

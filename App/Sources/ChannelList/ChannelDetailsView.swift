@@ -12,11 +12,27 @@ struct ChannelDetailsView: View {
     @Environment(\.entityNames) private var names
     @State private var model: ChannelDetailsModel
     @State private var presence: PresenceModel
+    @State private var confirmsArchive = false
+    @State private var confirmsDelete = false
+    @State private var operationError: String?
+    @State private var isMutating = false
     private let channel: ChannelListRow
+    private let engine: SyncEngine?
 
-    init(channel: ChannelListRow, store: BuzzEventStore, presenceStore: PresenceStore) {
+    init(
+        channel: ChannelListRow,
+        store: BuzzEventStore,
+        presenceStore: PresenceStore,
+        engine: SyncEngine? = nil,
+        selfPubkey: String? = nil
+    ) {
         self.channel = channel
-        _model = State(initialValue: ChannelDetailsModel(channelID: channel.id, store: store))
+        self.engine = engine
+        _model = State(initialValue: ChannelDetailsModel(
+            channelID: channel.id,
+            store: store,
+            identity: selfPubkey
+        ))
         _presence = State(initialValue: PresenceModel(store: presenceStore))
     }
 
@@ -57,6 +73,39 @@ struct ChannelDetailsView: View {
         }
         .task { await model.run() }
         .task { await presence.run() }
+        .confirmationDialog(
+            "Archive Channel?",
+            isPresented: $confirmsArchive,
+            titleVisibility: .visible
+        ) {
+            Button("Archive Channel", role: .destructive) { archive() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(
+                "The channel will disappear from this app. Restoring it requires Desktop or CLI because this release has no archived-channel browser."
+            )
+        }
+        .confirmationDialog(
+            "Delete Channel Permanently?",
+            isPresented: $confirmsDelete,
+            titleVisibility: .visible
+        ) {
+            Button("Delete Channel", role: .destructive) { delete() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This cannot be undone. Cached history will remain read-only on this device.")
+        }
+        .alert(
+            "Couldn’t Update Channel",
+            isPresented: Binding(
+                get: { operationError != nil },
+                set: { if !$0 { operationError = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(operationError ?? "")
+        }
     }
 }
 
@@ -142,10 +191,68 @@ private extension ChannelDetailsView {
                 }
             }
         }
+
+        if engine != nil, model.permissions.canArchive || model.permissions.canDelete {
+            Section("Management") {
+                if model.permissions.canArchive {
+                    Button("Archive Channel", systemImage: "archivebox") {
+                        confirmsArchive = true
+                    }
+                    .disabled(isMutating)
+                }
+                if model.permissions.canDelete {
+                    Button("Delete Channel", systemImage: "trash", role: .destructive) {
+                        confirmsDelete = true
+                    }
+                    .disabled(isMutating)
+                }
+            }
+        }
     }
 
     var topic: String {
         channel.about?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    }
+
+    func archive() {
+        guard let engine else { return }
+        isMutating = true
+        Task {
+            do {
+                try await engine.archiveChannel(id: channel.id)
+                dismiss()
+            } catch {
+                operationError = lifecycleMessage(error)
+            }
+            isMutating = false
+        }
+    }
+
+    func delete() {
+        guard let engine else { return }
+        isMutating = true
+        Task {
+            do {
+                try await engine.deleteChannel(id: channel.id)
+                dismiss()
+            } catch {
+                operationError = lifecycleMessage(error)
+            }
+            isMutating = false
+        }
+    }
+
+    func lifecycleMessage(_ error: any Error) -> String {
+        switch error {
+        case ChannelLifecycleError.noIdentity:
+            "No signed-in identity is available."
+        case let ChannelLifecycleError.rejected(reason):
+            String(describing: reason)
+        case let ChannelLifecycleError.publishFailed(failure):
+            String(describing: failure)
+        default:
+            String(describing: error)
+        }
     }
 }
 

@@ -26,6 +26,7 @@ public struct TimelineRow: Sendable, Hashable, Identifiable {
     public let richContent: String?
     /// Where this message is on its way to the relay.
     public let delivery: Delivery
+    public let failureIsRetryable: Bool
     public let authorName: String?
     public let authorPicture: String?
     /// The message this one replies to directly, when it is a reply.
@@ -87,6 +88,7 @@ public struct TimelineRow: Sendable, Hashable, Identifiable {
         isDeleted: Bool,
         richContent: String?,
         delivery: Delivery,
+        failureIsRetryable: Bool = false,
         authorName: String?,
         authorPicture: String?,
         parentID: String?,
@@ -105,6 +107,7 @@ public struct TimelineRow: Sendable, Hashable, Identifiable {
         self.isDeleted = isDeleted
         self.richContent = richContent
         self.delivery = delivery
+        self.failureIsRetryable = failureIsRetryable
         self.authorName = authorName
         self.authorPicture = authorPicture
         self.parentID = parentID

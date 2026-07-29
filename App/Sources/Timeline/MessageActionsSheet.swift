@@ -51,12 +51,14 @@ extension View {
     func messageActionsSheet(
         target: Binding<MessageActionTarget?>,
         actions: any MessageActing,
+        isReadOnly: Bool = false,
         onReplyInThread: ((TimelineRow) -> Void)? = nil
     ) -> some View {
         modifier(
             MessageActionsSheetModifier(
                 target: target,
                 actions: actions,
+                isReadOnly: isReadOnly,
                 onReplyInThread: onReplyInThread
             )
         )
@@ -67,6 +69,7 @@ extension View {
 private struct MessageActionsSheetModifier: ViewModifier {
     @Binding var target: MessageActionTarget?
     let actions: any MessageActing
+    let isReadOnly: Bool
     let onReplyInThread: ((TimelineRow) -> Void)?
 
     /// The thread the sheet asked for, held until the sheet has actually gone.
@@ -77,6 +80,7 @@ private struct MessageActionsSheetModifier: ViewModifier {
             MessageActionsSheet(
                 target: target,
                 actions: actions,
+                isReadOnly: isReadOnly,
                 // The sheet only needs to know *whether* the action exists; the row it
                 // applies to is the one it was presented for.
                 onReplyInThread: onReplyInThread.map { _ in { pendingThread = target.row } }
@@ -117,6 +121,7 @@ private struct MessageActionsSheetModifier: ViewModifier {
 private struct MessageActionsSheet: View {
     let target: MessageActionTarget
     let actions: any MessageActing
+    let isReadOnly: Bool
     /// Absent inside a thread, where the message is already open.
     let onReplyInThread: (() -> Void)?
 
@@ -136,9 +141,11 @@ private struct MessageActionsSheet: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                palette
-                Divider()
-                    .padding(.horizontal, 20)
+                if !isReadOnly {
+                    palette
+                    Divider()
+                        .padding(.horizontal, 20)
+                }
                 actionRows
                 Spacer(minLength: 0)
             }
@@ -243,7 +250,7 @@ private struct MessageActionsSheet: View {
 
     @ViewBuilder
     private var actionRows: some View {
-        if let onReplyInThread {
+        if let onReplyInThread, !isReadOnly {
             // The thread's own mark, not a reply arrow: `text.append` is what the thread
             // heading and the Threads tab already use, so the symbol means one thing.
             actionRow("Reply in thread", symbol: ThreadView.threadSymbol) {
@@ -268,8 +275,9 @@ private struct MessageActionsSheet: View {
     /// then have had only the strip under it to retry from, and no way to be discarded at all.
     @ViewBuilder
     private var ownSendActions: some View {
-        if target.isOwn, target.row.delivery != .sent {
-            if case .failed = target.row.delivery {
+        if target.isOwn, target.row.delivery != .sent, !isReadOnly {
+            if case .failed = target.row.delivery,
+               target.row.failureIsRetryable {
                 actionRow("Retry", symbol: "arrow.clockwise") {
                     actions.retry(target.row.id)
                     dismiss()

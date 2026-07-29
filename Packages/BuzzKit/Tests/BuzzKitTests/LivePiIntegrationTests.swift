@@ -22,93 +22,47 @@ struct LivePiIntegrationTests {
     @Test("Store converges across lifecycle cycling and drains a message composed while stopped")
     func convergesAcrossLifecycleCycling() async throws {
         let signer = try InMemorySigner() // throwaway; creator ⇒ member, so no join flow
-        let channel = LiveRelay.channelID()
         let database = TempDatabase()
         defer { database.remove() }
         let store = try database.open()
 
-        // The "second connection" — provisions the channel and publishes every peer
-        // message; a separate socket from the engine's own.
-        guard let peer = await provision(channel: channel, signer: signer, store: store) else { return }
+        try await withLiveChannelFixture(namePrefix: "buzzkit-p2", signer: signer) { fixture in
+            let channel = fixture.channelID
+            let peer = fixture.connection
+            let engine1 = LiveEngine(store: store, signer: signer)
+            try await engine1.engine.start()
+            guard await poll(timeout: .seconds(30), { await engine1.engine.state == .running }) else {
+                Issue.record("[LIVE] engine never reached running")
+                await engine1.engine.stop()
+                return
+            }
 
-        // Engine instance 1.
-        let engine1 = LiveEngine(store: store, signer: signer)
-        try await engine1.engine.start()
-        guard await poll(timeout: .seconds(30), { await engine1.engine.state == .running }) else {
-            Issue.record("[LIVE] engine never reached running")
-            await engine1.engine.stop(); await peer.stop()
-            return
+            await captureWindowFinding(channel: channel, signer: signer, label: "empty")
+            let (expected, composed) = try await driveLifecycle(
+                engine1: engine1, store: store, channel: channel, peer: peer, signer: signer
+            )
+
+            let engine2 = LiveEngine(store: store, signer: signer)
+            try await engine2.engine.start()
+            guard await poll(timeout: .seconds(30), { await engine2.engine.state == .running }) else {
+                Issue.record("[LIVE] relaunched engine never reached running")
+                await engine2.engine.stop()
+                return
+            }
+
+            try await assertConvergence(
+                store: store,
+                channel: channel,
+                expected: expected,
+                composed: composed
+            )
+            await captureWindowFinding(channel: channel, signer: signer, label: "populated")
+            await captureMembershipFinding(signer: signer, on: peer)
+            await engine2.engine.stop()
         }
-        print("[LIVE] engine running")
-
-        // Finding (1) on the empty channel: a served bounds overlay proves the fast path
-        // even before any rows exist.
-        await captureWindowFinding(channel: channel, signer: signer, label: "empty")
-
-        // The churn: publish across a background/foreground cycle and a stop/relaunch,
-        // composing one message while the engine is fully down.
-        let (expected, composed) = try await driveLifecycle(
-            engine1: engine1, store: store, channel: channel, peer: peer, signer: signer
-        )
-
-        // Relaunch on the same store — a real app restart.
-        let engine2 = LiveEngine(store: store, signer: signer)
-        try await engine2.engine.start()
-        guard await poll(timeout: .seconds(30), { await engine2.engine.state == .running }) else {
-            Issue.record("[LIVE] relaunched engine never reached running")
-            await engine2.engine.stop(); await peer.stop()
-            return
-        }
-        print("[LIVE] engine relaunched and running")
-
-        try await assertConvergence(store: store, channel: channel, expected: expected, composed: composed)
-
-        // Findings captured after convergence.
-        await captureWindowFinding(channel: channel, signer: signer, label: "populated")
-        await captureMembershipFinding(signer: signer, on: peer)
-        print("[LIVE] finding(3) NIP-OA agent auth tags: SKIPPED — a self-provisioned "
-            + "throwaway channel has no agent-authored messages to inspect")
-
-        await engine2.engine.stop()
-        await peer.stop()
     }
 
     // MARK: - Scenario phases
-
-    /// Connects the peer, self-provisions the channel (kind 9007), and seeds it into
-    /// `channel_sync` so reconcile runs independent of discovery. Returns the peer
-    /// connection, or `nil` (recording the reason) if the relay was unreachable or
-    /// rejected the provision.
-    private func provision(channel: String, signer: some EventSigner, store: BuzzEventStore) async -> RelayConnection? {
-        let peer = RelayConnection(url: LiveRelay.wsURL, signer: signer)
-        guard await connectAndWaitReady(peer) else {
-            Issue.record("[LIVE] peer connection never reached ready — relay unreachable or auth failed")
-            return nil
-        }
-        print("[LIVE] peer connected and authenticated to \(LiveRelay.wsURL)")
-
-        do {
-            let create = try await createChannelEvent(
-                channel: channel, name: "buzzkit-p2-\(channel.prefix(8))", signer: signer
-            )
-            if let rejection = await tryPublish(create, on: peer) {
-                Issue.record("[LIVE] channel self-provision (kind 9007) rejected: \(rejection)")
-                await peer.stop()
-                return nil
-            }
-            print("[LIVE] provisioned channel \(channel)")
-
-            try await store.executeForTest("""
-            INSERT OR IGNORE INTO channel_sync (channel_id, watermark_created_at, watermark_id, head_synced)
-            VALUES ('\(channel)', NULL, NULL, 0)
-            """)
-            return peer
-        } catch {
-            Issue.record("[LIVE] provision threw: \(error)")
-            await peer.stop()
-            return nil
-        }
-    }
 
     /// Publishes six peer messages across a background/foreground cycle and a full stop,
     /// composing one message while the engine is stopped. Returns the ids expected in the

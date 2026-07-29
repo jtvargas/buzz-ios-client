@@ -43,6 +43,9 @@ public struct OutboxEntry: Sendable, Equatable, Identifiable {
     public let attempts: Int
     /// The last relay reason or failure, kept to surface on a `failed` send.
     public let lastError: String?
+    /// Whether a user-triggered retry can change the outcome. Terminal relay
+    /// refusals persist for inspection but expose no retry affordance.
+    public let isRetryable: Bool
 
     public var id: String { event.id }
 
@@ -51,13 +54,15 @@ public struct OutboxEntry: Sendable, Equatable, Identifiable {
         channelID: String,
         state: OutboxState,
         attempts: Int,
-        lastError: String?
+        lastError: String?,
+        isRetryable: Bool = true
     ) {
         self.event = event
         self.channelID = channelID
         self.state = state
         self.attempts = attempts
         self.lastError = lastError
+        self.isRetryable = isRetryable
     }
 }
 
@@ -120,6 +125,8 @@ public enum OutboxError: Error, Equatable {
     case invalidEvent(String)
     /// An operation referenced an event id that is not in the outbox.
     case notQueued(String)
+    /// The relay classified the failure as terminal.
+    case notRetryable(String)
     /// Encoding a queued event to JSON produced non-UTF-8 bytes. Unreachable in
     /// practice — `JSONEncoder` always emits UTF-8 — but surfaced as an honest
     /// failure path rather than force-unwrapped.

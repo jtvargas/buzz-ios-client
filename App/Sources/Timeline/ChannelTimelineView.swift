@@ -15,6 +15,7 @@ struct ChannelTimelineView: View {
     @State private var model: ChannelTimelineModel
     @State private var presence: PresenceModel
     @State private var typing: ChannelTypingModel
+    @State private var access: ChannelAccessModel
     @State private var openedThread: ThreadRoute?
     @State private var showsChannelDetails = false
     /// The message whose actions sheet is open, if any — set by a long press on a row.
@@ -34,6 +35,7 @@ struct ChannelTimelineView: View {
     private let sender: any MessageSending
     private let opener: any ThreadOpening
     private let presenceStore: PresenceStore
+    private let lifecycleEngine: SyncEngine?
     private let selfPubkey: String?
     /// The peer this conversation was opened with, when it was reached by opening a direct
     /// message rather than from the sidebar. Only ever consulted while the roster has
@@ -63,7 +65,8 @@ struct ChannelTimelineView: View {
             opener: engine,
             presence: engine.presenceStore,
             selfPubkey: selfPubkey,
-            knownPeer: knownPeer
+            knownPeer: knownPeer,
+            lifecycleEngine: engine
         )
     }
 
@@ -86,7 +89,8 @@ struct ChannelTimelineView: View {
         opener: any ThreadOpening,
         presence: PresenceStore,
         selfPubkey: String?,
-        knownPeer: String? = nil
+        knownPeer: String? = nil,
+        lifecycleEngine: SyncEngine? = nil
     ) {
         self.channel = channel
         channelID = channel.id
@@ -94,6 +98,7 @@ struct ChannelTimelineView: View {
         self.sender = sender
         self.opener = opener
         presenceStore = presence
+        self.lifecycleEngine = lifecycleEngine
         self.selfPubkey = selfPubkey
         self.knownPeer = knownPeer
         _model = State(initialValue: ChannelTimelineModel(
@@ -109,6 +114,11 @@ struct ChannelTimelineView: View {
             channel: channel.id,
             store: presence,
             selfPubkey: selfPubkey
+        ))
+        _access = State(initialValue: ChannelAccessModel(
+            channelID: channel.id,
+            identity: selfPubkey,
+            store: store
         ))
     }
 
@@ -139,6 +149,7 @@ struct ChannelTimelineView: View {
             // bar's height is the list's bottom inset — so somebody starting to type
             // re-inset the conversation and moved the reader. It is an accessory now.
             ComposerView(model: model)
+                .disabled(!access.isWritable)
         } accessory: {
             accessory
         }
@@ -157,7 +168,9 @@ struct ChannelTimelineView: View {
             ChannelDetailsView(
                 channel: channel,
                 store: store,
-                presenceStore: presenceStore
+                presenceStore: presenceStore,
+                engine: lifecycleEngine,
+                selfPubkey: selfPubkey
             )
         }
         // The same modifier a thread uses, so the two surfaces cannot present a
@@ -170,6 +183,7 @@ struct ChannelTimelineView: View {
         .messageActionsSheet(
             target: $messageActions,
             actions: model,
+            isReadOnly: !access.isWritable,
             onReplyInThread: { open(thread: $0, focusingComposer: true) }
         )
         .navigationDestination(item: $openedThread) { route in
@@ -190,6 +204,7 @@ struct ChannelTimelineView: View {
         // tree until somebody is typing and so could never start its own model — see the
         // note on that type. The surface that owns the model runs it, as above.
         .task { await typing.run() }
+        .task { await access.run() }
     }
 
     /// How this conversation presents itself — a channel, or the person on the other
@@ -255,6 +270,7 @@ struct ChannelTimelineView: View {
             mentions: model.mentions(for: row.id),
             replyParticipants: model.participants(for: row.id),
             selfPubkey: selfPubkey,
+            allowsInteraction: access.isWritable,
             onRetry: { model.retry($0) },
             onReact: { model.react($0, on: row.id) },
             onToggleReaction: { model.toggleReaction($0, on: row.id) },
@@ -274,6 +290,7 @@ struct ChannelTimelineView: View {
         // binding is hand-written above.
         @Bindable var model = model
         return VStack(spacing: 8) {
+            ChannelAccessBanner(state: access.state)
             // `model.jump` is a `let`, so reading it here registers no dependency: the
             // count is read inside ``ConversationJumpControls``, and an arrival that
             // moves it invalidates that view alone rather than this body and its list.

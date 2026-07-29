@@ -39,6 +39,8 @@ struct BuzzProjector: EventProjecting {
             try Self.projectChannel(event, into: db)
         case .groupMembers:
             try Self.projectRoster(event, into: db)
+        case .groupAdmins:
+            try Self.projectAdmins(event, into: db)
         case .metadata:
             try Self.projectProfile(event, into: db)
         case .reaction:
@@ -95,13 +97,15 @@ struct BuzzProjector: EventProjecting {
         // an older addressable after a reconnect, and the replace must not regress.
         try db.execute(
             sql: """
-            INSERT INTO channel (id, name, about, picture, is_private, source_event_id, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO channel
+                (id, name, about, picture, is_private, is_archived, source_event_id, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 name = excluded.name,
                 about = excluded.about,
                 picture = excluded.picture,
                 is_private = excluded.is_private,
+                is_archived = excluded.is_archived,
                 source_event_id = excluded.source_event_id,
                 updated_at = excluded.updated_at
             WHERE excluded.updated_at > channel.updated_at
@@ -115,6 +119,11 @@ struct BuzzProjector: EventProjecting {
                 meta?.picture?.nilIfEmpty ?? event.firstValue(forTag: "picture"),
                 // NIP-29 marks a closed group with a bare `private` tag.
                 event.tags.contains { $0.first == "private" },
+                event.tags.contains {
+                    $0.count > 1
+                        && $0[0].lowercased() == "archived"
+                        && $0[1].lowercased() == "true"
+                },
                 event.id,
                 event.createdAt,
             ]
@@ -158,6 +167,43 @@ struct BuzzProjector: EventProjecting {
                     source_event_id = excluded.source_event_id
                 """,
                 arguments: [channelID, tag[1], tag.count > 2 ? tag[2] : nil, event.createdAt, event.id]
+            )
+        }
+    }
+
+    /// Kind 39001: relay-authored owner/admin roster.
+    private static func projectAdmins(_ event: NostrEvent, into db: Database) throws {
+        guard let channelID = event.addressableIdentifier else { return }
+        let existing = try Row.fetchOne(
+            db,
+            sql: "SELECT source_created_at, source_event_id FROM channel_admin WHERE channel_id = ? LIMIT 1",
+            arguments: [channelID]
+        )
+        if let existing {
+            let appliedAt: Int64 = existing["source_created_at"]
+            let appliedID: String = existing["source_event_id"]
+            if (event.createdAt, event.id) <= (appliedAt, appliedID) { return }
+        }
+
+        try db.execute(sql: "DELETE FROM channel_admin WHERE channel_id = ?", arguments: [channelID])
+        for tag in event.tags where tag.first == "p" && tag.count > 1 {
+            try db.execute(
+                sql: """
+                INSERT INTO channel_admin
+                    (channel_id, pubkey, role, source_created_at, source_event_id)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(channel_id, pubkey) DO UPDATE SET
+                    role = excluded.role,
+                    source_created_at = excluded.source_created_at,
+                    source_event_id = excluded.source_event_id
+                """,
+                arguments: [
+                    channelID,
+                    tag[1],
+                    tag.count > 2 ? tag[2] : "admin",
+                    event.createdAt,
+                    event.id,
+                ]
             )
         }
     }

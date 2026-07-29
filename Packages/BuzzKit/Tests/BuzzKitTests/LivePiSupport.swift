@@ -40,8 +40,12 @@ struct LiveEngine {
         self.connection = connection
         let subscriptions = SubscriptionManager(connection: connection, signer: signer)
         self.subscriptions = subscriptions
+        let transport = URLSessionHTTPTransport()
         let windowClient = WindowClient(
-            transport: URLSessionHTTPTransport(), queryURL: LiveRelay.queryURL, signer: signer
+            transport: transport, queryURL: LiveRelay.queryURL, signer: signer
+        )
+        let directoryClient = ChannelDirectoryClient(
+            transport: transport, queryURL: LiveRelay.queryURL, signer: signer
         )
         engine = SyncEngine(
             connection: connection,
@@ -49,6 +53,7 @@ struct LiveEngine {
             store: store,
             presence: PresenceStore(),
             windowClient: windowClient,
+            directoryClient: directoryClient,
             signer: signer
         )
     }
@@ -59,16 +64,26 @@ struct LiveEngine {
 /// A NIP-29 create-group event (kind 9007), the SDK-shaped self-provision the live
 /// suite uses: `h` = the new channel, `name`, `channel_type stream`, `visibility open`.
 /// The relay authors the 39000/39001/39002 group state in response.
-func createChannelEvent(channel: String, name: String, signer: some EventSigner) async throws -> NostrEvent {
-    try await signer.sign(
+func createChannelEvent(
+    channel: String,
+    name: String,
+    signer: some EventSigner,
+    isPrivate: Bool = false,
+    ttlSeconds: Int? = nil
+) async throws -> NostrEvent {
+    var tags = [
+        ["h", channel],
+        ["name", name],
+        ["channel_type", "stream"],
+        ["visibility", isPrivate ? "private" : "open"],
+    ]
+    if let ttlSeconds {
+        tags.append(["ttl", String(ttlSeconds)])
+    }
+    return try await signer.sign(
         kind: .groupCreate,
         content: "",
-        tags: [
-            ["h", channel],
-            ["name", name],
-            ["channel_type", "stream"],
-            ["visibility", "open"],
-        ]
+        tags: tags
     )
 }
 
@@ -122,5 +137,93 @@ func tryPublish(_ event: NostrEvent, on connection: RelayConnection) async -> St
         return nil
     } catch {
         return "\(error)"
+    }
+}
+
+/// A live test channel whose owner and connection remain alive until an
+/// owner-signed delete has been attempted. Channels are private and carry a short
+/// TTL as a second cleanup boundary if the process itself is killed.
+struct LiveChannelFixture: Sendable {
+    let channelID: String
+    let connection: RelayConnection
+    let signer: any EventSigner
+
+    static func create(
+        namePrefix: String,
+        signer: some EventSigner
+    ) async throws -> LiveChannelFixture {
+        let channelID = LiveRelay.channelID()
+        let connection = RelayConnection(url: LiveRelay.wsURL, signer: signer)
+        guard await connectAndWaitReady(connection) else {
+            throw TransportError.requestFailed("live fixture connection never reached ready")
+        }
+        let create = try await createChannelEvent(
+            channel: channelID,
+            name: "\(namePrefix)-\(channelID.prefix(8))",
+            signer: signer,
+            isPrivate: true,
+            ttlSeconds: 300
+        )
+        if let rejection = await tryPublish(create, on: connection) {
+            let fixture = LiveChannelFixture(
+                channelID: channelID,
+                connection: connection,
+                signer: signer
+            )
+            await fixture.cleanup()
+            throw TransportError.requestFailed("live fixture create rejected: \(rejection)")
+        }
+        return LiveChannelFixture(channelID: channelID, connection: connection, signer: signer)
+    }
+
+    func cleanup() async {
+        if let event = try? await signer.sign(
+            kind: .groupDelete,
+            content: "",
+            tags: [["h", channelID]]
+        ) {
+            _ = await tryPublish(event, on: connection)
+        }
+        await connection.stop()
+    }
+}
+
+/// Runs `operation` with cleanup on success, error, and cooperative
+/// cancellation. Cleanup is idempotent; the cancellation handler may race the
+/// ordinary unwind and both are allowed to attempt the same owner-signed delete.
+private actor LiveFixtureCleanupBox {
+    private var fixture: LiveChannelFixture?
+
+    func store(_ fixture: LiveChannelFixture) {
+        self.fixture = fixture
+    }
+
+    func cleanup() async {
+        guard let fixture else { return }
+        self.fixture = nil
+        await fixture.cleanup()
+    }
+}
+
+func withLiveChannelFixture<Result: Sendable>(
+    namePrefix: String,
+    signer: some EventSigner,
+    operation: @escaping @Sendable (LiveChannelFixture) async throws -> Result
+) async throws -> Result {
+    let cleanup = LiveFixtureCleanupBox()
+    return try await withTaskCancellationHandler {
+        let fixture = try await LiveChannelFixture.create(namePrefix: namePrefix, signer: signer)
+        await cleanup.store(fixture)
+        do {
+            try Task.checkCancellation()
+            let result = try await operation(fixture)
+            await cleanup.cleanup()
+            return result
+        } catch {
+            await cleanup.cleanup()
+            throw error
+        }
+    } onCancel: {
+        Task { await cleanup.cleanup() }
     }
 }

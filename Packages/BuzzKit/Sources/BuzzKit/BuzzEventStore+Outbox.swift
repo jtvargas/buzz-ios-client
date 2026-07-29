@@ -100,11 +100,11 @@ public extension BuzzEventStore {
     /// Records a terminal rejection or send failure, with a reason to show the
     /// user. The row stays in the outbox as ``OutboxState/failed`` so the message
     /// is not lost; it simply stops being resent automatically.
-    func markFailed(_ eventID: String, error: String?) async throws {
+    func markFailed(_ eventID: String, error: String?, retryable: Bool = true) async throws {
         try await writer.write { db in
             try db.execute(
-                sql: "UPDATE outbox SET state = ?, last_error = ? WHERE event_id = ?",
-                arguments: [OutboxState.failed.rawValue, error, eventID]
+                sql: "UPDATE outbox SET state = ?, last_error = ?, is_retryable = ? WHERE event_id = ?",
+                arguments: [OutboxState.failed.rawValue, error, retryable, eventID]
             )
         }
     }
@@ -132,8 +132,20 @@ public extension BuzzEventStore {
     /// continuation of the automated backoff that gave up.
     func retry(_ eventID: String) async throws {
         try await writer.write { db in
+            guard let retryable = try Bool.fetchOne(
+                db,
+                sql: "SELECT is_retryable FROM outbox WHERE event_id = ?",
+                arguments: [eventID]
+            ) else {
+                throw OutboxError.notQueued(eventID)
+            }
+            guard retryable else { throw OutboxError.notRetryable(eventID) }
             try db.execute(
-                sql: "UPDATE outbox SET state = ?, attempts = 0, last_error = NULL WHERE event_id = ?",
+                sql: """
+                UPDATE outbox
+                   SET state = ?, attempts = 0, last_error = NULL
+                 WHERE event_id = ?
+                """,
                 arguments: [OutboxState.pending.rawValue, eventID]
             )
         }
@@ -184,7 +196,7 @@ public extension BuzzEventStore {
                 let resigned = try await reSign(entry, with: signer)
                 return .resigned(newID: resigned.id)
             }
-            try await markFailed(eventID, error: detail)
+            try await markFailed(eventID, error: detail, retryable: false)
             return .failed(detail)
 
         case .reauthThenRetry:
@@ -193,7 +205,7 @@ public extension BuzzEventStore {
 
         case .retryable:
             if entry.attempts >= maxAttempts {
-                try await markFailed(eventID, error: detail)
+                try await markFailed(eventID, error: detail, retryable: true)
                 return .exhausted(detail)
             }
             try await writer.write { db in
