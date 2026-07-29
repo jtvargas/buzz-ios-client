@@ -130,6 +130,36 @@ struct UnreadMentionTests {
         #expect(try store.channelList(selfPubkey: selfPubkey).first?.unreadMentionCount == 0)
     }
 
+    /// A `p` tag is a raw string written by whichever client sent the message and never
+    /// decoded, so the tag comparison is `COLLATE NOCASE` where every `event.pubkey`
+    /// comparison around it is binary. Missing a mention because another client
+    /// upper-cased a key is the worse failure, and nothing else pins the collation —
+    /// dropping it leaves a badge that is quietly short by however many peers write hex
+    /// in upper case.
+    @Test("a mention counts however the sending client cased the key")
+    func mentionTagIsCaseInsensitive() async throws {
+        let database = TempDatabase()
+        defer { database.remove() }
+        let store = try database.open()
+        let relay = try Fixture()
+        let peer = try Fixture()
+        let selfPubkey = try PrivateKey().publicKey.hex
+
+        _ = try await store.ingest(batch: [
+            try meta(relay, "room-1", name: "One", at: 500),
+            try peer.event(
+                .channelMessage, "lower @you",
+                tags: [["h", "room-1"], ["p", selfPubkey]], at: 2000
+            ),
+            try peer.event(
+                .channelMessage, "upper @you",
+                tags: [["h", "room-1"], ["p", selfPubkey.uppercased()]], at: 3000
+            ),
+        ], phase: .backfill)
+
+        #expect(try store.channelList(selfPubkey: selfPubkey).first?.unreadMentionCount == 2)
+    }
+
     private func meta(_ relay: Fixture, _ id: String, name: String, at seconds: Int64) throws -> NostrEvent {
         try relay.event(.groupMetadata, #"{"name":"\#(name)"}"#, tags: [["d", id]], at: seconds)
     }

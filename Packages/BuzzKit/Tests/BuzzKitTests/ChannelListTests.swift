@@ -157,6 +157,104 @@ struct ChannelListTests {
         #expect(settled.first?.lastMessageID == pending.id)
     }
 
+    // MARK: - Which message is "newest"
+
+    /// The preview is the maximum on the `(created_at, id)` keyset, and the log side of
+    /// that comparison is bounded to one row before the queue is consulted (see
+    /// ``newestVisibleInChannel``). A bound that keeps the wrong row of a tied second does
+    /// not fail — it previews a real message that is simply not the newest one, which is
+    /// the failure this pins.
+    ///
+    /// Event ids are hashes, so the winner cannot be chosen; it is derived from the ids
+    /// the fixture produced, which is the one assertion the hashes cannot skew.
+    @Test("a second holding several messages is broken by id, not by arrival")
+    func previewBreaksTiesWithinTheLog() async throws {
+        let database = TempDatabase()
+        defer { database.remove() }
+        let store = try database.open()
+        let relay = try Fixture()
+        let author = try Fixture()
+
+        let tied = try (0 ..< 3).map { try author.message("tied-\($0)", in: "room-1", at: 2000) }
+        _ = try await store.ingest(batch: [
+            try meta(relay, "room-1", name: "Room", at: 500),
+            author.message("older", in: "room-1", at: 1000),
+        ] + tied, phase: .backfill)
+
+        let winner = try #require(tied.max { $0.id < $1.id })
+        let row = try #require(try store.channelList().first { $0.id == "room-1" })
+        #expect(row.lastMessageID == winner.id)
+        #expect(row.lastMessageAt == 2000)
+    }
+
+    /// The same tie across the union: one log row and one pending send sharing a second.
+    ///
+    /// Both directions, because only one of them is interesting per fixture and which one
+    /// depends on hashes. `room-1` gives the log the greater id and `room-2` gives it to
+    /// the queue, so a comparison that always prefers one side — or that drops the id
+    /// tiebreak and takes whichever branch it read first — is wrong in one of the two.
+    @Test("a log row and a pending send tied on a second are separated by id, either way")
+    func previewBreaksTiesAcrossTheQueue() async throws {
+        let database = TempDatabase()
+        defer { database.remove() }
+        let store = try database.open()
+        let relay = try Fixture()
+        let author = try Fixture()
+
+        let inRoom1 = try (0 ..< 2)
+            .map { try author.message("tie-\($0)", in: "room-1", at: 2000) }
+            .sorted { $0.id < $1.id }
+        let inRoom2 = try (0 ..< 2)
+            .map { try author.message("tie-\($0)", in: "room-2", at: 2000) }
+            .sorted { $0.id < $1.id }
+
+        _ = try await store.ingest(batch: [
+            try meta(relay, "room-1", name: "One", at: 500),
+            try meta(relay, "room-2", name: "Two", at: 500),
+            inRoom1[1],     // the log holds the greater id here
+            inRoom2[0],     // and the lesser one here
+        ], phase: .backfill)
+        try await store.enqueueForTest(inRoom1[0], channel: "room-1")
+        try await store.enqueueForTest(inRoom2[1], channel: "room-2")
+
+        let rows = try store.channelList()
+        #expect(try #require(rows.first { $0.id == "room-1" }).lastMessageID == inRoom1[1].id)
+        #expect(try #require(rows.first { $0.id == "room-2" }).lastMessageID == inRoom2[1].id)
+    }
+
+    /// The preview and the unread count disagree about thread replies, deliberately.
+    ///
+    /// A reply the reader can see in the channel *is* the newest thing in it, so the
+    /// sidebar previews it. It does not raise the channel's unread count, because a reply
+    /// carries its own thread badge and counting it twice is what the two badges are for.
+    /// Nothing else in either suite separates the two rules, so a `NOT EXISTS (thread …)`
+    /// added to the preview — or dropped from the count — would otherwise ship green.
+    @Test("a thread reply can be the preview, and still never the unread count")
+    func previewIncludesRepliesTheCountExcludes() async throws {
+        let database = TempDatabase()
+        defer { database.remove() }
+        let store = try database.open()
+        let relay = try Fixture()
+        let peer = try Fixture()
+        let selfKey = try PrivateKey()
+
+        let opener = try peer.message("opener", in: "room-1", at: 1000)
+        let reply = try peer.event(
+            .channelMessage, "a reply",
+            tags: [["h", "room-1"], ["e", opener.id, "", "reply"]], at: 2000
+        )
+        _ = try await store.ingest(batch: [
+            try meta(relay, "room-1", name: "Room", at: 500), opener, reply,
+        ], phase: .backfill)
+
+        let row = try #require(
+            try store.channelList(selfPubkey: selfKey.publicKey.hex).first { $0.id == "room-1" }
+        )
+        #expect(row.lastMessageID == reply.id)
+        #expect(row.lastMessageSnippet == "a reply")
+        #expect(row.unreadCount == 1, "the opener, and not the reply under it")
+    }
+
     // MARK: - Live observation
 
     @Test("ValueObservation fires when a new message arrives for a listed channel")

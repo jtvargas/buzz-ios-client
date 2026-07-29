@@ -119,15 +119,13 @@ public extension BuzzEventStore {
 extension BuzzEventStore {
     /// The channel-list query, over an open database so an observation can track it.
     ///
-    /// The heart is one `visible` set: kind-9 log messages that survive the
-    /// read-time deletion predicate, unioned with pending outbox sends the log does
-    /// not yet hold. From it, each channel keeps the single message no other visible
-    /// message in that channel outranks on the `(created_at, id)` keyset — the same
-    /// total order the timeline pages on, so "newest" means the same thing in both
-    /// reads. A deleted newest message drops out of `visible` and the previous one
-    /// wins; a pending send outranks the log until its own copy is ingested, at
-    /// which point the outbox row is excluded and the log row takes its place with
-    /// no double count.
+    /// Every column is asked **per channel**. A channel's preview is the single message
+    /// no other visible message in it outranks on the `(created_at, id)` keyset — the same
+    /// total order the timeline pages on, so "newest" means the same thing in both reads.
+    /// A deleted newest message drops out and the previous one wins; a pending send
+    /// outranks the log until its own copy is ingested, at which point the queued row is
+    /// excluded and the log row takes its place with no double count. The two counts are
+    /// the same predicates measured from the same frontier.
     static func fetchChannelList(_ db: Database, selfPubkey: String? = nil) throws -> [ChannelListRow] {
         let rows = try Row.fetchAll(db, sql: channelListSQL, arguments: [
             "kind": EventKind.channelMessage.rawValue,
@@ -136,90 +134,95 @@ extension BuzzEventStore {
         return rows.map(makeChannelListRow)
     }
 
-    /// The channel-list query. A stored constant so the deletion-predicate
-    /// interpolation is resolved once, and so the fetch stays a short function over it.
-    static let channelListSQL = """
-        WITH visible AS (
-            SELECT e.h          AS channel_id,
-                   e.id         AS msg_id,
-                   e.created_at AS created_at,
-                   e.content    AS content,
-                   e.pubkey     AS pubkey
+    /// The id of one channel's newest *visible* message: the log and the queue each
+    /// bounded to their own newest row, then compared.
+    ///
+    /// Interpolated into ``channelListSQL`` inside a scope where `c` is the `channel` row,
+    /// which is what makes it a probe rather than a scan: `e.h = c.id` and
+    /// `o.channel_id = c.id` hand each branch a range of `event_timeline
+    /// (h, kind, created_at DESC, id)` and `outbox_channel (channel_id, created_at)`, and
+    /// `LIMIT 1` stops it at the first surviving row instead of building the channel.
+    ///
+    /// Messages only on the queue side (`o.kind = :kind`), so a queued reaction never
+    /// becomes a channel's "last message". Thread replies are deliberately *not* excluded
+    /// on either side — a reply the reader can see in the channel is the newest thing in
+    /// it, and the sidebar says so.
+    ///
+    /// # Why bounding each branch cannot change the answer
+    ///
+    /// The winner is the maximum on the `(created_at, id)` keyset over the union of the
+    /// two branches, and `max(A ∪ B) = max(max A, max B)` — so taking each branch's own
+    /// maximum first picks the same row. That is ``fetchTimeline``'s page bound at N = 1,
+    /// and it carries the same precondition, in three parts:
+    ///
+    /// 1. every branch orders by the same total order the outer pick uses —
+    ///    `created_at DESC, id DESC` — on the columns it projects as `created_at` and
+    ///    `msg_id`, not on columns that merely alias plausibly;
+    /// 2. the same bound applies to every branch;
+    /// 3. nothing between a branch's `LIMIT` and the outer pick removes a row.
+    ///
+    /// **None of the three fails loudly.** A branch ordered another way, or filtered after
+    /// its bound, returns a plausible message rather than no message — and the sidebar
+    /// quietly previews something that is not the newest thing in the channel. Anything
+    /// added here inherits all three.
+    private static let newestVisibleInChannel = """
+    (SELECT w.msg_id FROM (
+        SELECT * FROM (
+            SELECT e.id AS msg_id, e.created_at AS created_at
             FROM event e
             LEFT JOIN event_owner eo ON eo.event_id = e.id
-            WHERE e.kind = :kind
-              AND e.h IS NOT NULL
+            WHERE e.h = c.id AND e.kind = :kind
               AND NOT \(deletionApplies(target: "e.id", author: "e.pubkey", owner: "eo.owner_pubkey"))
+            ORDER BY e.created_at DESC, e.id DESC
+            LIMIT 1
+        )
 
-            UNION ALL
+        UNION ALL
 
-            SELECT o.channel_id AS channel_id,
-                   o.event_id   AS msg_id,
-                   o.created_at AS created_at,
-                   o.content    AS content,
-                   o.pubkey     AS pubkey
+        SELECT * FROM (
+            SELECT o.event_id AS msg_id, o.created_at AS created_at
             FROM outbox o
-            -- Messages only (`o.kind = :kind`), so a queued reaction never becomes a
-            -- channel's "last message"; `:kind` is the channel-message kind bound below.
-            WHERE NOT EXISTS (SELECT 1 FROM event WHERE event.id = o.event_id) AND o.kind = :kind
-        ),
-        -- The effective read frontier per channel: MAX(read_at) across every device's
-        -- slot (the grow-only NIP-RS merge), so one device's stale slot can never lower
-        -- another's frontier.
-        frontier AS (
-            SELECT context_id AS channel_id, MAX(read_at) AS read_at
-            FROM read_state
-            GROUP BY context_id
-        ),
-        -- Unread = top-level channel messages by OTHERS, newer than the frontier, not
-        -- deleted. Thread replies (a `thread` row) are excluded — they carry their own
-        -- badges. A channel with no frontier falls to COALESCE(…,0), so every such
-        -- message counts (unknown read state is unread — the conservative NIP-RS default).
-        unread AS (
-            SELECT ue.h AS channel_id, COUNT(*) AS n
-            FROM event ue
-            LEFT JOIN event_owner ueo ON ueo.event_id = ue.id
-            LEFT JOIN frontier uf ON uf.channel_id = ue.h
-            WHERE ue.kind = :kind
-              AND ue.h IS NOT NULL
-              AND (:selfPubkey IS NULL OR ue.pubkey <> :selfPubkey)
-              AND ue.created_at > COALESCE(uf.read_at, 0)
-              AND NOT EXISTS (SELECT 1 FROM thread t WHERE t.event_id = ue.id)
-              AND NOT \(deletionApplies(target: "ue.id", author: "ue.pubkey", owner: "ueo.owner_pubkey"))
-            GROUP BY ue.h
-        ),
-        -- The subset of `unread` addressed to the local identity: same predicates, plus a
-        -- `p` tag naming them. A second CTE over the same conditions rather than a
-        -- conditional aggregate inside `unread`, because the tag join is what makes it
-        -- cheap — it visits messages that carry a `p` tag rather than every unread message
-        -- in the workspace. COUNT(DISTINCT) because a message may tag one identity twice
-        -- and a badge counts messages, not tags. With `:selfPubkey` NULL the join matches
-        -- nothing and every channel falls to zero.
-        --
-        -- `COLLATE NOCASE` on the tag value, deliberately, where `event.pubkey`
-        -- comparisons elsewhere in this file are binary: a pubkey in the log went through
-        -- NIP-01's strictly-lowercase hex decode, but a *tag value* is a raw string
-        -- written by whichever client sent the message and never decoded. Missing a
-        -- mention because another client upper-cased a key is the worse failure, and it
-        -- is the case-insensitivity the sidebar's own `mentionsSelf` had before this
-        -- column replaced it. Measured at 2.0 ms against 2.2 ms binary over a 50k-event
-        -- store, so it costs nothing here — unlike on `event.pubkey`, where the same
-        -- collation is the difference between 2 ms and 63 ms (see ``RecentMentions``).
-        mentioned AS (
-            SELECT me.h AS channel_id, COUNT(DISTINCT me.id) AS n
-            FROM event me
-            JOIN event_tag mt ON mt.event_id = me.id
-                             AND mt.name = 'p'
-                             AND mt.value = :selfPubkey COLLATE NOCASE
-            LEFT JOIN event_owner meo ON meo.event_id = me.id
-            LEFT JOIN frontier mf ON mf.channel_id = me.h
-            WHERE me.kind = :kind
-              AND me.h IS NOT NULL
-              AND me.pubkey <> :selfPubkey
-              AND me.created_at > COALESCE(mf.read_at, 0)
-              AND NOT EXISTS (SELECT 1 FROM thread t WHERE t.event_id = me.id)
-              AND NOT \(deletionApplies(target: "me.id", author: "me.pubkey", owner: "meo.owner_pubkey"))
-            GROUP BY me.h
+            WHERE o.channel_id = c.id AND o.kind = :kind
+              AND NOT EXISTS (SELECT 1 FROM event ev WHERE ev.id = o.event_id)
+            ORDER BY o.created_at DESC, o.event_id DESC
+            LIMIT 1
+        )
+    ) w
+    ORDER BY w.created_at DESC, w.msg_id DESC
+    LIMIT 1)
+    """
+
+    /// One channel's effective read frontier: `MAX(read_at)` across every device's slot
+    /// (the grow-only NIP-RS merge), so one device's stale slot can never lower another's.
+    /// `MAX` over no rows is NULL, so a channel no blob has ever marked read falls to 0 and
+    /// every message in it counts — unknown read state is unread, the conservative NIP-RS
+    /// default. Written once and used by both counts, because a badge counting from a
+    /// different frontier than the row it sits on is arithmetic a reader notices.
+    private static let channelFrontier = """
+    COALESCE((SELECT MAX(read_at) FROM read_state WHERE context_id = c.id), 0)
+    """
+
+    /// The channel-list query. A stored constant so the deletion-predicate
+    /// interpolation is resolved once, and so the fetch stays a short function over it.
+    ///
+    /// # One question per channel, not one row per message
+    ///
+    /// This read fires on every committed transaction (``ChannelListModel``), and it used
+    /// to answer per *workspace*: a `visible` CTE materialising every surviving kind-9
+    /// message anywhere, plus two more full passes for the counts, then an anti-join
+    /// asking each of those rows whether a newer one existed. The cost was O(total log)
+    /// to produce one row per channel — 51.7 ms against 8,860 events, and growing with
+    /// every channel's history at once rather than with anything on screen.
+    ///
+    /// Every column is now a correlated probe keyed on `c.id`, so the work is bounded by
+    /// the answer rather than by the log: **51.7 ms → 2.8 ms**, byte-identical result sets
+    /// across the fixtures in `RESEARCH/SIDEBAR_READ_COST.md`, which is where the harness
+    /// and the caveats live. The numbers are from a seeded fixture through the system
+    /// SQLite, not from a device.
+    static let channelListSQL = """
+        WITH newest AS (
+            SELECT c.id AS channel_id, \(newestVisibleInChannel) AS msg_id
+            FROM channel c
         )
         SELECT c.id            AS id,
                c.name          AS name,
@@ -227,24 +230,74 @@ extension BuzzEventStore {
                c.picture       AS picture,
                c.is_private    AS is_private,
                n.msg_id        AS last_message_id,
-               n.created_at    AS last_message_at,
-               n.content       AS last_message_snippet,
-               n.pubkey        AS author_pubkey,
+               -- The winner is a log row or a queued row, never both — the queue branch
+               -- excludes anything the log already holds — so the pair of joins below
+               -- resolves exactly one of them and COALESCE reads it.
+               COALESCE(le.created_at, lo.created_at) AS last_message_at,
+               COALESCE(le.content, lo.content)       AS last_message_snippet,
+               COALESCE(le.pubkey, lo.pubkey)         AS author_pubkey,
                p.display_name  AS author_name,
-               COALESCE(u.n, 0) AS unread_count,
-               COALESCE(m.n, 0) AS mention_count
+               -- Unread = top-level channel messages by OTHERS, newer than the frontier,
+               -- not deleted. Thread replies (a `thread` row) are excluded here — unlike
+               -- in the preview — because they carry their own thread badges.
+               (SELECT COUNT(*)
+                  FROM event ue
+                  LEFT JOIN event_owner ueo ON ueo.event_id = ue.id
+                 WHERE ue.h = c.id AND ue.kind = :kind
+                   AND (:selfPubkey IS NULL OR ue.pubkey <> :selfPubkey)
+                   AND ue.created_at > \(channelFrontier)
+                   AND NOT EXISTS (SELECT 1 FROM thread t WHERE t.event_id = ue.id)
+                   AND NOT \(deletionApplies(
+                       target: "ue.id", author: "ue.pubkey", owner: "ueo.owner_pubkey"
+                   ))) AS unread_count,
+               -- The subset of those addressed to the local identity: the same predicates
+               -- plus a `p` tag naming them, so the badge can never exceed the count it
+               -- sits beside. COUNT(DISTINCT) because a message may tag one identity twice
+               -- and a badge counts messages, not tags.
+               --
+               -- With no local identity every channel reads zero, which is the honest
+               -- answer rather than a degradation: there is nobody for a message to be
+               -- addressed to. **The join is what produces that** — `mt.value = NULL` is
+               -- NULL, so it matches nothing. `me.pubkey <> :selfPubkey` is deliberately
+               -- not the `IS NULL OR` form `unread` uses, but it is not what carries the
+               -- keyless case and rewriting it to that form changes no answer; it is here
+               -- to keep the reader's own mentions of themselves out of their own badge.
+               --
+               -- `COLLATE NOCASE` on the tag value, deliberately, where `event.pubkey`
+               -- comparisons elsewhere in this file are binary: a pubkey in the log went
+               -- through NIP-01's strictly-lowercase hex decode, but a *tag value* is a raw
+               -- string written by whichever client sent the message and never decoded.
+               -- Missing a mention because another client upper-cased a key is the worse
+               -- failure. Measured at 2.0 ms against 2.2 ms binary over a 50k-event store,
+               -- so it costs nothing here — unlike on `event.pubkey`, where the same
+               -- collation is the difference between 2 ms and 63 ms (see ``RecentMentions``).
+               (SELECT COUNT(DISTINCT me.id)
+                  FROM event me
+                  JOIN event_tag mt ON mt.event_id = me.id
+                                   AND mt.name = 'p'
+                                   AND mt.value = :selfPubkey COLLATE NOCASE
+                  LEFT JOIN event_owner meo ON meo.event_id = me.id
+                 WHERE me.h = c.id AND me.kind = :kind
+                   AND me.pubkey <> :selfPubkey
+                   AND me.created_at > \(channelFrontier)
+                   AND NOT EXISTS (SELECT 1 FROM thread t WHERE t.event_id = me.id)
+                   AND NOT \(deletionApplies(
+                       target: "me.id", author: "me.pubkey", owner: "meo.owner_pubkey"
+                   ))) AS mention_count
         FROM channel c
-        LEFT JOIN visible n
-               ON n.channel_id = c.id
-              AND NOT EXISTS (
-                    SELECT 1 FROM visible n2
-                     WHERE n2.channel_id = n.channel_id
-                       AND (n2.created_at > n.created_at
-                            OR (n2.created_at = n.created_at AND n2.msg_id > n.msg_id))
-                  )
-        LEFT JOIN unread u ON u.channel_id = c.id
-        LEFT JOIN mentioned m ON m.channel_id = c.id
-        LEFT JOIN profile p ON p.pubkey = n.pubkey
+        LEFT JOIN newest n ON n.channel_id = c.id
+        LEFT JOIN event le ON le.id = n.msg_id
+        -- Only when the winner is not a log row: a send stays in the queue after its event
+        -- lands, so without this a settled message would match on both sides.
+        --
+        -- It changes no answer *today* — `COALESCE` already prefers `le`, and
+        -- `outbox.event_id` is a primary key so the join cannot duplicate the row — and
+        -- removing it is a mutation nothing here catches. It stays because the moment a
+        -- column only the queue carries is read (`lo.state` for a sending chip, say), a
+        -- settled message starts reading as in-flight, and that failure would arrive
+        -- attached to the new column rather than to this join.
+        LEFT JOIN outbox lo ON lo.event_id = n.msg_id AND le.id IS NULL
+        LEFT JOIN profile p ON p.pubkey = COALESCE(le.pubkey, lo.pubkey)
         ORDER BY last_message_at DESC NULLS LAST, c.name ASC, c.id ASC
         """
 
