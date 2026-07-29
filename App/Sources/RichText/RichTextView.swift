@@ -200,7 +200,7 @@ private extension RichTextView {
             // presents that itself. Without it a press would open the picture *and*
             // push the thread behind it, which is the defect the reaction chips'
             // `onOpenPalette` exists to avoid.
-            MessageMediaView(media: media, onTap: { claimRowTap?() })
+            MessageMediaGroupView(media: media, onTap: { claimRowTap?() })
 
         case let .linkPreview(preview):
             // The surface's own `openURL`, captured above — *not* the flashing wrapper

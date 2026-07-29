@@ -47,10 +47,33 @@ enum RichTextMedia {
         // because `imeta` is keyed by URL in the first place. First wins on a repeat,
         // matching ``MessageMedia/parse(tags:)``, which already de-duplicates.
         let described = Dictionary(media.map { ($0.url, $0) }, uniquingKeysWith: { first, _ in first })
-        return blocks.flatMap { block -> [RichBlock] in
+        let lifted = blocks.flatMap { block -> [RichBlock] in
             guard case let .paragraph(text) = block, carriesImage(text) else { return [block] }
             return split(text, describedBy: described)
         }
+        return group(lifted)
+    }
+
+    /// `blocks` with adjacent `.media` entries — pictures the author placed with nothing
+    /// between them, whether from one split paragraph or from two consecutive ones —
+    /// folded into a single ``RichBlock/media(_:)`` the renderer draws as a mosaic.
+    ///
+    /// Videos never fold: there is no gallery to page a placeholder into, and mixing one
+    /// into a run of pictures would put an inert tile in a set every other member of
+    /// which opens. Each stays the one-picture group ``MessageMediaGroupView`` already
+    /// draws exactly as a lone attachment.
+    private static func group(_ blocks: [RichBlock]) -> [RichBlock] {
+        var result: [RichBlock] = []
+        for block in blocks {
+            guard case let .media(items) = block, items.allSatisfy({ $0.kind == .image }),
+                  case .media(let previous)? = result.last, previous.last?.kind == .image
+            else {
+                result.append(block)
+                continue
+            }
+            result[result.count - 1] = .media(previous + items)
+        }
+        return result
     }
 
     private static func carriesImage(_ text: AttributedString) -> Bool {
@@ -80,11 +103,11 @@ enum RichTextMedia {
             }
             appendParagraph(pending, to: &blocks)
             pending = AttributedString()
-            blocks.append(.media(describe(
+            blocks.append(.media([describe(
                 imageURL,
                 alt: String(text[run.range].characters),
                 by: described[imageURL.absoluteString]
-            )))
+            )]))
         }
         appendParagraph(pending, to: &blocks)
         return blocks

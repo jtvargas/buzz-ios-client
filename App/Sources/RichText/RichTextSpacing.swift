@@ -48,8 +48,15 @@ enum RichTextSpacing {
     /// Media joins code and tables rather than earning a gap of its own. All three are
     /// bounded rectangles with a visible edge, and the reason a code block wants air —
     /// its border should not touch the sentence introducing it — is the same reason a
-    /// photograph does. Two attachments in a row then sit at that same gap, which reads
-    /// as one set of pictures rather than as two messages.
+    /// photograph does.
+    ///
+    /// This used to add that two attachments in a row sat at that same gap and so read as
+    /// one set of pictures rather than as two messages. They no longer arrive that way:
+    /// ``RichTextMedia/lift(_:describedBy:)`` folds adjacent pictures into a single
+    /// ``RichBlock/media(_:)`` carrying all of them, so what used to be two boxed blocks
+    /// separated by a gap is now one block drawing a mosaic. The spacing rule is
+    /// unchanged and still correct — it is the gap *around* the group — but the case it
+    /// was reasoning about cannot occur any more.
     ///
     /// A link card is the same object again: a bordered rectangle, appended after the
     /// message, and a stack of them reads as one set of references at this gap.

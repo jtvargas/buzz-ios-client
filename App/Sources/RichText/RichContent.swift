@@ -30,7 +30,7 @@ enum RichBlock: Equatable, Sendable {
     /// A thematic break — a rule across the message, from a line of `---`, `***`,
     /// `___`, or the reference renderer's own `⸻`.
     case rule
-    /// A picture or a video, drawn where the message put it.
+    /// One or more pictures and videos, drawn together where the message put them.
     ///
     /// # Why a block and not an inline
     ///
@@ -40,12 +40,17 @@ enum RichBlock: Equatable, Sendable {
     /// picture in a conversation takes a line of its own at any size a phone offers, and
     /// an inline that always breaks is a block that has to be measured twice.
     ///
-    /// The associated value is a whole ``MessageMedia`` rather than a URL on purpose:
-    /// the renderer needs the declared aspect ratio *before* it asks for a byte, or the
-    /// row grows when the picture lands and takes the reader's place in the conversation
-    /// with it. A case carrying only a URL would make that impossible to get right and
-    /// easy to not notice.
-    case media(MessageMedia)
+    /// The associated value is an array of whole ``MessageMedia`` rather than an array of
+    /// URLs on purpose: the renderer needs every declared aspect ratio *before* it asks
+    /// for a byte, or the row grows when a picture lands and takes the reader's place in
+    /// the conversation with it. A case carrying only URLs would make that impossible to
+    /// get right and easy to not notice.
+    ///
+    /// More than one entry means the author placed consecutive pictures with nothing
+    /// between them — see ``RichTextMedia/lift(_:describedBy:)`` — and the renderer draws
+    /// them as one mosaic rather than as several attachments in a row. A single entry is
+    /// the common case and draws exactly as one attachment always has.
+    case media([MessageMedia])
     /// A card for a link the message points at, appended after everything the author
     /// wrote — see ``RichTextLinkPreview``.
     ///

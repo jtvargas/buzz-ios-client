@@ -28,7 +28,14 @@ struct RichTextMediaTests {
         RichMessage.make(text, media: media, resolver: StubMentionResolver()).blocks
     }
 
+    /// The one attachment a single-picture block carries.
     private func attached(_ block: RichBlock?) -> MessageMedia? {
+        guard case let .media(media) = block, media.count == 1 else { return nil }
+        return media.first
+    }
+
+    /// Every attachment a (possibly grouped) media block carries, in reading order.
+    private func attachedGroup(_ block: RichBlock?) -> [MessageMedia]? {
         guard case let .media(media) = block else { return nil }
         return media
     }
@@ -74,14 +81,74 @@ struct RichTextMediaTests {
         #expect(attached(parsed[0])?.url == Self.picture)
     }
 
-    @Test("two attachments keep the order the text places them in")
-    func twoAttachments() {
+    @Test("two attachments with words between them stay two blocks, in order")
+    func twoAttachmentsWithWordsBetween() {
         let parsed = blocks(
-            "![image](\(Self.second))\n![image](\(Self.picture))",
+            "![image](\(Self.second))\nsaid the caption\n![image](\(Self.picture))",
             media: [media(), media(Self.second)]
         )
 
         #expect(parsed.compactMap { attached($0)?.url } == [Self.second, Self.picture])
+    }
+
+    // MARK: - Consecutive pictures fold into one group
+
+    @Test("consecutive images with nothing between them fold into one group, in order")
+    func consecutiveImagesFold() {
+        let third = "https://relay.example/media/ghi.gif"
+        let parsed = blocks(
+            "![a](\(Self.second))\n![b](\(Self.picture))\n![c](\(third))",
+            media: [media(), media(Self.second), media(third)]
+        )
+
+        #expect(parsed.count == 1)
+        #expect(attachedGroup(parsed.first)?.map(\.url) == [Self.second, Self.picture, third])
+    }
+
+    @Test("two separate paragraphs of one image each still fold — nothing sits between them")
+    func separateParagraphsStillFold() {
+        // A blank line between two image-only paragraphs: two `RichBlock`s reach `group`
+        // adjacent to each other because neither carries a caption of its own, which is
+        // the same shape as one paragraph with a bare newline between its images.
+        let parsed = blocks(
+            "![a](\(Self.second))\n\n![b](\(Self.picture))",
+            media: [media(), media(Self.second)]
+        )
+
+        #expect(parsed.count == 1)
+        #expect(attachedGroup(parsed.first)?.map(\.url) == [Self.second, Self.picture])
+    }
+
+    @Test("a video never folds into a picture group")
+    func videoDoesNotFold() {
+        let clip = "https://relay.example/media/clip.mp4"
+        let parsed = blocks(
+            "![a](\(Self.picture))\n![b](\(clip))",
+            media: [media(), media(clip, kind: .video)]
+        )
+
+        #expect(parsed.count == 2)
+        #expect(attached(parsed[0])?.url == Self.picture)
+        #expect(attached(parsed[1])?.url == clip)
+    }
+
+    @Test("one URL written twice is two pictures in the group, not one")
+    func repeatedURLKeepsBothEntries() {
+        // The reason ``MessageMediaGroupView`` and ``MessageMediaViewer`` identify their
+        // cells by position: `split` emits one block per image *run*, so this group holds
+        // two entries whose ``BuzzKit/MessageMedia/id`` — the URL — is the same string.
+        // Identifying them by that id is a `ForEach` over duplicate ids, which SwiftUI
+        // calls undefined, and would cost the gallery a page the reader cannot swipe to.
+        let parsed = blocks(
+            "![a](\(Self.picture))\n![a again](\(Self.picture))",
+            media: [media()]
+        )
+
+        let group = attachedGroup(parsed.first)
+        #expect(parsed.count == 1)
+        #expect(group?.count == 2)
+        #expect(group?.map(\.url) == [Self.picture, Self.picture])
+        #expect(group?[0].id == group?[1].id)
     }
 
     // MARK: - A bare URL is a link, not a picture
@@ -205,7 +272,7 @@ struct RichTextMediaTests {
     @Test("media takes the gap a framed block takes, on both sides")
     func mediaSpacing() {
         let text = RichBlock.paragraph(AttributedString("words"))
-        let picture = RichBlock.media(media())
+        let picture = RichBlock.media([media()])
 
         #expect(RichTextSpacing.gap(after: text, before: picture) == RichTextSpacing.aroundBoxed)
         #expect(RichTextSpacing.gap(after: picture, before: text) == RichTextSpacing.aroundBoxed)
