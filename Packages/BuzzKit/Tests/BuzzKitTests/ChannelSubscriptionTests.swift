@@ -9,15 +9,21 @@ import Testing
 ///
 /// Ground truth (measured against the production relay): the relay scopes a REQ by
 /// its filters, and a channel-scoped event never fans out to a `#h`-less global
-/// subscription. So channel traffic (kind 9/40002/40003/7/5/9005 and `#h`-tagged
+/// subscription. So channel traffic (kind 9/40002/40003/40099/7/5/9005 and `#h`-tagged
 /// typing 20002) rides one standing `#h`-scoped subscription per channel, and the
 /// global REQ carries only what a global filter can receive (metadata + presence +
 /// the `#p`-scoped membership notifications).
 @Suite("Channel content subscriptions and narrowed global REQ", .timeLimit(.minutes(1)))
 struct ChannelSubscriptionTests {
     /// The measured live-delivering per-channel shape.
+    ///
+    /// The relay's own channel notice (40099) is here and not among the global kinds
+    /// because it is `#h`-scoped like a message. What *is* global is the `#p`-scoped
+    /// 44100/44101 pair, and those only ever speak about the local identity's own
+    /// membership — which is why nothing told a reader that somebody else had arrived
+    /// until this kind was added.
     private static let contentKinds: [EventKind] = [
-        .channelMessage, .richMessage, .messageEdit,
+        .channelMessage, .richMessage, .messageEdit, .systemMessage,
         .reaction, .deletion, .groupDeleteEvent, .typing,
     ]
 

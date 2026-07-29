@@ -18,9 +18,10 @@ import Testing
 @Suite("Standing per-channel content subscription (carries typing)", .timeLimit(.minutes(1)))
 struct TypingSubscriptionTests {
     /// The measured live-delivering shape: a single `#h`-scoped filter carrying the
-    /// channel's message/overlay/reaction/deletion kinds and typing (20002).
+    /// channel's message/overlay/reaction/deletion kinds, the relay's own channel
+    /// notice (40099), and typing (20002).
     private static let contentKinds: [EventKind] = [
-        .channelMessage, .richMessage, .messageEdit,
+        .channelMessage, .richMessage, .messageEdit, .systemMessage,
         .reaction, .deletion, .groupDeleteEvent, .typing,
     ]
 

@@ -191,6 +191,11 @@ struct ThreadView: View {
                     DaySeparatorView(date: marker.date)
                 case let .message(row):
                     messageRow(row)
+                case let .notice(marker):
+                    // A thread's rows are all kind-9 replies, so this is unreachable
+                    // today. Rendered rather than skipped so that a notice which ever
+                    // does reach a thread appears instead of silently vanishing.
+                    SystemNoticeRowView(notice: marker.notice)
                 }
             }
         }

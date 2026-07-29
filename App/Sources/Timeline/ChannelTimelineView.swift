@@ -217,6 +217,8 @@ struct ChannelTimelineView: View {
                     DaySeparatorView(date: marker.date)
                 case let .message(row):
                     messageRow(row)
+                case let .notice(marker):
+                    SystemNoticeRowView(notice: marker.notice)
                 }
             }
         }

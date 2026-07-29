@@ -91,6 +91,17 @@ public struct EventKind: RawRepresentable, Hashable, Sendable, ExpressibleByInte
     public static let richMessage: EventKind = 40002
     public static let messageEdit: EventKind = 40003
 
+    /// A channel notice the relay narrates itself: somebody joined, was added, left,
+    /// or the channel's topic changed.
+    ///
+    /// `h`-tagged to the channel like a message and stored in the ordinary range, but
+    /// its content is a JSON object rather than prose (`{"type", "actor", "target"}`),
+    /// because the words belong to the reader's client and not to the relay — "You"
+    /// has to mean a different person on every screen. See ``SystemNotice``.
+    ///
+    /// Relay-signed: the relay rejects a client-submitted one outright.
+    public static let systemMessage: EventKind = 40099
+
     // MARK: - Buzz channel commands
 
     /// Open-or-create a direct-message channel.
@@ -164,6 +175,7 @@ public struct EventKind: RawRepresentable, Hashable, Sendable, ExpressibleByInte
         .groupMetadata, .groupAdmins, .groupMembers, .groupRoles,
         .threadSummary, .windowBounds,
         .membershipList, .memberAdded, .memberRemoved,
+        .systemMessage,
     ]
 }
 
