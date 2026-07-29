@@ -171,6 +171,28 @@ extension BuzzEventStore {
     )
     """
 
+    /// What a reply read hands back, and the joins that resolve it.
+    ///
+    /// Split from the `FROM` clause because the two callers below reach `thread` by
+    /// different routes and *everything else* about them must not differ: a column added
+    /// here, or a change to which frontier a reply is judged against, has to reach both or
+    /// neither. Two near-identical CTEs a screen apart is how one of them silently stops
+    /// meaning what the other does.
+    private static let threadRepliesColumns = """
+    SELECT t.root_id    AS root_id,
+           t.event_id   AS event_id,
+           t.created_at AS created_at,
+           t.pubkey     AS pubkey,
+           COALESCE(f.read_at, 0) AS read_at
+    """
+
+    private static let threadRepliesJoins = """
+    JOIN event root ON root.id = t.root_id
+    LEFT JOIN frontier f ON f.channel_id = root.h
+    LEFT JOIN event_owner teo ON teo.event_id = t.event_id
+    WHERE NOT \(deletionApplies(target: "t.event_id", author: "t.pubkey", owner: "teo.owner_pubkey"))
+    """
+
     /// Surviving replies, joined to the frontier of the channel their root lives in.
     ///
     /// The channel comes from the **root's** `h` rather than from `thread.channel_id`,
@@ -178,16 +200,53 @@ extension BuzzEventStore {
     /// join no frontier and count as new forever.
     static let threadRepliesCTE = """
     reply AS (
-        SELECT t.root_id    AS root_id,
-               t.event_id   AS event_id,
-               t.created_at AS created_at,
-               t.pubkey     AS pubkey,
-               COALESCE(f.read_at, 0) AS read_at
+        \(threadRepliesColumns)
+        FROM thread t
+        \(threadRepliesJoins)
+    )
+    """
+
+    /// The roots that could possibly hold a new reply: one with a foreign reply past its
+    /// channel's frontier.
+    ///
+    /// Deliberately *without* the deletion check, which makes this a **superset** of the
+    /// answer rather than the answer — and a superset is the whole point. `new_count`
+    /// counts replies satisfying three conditions, of which this applies the two that are
+    /// cheap; a root admitted here whose only new reply turns out to be deleted falls out
+    /// on `HAVING new_count > 0` further down, exactly as it did before this CTE existed.
+    /// So the set can only ever be too generous, never too small, and the aggregate below
+    /// stays the thing that decides.
+    ///
+    /// It walks every reply, like the pass it feeds — that has not changed, and no index
+    /// on `thread` can change it (`thread_root` is `(root_id, created_at, event_id)`, and
+    /// measured, a `created_at` index loses to the covering scan it would replace). What
+    /// it buys is the *second* pass: the deletion predicate and the two joins behind it
+    /// then run over the threads that can qualify rather than over every reply in the
+    /// store.
+    static let threadCandidateCTE = """
+    candidate AS (
+        SELECT DISTINCT t.root_id AS root_id
         FROM thread t
         JOIN event root ON root.id = t.root_id
         LEFT JOIN frontier f ON f.channel_id = root.h
-        LEFT JOIN event_owner teo ON teo.event_id = t.event_id
-        WHERE NOT \(deletionApplies(target: "t.event_id", author: "t.pubkey", owner: "teo.owner_pubkey"))
+        WHERE t.created_at > COALESCE(f.read_at, 0)
+          AND (:selfPubkey IS NULL OR t.pubkey <> :selfPubkey)
+    )
+    """
+
+    /// ``threadRepliesCTE`` reached through ``threadCandidateCTE`` instead of through the
+    /// whole table — the same rows, for the roots that survived the first pass.
+    ///
+    /// **Only sound under `HAVING new_count > 0`.** A caller that wants every thread's
+    /// replies, unread or not, must use ``threadRepliesCTE``: this one has already dropped
+    /// the threads with nothing new in them, which is why ``threadSummariesSQL`` — which
+    /// lists recent activity rather than unread activity — does not use it.
+    static let threadRepliesForCandidatesCTE = """
+    reply AS (
+        \(threadRepliesColumns)
+        FROM candidate cd
+        JOIN thread t ON t.root_id = cd.root_id
+        \(threadRepliesJoins)
     )
     """
 
@@ -297,65 +356,5 @@ extension BuzzEventStore {
           AND NOT \(deletionApplies(target: "root.id", author: "root.pubkey", owner: "reo.owner_pubkey"))
         ORDER BY latest_reply_at DESC, latest_reply_id DESC
         LIMIT :limit
-        """
-
-    /// The unread roots, aggregated per thread.
-    ///
-    /// Two maxima over the same grouped pass, and they are not interchangeable.
-    /// `latest_reply_at` spans every surviving reply, the reader's own included: it orders
-    /// the list and it is the shape a device-local mark takes, since a mark is set from the
-    /// newest reply that was on screen. `latest_other_reply_at` spans only replies somebody
-    /// else wrote, and it is the one a mark is *compared* against — otherwise a reply the
-    /// reader sent from another device outruns the mark their phone set and the thread comes
-    /// back as unread on the strength of their own message.
-    ///
-    /// The conditional maximum is unrestricted by the frontier while `new_count` is not, and
-    /// under `HAVING new_count > 0` the two agree anyway: any reply newer than the newest
-    /// *new* foreign one is itself past the frontier and therefore also new. The unrestricted
-    /// form is written because it is the honest statement of "the last thing somebody else
-    /// said", and it survives a future caller that drops the `HAVING`.
-    static func fetchUnreadThreads(_ db: Database, selfPubkey: String?) throws -> [UnreadThread] {
-        try Row.fetchAll(db, sql: unreadThreadsSQL, arguments: [
-            "kind": EventKind.channelMessage.rawValue,
-            "selfPubkey": selfPubkey,
-        ]).map { row in
-            UnreadThread(
-                rootID: row["root_id"],
-                newReplyCount: row["new_count"] ?? 0,
-                latestReplyAt: row["latest_reply_at"] ?? 0,
-                // Unreachable: `HAVING new_count > 0` guarantees a reply by somebody else,
-                // so the conditional maximum has a row to take. `0` rather than a trap
-                // because the harmless direction to be wrong in, if the impossible happens,
-                // is a thread that stays struck off — not one that cannot be struck off.
-                latestReplyByOthersAt: row["latest_other_reply_at"] ?? 0
-            )
-        }
-    }
-
-    /// The query behind ``fetchUnreadThreads(_:selfPubkey:)``, hoisted out of it so the
-    /// function reads as the mapping it now is.
-    private static let unreadThreadsSQL = """
-        WITH \(threadFrontierCTE),
-        \(threadRepliesCTE)
-        SELECT r.root_id           AS root_id,
-               MAX(r.created_at)   AS latest_reply_at,
-               MAX(CASE
-                     WHEN :selfPubkey IS NULL OR r.pubkey <> :selfPubkey
-                     THEN r.created_at
-                   END) AS latest_other_reply_at,
-               SUM(CASE
-                     WHEN r.created_at > r.read_at
-                      AND (:selfPubkey IS NULL OR r.pubkey <> :selfPubkey)
-                     THEN 1 ELSE 0
-                   END) AS new_count
-        FROM reply r
-        JOIN event root2 ON root2.id = r.root_id
-        LEFT JOIN event_owner reo ON reo.event_id = root2.id
-        WHERE root2.kind = :kind
-          AND root2.h IS NOT NULL
-          AND NOT \(deletionApplies(target: "root2.id", author: "root2.pubkey", owner: "reo.owner_pubkey"))
-        GROUP BY r.root_id
-        HAVING new_count > 0
-        ORDER BY latest_reply_at DESC, root_id DESC
         """
 }
