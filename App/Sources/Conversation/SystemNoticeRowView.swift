@@ -12,9 +12,9 @@ import SwiftUI
 /// said.
 ///
 /// The names inside it carry ``Font/hive(_:weight:)`` semibold *while the font is
-/// built*, never `.fontWeight(.semibold)` over the surrounding font — Lato is a static
-/// family and a weight asked for by trait comes back regular with no error. See
-/// ``HiveTypography``.
+/// built*, never `.fontWeight(.semibold)` over the surrounding font — weight here is a
+/// value on Inter's `wght` axis, set as the face is resolved, and a trait layered on
+/// afterwards is not that. See ``HiveTypography``.
 ///
 /// # Where it starts
 ///

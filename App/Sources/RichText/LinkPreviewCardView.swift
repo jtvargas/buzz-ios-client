@@ -44,9 +44,8 @@ struct LinkPreviewCardView: View {
                             .truncationMode(.tail)
                     }
                     Text(preview.title)
-                        // Semibold named while the font is built. Lato ships as static
-                        // cuts, so a `.fontWeight(.semibold)` over this would silently
-                        // come back regular and the title would read as the caption.
+                        // Semibold is resolved while Inter's variable face is built;
+                        // applying a trait over an existing custom font is unreliable.
                         .font(.hive(.subheadline, weight: .semibold))
                         .lineLimit(1)
                         // The head, not the tail: a title that does not fit is nearly

@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 // The leaf block views a message is drawn from — lists, code, and the thematic rule.
 // Split out of `RichTextView.swift` so that file is about the message's own layout.
@@ -161,38 +162,61 @@ struct RichHeadingView: View {
 /// A fenced code block: monospaced, on a subtle fill, its raw text never inline- or
 /// entity-parsed.
 ///
-/// Long lines wrap rather than scroll, which is the one place this renderer knowingly
-/// differs from upstream — upstream scrolls the code horizontally. Wrapping loses no
-/// character either way, and it is the reading that needs no gesture. A table gets the
-/// scroll instead because a wrapped table is not a table; wrapped code is still code.
+/// Long lines scroll horizontally rather than wrap, which is what the mobile client
+/// does and what this renderer used to differ from. Indentation is what a wrap costs:
+/// a continued line restarts at the block's left edge, so the shape that carries the
+/// structure is exactly the thing that goes, and the reader cannot tell a wrap from a
+/// newline. A table scrolls for the neighbouring reason — a wrapped table is not a
+/// table.
 struct RichCodeBlock: View {
+    @Environment(\.colorScheme) private var colorScheme
+
     let code: String
     let language: String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 2) {
             if let language, !language.isEmpty {
-                // Above the code, not floating over its top-right corner. As an overlay
-                // it sat on top of the first line, so any block whose opening line ran
-                // the full width had the label printed through it.
-                Text(language)
-                    .font(.hive(.caption2))
-                    .foregroundStyle(.secondary)
-                    .accessibilityHidden(true)
+                HStack(spacing: 8) {
+                    Text(language)
+                        .font(.hive(.caption2))
+                        .foregroundStyle(.secondary)
+                        .accessibilityHidden(true)
+                    Spacer(minLength: 0)
+                    Button("Copy code", systemImage: "doc.on.doc") {
+                        UIPasteboard.general.string = code
+                    }
+                    .labelStyle(.iconOnly)
+                    .font(.hiveSymbol(.caption2))
+                    .frame(width: 28, height: 28)
+                    .accessibilityLabel("Copy code")
+                }
             }
-            Text(code)
-                // Named, not `.monospaced()`: the app's family is Lato and has no
-                // fixed-width member for that modifier to find.
-                .font(.hiveMono(.callout))
-                .frame(maxWidth: .infinity, alignment: .leading)
+            ScrollView(.horizontal) {
+                Text(RichCodeHighlighter.highlight(code, language: language, theme: theme))
+                    .font(.hiveMono(fixedSize: RichCodeHighlighter.fontSize))
+                    .foregroundStyle(.primary)
+                    .lineSpacing(RichCodeHighlighter.fontSize * 0.5)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
+            }
         }
-        .padding(10)
+        .padding(.horizontal, 12)
+        .padding(.top, language == nil || language?.isEmpty == true ? 6 : 2)
+        .padding(.bottom, 6)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-            RoundedRectangle(cornerRadius: 8)
-                .fill(Color.secondary.opacity(0.12))
+            RoundedRectangle(cornerRadius: 12)
+                .fill(Color(uiColor: .secondarySystemBackground).opacity(0.60))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(Color.secondary.opacity(0.70))
         )
     }
+
+    private var theme: RichCodeTheme { colorScheme == .dark ? .dark : .light }
 }
 
 // MARK: - Rule

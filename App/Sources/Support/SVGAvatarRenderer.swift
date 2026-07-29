@@ -130,7 +130,9 @@ extension SVGAvatarRenderer {
     }
 
     private static func draw(_ run: SVGTextRun, in context: CGContext) {
-        let font = UIFont.systemFont(ofSize: run.fontSize)
+        // Avatar SVG text is still app text. Build Inter at the SVG-authored size while
+        // leaving Core Text's fallback cascade free to resolve colour emoji.
+        let font = HiveTypography.drawingFont(fixedSize: run.fontSize)
         let attributes: [NSAttributedString.Key: Any] = [
             .init(kCTFontAttributeName as String): font,
             // Take the colour from the context rather than a `CTForegroundColor`

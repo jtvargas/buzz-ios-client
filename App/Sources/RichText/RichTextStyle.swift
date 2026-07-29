@@ -93,17 +93,13 @@ enum RichTextStyle {
     ///
     /// # Why `base` is a text style and not a `Font`
     ///
-    /// It used to be a `Font`, and every weight here was `base.weight(…)`. That is the
-    /// one construction the app's typeface cannot honour: Lato is a set of static cuts,
-    /// so a weight asked for by trait is dropped and the descriptor hands the regular
-    /// face straight back (``HiveTypography``). Every mention, channel reference and
-    /// link in every message would have drawn at body weight — no error, no warning,
-    /// just the tint doing all the work. Taking the *style* instead means the weight is
-    /// named while the font is being built, which is the only way to reach a real cut.
+    /// A `Font.weight(_:)` modifier asks for a trait after its face was built. The app
+    /// resolves Inter's `wght` axis while building the font instead, so taking the
+    /// *style* here keeps every mention, channel reference, and link on a real weight.
     ///
     /// Emphasis the parse stage recorded as intent — struck, underlined, and code —
     /// is stated as attributes first, by ``emphasised(_:base:)``, for the same reason:
-    /// what `Text` resolves from an intent alone is not enough once the family is Lato.
+    /// what `Text` resolves from an intent alone is not enough once the family is custom.
     ///
     /// `interactive` is what separates a message being read from a one-line preview
     /// of one. When it is set, an entity run also gains the `link` that carries its
@@ -161,14 +157,10 @@ enum RichTextStyle {
     /// A code span's face is composed rather than assigned, so `**`x`**` keeps its
     /// weight: monospaced first, then whatever emphasis the same run also carries.
     ///
-    /// The face is *named* rather than reached for with `.monospaced()`. `Text` renders
-    /// a `.code` run by asking the run's font for the fixed-width member of its own
-    /// family, and the app's family is Lato, which has none — so on a Lato base that
-    /// request is dropped exactly the way a weight trait is (``HiveTypography``), and an
-    /// inline `` `--flag` `` would have quietly set in proportional Lato in the middle of
-    /// a sentence about a command. ``HiveTypography/hiveMono(_:weight:)`` is the system's
-    /// monospaced face, which does carry a full weight axis, so the two emphasis
-    /// modifiers below still compose onto it.
+    /// The face is named rather than reached for with `.monospaced()`: prose is Inter,
+    /// while code is the separately bundled GeistMono family. Its weight and italic
+    /// axes are resolved as the font is built, so code emphasis never falls back to
+    /// proportional text.
     private static func emphasised(
         _ attributed: AttributedString,
         base: Font.TextStyle
@@ -184,10 +176,11 @@ enum RichTextStyle {
                 output[range].strikethroughStyle = .single
             }
             if intent.contains(.code) {
-                var font = Font.hiveMono(base)
-                if intent.contains(.stronglyEmphasized) { font = font.bold() }
-                if intent.contains(.emphasized) { font = font.italic() }
-                output[range].font = font
+                output[range].font = .hiveMono(
+                    base,
+                    weight: intent.contains(.stronglyEmphasized) ? .bold : .regular,
+                    italic: intent.contains(.emphasized)
+                )
             }
         }
         return output

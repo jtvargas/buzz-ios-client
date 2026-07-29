@@ -181,7 +181,7 @@ private struct MessageActionsSheet: View {
         return Button {
             send(emoji)
         } label: {
-            // See ``EmojiPickerView``'s cell for why an emoji is asked for in Lato.
+            // See ``EmojiPickerView``'s cell for why an emoji is asked for in Inter.
             Text(emoji)
                 .font(.hive(fixedSize: 28, relativeTo: .title2))
                 .frame(maxWidth: .infinity)

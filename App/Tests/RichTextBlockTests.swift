@@ -9,6 +9,82 @@ import Testing
 /// rule.
 @Suite("Rich text blocks")
 struct RichTextBlockTests {
+    // MARK: - Code highlighting
+
+    @Test("the One Light scanner colours Swift tokens with the mobile map")
+    func oneLightSwiftHighlighting() {
+        let highlighted = RichCodeHighlighter.highlight(
+            "let total: Int = 42 // count",
+            language: "swift",
+            theme: .light
+        )
+        let colors = highlighted.runs.compactMap(\.foregroundColor)
+        #expect(colors.contains(RichCodeTheme.light.keyword))
+        #expect(colors.contains(RichCodeTheme.light.type))
+        #expect(colors.contains(RichCodeTheme.light.number))
+        #expect(colors.contains(RichCodeTheme.light.comment))
+    }
+
+    @Test("the One Dark scanner colours JSON keys and values distinctly")
+    func oneDarkJSONHighlighting() {
+        let highlighted = RichCodeHighlighter.highlight(
+            "{\"name\": \"Buzz\", \"enabled\": true}",
+            language: "json",
+            theme: .dark
+        )
+        let colors = highlighted.runs.compactMap(\.foregroundColor)
+        #expect(colors.contains(RichCodeTheme.dark.name))
+        #expect(colors.contains(RichCodeTheme.dark.string))
+        #expect(colors.contains(RichCodeTheme.dark.type))
+    }
+
+    @Test("unknown and incomplete languages use unstyled base text")
+    func codeHighlightFallback() {
+        let unknown = RichCodeHighlighter.highlight("let x = 1", language: "haskell", theme: .light)
+        let incomplete = RichCodeHighlighter.highlight("let title = \"Buzz", language: "swift", theme: .light)
+        #expect(unknown.runs.allSatisfy { $0.foregroundColor == nil })
+        #expect(incomplete.runs.allSatisfy { $0.foregroundColor == nil })
+    }
+
+    @Test(
+        "a block comment opened near the end of the code does not take the app down",
+        arguments: ["a/*b", "let a = 1 /*", "/*", "/*x", "x/*", "SELECT 1 /*"]
+    )
+    func unterminatedBlockCommentAtTheEnd(code: String) {
+        // `starts("/*")` only needs two characters left, but the search for the closing
+        // `*/` then walked `position + 2 ... characters.count - 2`. Once the opener is
+        // inside the last four characters that range is inverted, which is a trap, not a
+        // nil — "Range requires lowerBound <= upperBound", from a code block a reader
+        // merely scrolled past. Every one of these is a snippet someone could paste.
+        let highlighted = RichCodeHighlighter.highlight(code, language: "swift", theme: .light)
+        #expect(highlighted.runs.allSatisfy { $0.foregroundColor == nil })
+        // A colouring pass may never lose a character, whichever branch it takes.
+        #expect(String(highlighted.characters) == code)
+    }
+
+    @Test("a scanned block is memoised, and the memo is keyed on all three inputs")
+    func codeHighlightMemoises() {
+        // `RichCodeBlock` is a plain value view, so its body re-runs whenever the row
+        // holding it is re-evaluated — which this channel does on traffic that has
+        // nothing to do with the message. Without the memo that is a fresh walk over
+        // the whole block every time.
+        //
+        // Uniqued per run so an earlier test in this suite cannot have warmed the entry
+        // and left this passing on someone else's work.
+        let code = "let memoised = 42 // \(UUID().uuidString)"
+        #expect(RichCodeHighlighter.memoisedText(code, language: "swift", theme: .light) == nil)
+
+        let highlighted = RichCodeHighlighter.highlight(code, language: "swift", theme: .light)
+        #expect(RichCodeHighlighter.memoisedText(code, language: "swift", theme: .light) == highlighted)
+
+        // The other two inputs are not the same block. A key that dropped either would
+        // serve One Light's palette to a reader in the dark, or one language's colours
+        // to another's source — both of which look like a rendering bug, not a cache.
+        #expect(RichCodeHighlighter.memoisedText(code, language: "swift", theme: .dark) == nil)
+        #expect(RichCodeHighlighter.memoisedText(code, language: "json", theme: .light) == nil)
+        #expect(RichCodeHighlighter.highlight(code, language: "swift", theme: .dark) != highlighted)
+    }
+
     // MARK: - Thematic rules
 
     @Test(
