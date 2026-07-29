@@ -11,6 +11,42 @@ extension SyncEngine {
         kinds: [.groupMetadata, .groupAdmins, .groupMembers]
     )
 
+    // MARK: - Refresh
+
+    /// A catch-up the reader asked for — the pull-to-refresh path.
+    ///
+    /// # What it does, by what the connection is doing
+    ///
+    /// - **Running:** re-runs the work a fresh socket runs — discovery, subscription
+    ///   reconciliation, the per-channel head window, and an outbox drain — and awaits
+    ///   it, so the spinner lasts exactly as long as the catch-up does. A catch-up
+    ///   already in flight is *joined* rather than duplicated: two reconciles of one
+    ///   channel would race on the watermark the whole contiguity contract rests on.
+    /// - **Anything else:** asks the connection to reopen now rather than wait out its
+    ///   backoff, and returns. Deliberately without waiting for `.ready` — the useful
+    ///   thing a pull can do for a disconnected client is stop the waiting, and what
+    ///   happens next is already reported by the connection state the app draws. Holding
+    ///   the spinner through a reconnect that may take a whole backoff would say less,
+    ///   for longer.
+    ///
+    /// A stopped engine (signed out) does nothing at all.
+    public func refresh() async {
+        guard !isStopped else { return }
+        guard state == .running else {
+            await connection.reconnectNow()
+            return
+        }
+        if readyWorkInFlight, let inFlight = onReadyTask {
+            await inFlight.value
+            return
+        }
+        let generation = readyGeneration
+        readyWorkInFlight = true
+        let task: Task<Void, Never> = Task { [weak self] in await self?.onReady(generation: generation) }
+        onReadyTask = task
+        await task.value
+    }
+
     // MARK: - On-ready orchestration
 
     /// The work a fresh, authenticated socket triggers, in order: discover group
@@ -18,6 +54,11 @@ extension SyncEngine {
     /// step re-checks the ready generation so a reconnect that supersedes this
     /// socket abandons the rest rather than committing against a stale epoch.
     func onReady(generation: Int) async {
+        // Cleared only by the run that is still current: a superseded run unwinding
+        // after a fresh `.ready` has already armed the flag must not clear the new
+        // run's claim. See ``SyncEngine/readyWorkInFlight``.
+        defer { if generation == readyGeneration { readyWorkInFlight = false } }
+
         let discovered = await discover(generation: generation)
         guard isCurrent(generation) else { return }
 

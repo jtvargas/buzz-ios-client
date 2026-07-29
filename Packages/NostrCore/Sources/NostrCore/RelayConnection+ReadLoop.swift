@@ -63,6 +63,7 @@ extension RelayConnection {
 
         advanceGeneration() // stale-guard the dead socket's late deliveries
         watchdogTask?.cancel(); watchdogTask = nil
+        handshakeTask?.cancel(); handshakeTask = nil
         await closeTransport()
         failInFlight(with: .connectionLost)
         authenticatedAs = nil
@@ -153,6 +154,52 @@ extension RelayConnection {
             let first = await group.next() ?? false
             group.cancelAll()
             return first
+        }
+    }
+
+    // MARK: - Handshake deadline
+
+    /// Bounds the time an opened socket may spend below ``ConnectionState/ready``.
+    ///
+    /// # Why the idle watchdog is not enough
+    ///
+    /// ``performLivenessCheck(generation:transport:)`` acts on how long the socket has
+    /// been *silent*, and an answered ping counts as activity — so a peer that pongs
+    /// but never speaks the protocol resets the idle clock every ``RelayConnectionConfig/pingInterval``
+    /// and is never judged dead. That is exactly the shape of an application-layer
+    /// stall: a relay that accepts the socket and never issues its NIP-42 challenge,
+    /// a TLS terminator that completes the upgrade without forwarding, an auth `OK`
+    /// that never arrives. Before this bound existed such a connection rested in
+    /// ``ConnectionState/connecting`` or ``ConnectionState/authenticating`` for the
+    /// life of the process: no data, no reconnect, and a UI reading the state
+    /// truthfully as "connecting" forever.
+    ///
+    /// A handshake that misses its deadline is therefore treated as any other dead
+    /// socket — torn down and retried on the backoff schedule.
+    func armHandshakeDeadline(generation: Int, within deadline: Duration) {
+        handshakeTask?.cancel()
+        handshakeTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await sleep(deadline)
+            } catch {
+                return // superseded by a fresh deadline, or torn down
+            }
+            await handshakeDeadlineExpired(generation: generation)
+        }
+    }
+
+    /// One handshake-deadline firing. Internal so a test drives it directly against a
+    /// socket parked mid-handshake, without spending the real deadline.
+    func handshakeDeadlineExpired(generation: Int) async {
+        guard generation == currentGeneration else { return }
+        // Only a socket still below `ready` is late; anything else either finished the
+        // handshake or is already being torn down.
+        switch state {
+        case .connecting, .authenticating:
+            await handleConnectionLost(generation: generation)
+        case .idle, .ready, .backingOff, .suspended, .stopped:
+            return
         }
     }
 

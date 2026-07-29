@@ -289,6 +289,12 @@ struct ChannelTimelineView: View {
             // the suggestion panel, which is the taller and more urgent of the two,
             // grows upwards away from it rather than pushing it off the bar.
             TypingIndicatorView(model: typing, nameFor: authorName)
+            // Beneath the typing strip, in the same capsule: while the connection is
+            // down nobody's typing can reach us anyway, so the two are near-exclusive,
+            // and this is the one that explains the silence. It reads the engine state
+            // itself rather than taking it as a parameter, so a transition invalidates
+            // this one small view instead of the whole surface and its list.
+            ConnectionStatusIndicatorView()
         }
     }
 

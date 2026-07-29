@@ -49,6 +49,10 @@ extension RelayConnection {
         case let .success(key):
             authenticatedAs = key
             authFailure = nil
+            // The handshake landed inside its deadline; disarm it. The deadline also
+            // checks the state before acting, so this is belt to that braces — but a
+            // timer left running against a healthy socket is the kind that later fires.
+            handshakeTask?.cancel(); handshakeTask = nil
             state = .ready
             resumeAuthWaiters(.success(()))
         case let .failure(error):
@@ -115,6 +119,7 @@ extension RelayConnection {
         reconnectTask?.cancel(); reconnectTask = nil
         readTask?.cancel(); readTask = nil
         watchdogTask?.cancel(); watchdogTask = nil
+        handshakeTask?.cancel(); handshakeTask = nil
 
         let error = RelayConnectionError.authenticationRejected(reason)
         authFailure = error

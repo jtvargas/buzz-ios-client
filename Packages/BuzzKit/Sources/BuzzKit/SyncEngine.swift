@@ -169,6 +169,11 @@ public actor SyncEngine {
 
     private var stateObserverTask: Task<Void, Never>?
     var onReadyTask: Task<Void, Never>?
+    /// Whether ``onReady(generation:)`` is still running. ``onReadyTask`` cannot answer
+    /// this — set on every `.ready` and never cleared, it is almost always a *completed*
+    /// task — and ``refresh()`` must not start a second catch-up beside a live one: two
+    /// concurrent reconciles of a channel race on its watermark.
+    var readyWorkInFlight = false
     private var sweepTask: Task<Void, Never>?
     /// Set by ``stop()``; blocks reacting to the `.stopped` the engine itself
     /// caused, and short-circuits any in-flight on-ready work.
@@ -290,6 +295,7 @@ public actor SyncEngine {
         isStopped = true
         stateObserverTask?.cancel(); stateObserverTask = nil
         onReadyTask?.cancel(); onReadyTask = nil
+        readyWorkInFlight = false
         sweepTask?.cancel(); sweepTask = nil
         await subscriptions.shutdown()
         await connection.stop()
@@ -330,16 +336,20 @@ public actor SyncEngine {
             // reconcile proves otherwise (NIP-CW head-refetch rule).
             channelStates.removeAll()
             onReadyTask?.cancel()
+            readyWorkInFlight = true
             onReadyTask = Task { [weak self] in await self?.onReady(generation: generation) }
 
         case .suspended:
             state = .suspended
             channelStates.removeAll()
             onReadyTask?.cancel(); onReadyTask = nil
+            readyWorkInFlight = false
 
         case let .stopped(termination):
             // A terminal auth rejection stops the connection on its own; mirror it.
-            if case .authRejected = termination { onReadyTask?.cancel(); onReadyTask = nil }
+            if case .authRejected = termination {
+                onReadyTask?.cancel(); onReadyTask = nil; readyWorkInFlight = false
+            }
             state = .stopped
 
         case .idle, .connecting, .authenticating, .backingOff:

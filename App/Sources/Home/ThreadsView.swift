@@ -57,6 +57,7 @@ struct ThreadsView: View {
     private let store: BuzzEventStore
     private let sender: any MessageSending
     private let opener: any ThreadOpening
+    private let refresher: any ConversationRefreshing
     private let presenceStore: PresenceStore
     private let selfPubkey: String?
 
@@ -71,6 +72,7 @@ struct ThreadsView: View {
             store: store,
             sender: engine,
             opener: engine,
+            refresher: engine,
             presence: engine.presenceStore,
             selfPubkey: selfPubkey,
             openedThread: openedThread
@@ -87,6 +89,7 @@ struct ThreadsView: View {
         store: BuzzEventStore,
         sender: any MessageSending,
         opener: any ThreadOpening,
+        refresher: any ConversationRefreshing,
         presence: PresenceStore,
         selfPubkey: String?,
         openedThread: Binding<ThreadRoute?>
@@ -94,6 +97,7 @@ struct ThreadsView: View {
         self.store = store
         self.sender = sender
         self.opener = opener
+        self.refresher = refresher
         presenceStore = presence
         self.selfPubkey = selfPubkey
         _openedThread = openedThread
@@ -126,6 +130,10 @@ struct ThreadsView: View {
             }
         }
         .listStyle(.plain)
+        // The same pull the sidebar offers, for the same reason — see
+        // ``ChannelListView/sidebar(names:)``. This screen summarises every channel's
+        // threads, so a stale one is exactly as misleading here as there.
+        .refreshable { await refresher.refresh() }
         .navigationTitle("Threads")
         .navigationBarTitleDisplayMode(.inline)
         .overlay { emptyState }

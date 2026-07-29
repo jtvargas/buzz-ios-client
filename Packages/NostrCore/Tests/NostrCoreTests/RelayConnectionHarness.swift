@@ -116,6 +116,8 @@ func inertConfig(policy: ReconnectPolicy = .default) -> RelayConnectionConfig {
         pingInterval: .seconds(3600),
         pingDeadline: .seconds(3600),
         idleTimeout: .seconds(3600),
+        handshakeTimeout: .seconds(3600),
+        foregroundHandshakeDeadline: .seconds(3600),
         authTimeout: .seconds(3600),
         queryTimeout: .seconds(3600),
         publishTimeout: .seconds(3600)

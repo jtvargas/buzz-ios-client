@@ -51,6 +51,10 @@ public actor RelayConnection {
     /// than reusing one transport — is what lets the generation model give each
     /// socket a clean object, and lets a test vend a scripted fake per attempt.
     let makeTransport: @Sendable () async -> any RelayTransport
+    /// Watches for the network coming back, so a backoff is cut short by a fact
+    /// rather than waited out. Injected on ``makeTransport``'s principle: a test
+    /// drives the transitions instead of the machine's radios.
+    let makePathMonitor: @Sendable () -> any NetworkPathMonitoring
     /// The jitter fraction for the next backoff delay, in `0...1`. Injected so a
     /// test pins the schedule; production draws from the system CSPRNG.
     let jitter: @Sendable () -> Double
@@ -93,8 +97,13 @@ public actor RelayConnection {
     var readTask: Task<Void, Never>?
     var watchdogTask: Task<Void, Never>?
     var reconnectTask: Task<Void, Never>?
-    private var backgroundGraceTask: Task<Void, Never>?
+    var backgroundGraceTask: Task<Void, Never>?
     var foregroundProbeTask: Task<Void, Never>?
+    /// Bounds the current socket's time below `.ready`. See ``armHandshakeDeadline(generation:within:)``.
+    var handshakeTask: Task<Void, Never>?
+    /// Observes network availability for the life of the connection. See
+    /// ``networkPathBecameAvailable()``.
+    var pathMonitorTask: Task<Void, Never>?
 
     /// When the current socket last connected, for the ``ReconnectPolicy``
     /// health-based counter reset.
@@ -149,6 +158,7 @@ public actor RelayConnection {
         signer: any EventSigner,
         config: RelayConnectionConfig = .default,
         makeTransport: @escaping @Sendable () async -> any RelayTransport = { URLSessionTransport() },
+        makePathMonitor: @escaping @Sendable () -> any NetworkPathMonitoring = { SystemNetworkPathMonitor() },
         jitter: @escaping @Sendable () -> Double = { Double.random(in: 0 ... 1) },
         now: @escaping @Sendable () -> ContinuousClock.Instant = { ContinuousClock.now },
         backoffSleep: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) },
@@ -159,6 +169,7 @@ public actor RelayConnection {
         self.signer = signer
         self.config = config
         self.makeTransport = makeTransport
+        self.makePathMonitor = makePathMonitor
         self.jitter = jitter
         self.now = now
         self.backoffSleep = backoffSleep
@@ -230,51 +241,8 @@ public actor RelayConnection {
         reconnectAttempt = 0
         connectionEstablishedAt = nil
         authFailure = nil
+        startPathMonitoring()
         try await establishConnection()
-    }
-
-    /// Arms the background grace window. If the app returns to the foreground
-    /// within it, the socket is kept; otherwise the socket is released. A quick
-    /// app switch therefore does not churn the connection.
-    public func background() {
-        guard !authTerminated else { return }
-        if case .stopped = state { return }
-        backgroundGraceTask?.cancel()
-        backgroundGraceTask = Task { [weak self] in
-            guard let self else { return }
-            do {
-                try await graceSleep(config.backgroundGrace)
-            } catch {
-                return // foreground cancelled the grace window
-            }
-            await suspendAfterGrace()
-        }
-    }
-
-    /// Resumes from the background. A `.ready` that survived the grace window is
-    /// not trusted blindly — the process was frozen, so the socket may be silently
-    /// dead — and is probed for liveness; a suspended or backing-off connection
-    /// cancels any pending backoff and reconnects immediately. A connection stopped
-    /// by a terminal auth rejection is not revived.
-    public func foreground() {
-        backgroundGraceTask?.cancel()
-        backgroundGraceTask = nil
-        guard !authTerminated else { return }
-        if case .stopped = state { return }
-
-        switch state {
-        case .ready:
-            // A `.ready` that outlived a freeze is unproven; the probe confirms the
-            // socket or forces a reconnect. See ``armForegroundProbe()``.
-            armForegroundProbe()
-        case .connecting, .authenticating, .stopped:
-            return // an in-flight handshake resolves on its own; nothing to probe
-        case .idle, .suspended, .backingOff:
-            reconnectTask?.cancel()
-            reconnectSuppressed = false
-            reconnectAttempt = 0
-            reconnectTask = Task { [weak self] in await self?.reconnectImmediately() }
-        }
     }
 
     /// Tears the connection down for good. In-flight requests and auth waiters
@@ -286,32 +254,18 @@ public actor RelayConnection {
         advanceGeneration()
         backgroundGraceTask?.cancel(); backgroundGraceTask = nil
         foregroundProbeTask?.cancel(); foregroundProbeTask = nil
+        handshakeTask?.cancel(); handshakeTask = nil
         reconnectTask?.cancel(); reconnectTask = nil
         readTask?.cancel(); readTask = nil
         watchdogTask?.cancel(); watchdogTask = nil
+        // Cancelling the observation terminates the stream, which cancels the system
+        // path monitor behind it — see ``SystemNetworkPathMonitor``.
+        pathMonitorTask?.cancel(); pathMonitorTask = nil
         await closeTransport()
         authFailure = .stopped
         failInFlight(with: .stopped)
         resumeAuthWaiters(.failure(RelayConnectionError.stopped))
         state = .stopped(.client)
-    }
-
-    private func suspendAfterGrace() async {
-        backgroundGraceTask = nil
-        guard !authTerminated, !isStopping else { return }
-        if case .stopped = state { return }
-        advanceGeneration()
-        reconnectTask?.cancel(); reconnectTask = nil
-        readTask?.cancel(); readTask = nil
-        watchdogTask?.cancel(); watchdogTask = nil
-        reconnectSuppressed = true
-        await closeTransport()
-        failInFlight(with: .notConnected)
-        // A caller parked mid-handshake must fail fast like everything else,
-        // not sit out the full auth timeout against a suspended connection.
-        resumeAuthWaiters(.failure(RelayConnectionError.notConnected))
-        authenticatedAs = nil
-        state = .suspended
     }
 
     // MARK: - Establishing a socket
@@ -354,6 +308,9 @@ public actor RelayConnection {
         watchdogTask = Task { [weak self] in
             await self?.runWatchdog(generation: generation, transport: transport)
         }
+        // The socket is open; the handshake starts now and is on the clock. Nothing
+        // else bounds it — see ``armHandshakeDeadline(generation:within:)``.
+        armHandshakeDeadline(generation: generation, within: config.handshakeTimeout)
     }
 
     func reconnectImmediately() async {
