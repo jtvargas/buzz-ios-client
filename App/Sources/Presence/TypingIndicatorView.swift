@@ -62,9 +62,11 @@ struct TypingIndicatorView: View {
                 // inside it. Same reasoning as ``NewMessagesPill``.
                 .frame(minHeight: 28)
                 .glassEffect(.regular, in: .capsule)
-                // Leading, unlike the jump pill: this annotates the conversation's text,
-                // which starts at this edge, and a centred one reads as a control.
-                .frame(maxWidth: .infinity, alignment: .leading)
+                // Trailing, by the owner's call. It used to sit at the leading edge on the
+                // argument that it annotates text starting there; in practice it lands on
+                // top of the newest message's own first words, which are the ones being
+                // read. At this edge it covers the ragged right instead.
+                .frame(maxWidth: .infinity, alignment: .trailing)
                 .transition(.opacity)
                 .accessibilityElement(children: .combine)
                 .accessibilityLabel(text)

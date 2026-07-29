@@ -17,17 +17,17 @@ import CoreGraphics
 /// to change when it is wrong.
 enum RichTextSpacing {
     /// The ordinary paragraph-to-paragraph gap.
-    static let regular = RichTextStyle.blockSpacing
+    static let regular: CGFloat = 19
     /// The gap above a heading: enough to say the section starts here.
-    static let beforeHeading: CGFloat = 12
+    static let beforeHeading: CGFloat = 24
     /// The gap below a heading, tighter than ``regular`` so the heading reads as
     /// belonging to what follows it rather than sitting between two equals.
-    static let afterHeading: CGFloat = 3
+    static let afterHeading: CGFloat = 12
     /// The gap on either side of a block that draws its own frame — code and tables.
-    static let aroundBoxed: CGFloat = 9
+    static let aroundBoxed: CGFloat = 22
     /// The gap on either side of a thematic break, which carries its own padding
     /// already and only needs the blocks kept off it.
-    static let aroundRule: CGFloat = 8
+    static let aroundRule: CGFloat = 20
 
     /// The vertical gap between `previous` and `next`.
     ///

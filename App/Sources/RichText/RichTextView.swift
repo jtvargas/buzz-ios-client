@@ -44,6 +44,9 @@ struct RichTextView: View {
     /// rather than a link run, so it never reaches the arbitrating `OpenURLAction`
     /// above and has to claim the tap itself — see ``ClaimRowTapAction``.
     @Environment(\.claimRowTap) private var claimRowTap
+    /// Block spacing represents an empty body-text line in the reference renderer, so it
+    /// must grow with the same Dynamic Type setting as the message it separates.
+    @ScaledMetric(relativeTo: .body) private var blockSpacingScale: CGFloat = 1
 
     /// The interactive range currently flashing, by target URL string.
     @State private var flashing: String?
@@ -154,7 +157,7 @@ private extension RichTextView {
     /// message's first block sits flush against the attribution line above it.
     func gapAbove(_ index: Int) -> CGFloat {
         guard index > 0 else { return 0 }
-        return RichTextSpacing.gap(after: message.blocks[index - 1], before: message.blocks[index])
+        return RichTextSpacing.gap(after: message.blocks[index - 1], before: message.blocks[index]) * blockSpacingScale
     }
 
     @ViewBuilder

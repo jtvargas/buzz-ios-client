@@ -61,6 +61,10 @@ enum ConversationFixture {
         /// height to a row, and the shapes are about what a `LazyVStack` estimates. This is
         /// a way to *see* the cards on a simulator, not a shape.
         var links = false
+        /// Replaces the ordinary fixture conversation with a single markdown message that
+        /// exercises the inline renderer. It is a visual regression sampler, not a scroll
+        /// shape, so it remains inert unless explicitly requested at launch.
+        var markdownSampler = false
 
         /// Parses the arguments the test launched us with, or `nil` for a normal run.
         ///
@@ -83,6 +87,7 @@ enum ConversationFixture {
             if let primed = value("primed") { options.primed = max(1, primed) }
             options.spread = arguments.contains("-spread")
             options.links = arguments.contains("-links")
+            options.markdownSampler = arguments.contains("-markdownSampler")
             return options
         }
     }
@@ -102,6 +107,15 @@ enum ConversationFixture {
     /// - Parameter root: when non-nil, every message after the first carries an `e` tag
     ///   marking it a reply to `root` — which is what makes the set a thread.
     static func events(for options: Options, key: PrivateKey) throws -> [NostrEvent] {
+        if options.markdownSampler {
+            return [try NostrEvent.signed(
+                kind: .channelMessage,
+                content: markdownSampler,
+                tags: [["h", channelID]],
+                createdAt: Date(timeIntervalSince1970: 1_700_000_000),
+                with: key
+            )]
+        }
         var events: [NostrEvent] = []
         var rootID: String?
         for index in 0 ..< options.messages {
@@ -159,6 +173,23 @@ enum ConversationFixture {
     https://developer.apple.com/documentation/swiftui/scrollposition
     https://example.com
     """
+
+    // swiftlint:disable line_length
+    /// The production-like message used to inspect inline markdown treatment by eye. Launch
+    /// with `-fixtureConversation thread -markdownSampler`; without both fixture arguments the
+    /// normal application path remains unchanged.
+    private static let markdownSampler = """
+    ## On the review itself
+
+    You did the two things I asked for and one I did not. **The query-text diff is the one I did not think to ask for and would have wanted most** — showing that the CTE bodies and the entire outer `SELECT`/`GROUP BY`/`HAVING`/`ORDER BY` are byte-identical reduces the whole equivalence question to a single reachability claim about `candidate`, which your witness argument already closes generally. That is a smaller thing to be right about than 22 sampled scenarios, and it is stronger.
+
+    And you built the plan against a schema pulled out of `Schema.swift` rather than reasoning from the source. This repo's rule is that an index claim is not a claim until the planner is asked — you asked it, twice, under two different statistics states so a missing-`ANALYZE` artifact could not explain the join order.
+
+    A line with *italic*, ***bold italic***, ~~struck~~, and `**bold inside code**` to prove composition.
+
+    `.scratch/eqp-81/` noted. Nothing further from you on #81.
+    """
+    // swiftlint:enable line_length
 
     // MARK: - Store
 

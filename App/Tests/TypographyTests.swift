@@ -182,18 +182,92 @@ struct MessageTypographyTests {
         #expect(RichTextStyle.selfMentionWeight != RichTextStyle.mentionWeight)
     }
 
-    @Test("an inline code span uses GeistMono")
-    func inlineCodeStaysMonospaced() throws {
+    @Test("inline treatments resolve named Inter faces and weights")
+    func inlineTreatmentsResolveNamedInterFaces() throws {
+        let traits = UITraitCollection(preferredContentSizeCategory: .extraLarge)
+        let regular = HiveTypography.proseUIFont(
+            .body,
+            weight: .regular,
+            compatibleWith: traits
+        )
+        func assertResolution(
+            _ intent: InlinePresentationIntent,
+            entityWeight: Font.Weight? = nil,
+            expectedWeight: Font.Weight,
+            italic: Bool
+        ) throws {
+            let request = try #require(RichTextStyle.fontRequest(for: intent, entityWeight: entityWeight))
+            #expect(request.weight == expectedWeight)
+            #expect(request.italic == italic)
+
+            let resolved = try #require(HiveTypography.variableFont(
+                request.postScriptName,
+                size: HiveTypography.size(of: .body),
+                weight: request.weight
+            ))
+            #expect(resolved.familyName == HiveTypography.familyName)
+            #expect(variation(resolved, axis: 0x7767_6874) == expectedWeight.variableAxisValue)
+
+            let scaled = HiveTypography.proseUIFont(
+                .body,
+                weight: request.weight,
+                italic: request.italic,
+                compatibleWith: traits
+            )
+            #expect(scaled.familyName == HiveTypography.familyName)
+            #expect(scaled.pointSize == regular.pointSize)
+        }
+
+        try assertResolution(.stronglyEmphasized, expectedWeight: .bold, italic: false)
+        try assertResolution(.emphasized, expectedWeight: .regular, italic: true)
+        try assertResolution([.stronglyEmphasized, .emphasized], expectedWeight: .bold, italic: true)
+        try assertResolution(.code, expectedWeight: .bold, italic: false)
+        try assertResolution([.code, .stronglyEmphasized], expectedWeight: .bold, italic: false)
+        try assertResolution(.stronglyEmphasized, entityWeight: RichTextStyle.mentionWeight,
+                             expectedWeight: .bold, italic: false)
+    }
+
+    @Test("an inline code span has a mobile-style highlight")
+    func inlineCodeUsesAHighlight() throws {
         var code = AttributedString("--flag")
         code.inlinePresentationIntent = .code
         var attributed = AttributedString("run ")
         attributed.append(code)
 
         let styled = RichTextStyle.styled(attributed, base: .body)
-        let codeRun = try #require(styled.runs.first { $0.inlinePresentationIntent?.contains(.code) == true })
-        #expect(codeRun.font == .hiveMono(.body))
+        let codeRun = try #require(styled.runs.first { String(styled[$0.range].characters) == "--flag" })
+        #expect(codeRun.backgroundColor != nil)
         let prose = try #require(styled.runs.first { $0.inlinePresentationIntent == nil })
+        #expect(prose.backgroundColor == nil)
         #expect(prose.font == nil)
+    }
+
+    @Test("handled inline intents become explicit named attributes")
+    func inlineTreatmentsDoNotLeaveSwiftUITraitsToResolve() throws {
+        var mention = AttributedString("@Ada")
+        mention.mention = MentionToken(pubkey: String(repeating: "a", count: 64), isSelf: false)
+        mention.inlinePresentationIntent = .stronglyEmphasized
+
+        var attributed = InlineMarkdown.render("**bold** *italic* ***both*** `code`")
+        attributed.append(AttributedString(" "))
+        attributed.append(mention)
+        let styled = RichTextStyle.styled(attributed, base: .body)
+
+        let handled: InlinePresentationIntent = [.code, .stronglyEmphasized, .emphasized]
+        #expect(!styled.runs.contains { run in
+            guard let intent = run.inlinePresentationIntent else { return false }
+            return !intent.isDisjoint(with: handled)
+        })
+
+        let expectedText = Set(["bold", "italic", "both", "code", "@Ada"])
+        let treatedRuns = styled.runs.filter {
+            expectedText.contains(String(styled[$0.range].characters))
+        }
+        #expect(treatedRuns.count == expectedText.count)
+        #expect(treatedRuns.allSatisfy { $0.font != nil })
+        #expect(try #require(treatedRuns.first {
+            String(styled[$0.range].characters) == "code"
+        }).backgroundColor != nil)
     }
 
     @Test("inline treatments keep the block text style", arguments: [
@@ -202,7 +276,8 @@ struct MessageTypographyTests {
     func treatmentsFollowTheBlockStyle(style: Font.TextStyle) throws {
         var code = AttributedString("let x = 1")
         code.inlinePresentationIntent = .code
-        #expect(try #require(RichTextStyle.styled(code, base: style).runs.first).font == .hiveMono(style))
+        let codeRequest = try #require(RichTextStyle.fontRequest(for: code.inlinePresentationIntent))
+        #expect(codeRequest.weight == .bold)
 
         var mention = AttributedString("@ada")
         mention.mention = MentionToken(pubkey: nil, isSelf: true)
@@ -211,5 +286,28 @@ struct MessageTypographyTests {
             try #require(styled.runs.first).font
                 == .hive(style, weight: RichTextStyle.selfMentionWeight)
         )
+    }
+
+    private func variation(_ font: UIFont, axis: UInt32) -> CGFloat? {
+        let key = UIFontDescriptor.AttributeName(rawValue: kCTFontVariationAttribute as String)
+        let values = font.fontDescriptor.object(forKey: key) as? [NSNumber: NSNumber]
+        return values?[NSNumber(value: axis)].map { CGFloat($0.doubleValue) }
+    }
+}
+
+private extension Font.Weight {
+    var variableAxisValue: CGFloat {
+        switch self {
+        case .ultraLight: 100
+        case .thin: 200
+        case .light: 300
+        case .regular: 400
+        case .medium: 500
+        case .semibold: 600
+        case .bold: 700
+        case .heavy: 800
+        case .black: 900
+        default: 400
+        }
     }
 }

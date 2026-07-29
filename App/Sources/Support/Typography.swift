@@ -42,20 +42,26 @@ enum HiveTypography {
         uniqueKeysWithValues: PostScriptName.allCases.map { ($0, UIFont(name: $0.rawValue, size: 12) != nil) }
     )
 
-    static func font(_ style: Font.TextStyle, weight: Font.Weight = .regular) -> Font {
-        Font(uiFont(style.uiKit, weight: weight))
+    static func font(
+        _ style: Font.TextStyle,
+        weight: Font.Weight = .regular,
+        italic: Bool = false
+    ) -> Font {
+        Font(proseUIFont(style.uiKit, weight: weight, italic: italic))
     }
 
     static func font(
         fixedSize: CGFloat,
         relativeTo style: Font.TextStyle,
-        weight: Font.Weight = .regular
+        weight: Font.Weight = .regular,
+        italic: Bool = false
     ) -> Font {
-        Font(uiFont(style.uiKit, weight: weight, fixedSize: fixedSize))
+        Font(uiFont(style.uiKit, weight: weight, fixedSize: fixedSize, italic: italic))
     }
 
-    static func font(fixedSize: CGFloat, weight: Font.Weight = .regular) -> Font {
-        let font = variableFont(PostScriptName.regular, size: fixedSize, weight: weight)
+    static func font(fixedSize: CGFloat, weight: Font.Weight = .regular, italic: Bool = false) -> Font {
+        let name: PostScriptName = italic ? .italic : .regular
+        let font = variableFont(name, size: fixedSize, weight: weight)
             ?? .systemFont(ofSize: fixedSize, weight: weight.uiKit)
         return Font(font)
     }
@@ -99,13 +105,32 @@ enum HiveTypography {
         _ style: UIFont.TextStyle,
         weight: Font.Weight = .regular,
         fixedSize: CGFloat? = nil,
+        italic: Bool = false,
         compatibleWith traits: UITraitCollection? = nil
     ) -> UIFont {
         let size = fixedSize ?? UIFontDescriptor.preferredFontDescriptor(
             withTextStyle: style,
             compatibleWith: UITraitCollection(preferredContentSizeCategory: .large)
         ).pointSize
-        let base = variableFont(PostScriptName.regular, size: size, weight: weight)
+        return proseUIFont(style, weight: weight, fixedSize: size, italic: italic, compatibleWith: traits)
+    }
+
+    /// The observable prose route: builds Inter's upright or italic face with its `wght` and
+    /// `opsz` axes before SwiftUI receives it. Calling `.italic()` or `.weight()` later asks
+    /// SwiftUI for a trait over an already-resolved face, which can substitute a smaller font.
+    static func proseUIFont(
+        _ style: UIFont.TextStyle,
+        weight: Font.Weight,
+        fixedSize: CGFloat? = nil,
+        italic: Bool = false,
+        compatibleWith traits: UITraitCollection? = nil
+    ) -> UIFont {
+        let size = fixedSize ?? UIFontDescriptor.preferredFontDescriptor(
+            withTextStyle: style,
+            compatibleWith: UITraitCollection(preferredContentSizeCategory: .large)
+        ).pointSize
+        let name: PostScriptName = italic ? .italic : .regular
+        let base = variableFont(name, size: size, weight: weight)
             ?? .systemFont(ofSize: size, weight: weight.uiKit)
         return UIFontMetrics(forTextStyle: style).scaledFont(for: base, compatibleWith: traits)
     }
@@ -236,16 +261,21 @@ extension Font.TextStyle {
 }
 
 extension Font {
-    static func hive(_ style: Font.TextStyle, weight: Font.Weight = .regular) -> Font {
-        HiveTypography.font(style, weight: weight)
+    static func hive(_ style: Font.TextStyle, weight: Font.Weight = .regular, italic: Bool = false) -> Font {
+        HiveTypography.font(style, weight: weight, italic: italic)
     }
 
-    static func hive(fixedSize: CGFloat, relativeTo style: Font.TextStyle, weight: Font.Weight = .regular) -> Font {
-        HiveTypography.font(fixedSize: fixedSize, relativeTo: style, weight: weight)
+    static func hive(
+        fixedSize: CGFloat,
+        relativeTo style: Font.TextStyle,
+        weight: Font.Weight = .regular,
+        italic: Bool = false
+    ) -> Font {
+        HiveTypography.font(fixedSize: fixedSize, relativeTo: style, weight: weight, italic: italic)
     }
 
-    static func hive(fixedSize: CGFloat, weight: Font.Weight = .regular) -> Font {
-        HiveTypography.font(fixedSize: fixedSize, weight: weight)
+    static func hive(fixedSize: CGFloat, weight: Font.Weight = .regular, italic: Bool = false) -> Font {
+        HiveTypography.font(fixedSize: fixedSize, weight: weight, italic: italic)
     }
 
     static func hiveMono(_ style: Font.TextStyle, weight: Font.Weight = .regular, italic: Bool = false) -> Font {
