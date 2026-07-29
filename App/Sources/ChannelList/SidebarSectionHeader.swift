@@ -1,12 +1,28 @@
 import SwiftUI
 
 /// One sidebar heading, Slack-style: a hairline rule, then a tappable expand/collapse
-/// control with a rotating chevron.
+/// control with a rotating chevron, and — where the section can be added to — a `+`
+/// before it.
 ///
 /// The whole header is the hit target, not the chevron — a 12-pt glyph is not a control
 /// anyone can hit, so the row is given a 44-pt minimum height and its own content shape.
 /// The chevron rotates rather than swapping glyphs so the state change reads as one
 /// continuous motion with the rows appearing beneath it.
+///
+/// # Which way the chevron points
+///
+/// Down when the section is closed, up when it is open — Slack's direction, and the one
+/// that reads as "press this to pull the rows down" rather than as an arrow pointing at
+/// the rows it already opened. It is still one glyph rotating: `chevron.down` turned a
+/// half-turn *is* `chevron.up`, so the direction changes without the swap that would cost
+/// the motion.
+///
+/// # Why the `+` is its own button
+///
+/// A control inside a control is a hit-testing coin flip in SwiftUI, so the header is not
+/// one button with a `+` sitting on it: the title area and the chevron are each their own
+/// expand/collapse target and the `+` is a third, between them. Three targets, one row,
+/// no nesting.
 ///
 /// # Why this is an ordinary row and not a `Section` header
 ///
@@ -34,6 +50,10 @@ struct SidebarSectionHeader: View {
     /// How many conversations the section holds.
     let count: Int
     @Binding var isExpanded: Bool
+    /// What the `+` does, or `nil` for a section nothing can be added to. Only Channels
+    /// has one: a direct message is started from a person, an agent is not something this
+    /// app makes, and Starred is a view of the other three.
+    var create: (() -> Void)?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -44,8 +64,22 @@ struct SidebarSectionHeader: View {
     }
 
     private var control: some View {
+        HStack(spacing: 8) {
+            title
+            if let create { createButton(create) }
+            chevron
+        }
+        .padding(.top, Self.aboveTitle)
+        // List section headers upper-case their text by default; the spec's headings are
+        // title-case. Redundant now that this is an ordinary row, and kept so it stays
+        // harmless if it is ever put back inside a `Section`.
+        .textCase(nil)
+    }
+
+    /// The heading itself, and the larger of the two expand/collapse targets.
+    private var title: some View {
         Button {
-            withAnimation(.snappy(duration: 0.22)) { isExpanded.toggle() }
+            toggle()
         } label: {
             HStack(spacing: 8) {
                 Image(systemName: section.symbol)
@@ -63,28 +97,58 @@ struct SidebarSectionHeader: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 0)
-                Image(systemName: "chevron.right")
-                    .font(.hiveSymbol(.footnote, weight: .bold))
-                    .foregroundStyle(.secondary)
-                    .rotationEffect(.degrees(isExpanded ? 90 : 0))
-                    .animation(.snappy(duration: 0.22), value: isExpanded)
-                    .frame(width: 14)
             }
-            .padding(.top, Self.aboveTitle)
             // A section heading is a control, so it carries a full-height target.
             .frame(minHeight: 44)
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
-        // List section headers upper-case their text by default; the spec's headings are
-        // title-case. Redundant now that this is an ordinary row, and kept so it stays
-        // harmless if it is ever put back inside a `Section`.
-        .textCase(nil)
         .accessibilityAddTraits(.isHeader)
         .accessibilityLabel("\(section.title), \(count)")
         .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
         .accessibilityHint(isExpanded ? "Collapses this section" : "Expands this section")
     }
+
+    private func createButton(_ create: @escaping () -> Void) -> some View {
+        Button(action: create) {
+            Image(systemName: "plus")
+                .font(.hiveSymbol(.subheadline, weight: .semibold))
+                .foregroundStyle(.secondary)
+                // Square and full height so the glyph is not the target — the same
+                // reason the heading carries a 44-pt minimum.
+                .frame(width: 32, height: 44)
+                .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(section.createLabel)
+    }
+
+    /// The second expand/collapse target. Hidden from assistive technology because the
+    /// heading beside it already carries that action, its state, and its hint — two
+    /// controls for one toggle is a list VoiceOver has to read twice.
+    private var chevron: some View {
+        Button {
+            toggle()
+        } label: {
+            Image(systemName: Self.chevronSymbol)
+                .font(.hiveSymbol(.footnote, weight: .bold))
+                .foregroundStyle(.secondary)
+                .rotationEffect(.degrees(isExpanded ? 180 : 0))
+                .animation(.snappy(duration: 0.22), value: isExpanded)
+                .frame(width: 14, height: 44)
+                .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .accessibilityHidden(true)
+    }
+
+    private func toggle() {
+        withAnimation(.snappy(duration: 0.22)) { isExpanded.toggle() }
+    }
+
+    /// The glyph the chevron is drawn from, at rest — closed. Open, it is this turned a
+    /// half-turn, which is `chevron.up`. Named so a test can hold the direction.
+    static let chevronSymbol = "chevron.down"
 
     /// Between the rule and the heading it introduces. The larger type needs the room:
     /// without it the title sits against the rule and the two read as one object.

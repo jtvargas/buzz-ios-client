@@ -29,6 +29,18 @@ enum SidebarSection: String, CaseIterable, Hashable, Sendable, Identifiable {
         }
     }
 
+    /// What the section's `+` says to a screen reader. Only Channels draws one, but the
+    /// words live here with the rest of the section's vocabulary rather than at the one
+    /// call site, so a second addable section cannot be labelled "New channel".
+    var createLabel: String {
+        switch self {
+        case .starred: "New starred conversation"
+        case .channels: "New channel"
+        case .directMessages: "New direct message"
+        case .agents: "New agent"
+        }
+    }
+
     /// The SF Symbol that makes this section recognizable before its title is read.
     var symbol: String {
         switch self {

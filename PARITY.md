@@ -30,7 +30,7 @@ This is the living checklist for the headline milestone: feature parity with the
 | Activity feed (mentions/replies/reactions) | `activity` | ☐ | A tab exists and is a placeholder; nothing is collected behind it |
 | Search | `search` | ☐ | No in-app search |
 | Profiles | `profile` | ◐ | Profile sheet (picture, name, member/agent, presence, npub + copy, Message) opens from a message's avatar, name or mention; not yet from the sidebar or the channel roster. Own profile (display name, About) editable in Account |
-| Settings | `settings` | ◐ | Account sheet: profile, key backup, own npub, sign out; relay endpoint at sign-in; connection-state pill in the sidebar. No general settings screen |
+| Settings | `settings` | ◐ | Account sheet: profile, key backup, own npub, sign out; relay endpoint at sign-in; the connection state as a dot on your own face in the sidebar's toolbar. No general settings screen |
 | Auth: nsec import | — | ✅ | Paste a key, or create one on device |
 | Auth: QR pairing with Desktop | `pairing` | ✅ | NIP-AB, target role: encrypted transfer with short-authentication-string confirmation on both screens, plus a paste-the-`nostrpair://`-link fallback when the camera is unavailable |
 | Invites + deeplinks | `invites` | ☐ | `buzz://message` links render and route in-app; no invite or pairing deep-link entry point |
@@ -46,7 +46,7 @@ This is the living checklist for the headline milestone: feature parity with the
 | Cross-device read state (NIP-RS) | — | ✅ | Published and adopted, NIP-44 encrypted to self |
 | Channel mutes/stars/sections | `home`/`settings` | ◐ | Sidebar sections ship, and starring (swipe or long-press a row) with its own sidebar section; no mutes |
 | Agent activity observer | `activity` | ☐ | The agent directory (kind 10100) is projected and agents have their own sidebar section, but there is no activity surface |
-| Channel creation / membership management | `channels` | ◐ | Opening a direct message publishes the kind-41010 open-or-create command and the relay creates the channel if it does not exist. No named-channel creation and no roster editing |
+| Channel creation / membership management | `channels` | ◐ | The `+` on the Channels heading makes a named channel — a kind-9007 create carrying the name, an optional description and open-or-private visibility — and opens it. Opening a direct message publishes the kind-41010 open-or-create command and the relay creates the channel if it does not exist. No roster editing: a private channel made here has no way to invite anybody into it |
 
 ## Beyond parity
 

@@ -23,11 +23,12 @@ What follows describes the app as it is on `main`, not as it is planned. Anythin
 - The private key lives in the Keychain and signs locally. Hive is a pairing *target* only: it receives a key, and has no path that sends one anywhere.
 - **Key backup** behind Face ID / Touch ID, and a sign-out that removes the key from this device. Local history is kept — it is wiped only when a *different* identity signs in.
 - **Edit your own profile** — display name and About, published as a kind-0 event — and copy your own `npub`, from the Account sheet.
-- The relay endpoint is configurable at sign-in; a paired identity brings the desktop's relay with it. A status pill in the sidebar shows the live connection: Offline, Connecting, Live or Paused.
+- The relay endpoint is configurable at sign-in; a paired identity brings the desktop's relay with it. Your own face in the sidebar's toolbar carries the live connection as a dot — green for Live, and Offline, Connecting or Paused otherwise — and opens the Account sheet.
 
 **Conversations**
 
 - **Sidebar** with four sections — Starred, Channels, Direct Messages, Agents — each collapsible, with its state remembered across launches. A row is the conversation's name and nothing else: an unread one is bold and at full strength, and a numeric badge counts the unread messages that mention you. Starring a conversation is local to the device.
+- **Make a channel** from the `+` on the Channels heading: a name, an optional description, and whether it is private. It opens as soon as the relay has it. Adding people to a private one is not built here yet, so it stays yours until somebody is added from Desktop.
 - **Shortcut cards** above the list: **Threads**, which opens a screen of recent thread activity and counts the threads holding replies you have not read, and **Later**, which is not built yet and says so.
 - **Channels, direct messages and threads** all render through one shell, so a new surface inherits its scrolling, keyboard and layout behaviour rather than reimplementing it. (A thread deliberately opts out of one part: it does not page into history.)
 - A **direct message is a channel whose roster is exactly two members including you** — derived in one place rather than treated as a separate surface. An agent DM is the same thing with an agent on the other end.
@@ -71,11 +72,11 @@ These exist upstream, or are on the roadmap, and are honestly absent here:
 
 - **Push notifications.** There is no APNs registration; you see activity when the app is open.
 - **Activity feed** and **in-app search.** The Activity tab exists and is a placeholder: there is no mentions/reactions inbox behind it, and no cross-channel search screen.
-- **Media.** No image or file attachments — the composer's `+` opens a placeholder — and no inline media in messages. Avatars are the only images fetched.
+- **Sending media.** Pictures others post render inline and open full screen, but nothing can be attached from here — the composer's `+` opens a placeholder. Video is marked and not played.
 - **Authoring an edit or a deletion.** Both render when they arrive from elsewhere; Hive can only discard one of its own messages that has not left the outbox.
 - **A profile from the sidebar or the channel roster.** The sheet is reached from a message today, so someone who has not posted in the open conversation has no entry point.
 - **Forum, Pulse, invites and deep links, custom emoji, and channel mutes.** A conversation can be starred, but the star stays on the device rather than syncing.
-- **Creating a named channel, and editing a roster.** Hive asks the relay to open a direct message, and otherwise reads membership rather than changing it.
+- **Editing a roster.** A channel can be made here and a direct message opened, but membership is read rather than changed: nobody can be added to a channel or removed from one.
 - **An iPad layout.** The app installs and runs on iPad, but nothing is laid out for it.
 - **Widgets, share extension, App Intents, Live Activities.**
 
