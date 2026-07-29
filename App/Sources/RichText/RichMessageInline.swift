@@ -36,8 +36,8 @@ extension RichMessage {
             // stray `—` in a sidebar preview where the message's own first sentence
             // belongs.
             return AttributedString()
-        case let .media(media):
-            return AttributedString(noun(for: media.kind))
+        case let .media(items):
+            return AttributedString(noun(for: items))
         case .linkPreview:
             // Nothing, and for the opposite reason to a picture's. A card is a *second*
             // rendering of a link whose text is still in the message, so the snippet
@@ -47,19 +47,28 @@ extension RichMessage {
         }
     }
 
-    /// What a picture contributes to a one-line preview: the word for what it is.
+    /// What a group of pictures contributes to a one-line preview: the count and the word
+    /// for what they are.
     ///
     /// Not nothing, the way a rule contributes nothing: a rule is decoration, but a
     /// message that is only a photograph is *entirely* its attachment, and flattening it
     /// away leaves a preview that is blank where the message is not. Saying "Image" is
-    /// the least a reader needs to know something arrived.
+    /// the least a reader needs to know something arrived, and a group says how many —
+    /// "3 Images" is a different message from one, and a snippet that read the same for
+    /// both would be losing information the full render shows plainly.
     ///
     /// Not the author's alt either, though it is right there on the media. An alt is
     /// written to be read *instead of* the picture and runs as long as it needs to; a
     /// snippet is one truncated line already competing with the words the author typed,
     /// and a paragraph-long description of a screenshot would push those words off the
     /// end of it. The alt keeps its own job on the full render and in VoiceOver.
-    private static func noun(for kind: MessageMediaKind) -> String {
+    private static func noun(for items: [MessageMedia]) -> String {
+        guard let first = items.first else { return "" }
+        guard items.count > 1 else { return singularNoun(for: first.kind) }
+        return "\(items.count) \(singularNoun(for: first.kind))s"
+    }
+
+    private static func singularNoun(for kind: MessageMediaKind) -> String {
         switch kind {
         case .image: "Image"
         case .video: "Video"

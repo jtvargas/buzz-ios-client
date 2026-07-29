@@ -2,22 +2,32 @@ import BuzzKit
 import SwiftUI
 import UIKit
 
-/// What the viewer was opened on: the attachment, and the bitmap that was already on
-/// screen when it opened.
+/// What the viewer was opened on: every picture in the group it was opened from, which
+/// one was tapped, and the bitmap that was already on screen for that one.
 ///
-/// The preview is the reason the viewer never starts empty. The inline view is drawing a
-/// downsampled copy of exactly this picture at the moment it is tapped, so handing it over
-/// costs nothing and means the full-screen surface has real content in its first frame —
-/// which is also what makes the zoom transition land on the picture rather than on a black
-/// rectangle that becomes one.
+/// A single attachment opens this with a one-element `media` and `startIndex` 0, so its
+/// behaviour is unchanged from before grouping existed — it is a gallery of one, not a
+/// second case to keep in step.
+///
+/// The preview is the reason the tapped page never starts empty. The inline view — or a
+/// mosaic cell — is drawing a downsampled copy of exactly that picture at the moment it is
+/// tapped, so handing it over costs nothing and means the full-screen surface has real
+/// content in its first frame, which is also what makes the zoom transition land on the
+/// picture rather than on a black rectangle that becomes one. The other pages in the group
+/// carry no preview; they were not on screen a moment ago, so there is nothing to hand
+/// over.
 struct MessageMediaViewerSubject: Identifiable {
-    let media: MessageMedia
-    /// The inline bitmap, when the inline view had one to give.
+    /// Every picture the reader can page to, in reading order.
+    let media: [MessageMedia]
+    /// Which of ``media`` was tapped, and so which page the viewer opens on.
+    let startIndex: Int
+    /// The inline bitmap for `media[startIndex]`, when the view that opened this had one
+    /// to give.
     let preview: UIImage?
 
-    /// Keyed by URL, matching ``BuzzKit/MessageMedia/id`` and the transition source the
-    /// inline view registers.
-    var id: String { media.url }
+    /// Keyed by the tapped picture's URL, matching ``BuzzKit/MessageMedia/id`` and the
+    /// transition source the view that opened this registers.
+    var id: String { media[startIndex].url }
 }
 
 /// One attachment, full screen, zoomable.
@@ -47,47 +57,89 @@ struct MessageMediaViewer: View {
     let subject: MessageMediaViewerSubject
     var loader: RemoteImageLoader = .messageMedia
 
-    @State private var full: UIImage?
-    @State private var didFail = false
+    @State private var selection: Int
     @Environment(\.dismiss) private var dismiss
-    @Environment(\.displayScale) private var displayScale
+
+    init(subject: MessageMediaViewerSubject, loader: RemoteImageLoader = .messageMedia) {
+        self.subject = subject
+        self.loader = loader
+        self._selection = State(initialValue: subject.startIndex)
+    }
 
     var body: some View {
         GeometryReader { proxy in
             // The picture runs edge to edge and the button does not. Both children of one
-            // stack, with only the picture ignoring the safe area: an overlay on a view
+            // stack, with only the pages ignoring the safe area: an overlay on a view
             // that has already ignored it inherits the same full-bleed frame, which puts
             // the button under the clock.
             ZStack(alignment: .topTrailing) {
                 Color.black.ignoresSafeArea()
-                content
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .ignoresSafeArea()
+                TabView(selection: $selection) {
+                    ForEach(Array(subject.media.enumerated()), id: \.element.id) { index, media in
+                        MessageMediaViewerPage(
+                            media: media,
+                            preview: index == subject.startIndex ? subject.preview : nil,
+                            screenSize: proxy.size,
+                            loader: loader
+                        )
+                        .tag(index)
+                    }
+                }
+                // Paging only earns its chrome once there is more than one page — a
+                // single attachment's viewer must read exactly as it did before
+                // grouping existed, dots and all.
+                .tabViewStyle(.page(indexDisplayMode: subject.media.count > 1 ? .automatic : .never))
+                .ignoresSafeArea()
                 doneButton
-            }
-            // Keyed by the pixel size rather than by the geometry: the target is derived
-            // from the screen's *longest* edge, so a rotation cannot change it and cannot
-            // re-run a decode that would produce the identical bitmap.
-            .task(id: pixelSize(for: proxy.size)) {
-                await load(pixelSize: pixelSize(for: proxy.size))
             }
         }
         .preferredColorScheme(.dark)
     }
 }
 
-// MARK: - Content
+// MARK: - One page
 
-private extension MessageMediaViewer {
+/// One picture of the gallery, full screen. Its own load and its own failure notice,
+/// because each page decodes a different source at whatever pixel size the shared screen
+/// geometry implies for *its* declared dimensions — the one thing neighbouring pages
+/// cannot answer for each other.
+private struct MessageMediaViewerPage: View {
+    let media: MessageMedia
+    /// The bitmap already on screen when this page's gallery was opened, or `nil` for
+    /// every page but the one that was tapped — see ``MessageMediaViewerSubject``.
+    let preview: UIImage?
+    /// The viewer's own bounds, read once by the container's `GeometryReader` rather than
+    /// once per page: every page targets the same screen, so there is nothing for a
+    /// second reader to learn that the first one has not already.
+    let screenSize: CGSize
+    var loader: RemoteImageLoader
+
+    @State private var full: UIImage?
+    @State private var didFail = false
+    @Environment(\.displayScale) private var displayScale
+
+    var body: some View {
+        content
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            // Keyed by the pixel size rather than by the geometry: the target is derived
+            // from the screen's *longest* edge, so a rotation cannot change it and cannot
+            // re-run a decode that would produce the identical bitmap.
+            .task(id: pixelSize) {
+                await load(pixelSize: pixelSize)
+            }
+    }
+}
+
+private extension MessageMediaViewerPage {
     @ViewBuilder
     var content: some View {
-        if let image = full ?? subject.preview {
+        if let image = full ?? preview {
             MessageMediaZoomView(image: image)
                 // Labelled here rather than left to the bridge: a `UIImageView` reports
                 // itself to VoiceOver as an unlabelled image, and the author's `alt` is the
                 // only description of it that exists.
                 .accessibilityElement()
-                .accessibilityLabel(MessageMediaDescription.label(for: subject.media, state: .loaded))
+                .accessibilityLabel(MessageMediaDescription.label(for: media, state: .loaded))
                 .accessibilityAddTraits(.isImage)
         } else if didFail {
             failureNotice
@@ -107,7 +159,7 @@ private extension MessageMediaViewer {
             Image(systemName: "photo")
                 .font(.hiveSymbol(.largeTitle))
                 .foregroundStyle(.white.opacity(0.7))
-            Text(MessageMediaDescription.placeholderText(for: subject.media, state: .failed))
+            Text(MessageMediaDescription.placeholderText(for: media, state: .failed))
                 .font(.hive(.callout))
                 .foregroundStyle(.white.opacity(0.7))
                 .multilineTextAlignment(.center)
@@ -116,6 +168,31 @@ private extension MessageMediaViewer {
         .accessibilityElement(children: .combine)
     }
 
+    var pixelSize: CGFloat {
+        MessageMediaLayout.viewerPixelSize(screen: screenSize, displayScale: displayScale, declared: media.pixelSize)
+    }
+
+    func load(pixelSize: CGFloat) async {
+        guard media.kind == .image, let url = URL(string: media.url) else {
+            didFail = preview == nil
+            return
+        }
+        // A cache hit answers without suspending and without a request; a miss shares the
+        // fetch with anything else asking for the same picture at the same size.
+        let image = await loader.image(for: url, pixelSize: pixelSize)
+        guard !Task.isCancelled else { return }
+        if let image {
+            full = image
+        } else {
+            // Only a failure if there is nothing at all to show. Falling back to the
+            // inline bitmap — soft, but the right picture — beats replacing a picture the
+            // reader is already looking at with an apology.
+            didFail = preview == nil
+        }
+    }
+}
+
+private extension MessageMediaViewer {
     var doneButton: some View {
         Button {
             dismiss()
@@ -131,36 +208,5 @@ private extension MessageMediaViewer {
         .accessibilityLabel("Done")
         .padding(.trailing, 16)
         .padding(.top, 4)
-    }
-}
-
-// MARK: - Loading
-
-private extension MessageMediaViewer {
-    func pixelSize(for screen: CGSize) -> CGFloat {
-        MessageMediaLayout.viewerPixelSize(
-            screen: screen,
-            displayScale: displayScale,
-            declared: subject.media.pixelSize
-        )
-    }
-
-    func load(pixelSize: CGFloat) async {
-        guard subject.media.kind == .image, let url = URL(string: subject.media.url) else {
-            didFail = subject.preview == nil
-            return
-        }
-        // A cache hit answers without suspending and without a request; a miss shares the
-        // fetch with anything else asking for the same picture at the same size.
-        let image = await loader.image(for: url, pixelSize: pixelSize)
-        guard !Task.isCancelled else { return }
-        if let image {
-            full = image
-        } else {
-            // Only a failure if there is nothing at all to show. Falling back to the
-            // inline bitmap — soft, but the right picture — beats replacing a picture the
-            // reader is already looking at with an apology.
-            didFail = subject.preview == nil
-        }
     }
 }
