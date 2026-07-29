@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// The shortcut cards above the conversation list: Threads, and Later.
 ///
@@ -41,11 +42,11 @@ struct HomeShortcutCards: View {
 
 /// One shortcut card: a bold glyph, the destination's name, and what is waiting in it.
 ///
-/// Drawn as an outline — a border and nothing else. The card is a small destination beside
-/// a list of conversations, and a filled tile with a tinted glyph in it competes with the
-/// messages below for the eye. Colour is spent in exactly one place, on the border of a
-/// card that has something in it, so that the one card worth looking at is the one that
-/// carries the only colour on the screen.
+/// Bordered, and washed with a light fill of the same colour: the card is a small
+/// destination beside a list of conversations, so the fill stays a wash rather than a
+/// tile solid enough to compete with the messages below for the eye. Colour is spent on
+/// exactly one card at a time, the one that has something in it, so that the one worth
+/// looking at is the one carrying the only colour on the screen.
 struct HomeShortcutCard: View {
     let shortcut: HomeShortcut
     /// The number under the title. Always drawn, zero included: the card exists to answer
@@ -58,10 +59,10 @@ struct HomeShortcutCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Self.betweenLines) {
-            Image(systemName: shortcut.symbol)
-                // Bold and unfilled, in the text's own colour: at this size a glyph in the
-                // regular weight reads as thinner than the word under it, which is what
-                // made the card look assembled out of two different things.
+            Image(systemName: shortcut.filledSymbol)
+                // Bold, in the text's own colour: at this size a glyph in the regular
+                // weight reads as thinner than the word under it, which is what made the
+                // card look assembled out of two different things.
                 .font(.hiveSymbol(.title3, weight: .bold))
                 .foregroundStyle(.primary)
                 .accessibilityHidden(true)
@@ -81,6 +82,13 @@ struct HomeShortcutCard: View {
         // `@ScaledMetric` points, so a reader at an accessibility size gets a bigger card
         // rather than a clipped word.
         .frame(width: width, height: height, alignment: .leading)
+        // Behind the border rather than a `ZStack` layer of its own: a `RoundedRectangle`
+        // filled in `.clear` still costs a shape, and `background` is the same one line
+        // the border already reaches for below.
+        .background {
+            RoundedRectangle(cornerRadius: Self.cornerRadius)
+                .fill(fill)
+        }
         // `strokeBorder` and not `stroke`, because `stroke` straddles the path — half its
         // width would fall outside the card and clip against the neighbouring card's edge.
         .overlay {
@@ -100,6 +108,14 @@ struct HomeShortcutCard: View {
     /// rather than empty, which is the question these cards exist to answer.
     private var border: Color {
         Self.hasSomethingWaiting(count) ? .hiveAccent : Self.restingBorder
+    }
+
+    /// The card's wash: the same rule the border reads its colour from, so a card never
+    /// carries the fill without the border that explains it. `0.18` is the app's own
+    /// number for "this is mine, lightly" — the opacity a reacted chip and a sent bubble
+    /// already draw the accent at.
+    private var fill: Color {
+        Self.hasSomethingWaiting(count) ? Color.hiveAccent.opacity(Self.fillOpacity) : .clear
     }
 
     /// Whether this card is drawn in the accent: whether there is anything in it.
@@ -147,6 +163,8 @@ struct HomeShortcutCard: View {
     /// only its colour. Thinner than the 2pt a text field draws, which would make a card
     /// read as something to fill in rather than somewhere to go.
     private static let borderWidth: CGFloat = 1
+    /// The wash's strength — see ``fill``.
+    private static let fillOpacity: CGFloat = 0.18
     /// The edge of a card with nothing in it: present, and quiet enough that the accent on
     /// the card beside it is the only thing on the screen asking to be looked at.
     private static let restingBorder = Color.primary.opacity(0.15)
@@ -180,6 +198,17 @@ enum HomeShortcut: String, CaseIterable, Hashable, Identifiable {
         case .threads: "text.append"
         case .later: "bookmark"
         }
+    }
+
+    /// ``symbol``'s `.fill` cut, when the system has one.
+    ///
+    /// Resolved at runtime rather than assumed: not every SF Symbol ships a filled
+    /// counterpart — ``threads``' `text.append` does not — and asking for a name the
+    /// system does not have draws nothing at all, silently, which is the exact trap
+    /// ``symbol`` is already pinned against in `HomeShortcutTests`.
+    var filledSymbol: String {
+        let filled = "\(symbol).fill"
+        return UIImage(systemName: filled) != nil ? filled : symbol
     }
 
     /// What the count counts, singular and plural. Threads counts *new* ones — the

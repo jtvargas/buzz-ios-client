@@ -19,6 +19,8 @@ struct ThreadActivityRow: View {
     let isUnseen: Bool
     let onOpen: () -> Void
     let onReply: () -> Void
+    /// Clears ``isUnseen`` in place, without opening the thread.
+    let onMarkAsRead: () -> Void
     let onOpenProfile: (String) -> Void
 
     @Environment(\.openConversation) private var openConversation
@@ -159,18 +161,32 @@ struct ThreadActivityRow: View {
         return ThreadSummary.summarisedReply(activity.latestReply)
     }
 
-    /// The way into the thread with the composer already up, under the message it answers.
+    /// The way into the thread with the composer already up, under the message it answers —
+    /// and, while the thread still holds something unseen, the solid button beside it that
+    /// clears that state in place.
     ///
     /// Indented onto the content column rather than left on the row's leading edge, because
     /// the leading edge is the avatar rail: a control starting there reads as a third
     /// participant in the conversation. On the text column it lines up with the replies
     /// strip under the opener, which is the other control in this row and the other way in.
     private var replyButton: some View {
-        Button("Reply", action: onReply)
-            .buttonStyle(.glass)
-            .controlSize(.small)
-            .accessibilityHint("Opens the thread at its newest reply")
-            .padding(.leading, avatarSize + MessageRowMetrics.avatarGap)
+        HStack(spacing: 8) {
+            Button("Reply", action: onReply)
+                .buttonStyle(.glass)
+                .controlSize(.small)
+                .accessibilityHint("Opens the thread at its newest reply")
+            // Solid rather than outlined, the same pairing `.glass`/`.glassProminent`
+            // draws everywhere else in the app: **Reply** is one of several ways in,
+            // **Mark As Read** is the one action this row commits on the spot, and the
+            // fill is what says so before either label is read.
+            if isUnseen {
+                Button("Mark As Read", action: onMarkAsRead)
+                    .buttonStyle(.glassProminent)
+                    .controlSize(.small)
+                    .accessibilityHint("Marks this thread read without opening it")
+            }
+        }
+        .padding(.leading, avatarSize + MessageRowMetrics.avatarGap)
     }
 
     /// The people in the thread, as this reader sees them named.

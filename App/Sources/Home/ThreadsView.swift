@@ -115,6 +115,7 @@ struct ThreadsView: View {
                     isUnseen: isUnseen(activity),
                     onOpen: { open(activity, at: .opener) },
                     onReply: { open(activity, at: .latestReply) },
+                    onMarkAsRead: { markAsRead(activity) },
                     onOpenProfile: { profilePeer = ProfilePeer(pubkey: $0) }
                 )
                 .listRowInsets(Self.rowInsets)
@@ -172,6 +173,18 @@ struct ThreadsView: View {
         guard activity.hasNewReplies else { return false }
         guard let threadReads else { return true }
         return threadReads.hasUnseen(activity.rootID, latestReplyByOthersAt: activity.latestReplyByOthersAt)
+    }
+
+    /// Clears a thread's unseen state in place — the same device-local mark ``ThreadView``
+    /// writes on the open path (see ``ThreadReadMarks``), set straight to the thread's
+    /// newest reply rather than waited on the reader scrolling down to it.
+    ///
+    /// Local and unpublished on purpose, exactly like the open path: NIP-RS keys read
+    /// state by channel, so there is no per-thread frontier to publish this into without
+    /// marking every other thread in the channel read along with it, on every device. See
+    /// ``ThreadReadMarks`` for the full argument.
+    private func markAsRead(_ activity: ThreadActivity) {
+        threadReads?.mark(activity.rootID, seenUpTo: activity.latestReply.createdAt)
     }
 
     /// Where this thread lives, resolved through the shared directory — so a thread

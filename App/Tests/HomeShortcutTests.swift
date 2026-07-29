@@ -54,6 +54,18 @@ struct HomeShortcutTests {
         }
     }
 
+    @Test("the card draws the .fill cut when the system has one, and the outline otherwise")
+    func filledSymbolFallsBackWhenNoFillExists() {
+        // `text.append` has no `.fill` counterpart. String-appending `.fill` onto it and
+        // trusting the result draws nothing at all — this pins the fallback, not the glue.
+        #expect(HomeShortcut.threads.filledSymbol == "text.append")
+        // `bookmark` does, and this is the shortcut expected to actually draw filled.
+        #expect(HomeShortcut.later.filledSymbol == "bookmark.fill")
+        for shortcut in HomeShortcut.allCases {
+            #expect(UIImage(systemName: shortcut.filledSymbol) != nil, "\(shortcut.filledSymbol) is missing")
+        }
+    }
+
     // MARK: - Summarising a thread
 
     @Test("a shown message is cut at 2,000 characters, and marked where it was cut")
