@@ -174,6 +174,7 @@ enum ConversationFixture {
     https://example.com
     """
 
+    // swiftlint:disable line_length
     /// The production-like message used to inspect inline markdown treatment by eye. Launch
     /// with `-fixtureConversation thread -markdownSampler`; without both fixture arguments the
     /// normal application path remains unchanged.
@@ -188,6 +189,7 @@ enum ConversationFixture {
 
     `.scratch/eqp-81/` noted. Nothing further from you on #81.
     """
+    // swiftlint:enable line_length
 
     // MARK: - Store
 

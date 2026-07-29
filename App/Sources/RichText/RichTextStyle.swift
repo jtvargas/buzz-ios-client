@@ -19,12 +19,20 @@ enum RichTextStyle {
     /// A web/email/internal link: medium, matching a plain mention.
     static let linkWeight: Font.Weight = .medium
 
+    /// The one named Inter face a styled run asks SwiftUI to draw. Keeping this as data makes
+    /// the composition rule testable at ``HiveTypography/variableFont(_:size:weight:)`` — the
+    /// last point at which a missing or substituted face is visible.
+    struct FontRequest: Equatable {
+        let weight: Font.Weight
+        let italic: Bool
+
+        var postScriptName: HiveTypography.PostScriptName {
+            italic ? .italic : .regular
+        }
+    }
+
     /// The horizontal indent applied per nested-list level.
     static let nestedIndent: CGFloat = 16
-
-    /// The ordinary gap between two blocks of a message. See ``RichTextSpacing`` for
-    /// the pairs that want more or less than this.
-    static let blockSpacing: CGFloat = 6
 
     // MARK: - Tables
 
@@ -87,9 +95,9 @@ enum RichTextStyle {
 
     /// Produces the presentation `AttributedString` for one inline: every resolved
     /// mention/channel run gains the accent colour and the right weight *at `base`*
-    /// (so it still scales with Dynamic Type), every code span is pinned to the
-    /// monospaced face, and plain runs inherit the view's environment font and colour
-    /// untouched.
+    /// (so it still scales with Dynamic Type), every inline-code span gains the mobile
+    /// client's bold prose treatment and highlight, and plain runs inherit the view's
+    /// environment font and colour untouched.
     ///
     /// # Why `base` is a text style and not a `Font`
     ///
@@ -115,18 +123,25 @@ enum RichTextStyle {
         base: Font.TextStyle,
         interactive: Bool = false
     ) -> AttributedString {
+        // Preserve parse intent before `emphasised` removes the trait bits. Entity styling
+        // runs after emphasis to add its colour/link, but it must build the same named face
+        // so `**@Ada**` does not silently fall back to the entity's medium weight.
+        let runs = attributed.runs.map { ($0.range, $0.mention, $0.channel, $0.link, $0.inlinePresentationIntent) }
         var output = emphasised(attributed, base: base)
-        let runs = output.runs.map { ($0.range, $0.mention, $0.channel, $0.link) }
-        for (range, mention, channel, link) in runs {
+        for (range, mention, channel, link, intent) in runs {
             if let mention {
                 output[range].foregroundColor = tint
-                output[range].font = .hive(base, weight: mention.isSelf ? selfMentionWeight : mentionWeight)
+                output[range].font = font(
+                    base: base,
+                    intent: intent,
+                    entityWeight: mention.isSelf ? selfMentionWeight : mentionWeight
+                )
                 output[range].link = interactive
                     ? mention.pubkey.flatMap { RichTextTarget.user(pubkey: $0).url }
                     : nil
             } else if let channel {
                 output[range].foregroundColor = tint
-                output[range].font = .hive(base, weight: channelWeight)
+                output[range].font = font(base: base, intent: intent, entityWeight: channelWeight)
                 output[range].link = interactive
                     ? channel.channelID.flatMap { RichTextTarget.channel(id: $0).url }
                     : nil
@@ -134,7 +149,7 @@ enum RichTextStyle {
                 // A web, email, or internal link: the same treatment a mention gets,
                 // so interactive text reads as one visual language rather than two.
                 output[range].foregroundColor = tint
-                output[range].font = .hive(base, weight: linkWeight)
+                output[range].font = font(base: base, intent: intent, entityWeight: linkWeight)
                 if !interactive { output[range].link = nil }
             }
         }
@@ -142,25 +157,9 @@ enum RichTextStyle {
     }
 
     /// Turns the emphasis the *parse* stage recorded as intent into attributes a
-    /// SwiftUI `Text` is guaranteed to draw: a struck run, a code span's monospaced
-    /// face, and a `<u>` underline.
-    ///
-    /// Bold and italic are deliberately absent. `Text` resolves
-    /// `InlinePresentationIntent.stronglyEmphasized` and `.emphasized` itself, and
-    /// re-stating them as a `font` here would replace the environment's font instead
-    /// of decorating it — which is how a bold word ends up refusing to scale with
-    /// Dynamic Type. The three below are stated because leaving them to the intent was
-    /// not reliably drawing anything: a strikethrough and a code span rendered
-    /// identically to plain body text, so `~~wrong~~` read as a correction that had not
-    /// been made.
-    ///
-    /// A code span's face is composed rather than assigned, so `**`x`**` keeps its
-    /// weight: monospaced first, then whatever emphasis the same run also carries.
-    ///
-    /// The face is named rather than reached for with `.monospaced()`: prose is Inter,
-    /// while code is the separately bundled GeistMono family. Its weight and italic
-    /// axes are resolved as the font is built, so code emphasis never falls back to
-    /// proportional text.
+    /// SwiftUI `Text` is guaranteed to draw: named Inter faces for emphasis and inline code,
+    /// a highlighted code span, a struck run, and a `<u>` underline. Naming the face while it
+    /// is built preserves Dynamic Type and prevents a trait request from substituting it.
     private static func emphasised(
         _ attributed: AttributedString,
         base: Font.TextStyle
@@ -175,15 +174,59 @@ enum RichTextStyle {
             if intent.contains(.strikethrough) {
                 output[range].strikethroughStyle = .single
             }
-            if intent.contains(.code) {
-                output[range].font = .hiveMono(
-                    base,
-                    weight: intent.contains(.stronglyEmphasized) ? .bold : .regular,
-                    italic: intent.contains(.emphasized)
-                )
+            if let request = fontRequest(for: intent) {
+                output[range].font = .hive(base, weight: request.weight, italic: request.italic)
             }
+            if intent.contains(.code) {
+                output[range].backgroundColor = inlineCodeBackground
+            }
+            let remainingIntent = intent.subtracting([.emphasized, .stronglyEmphasized, .code])
+            output[range].inlinePresentationIntent = remainingIntent.isEmpty ? nil : remainingIntent
         }
         return output
+    }
+
+    /// Mobile uses bold body text with a secondary-label wash for inline code. The semantic
+    /// colour resolves with the active appearance, unlike a fixed light-mode grey.
+    static let inlineCodeBackground = Color(uiColor: .secondaryLabel).opacity(0.2)
+
+    /// Resolves all intersecting inline and entity treatment in one place. Entity styling runs
+    /// after emphasis to add colour and links, so it must reapply the same composed request.
+    /// Strong emphasis upgrades medium entity text; inline code uses the same bold Inter
+    /// body face as the mobile client.
+    static func fontRequest(
+        for intent: InlinePresentationIntent?,
+        entityWeight: Font.Weight? = nil
+    ) -> FontRequest? {
+        let code = intent?.contains(.code) == true
+        let strong = intent?.contains(.stronglyEmphasized) == true
+        let italic = intent?.contains(.emphasized) == true
+        guard code || strong || italic || entityWeight != nil else { return nil }
+
+        let emphasisWeight: Font.Weight
+        if code || strong {
+            emphasisWeight = .bold
+        } else {
+            emphasisWeight = .regular
+        }
+        return FontRequest(
+            weight: heavier(of: emphasisWeight, and: entityWeight ?? .regular),
+            italic: italic
+        )
+    }
+
+    private static func heavier(of left: Font.Weight, and right: Font.Weight) -> Font.Weight {
+        left.variableAxisValue >= right.variableAxisValue ? left : right
+    }
+
+    private static func font(
+        base: Font.TextStyle,
+        intent: InlinePresentationIntent?,
+        entityWeight: Font.Weight
+    ) -> Font {
+        let request = fontRequest(for: intent, entityWeight: entityWeight)
+            ?? FontRequest(weight: entityWeight, italic: false)
+        return .hive(base, weight: request.weight, italic: request.italic)
     }
 
     /// Holds every pill off the text beside it, by adding ``pillAdvance`` of kerning
@@ -209,5 +252,22 @@ enum RichTextStyle {
             output[last ..< segment.range.upperBound].kern = pillAdvance
         }
         return output
+    }
+}
+
+private extension Font.Weight {
+    var variableAxisValue: CGFloat {
+        switch self {
+        case .ultraLight: 100
+        case .thin: 200
+        case .light: 300
+        case .regular: 400
+        case .medium: 500
+        case .semibold: 600
+        case .bold: 700
+        case .heavy: 800
+        case .black: 900
+        default: 400
+        }
     }
 }

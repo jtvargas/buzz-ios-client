@@ -227,17 +227,17 @@ struct RichTextBlockTests {
         #expect(struck.map { String(styled[$0.range].characters) } == ["gone"])
     }
 
-    @Test("a code span is given a monospaced face")
-    func codeSpanIsMonospaced() {
+    @Test("a code span is given an explicit prose face")
+    func codeSpanUsesExplicitProseFace() {
         let styled = RichTextStyle.styled(InlineMarkdown.render("run `git log` first"), base: .body)
         let monospaced = styled.runs.filter { $0.font != nil }
         #expect(monospaced.map { String(styled[$0.range].characters) } == ["git log"])
     }
 
-    @Test("bold and italic are left to the intent, so they keep scaling")
-    func emphasisIsNotOverridden() {
+    @Test("bold and italic are given named faces so Dynamic Type cannot drop their scale")
+    func emphasisUsesExplicitFaces() {
         let styled = RichTextStyle.styled(InlineMarkdown.render("**b** and *i*"), base: .body)
-        #expect(!styled.runs.contains { $0.font != nil })
+        #expect(styled.runs.filter { $0.font != nil }.map { String(styled[$0.range].characters) } == ["b", "i"])
     }
 
     @Test("an underlined run is given an underline a Text will draw")
@@ -306,5 +306,12 @@ struct RichTextBlockTests {
     func paragraphSpacing() {
         let paragraph = RichBlock.paragraph(AttributedString("p"))
         #expect(RichTextSpacing.gap(after: paragraph, before: paragraph) == RichTextSpacing.regular)
+    }
+
+    @Test("the markdown spacing ladder keeps sections and boxed blocks ahead of paragraphs")
+    func spacingHierarchyIsPreserved() {
+        #expect(RichTextSpacing.beforeHeading >= RichTextSpacing.regular)
+        #expect(RichTextSpacing.regular > RichTextSpacing.afterHeading)
+        #expect(RichTextSpacing.aroundBoxed >= RichTextSpacing.regular)
     }
 }
