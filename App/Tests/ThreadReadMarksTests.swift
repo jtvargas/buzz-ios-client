@@ -117,6 +117,57 @@ struct ThreadReadMarksTests {
         #expect(marks.unseenCount(among: threads) == 1)
     }
 
+    /// The Threads screen's **Mark As Read** button, exercised end to end: the same store
+    /// read that feeds the row, the same mark the row's button writes, and the same
+    /// assertion the open path is already held to — nothing published, only this device's
+    /// mark moved.
+    @Test("Mark As Read clears a thread in place, without touching the channel's shared frontier")
+    @MainActor
+    func markAsReadClearsWithoutOpening() async throws {
+        let temp = TempStore()
+        defer { temp.remove() }
+        let store = try temp.open()
+        let relay = try Fixture()
+        let asker = try Fixture()
+        let answerer = try Fixture()
+        let reader = try Fixture()
+
+        let suiteName = "thread-marks-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let marks = ThreadReadMarks(defaults: defaults)
+
+        let model = ThreadsModel(store: store, selfPubkey: reader.pubkey)
+        let run = Task { await model.run() }
+        defer { run.cancel() }
+
+        let opener = try asker.message("question", in: "general", at: 1_000)
+        _ = try await store.ingest(batch: [
+            try relay.channelMetadata("general", name: "General", at: 500),
+            opener,
+            try answerer.event(
+                .channelMessage, "an answer",
+                tags: [["h", "general"], ["e", opener.id, "", "reply"]], at: 2_000
+            ),
+        ], phase: .backfill)
+
+        await waitUntil { model.threads.count == 1 }
+        let thread = try #require(model.threads.first)
+        #expect(thread.hasNewReplies)
+        #expect(marks.hasUnseen(thread.rootID, latestReplyByOthersAt: thread.latestReplyByOthersAt))
+
+        // What the button does: mark straight to the newest reply's own timestamp, the
+        // same call `ThreadView`'s open path makes once it has scrolled to the bottom —
+        // without opening the thread and without publishing anything.
+        marks.mark(thread.rootID, seenUpTo: thread.latestReply.createdAt)
+        #expect(!marks.hasUnseen(thread.rootID, latestReplyByOthersAt: thread.latestReplyByOthersAt))
+
+        // The store still reports the reply as new — nothing was published, exactly like
+        // the open path: only this device's mark moved.
+        let stillUnread = try store.unreadThreads(selfPubkey: reader.pubkey)
+        #expect(stillUnread.first?.newReplyCount == 1)
+    }
+
     @Test("the marks are bounded, keeping the most recently active threads")
     func marksArePruned() {
         let capacity = ThreadReadMarks.capacity
