@@ -46,6 +46,22 @@ struct RichTextBlockTests {
         #expect(incomplete.runs.allSatisfy { $0.foregroundColor == nil })
     }
 
+    @Test(
+        "a block comment opened near the end of the code does not take the app down",
+        arguments: ["a/*b", "let a = 1 /*", "/*", "/*x", "x/*", "SELECT 1 /*"]
+    )
+    func unterminatedBlockCommentAtTheEnd(code: String) {
+        // `starts("/*")` only needs two characters left, but the search for the closing
+        // `*/` then walked `position + 2 ... characters.count - 2`. Once the opener is
+        // inside the last four characters that range is inverted, which is a trap, not a
+        // nil — "Range requires lowerBound <= upperBound", from a code block a reader
+        // merely scrolled past. Every one of these is a snippet someone could paste.
+        let highlighted = RichCodeHighlighter.highlight(code, language: "swift", theme: .light)
+        #expect(highlighted.runs.allSatisfy { $0.foregroundColor == nil })
+        // A colouring pass may never lose a character, whichever branch it takes.
+        #expect(String(highlighted.characters) == code)
+    }
+
     // MARK: - Thematic rules
 
     @Test(

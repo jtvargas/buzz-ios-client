@@ -118,6 +118,14 @@ private extension RichCodeHighlighter {
             while position < characters.count {
                 if let end = commentEnd() {
                     append(end, .comment)
+                } else if blockCommentStartsHere() {
+                    // An opener with no closer, handled exactly as an unterminated string
+                    // is: give the whole block back unstyled rather than guess where the
+                    // comment was meant to end. This is the branch the type's own
+                    // documentation already claimed — "incomplete strings/comment blocks
+                    // deliberately receive no token styling" — and without it the scanner
+                    // read on past the opener and coloured the code around it.
+                    return nil
                 } else if let end = stringEnd() {
                     append(end, language == .json && nextNonWhitespace(after: end) == ":" ? .name : .string)
                 } else if stringStartsHere() {
@@ -206,6 +214,14 @@ private extension RichCodeHighlighter {
             return nil
         }
 
+        /// Whether a `/* … */` opener sits at `position` in a language that has them.
+        /// Only reached once ``commentEnd()`` has already declined, so in practice this
+        /// is true exactly when the opener has no closer after it.
+        private func blockCommentStartsHere() -> Bool {
+            guard language != .bash, language != .python else { return false }
+            return starts("/*")
+        }
+
         private func stringStartsHere() -> Bool {
             guard position < characters.count else { return false }
             return characters[position] == "\""
@@ -252,8 +268,14 @@ private extension RichCodeHighlighter {
 
         private func index(of text: String, after index: Int) -> Int? {
             let candidate = Array(text)
-            guard candidate.count <= characters.count else { return nil }
-            return (index ... characters.count - candidate.count).first { start in
+            // The bound has to be checked against `index`, not against the source: an
+            // opener found in the last few characters leaves a start position past the
+            // last place a closer could begin, and `index ... last` is then inverted —
+            // a trap rather than a nil. `starts("/*")` needs only two characters to
+            // match, so `a/*b` reaches here with nowhere left to search.
+            let last = characters.count - candidate.count
+            guard index <= last else { return nil }
+            return (index ... last).first { start in
                 characters[start ..< start + candidate.count].elementsEqual(candidate)
             }
         }
