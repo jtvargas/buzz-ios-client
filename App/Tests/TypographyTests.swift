@@ -65,7 +65,7 @@ struct TypographyTests {
     private func variation(_ font: UIFont, axis: UInt32) -> CGFloat? {
         let key = UIFontDescriptor.AttributeName(rawValue: kCTFontVariationAttribute as String)
         let values = font.fontDescriptor.object(forKey: key) as? [NSNumber: NSNumber]
-        return values?[NSNumber(value: axis)]?.doubleValue
+        return values?[NSNumber(value: axis)].map { CGFloat($0.doubleValue) }
     }
 }
 
