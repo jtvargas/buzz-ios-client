@@ -40,8 +40,14 @@ struct TypographyTests {
     func uiFontScales() {
         let body = HiveTypography.uiFont(.body)
         let semibold = HiveTypography.uiFont(.body, weight: .semibold)
-        #expect(body.fontName == HiveTypography.PostScriptName.regular.rawValue)
-        #expect(semibold.fontName == HiveTypography.PostScriptName.regular.rawValue)
+        // A resolved variation instance does not keep the face's own PostScript
+        // name, and what it is renamed to is a CoreText version detail: Xcode 26.2
+        // reports "InterVariable", 26.6 reports "InterVariable_opsz110000_wght"
+        // (the axis values in 16.16 fixed point — 0x110000 is opsz 17). The face
+        // is what has to be asserted, so match its name as a prefix; the system
+        // fallback this guards against is ".SFUI-Regular" and fails either way.
+        #expect(body.fontName.hasPrefix(HiveTypography.PostScriptName.regular.rawValue))
+        #expect(semibold.fontName.hasPrefix(HiveTypography.PostScriptName.regular.rawValue))
         #expect(semibold.pointSize == body.pointSize)
         #expect(body != semibold)
         #expect(variation(body, axis: 0x7767_6874) == 400)
