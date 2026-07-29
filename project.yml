@@ -38,8 +38,10 @@ targets:
         UILaunchScreen:
           UIColorName: LaunchBackground
         # The mobile client's Inter body and GeistMono code families, both under SIL
-        # Open Font License 1.1. Their variable `wght` axis is resolved in
-        # `HiveTypography`, so no SwiftUI trait modifier can silently flatten weight.
+        # Open Font License 1.1 — which requires its text to travel with the fonts, so
+        # `Inter-LICENSE.txt` and `GeistMono-LICENSE.txt` ship beside them. Their
+        # variable `wght` axis is resolved in `HiveTypography`, so no SwiftUI trait
+        # modifier can silently flatten weight.
         UIAppFonts:
           - InterVariable.ttf
           - InterVariable-Italic.ttf

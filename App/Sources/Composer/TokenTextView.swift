@@ -105,10 +105,10 @@ struct TokenTextView: UIViewRepresentable {
     ) -> CGSize? {
         guard let width = proposal.width else { return nil }
         // Measured off the face the composer actually draws in, not off the system's.
-        // Lato's line height is about 2% above San Francisco's at the same point size,
-        // and this number sets both the growth floor and the six-line ceiling — taken
-        // from the wrong face, the bar rests a hair short of one line of its own text
-        // and hands over to scrolling a hair before six of them are on screen.
+        // A bundled family's line height does not match San Francisco's at the same point
+        // size, and this number sets both the growth floor and the six-line ceiling —
+        // taken from the wrong face, the bar rests a hair short of one line of its own
+        // text and hands over to scrolling a hair before six of them are on screen.
         let lineHeight = HiveTypography.uiFont(.body).lineHeight
         let chrome = uiView.textContainerInset.top + uiView.textContainerInset.bottom
         let measured = uiView
@@ -298,9 +298,9 @@ struct TokenTextView: UIViewRepresentable {
         /// Named through ``HiveTypography/uiFont(_:weight:)`` rather than derived from the
         /// base font's point size, which is what this used to do. Both routes give the same
         /// size — they scale off the same style — but a point size is all `UIFont.systemFont`
-        /// can be given, and there is no equivalent for a static family: asking Lato-Regular
-        /// for semibold by trait returns Lato-Regular, so the token would have been tinted
-        /// and nothing else.
+        /// can be given, and it cannot name the bundled face at all: the weight has to be
+        /// set on Inter's `wght` axis as the font is built, or the token is tinted and
+        /// nothing else.
         private var mentionFont: UIFont {
             HiveTypography.uiFont(.body, weight: .semibold)
         }

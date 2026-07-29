@@ -162,10 +162,12 @@ struct RichHeadingView: View {
 /// A fenced code block: monospaced, on a subtle fill, its raw text never inline- or
 /// entity-parsed.
 ///
-/// Long lines wrap rather than scroll, which is the one place this renderer knowingly
-/// differs from upstream — upstream scrolls the code horizontally. Wrapping loses no
-/// character either way, and it is the reading that needs no gesture. A table gets the
-/// scroll instead because a wrapped table is not a table; wrapped code is still code.
+/// Long lines scroll horizontally rather than wrap, which is what the mobile client
+/// does and what this renderer used to differ from. Indentation is what a wrap costs:
+/// a continued line restarts at the block's left edge, so the shape that carries the
+/// structure is exactly the thing that goes, and the reader cannot tell a wrap from a
+/// newline. A table scrolls for the neighbouring reason — a wrapped table is not a
+/// table.
 struct RichCodeBlock: View {
     @Environment(\.colorScheme) private var colorScheme
 

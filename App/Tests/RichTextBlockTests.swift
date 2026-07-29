@@ -62,6 +62,29 @@ struct RichTextBlockTests {
         #expect(String(highlighted.characters) == code)
     }
 
+    @Test("a scanned block is memoised, and the memo is keyed on all three inputs")
+    func codeHighlightMemoises() {
+        // `RichCodeBlock` is a plain value view, so its body re-runs whenever the row
+        // holding it is re-evaluated — which this channel does on traffic that has
+        // nothing to do with the message. Without the memo that is a fresh walk over
+        // the whole block every time.
+        //
+        // Uniqued per run so an earlier test in this suite cannot have warmed the entry
+        // and left this passing on someone else's work.
+        let code = "let memoised = 42 // \(UUID().uuidString)"
+        #expect(RichCodeHighlighter.memoisedText(code, language: "swift", theme: .light) == nil)
+
+        let highlighted = RichCodeHighlighter.highlight(code, language: "swift", theme: .light)
+        #expect(RichCodeHighlighter.memoisedText(code, language: "swift", theme: .light) == highlighted)
+
+        // The other two inputs are not the same block. A key that dropped either would
+        // serve One Light's palette to a reader in the dark, or one language's colours
+        // to another's source — both of which look like a rendering bug, not a cache.
+        #expect(RichCodeHighlighter.memoisedText(code, language: "swift", theme: .dark) == nil)
+        #expect(RichCodeHighlighter.memoisedText(code, language: "json", theme: .light) == nil)
+        #expect(RichCodeHighlighter.highlight(code, language: "swift", theme: .dark) != highlighted)
+    }
+
     // MARK: - Thematic rules
 
     @Test(

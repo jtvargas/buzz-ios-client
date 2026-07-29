@@ -33,7 +33,27 @@ enum RichCodeHighlighter {
     /// Produces styled text for the eight languages actively used in Buzz channels.
     /// Unknown languages and incomplete strings/comment blocks deliberately receive no
     /// token styling, matching mobile's `highlight.parse` fallback rather than guessing.
+    ///
+    /// Memoised on `(code, language, theme)`. ``RichCodeBlock`` is a plain value view, so
+    /// its body runs again every time the row holding it is re-evaluated — including the
+    /// re-evaluations driven by traffic elsewhere in the channel — and a scan is a walk
+    /// over the whole block. The scan is pure, so those three inputs can only ever
+    /// produce this text.
     static func highlight(_ code: String, language: String?, theme: RichCodeTheme) -> AttributedString {
+        let key = cacheKey(code, language: language, theme: theme)
+        if let cached = cache.object(forKey: key) { return cached.text }
+        let text = scan(code, language: language, theme: theme)
+        cache.setObject(Memo(text), forKey: key, cost: code.utf8.count)
+        return text
+    }
+
+    /// The memoised text for these inputs, or nil if they have not been scanned — or have
+    /// been evicted since. Exists so a test can see the memo; nothing ships against it.
+    static func memoisedText(_ code: String, language: String?, theme: RichCodeTheme) -> AttributedString? {
+        cache.object(forKey: cacheKey(code, language: language, theme: theme))?.text
+    }
+
+    private static func scan(_ code: String, language: String?, theme: RichCodeTheme) -> AttributedString {
         guard let language = Language(language) else { return AttributedString(code) }
         var scanner = Scanner(code, language: language)
         guard let runs = scanner.runs() else { return AttributedString(code) }
@@ -48,6 +68,40 @@ enum RichCodeHighlighter {
             output.append(fragment)
         }
         return output
+    }
+
+    /// Bounded by the weight of the source it holds rather than by a count, since one
+    /// long block costs what many short ones do. `NSCache` evicts under memory pressure
+    /// on its own; a miss only costs the scan that used to run unconditionally.
+    ///
+    /// `nonisolated(unsafe)` because `NSCache` documents its own thread safety but is not
+    /// annotated `Sendable`, so the compiler cannot see it. Both halves of the assertion
+    /// hold here: the container synchronises its own access, and ``Memo`` is a `let` over
+    /// a value type, so nothing reachable through it can be mutated after it is stored.
+    /// This is a cache of a pure function — the worst a race could produce is the same
+    /// text computed twice.
+    nonisolated(unsafe) private static let cache: NSCache<NSString, Memo> = {
+        let cache = NSCache<NSString, Memo>()
+        cache.totalCostLimit = 1 << 20
+        return cache
+    }()
+
+    /// The language is length-prefixed rather than separated by a delimiter, so the join
+    /// cannot be spelled by the fields themselves — a fence body is arbitrary text and
+    /// there is no character it is guaranteed not to contain. Two distinct inputs sharing
+    /// a key would mean one block drawn in another's colours.
+    private static func cacheKey(_ code: String, language: String?, theme: RichCodeTheme) -> NSString {
+        let language = language ?? ""
+        return "\(theme == .light ? "L" : "D")\(language.utf8.count):\(language)\(code)" as NSString
+    }
+
+    /// A reference box, because `NSCache` holds objects and `AttributedString` is a value.
+    private final class Memo: Sendable {
+        let text: AttributedString
+
+        init(_ text: AttributedString) {
+            self.text = text
+        }
     }
 
     private static func color(for kind: Token, theme: RichCodeTheme) -> Color {

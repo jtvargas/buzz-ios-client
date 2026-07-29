@@ -36,6 +36,95 @@ struct TypographyTests {
         #expect(UIFont(name: HiveTypography.PostScriptName.regular.rawValue + "X", size: 17) == nil)
     }
 
+    @Test("the probe answers per face, not per family")
+    func availabilityIsAskedPerFace() {
+        // The guard in `variableFont` used to ask whether the *regular* member had
+        // registered and then name the italic one. That is not a check: a descriptor
+        // built from an unbacked name still resolves to a substitute, so a missing
+        // italic would have been drawn as a substitute rather than caught.
+        for face in HiveTypography.PostScriptName.allCases {
+            #expect(HiveTypography.isRegistered(face), "\(face.rawValue) did not register")
+        }
+    }
+
+    @Test("italic resolves to the shipped Inter italic rather than a synthesised slant")
+    func italicResolvesToTheShippedFace() throws {
+        // Prose italic is the one axis nothing in `HiveTypography` selects:
+        // `PostScriptName.italic` is never passed to `variableFont`, because
+        // `RichTextStyle` deliberately leaves `.emphasized` to `Text` so Dynamic Type
+        // keeps working. That delegation is only safe while the family resolves its own
+        // italic member — the alternative is a faux oblique sheared off the regular face,
+        // which is the parity gap the typeface change exists to close.
+        //
+        // Asked at the descriptor level, which is the route a trait takes. It is not
+        // `Text` itself; nothing here renders one.
+        let regular = UIFontDescriptor(name: HiveTypography.PostScriptName.regular.rawValue, size: 17)
+        let italic = try #require(regular.withSymbolicTraits(.traitItalic))
+        let resolved = UIFont(descriptor: italic, size: 17)
+        #expect(
+            resolved.familyName == HiveTypography.familyName,
+            "italic left the family: \(resolved.familyName)"
+        )
+        #expect(
+            resolved.fontName != HiveTypography.PostScriptName.regular.rawValue,
+            "italic resolved to the regular face, so the slant is synthesised: \(resolved.fontName)"
+        )
+    }
+
+    @Test(
+        "every face resolves into its own family rather than a system substitute",
+        arguments: HiveTypography.PostScriptName.allCases
+    )
+    func facesResolveRatherThanSubstitute(face: HiveTypography.PostScriptName) throws {
+        // `facesRegister` proves the four files loaded. This proves that what the app
+        // then *builds* is one of them, which is a different question: a descriptor
+        // named after a face nothing backs resolves to a substitute rather than nil, so
+        // the `?? .systemFont` arm never fires and the fallback is silent by
+        // construction — clean build, green suite, wrong letters.
+        let mono = face == .mono || face == .monoItalic
+        let resolved = try #require(HiveTypography.variableFont(face, size: 13, weight: .regular))
+        #expect(
+            resolved.familyName == (mono ? HiveTypography.monoFamilyName : HiveTypography.familyName),
+            "\(face.rawValue) resolved into \(resolved.familyName) as \(resolved.fontName)"
+        )
+    }
+
+    @Test("the italic faces are their own resolution, not the upright one reused")
+    func italicFacesAreDistinct() throws {
+        // The family assertion above cannot separate the two members of a family, and
+        // an italic that quietly resolves to its upright sibling is drawn as a
+        // synthesised slant — the parity gap the typeface change exists to close.
+        func resolve(_ name: HiveTypography.PostScriptName) throws -> String {
+            try #require(HiveTypography.variableFont(name, size: 13, weight: .regular)).fontName
+        }
+        #expect(try resolve(.regular) != resolve(.italic))
+        #expect(try resolve(.mono) != resolve(.monoItalic))
+    }
+
+    @Test("the routes code blocks and avatars draw with keep their face")
+    func shippedFixedSizeRoutesKeepTheirFace() {
+        // These are the routes nothing asserted a face on before. `MessageTypographyTests`
+        // compares `Font` to `Font` with both sides built by the same helper, which proves
+        // the helpers agree with themselves and would keep passing with the system
+        // monospace font on screen. `RichCodeBlock` draws every code block through
+        // `.hiveMono(fixedSize:)` and its comments through the italic arm of the same call.
+        //
+        // What this does not prove: that each helper passes the *right* name to
+        // `variableFont`. That is a read of five call sites, not a test.
+        for italic in [false, true] {
+            let scaled = HiveTypography.monoUIFont(.body, weight: .regular, italic: italic)
+            #expect(
+                scaled.familyName == HiveTypography.monoFamilyName,
+                "mono \(italic ? "italic" : "upright") resolved into \(scaled.familyName)"
+            )
+        }
+        let drawing = HiveTypography.drawingFont(fixedSize: 30)
+        #expect(
+            drawing.familyName == HiveTypography.familyName,
+            "SVG avatar text resolved into \(drawing.familyName)"
+        )
+    }
+
     @Test("the UIKit Inter route scales")
     func uiFontScales() {
         let body = HiveTypography.uiFont(.body)

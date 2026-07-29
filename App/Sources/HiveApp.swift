@@ -8,7 +8,7 @@ struct HiveApp: App {
 
     @Environment(\.scenePhase) private var scenePhase
 
-    /// Lato reaches UIKit's own chrome from here, before the first window exists —
+    /// Inter reaches UIKit's own chrome from here, before the first window exists —
     /// an appearance proxy set after a bar is on screen leaves that bar on the old
     /// font. See ``HiveTypography/applyUIKitAppearance()``.
     init() {
@@ -27,7 +27,7 @@ struct HiveApp: App {
                 // screen and the UI-test fixture host are set in the same face as the app.
                 // The fixture host is the surface `ConversationScrollTests` drives, and a
                 // scroll assertion measured against San Francisco while the shipping app
-                // draws Lato is a test measuring a screen nobody has.
+                // draws Inter is a test measuring a screen nobody has.
                 .environment(\.font, .hive(.body))
                 // The accent, put into the environment explicitly rather than left to the
                 // catalogue's global — which does not reach either framework on iOS, see

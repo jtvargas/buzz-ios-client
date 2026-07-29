@@ -53,10 +53,10 @@ struct EmojiPickerView: View {
             onSelect(emoji)
         } label: {
             // Sized against `.title` rather than fixed, so the grid grows with Dynamic Type
-            // like everything else. The face named is Lato and the glyph drawn is not: Lato
-            // has no emoji, so CoreText falls through to the system's colour emoji font. The
-            // point size is the whole contribution, and asking for it through `.hive` is what
-            // keeps this from reading as a call site the typeface sweep missed.
+            // like everything else. The face named is Inter and the glyph drawn is not:
+            // Inter has no emoji, so CoreText falls through to the system's colour emoji
+            // font. The point size is the whole contribution, and asking for it through
+            // `.hive` is what keeps this from reading as a call site the sweep missed.
             Text(emoji)
                 .font(.hive(fixedSize: 30, relativeTo: .title))
                 .frame(width: Self.cell, height: Self.cell)

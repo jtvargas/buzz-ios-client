@@ -116,9 +116,10 @@ struct MessageMediaVideoPlaceholder: View {
                 .font(.hive(.caption, weight: .semibold))
                 .foregroundStyle(.secondary)
             Text(MessageMediaDescription.placeholderText(for: media, state: .loaded))
-                // Named, not `.monospaced()`: the app's family is Lato and has no
-                // fixed-width member for that modifier to find. A file name is an
-                // identifier, and this is how the app already draws those.
+                // Named, not `.monospaced()`: that modifier reaches the system's
+                // fixed-width face, never the separately bundled GeistMono this app draws
+                // code in. A file name is an identifier, and this is how the app already
+                // draws those.
                 .font(.hiveMono(.caption2))
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)

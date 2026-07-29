@@ -20,8 +20,27 @@ enum HiveTypography {
         case monoItalic = "GeistMono-Italic"
     }
 
-    static let isAvailable: Bool = UIFont(name: PostScriptName.regular.rawValue, size: 12) != nil
-    static let isMonoAvailable: Bool = UIFont(name: PostScriptName.mono.rawValue, size: 12) != nil
+    static let isAvailable: Bool = isRegistered(.regular)
+    static let isMonoAvailable: Bool = isRegistered(.mono)
+
+    /// Whether *this* face registered — asked per face, never per family.
+    ///
+    /// A descriptor built from a PostScript name nothing backs does not fail:
+    /// `UIFont(descriptor:size:)` hands back a resolved substitute rather than nil, so
+    /// the `?? .systemFont` arm in ``variableFont(_:size:weight:)`` can never see a face
+    /// that is missing. Probing the regular member and then naming its italic sibling
+    /// would leave the app drawing a substitute with a clean build and green tests.
+    ///
+    /// Answered from a table built once. ``variableFont(_:size:weight:)`` guards on this
+    /// on the way to every font the app builds, which is every view body that names one;
+    /// registration is fixed at launch by `UIAppFonts`, so there is nothing to re-ask.
+    static func isRegistered(_ name: PostScriptName) -> Bool {
+        registrations[name] ?? false
+    }
+
+    private static let registrations: [PostScriptName: Bool] = Dictionary(
+        uniqueKeysWithValues: PostScriptName.allCases.map { ($0, UIFont(name: $0.rawValue, size: 12) != nil) }
+    )
 
     static func font(_ style: Font.TextStyle, weight: Font.Weight = .regular) -> Font {
         Font(uiFont(style.uiKit, weight: weight))
@@ -97,7 +116,10 @@ enum HiveTypography {
             ?? .systemFont(ofSize: fixedSize, weight: .regular)
     }
 
-    private static func monoUIFont(
+    /// Internal rather than private for the same reason as ``variableFont(_:size:weight:)``:
+    /// ``monoFont(_:weight:italic:)`` hands back a `Font`, which cannot be asked its face,
+    /// so this is the only place the mono route's resolution is observable.
+    static func monoUIFont(
         _ style: UIFont.TextStyle,
         weight: Font.Weight,
         italic: Bool
@@ -112,8 +134,14 @@ enum HiveTypography {
         return UIFontMetrics(forTextStyle: style).scaledFont(for: base)
     }
 
-    private static func variableFont(_ name: PostScriptName, size: CGFloat, weight: Font.Weight) -> UIFont? {
-        guard (name == .mono || name == .monoItalic) ? isMonoAvailable : isAvailable else { return nil }
+    /// Internal rather than private so a test can assert the *resolved* face.
+    ///
+    /// Every helper above funnels through here, and registration and resolution are
+    /// separate questions: ``isRegistered(_:)`` says the file loaded, this says which
+    /// letters come back. The `fixedSize` helpers hand SwiftUI a `Font`, which cannot be
+    /// asked its face, so this is the last point at which a substitute is still visible.
+    static func variableFont(_ name: PostScriptName, size: CGFloat, weight: Font.Weight) -> UIFont? {
+        guard isRegistered(name) else { return nil }
         var variations: [NSNumber: CGFloat] = [
             Self.weightAxis: variableWeight(for: weight), // `wght`
         ]

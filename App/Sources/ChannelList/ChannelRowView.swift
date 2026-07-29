@@ -40,9 +40,10 @@ struct ChannelRowView: View {
                 // badge to mean one thing only.
                 //
                 // The weight is chosen while the font is built rather than layered on with
-                // `.fontWeight(_:)`, which is the one thing the app's typeface cannot
-                // honour: Lato ships as static cuts, so a weight asked for by trait comes
-                // back regular and every row in the sidebar would have read as read.
+                // `.fontWeight(_:)`: it is a value on Inter's `wght` axis, resolved as the
+                // face is, and a trait applied over an already-resolved face is a separate
+                // mechanism. Under the static family this shipped with first, that trait
+                // came back regular with no error and every row here read as read.
                 .font(.hive(.headline, weight: row.indicator.isUnread ? .semibold : .regular))
                 .foregroundStyle(row.indicator.isUnread ? .primary : .secondary)
                 .lineLimit(1)
