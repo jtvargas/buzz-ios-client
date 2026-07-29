@@ -40,3 +40,6 @@ Package.resolved
 # Tooling
 *.log
 .env
+
+# What a failing render test leaves behind to be looked at, never committed.
+App/Tests/Snapshots/*.actual.png
