@@ -233,9 +233,17 @@ final class ChannelTimelineModel {
         do {
             for try await _ in DatabaseSignal.changes(in: store.reader) {
                 let head = fetch(before: nil)
+                // The head is the newest page and speaks only for itself, but the loaded
+                // set can reach further back than it — every row an older page brought in,
+                // and every row that has since drifted past the newest page. Those rows
+                // still change: a reply landing on one moves its `reply_count` and
+                // `last_reply_at`, and without this the row kept the tally it was fetched
+                // with and its replies CTA never appeared for the life of the screen.
+                // Re-read exactly those, by id, through the timeline's own row query.
+                let refreshed = await fetchRefreshed(outsideHead: head)
                 // Merging rebuilds the rendered set, which is also what marks the
                 // channel read up to the newest row the reader can actually see.
-                let ids = await mergeHead(head)
+                let ids = await mergeHead(head, refreshing: refreshed)
                 // Same signal, same reader, off the main actor: re-read reactions and
                 // mentions for every loaded row so chips and @-tokens track the
                 // timeline exactly.
@@ -263,9 +271,16 @@ final class ChannelTimelineModel {
 
     /// Merges the newest page into the loaded set and returns every loaded row id,
     /// so the caller can re-read reactions for exactly what is on screen.
+    ///
+    /// `refreshed` carries re-read copies of rows outside the head window. They update
+    /// in place and never insert: the head is the only authority on what has stopped
+    /// existing, and it does not cover these rows — so a row the by-id read no longer
+    /// returns is left alone rather than dropped. Applied after ``prune(against:)`` so a
+    /// row the head *has* retired cannot be resurrected by its own refresh.
     @discardableResult
-    private func mergeHead(_ head: [TimelineRow]) -> [String] {
+    private func mergeHead(_ head: [TimelineRow], refreshing refreshed: [TimelineRow] = []) -> [String] {
         prune(against: head)
+        for row in refreshed where loaded[row.id] != nil { loaded[row.id] = row }
         for row in head { loaded[row.id] = row }
         rebuild()
         // Guarded like the rest: written on every commit, read in the timeline's `body`.

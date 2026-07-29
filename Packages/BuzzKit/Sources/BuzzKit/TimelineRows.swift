@@ -9,6 +9,27 @@ import NostrCore
 /// ``TimelineQuery.swift`` — are internal rather than private for exactly this: a third
 /// caller reading the same row shape must select the same columns and build the same
 /// struct, or it is a second definition of what a message is.
+public extension BuzzEventStore {
+    /// The current state of particular messages, by id, in no guaranteed order.
+    ///
+    /// A paging read speaks only for its own window: the newest page says nothing about a
+    /// row an older page brought in, so a surface holding rows from several pages has no
+    /// way to learn that one of them gained a reply. This is that way — one indexed read
+    /// over exactly the ids a caller already holds, through the same
+    /// ``eventBranch(where:)`` the paging reads use, so a refreshed row is the same row
+    /// the page would have returned.
+    ///
+    /// Log rows only (see ``fetchRows(_:ids:)``): an id still in the outbox is absent
+    /// rather than wrong, and a pending send has no tally to refresh anyway.
+    ///
+    /// Synchronous and `nonisolated` for the reason the paging reads are — it runs on
+    /// the concurrent reader, off the actor.
+    nonisolated func rows(for ids: [String]) throws -> [TimelineRow] {
+        guard !ids.isEmpty else { return [] }
+        return try reader.read { db in try Self.fetchRows(db, ids: ids) }
+    }
+}
+
 extension BuzzEventStore {
     /// Particular messages by id, in no guaranteed order.
     ///
