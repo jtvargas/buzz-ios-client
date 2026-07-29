@@ -46,7 +46,7 @@ import UIKit
 struct RichTextRenderingTests {
     @Test(
         "a message carrying every construct renders as recorded",
-        .enabled(if: RenderReference.existsForThisRuntime)
+        .enabled(if: RenderReference.existsForThisRuntime && RenderReference.isRecordedForThisTextSize)
     )
     func samplerMatchesItsReference() throws {
         let rendered = try #require(Self.render(Self.sampler), "the renderer produced no image")
@@ -133,6 +133,28 @@ enum RenderReference {
     static var existsForThisRuntime: Bool {
         FileManager.default.fileExists(atPath: url.path)
     }
+
+    /// The device text size the reference is recorded at: `.large`, which is iOS's own
+    /// default and what CI and an untouched simulator run at.
+    static let recordedTextSize = UIContentSizeCategory.large
+
+    /// Whether this device is in the text size the reference speaks for.
+    ///
+    /// The reference is a function of the code **and** the simulator's content size
+    /// category, because message type scales through `UIFontMetrics` against
+    /// `UITraitCollection.current` and nothing the renderer can set overrides it — see
+    /// ``RichTextRenderingTests/render(_:)-(some View)``. A simulator left on another
+    /// setting therefore renders a different-sized image and the comparison fails by the
+    /// whole picture: 1476 pixels tall at extra-large against 1339 at the default, which
+    /// is exactly how the first reference came to be recorded off-default and how it then
+    /// failed for the next person to run the suite.
+    ///
+    /// So it is a *skip*, not a failure — the same rule as a runtime with no reference. A
+    /// gate that cannot speak says nothing rather than saying the wrong thing, and
+    /// `xcrun simctl ui <device> content_size large` is what makes it speak again.
+    static var isRecordedForThisTextSize: Bool {
+        UITraitCollection.current.preferredContentSizeCategory == recordedTextSize
+    }
 }
 
 // MARK: - Fixture
@@ -214,9 +236,21 @@ private extension RichTextRenderingTests {
         )
     }
 
-    /// Every environment value the output depends on is stated, so the image is a function
-    /// of the code under test and nothing else — not the simulator's text size, not its
-    /// appearance, not its scale.
+    /// The environment values that *can* be stated here are stated, so the image does not
+    /// depend on the simulator's appearance, locale, writing direction or scale.
+    ///
+    /// # One thing it cannot state, learned the hard way
+    ///
+    /// `.environment(\.dynamicTypeSize, .large)` is here and does **not** hold the image
+    /// still. Message type is built by ``HiveTypography`` through
+    /// `UIFontMetrics.scaledFont(for:compatibleWith:)` with no trait collection, so it
+    /// scales against `UITraitCollection.current` — the *device's* content size category,
+    /// which SwiftUI's environment does not set and which
+    /// `UITraitCollection.performAsCurrent` around the render does not reach either.
+    ///
+    /// So the render is a function of the code **and the simulator's text size**, and the
+    /// gate deals with that by refusing to speak outside the one setting its reference was
+    /// recorded in — see ``RenderReference/isRecordedForThisTextSize``.
     static func render(_ content: some View) -> UIImage? {
         let renderer = ImageRenderer(
             content: content
