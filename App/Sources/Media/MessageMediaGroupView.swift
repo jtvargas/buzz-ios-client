@@ -56,7 +56,15 @@ private struct MessageMediaMosaicView: View {
 
     var body: some View {
         MessageMediaMosaicReservation(count: media.count) {
-            ForEach(Array(media.enumerated()), id: \.element.id) { index, item in
+            // Identified by position, not by ``BuzzKit/MessageMedia/id`` — which is the
+            // URL, and a group can hold the same URL twice. `![](u) ![](u)` is ordinary
+            // markdown, and `RichTextMedia.split` emits one block per image *run* rather
+            // than per distinct URL, so the fold produces two entries with equal ids.
+            // A `ForEach` over duplicate ids is undefined by SwiftUI's own diagnostic,
+            // while the reservation above has already committed to `media.count` cells.
+            // Position is stable here for the reason it usually is not: the array is
+            // fixed for the life of one rendered message.
+            ForEach(Array(media.enumerated()), id: \.offset) { index, item in
                 MessageMediaMosaicCellView(media: item, position: index, onOpen: { image in
                     onTap?()
                     viewing = MessageMediaViewerSubject(media: media, startIndex: index, preview: image)

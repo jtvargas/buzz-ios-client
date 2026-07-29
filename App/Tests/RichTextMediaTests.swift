@@ -132,6 +132,25 @@ struct RichTextMediaTests {
         #expect(attached(parsed[1])?.url == clip)
     }
 
+    @Test("one URL written twice is two pictures in the group, not one")
+    func repeatedURLKeepsBothEntries() {
+        // The reason ``MessageMediaGroupView`` and ``MessageMediaViewer`` identify their
+        // cells by position: `split` emits one block per image *run*, so this group holds
+        // two entries whose ``BuzzKit/MessageMedia/id`` — the URL — is the same string.
+        // Identifying them by that id is a `ForEach` over duplicate ids, which SwiftUI
+        // calls undefined, and would cost the gallery a page the reader cannot swipe to.
+        let parsed = blocks(
+            "![a](\(Self.picture))\n![a again](\(Self.picture))",
+            media: [media()]
+        )
+
+        let group = attachedGroup(parsed.first)
+        #expect(parsed.count == 1)
+        #expect(group?.count == 2)
+        #expect(group?.map(\.url) == [Self.picture, Self.picture])
+        #expect(group?[0].id == group?[1].id)
+    }
+
     // MARK: - A bare URL is a link, not a picture
 
     @Test("a bare media URL stays a link, as it does in both reference clients")

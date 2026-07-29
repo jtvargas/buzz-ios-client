@@ -75,7 +75,11 @@ struct MessageMediaViewer: View {
             ZStack(alignment: .topTrailing) {
                 Color.black.ignoresSafeArea()
                 TabView(selection: $selection) {
-                    ForEach(Array(subject.media.enumerated()), id: \.element.id) { index, media in
+                    // By position, for the same reason the mosaic is — the group can hold
+                    // one URL twice, and ``BuzzKit/MessageMedia/id`` is the URL. Here the
+                    // consequence would be a page the reader cannot reach: `.tag(index)`
+                    // stays distinct while the identity behind it does not.
+                    ForEach(Array(subject.media.enumerated()), id: \.offset) { index, media in
                         MessageMediaViewerPage(
                             media: media,
                             preview: index == subject.startIndex ? subject.preview : nil,
