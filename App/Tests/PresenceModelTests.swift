@@ -73,11 +73,21 @@ struct PresenceModelTests {
         #expect(channelModel.typers == both)
     }
 
+    /// Every arity, against upstream mobile's own switch
+    /// (`mobile/lib/features/channels/channel_detail_page/app_bar.dart:17-21`). Four
+    /// cases because the interesting one is the third: it names the first typer and
+    /// counts the *others*, so three names say "2 others", not "3".
     @Test("the typing indicator string pluralizes")
     func indicatorPluralizes() {
         #expect(TypingIndicator.text(for: []) == nil)
         #expect(TypingIndicator.text(for: ["Alice"]) == "Alice is typing…")
         #expect(TypingIndicator.text(for: ["Alice", "Bob"]) == "Alice and Bob are typing…")
-        #expect(TypingIndicator.text(for: ["Alice", "Bob", "Cara"]) == "Several people are typing…")
+        #expect(
+            TypingIndicator.text(for: ["Alice", "Bob", "Cara"]) == "Alice and 2 others are typing…"
+        )
+        #expect(
+            TypingIndicator.text(for: ["Alice", "Bob", "Cara", "Dan"])
+                == "Alice and 3 others are typing…"
+        )
     }
 }

@@ -46,6 +46,16 @@ final class ChannelTypingModel {
 
 /// Builds the human "X is typing…" phrase from resolved names. Pure and view-free,
 /// so the pluralization is unit-testable on its own.
+///
+/// The wording is upstream mobile's, arity for arity
+/// (`mobile/lib/features/channels/channel_detail_page/app_bar.dart:17-21`). At three or
+/// more this used to read "Several people are typing…", which named nobody; upstream
+/// keeps the first name and counts the *others*, so three typers read "Alice and 2
+/// others are typing…". Desktop diverges — it lists all three at exactly three — and is
+/// deliberately not the reference here.
+///
+/// The ellipsis is the typographic `…` rather than three periods, matching upstream's
+/// channel indicator.
 enum TypingIndicator {
     static func text(for names: [String]) -> String? {
         switch names.count {
@@ -56,7 +66,9 @@ enum TypingIndicator {
         case 2:
             return "\(names[0]) and \(names[1]) are typing…"
         default:
-            return "Several people are typing…"
+            // Never singular: this branch starts at three names, so the count of others
+            // is at least two.
+            return "\(names[0]) and \(names.count - 1) others are typing…"
         }
     }
 }

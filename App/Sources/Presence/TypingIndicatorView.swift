@@ -22,8 +22,28 @@ import SwiftUI
 /// Driven by ``ChannelTypingModel``; absent entirely when no one is typing. Names are
 /// resolved by `nameFor` — the surface supplies known author names and falls back to a
 /// short key.
+///
+/// # Why the model's lifecycle is not here
+///
+/// It used to be: `.task { await model.run() }` hung off the `Group` below. SwiftUI
+/// distributes a modifier applied to a `Group` to that group's *children*, and this
+/// group's only child is the `if let` — which is nil until somebody is typing. So the
+/// group had no children, the task had nothing to attach to, and `run()` — the only
+/// consumer of ``BuzzKit/PresenceStore/typing(in:thread:)`` — never started. The strip
+/// could then never appear, because the only thing that could fill the model was gated
+/// on content only that thing produces. Measured, not inferred: the same `.task` fires
+/// on a group whose child is present and on any always-present container.
+///
+/// Attaching it to an always-present container here would fix the task and cost 8pt in
+/// the accessory stack this sits in, every time another accessory is up. So the surface
+/// that *owns* the model runs it, beside `presence.run()` — which is what every other
+/// model in the app already does.
 struct TypingIndicatorView: View {
-    @State var model: ChannelTypingModel
+    /// Owned by the conversation surface, which also drives its ``ChannelTypingModel/run()``.
+    /// A `let` rather than `@State` for that reason: `State(wrappedValue:)` keeps the
+    /// *first* instance it is handed and silently ignores later ones, which for a view
+    /// that does not own its object is a stale reference waiting to happen.
+    let model: ChannelTypingModel
     let nameFor: (String) -> String
 
     var body: some View {
@@ -51,7 +71,6 @@ struct TypingIndicatorView: View {
             }
         }
         .animation(.default, value: model.typers)
-        .task { await model.run() }
     }
 }
 

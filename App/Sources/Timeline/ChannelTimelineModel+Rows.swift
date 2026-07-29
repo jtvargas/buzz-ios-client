@@ -53,6 +53,31 @@ extension ChannelTimelineModel {
         return (try? store.threadParticipants(for: ids, limit: limit)) ?? [:]
     }
 
+    /// Re-reads the loaded rows the newest page does not cover, so their reply tallies,
+    /// edits and deletion state track the store rather than freezing at the page that
+    /// fetched them.
+    ///
+    /// The other reads here refresh what hangs *off* a row; this one refreshes the row.
+    /// It exists because a paging read speaks only for its own window: the head says
+    /// nothing about a message an older page brought in, so a reply landing on one moved
+    /// no tally a reader could see and its replies CTA never appeared.
+    ///
+    /// Narrowed to the ids the head misses rather than the whole loaded set: a channel
+    /// nobody has paged back through has nothing outside the head window, and there the
+    /// read is skipped entirely — so the common case costs one main-actor hop and no
+    /// query at all. `store` is immutable, so this is safe to call from the
+    /// `nonisolated` observation loop.
+    nonisolated func fetchRefreshed(outsideHead head: [TimelineRow]) async -> [TimelineRow] {
+        let covered = Set(head.map(\.id))
+        let outside = await loadedIDs.subtracting(covered)
+        guard !outside.isEmpty else { return [] }
+        return (try? store.rows(for: Array(outside))) ?? []
+    }
+
+    /// Every id currently in the loaded set. Reached from the `nonisolated` observation
+    /// loop, so reading it is a hop onto the main actor rather than a direct read.
+    private var loadedIDs: Set<String> { Set(loaded.keys) }
+
     /// Sends a reaction on a message through the durable send path — an ordinary
     /// persisted kind-7, not an ephemeral.
     func react(_ emoji: String, on targetID: String) {

@@ -164,6 +164,10 @@ struct ThreadView: View {
         .task { await focusComposerWhenSettled() }
         .task { await model.run() }
         .task { await presence.run() }
+        // Here rather than inside ``TypingIndicatorView``, which is absent from the view
+        // tree until somebody is typing and so could never start its own model — see the
+        // note on that type. The surface that owns the model runs it, as above.
+        .task { await typing.run() }
         // Mark-on-view, the same discipline the channel's read state follows — and the
         // *rendered* newest row for the same reason: a reply held behind a frozen tail has
         // not been seen, so it must still count as new. Being here rather than in the model
