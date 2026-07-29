@@ -123,7 +123,7 @@ private struct MessageActionsSheet: View {
     @Environment(\.dismiss) private var dismiss
     /// Rests at medium, as asked. The picker is the only thing that takes the other one:
     /// several hundred glyphs behind a search field do not fit in half a screen.
-    @State private var detent: PresentationDetent = .height(220)
+    @State private var detent: PresentationDetent = .height(260)
     @State private var isPickingEmoji = false
     @State private var isShowingWorkInProgress = false
 
@@ -151,7 +151,7 @@ private struct MessageActionsSheet: View {
                     .navigationBarTitleDisplayMode(.inline)
             }
         }
-        .presentationDetents([.height(220), .large], selection: $detent)
+        .presentationDetents([.height(260), .large], selection: $detent)
         .presentationDragIndicator(.visible)
         .alert("WIP", isPresented: $isShowingWorkInProgress) {
             Button("OK", role: .cancel) {}
