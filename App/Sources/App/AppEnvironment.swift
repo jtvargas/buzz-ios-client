@@ -29,6 +29,14 @@ final class AppEnvironment {
     /// The engine's lifecycle, mirrored for the toolbar pill. Seeded `.stopped`
     /// and updated from ``SyncEngine/states()``.
     private(set) var engineState: SyncEngine.State = .stopped
+    /// Whether this session has ever reached ``SyncEngine/State/running``.
+    ///
+    /// The one fact that separates *connecting* from *reconnecting*, which the engine
+    /// state cannot carry on its own — both are ``SyncEngine/State/starting``. Held
+    /// here rather than in the surface that draws the word, because a conversation
+    /// opened mid-reconnect has itself never seen a live engine and would otherwise
+    /// call a dropped connection a cold start. Reset with the engine on sign-out.
+    private(set) var hasConnectedBefore = false
 
     /// The store, opened at launch regardless of identity so a returning user's
     /// history is on screen the instant the engine reconnects.
@@ -164,6 +172,7 @@ final class AppEnvironment {
         engine = nil
         selfPubkeyHex = nil
         engineState = .stopped
+        hasConnectedBefore = false
         phase = .needsIdentity
         return .signedOut
     }
@@ -258,6 +267,7 @@ final class AppEnvironment {
             let states = await engine.states()
             for await state in states {
                 self?.engineState = state
+                if state == .running { self?.hasConnectedBefore = true }
             }
         }
     }

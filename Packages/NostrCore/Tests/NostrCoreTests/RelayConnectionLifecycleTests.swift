@@ -11,6 +11,8 @@ struct RelayConnectionLifecycleTests {
             pingInterval: .seconds(25),
             pingDeadline: .seconds(10),
             idleTimeout: .seconds(40),
+            handshakeTimeout: .seconds(3600),
+            foregroundHandshakeDeadline: .seconds(3600),
             authTimeout: .seconds(3600),
             queryTimeout: .seconds(3600)
         )

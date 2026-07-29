@@ -263,6 +263,9 @@ struct ThreadView: View {
             // cannot see and did not ask about. The channel's own strip is the wide one:
             // it covers its threads, because from there they are not distinguishable.
             TypingIndicatorView(model: typing, nameFor: names.name(for:))
+            // The same strip the channel carries, for the same reason: a thread read
+            // over a dead socket looks exactly like a thread nobody has replied to.
+            ConnectionStatusIndicatorView()
         }
     }
 

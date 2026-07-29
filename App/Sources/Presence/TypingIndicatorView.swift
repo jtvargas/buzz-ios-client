@@ -49,30 +49,50 @@ struct TypingIndicatorView: View {
     var body: some View {
         Group {
             if let text = model.indicator(nameFor: nameFor) {
-                HStack(spacing: 6) {
+                ConversationAccessoryCapsule(label: text) {
                     TypingDots()
-                    Text(text)
-                        .font(.hive(.caption2, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
                 }
-                .padding(.horizontal, 10)
-                // A floor, not a height: at an accessibility text size the label keeps
-                // its intrinsic height and grows the capsule instead of being clipped
-                // inside it. Same reasoning as ``NewMessagesPill``.
-                .frame(minHeight: 28)
-                .glassEffect(.regular, in: .capsule)
-                // Trailing, by the owner's call. It used to sit at the leading edge on the
-                // argument that it annotates text starting there; in practice it lands on
-                // top of the newest message's own first words, which are the ones being
-                // read. At this edge it covers the ragged right instead.
-                .frame(maxWidth: .infinity, alignment: .trailing)
-                .transition(.opacity)
-                .accessibilityElement(children: .combine)
-                .accessibilityLabel(text)
             }
         }
         .animation(.default, value: model.typers)
+    }
+}
+
+/// The capsule the conversation's small live annotations are drawn in: the typing
+/// strip, and ``ConnectionStatusIndicatorView``.
+///
+/// Extracted so the two cannot drift. They occupy the same slot, say the same *kind*
+/// of thing — something is happening, right now, that you did not ask for — and a
+/// reader who saw one read as a different sort of object from the other would be
+/// reading a difference that is not there.
+struct ConversationAccessoryCapsule<Leading: View>: View {
+    /// The words, which are also what VoiceOver speaks for the whole capsule.
+    let label: String
+    /// What sits before them — the cycling dots, in both of this type's uses.
+    @ViewBuilder var leading: Leading
+
+    var body: some View {
+        HStack(spacing: 6) {
+            leading
+            Text(label)
+                .font(.hive(.caption2, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 10)
+        // A floor, not a height: at an accessibility text size the label keeps its
+        // intrinsic height and grows the capsule instead of being clipped inside it.
+        // Same reasoning as ``NewMessagesPill``.
+        .frame(minHeight: 28)
+        .glassEffect(.regular, in: .capsule)
+        // Trailing, by the owner's call. It used to sit at the leading edge on the
+        // argument that it annotates text starting there; in practice it lands on top
+        // of the newest message's own first words, which are the ones being read. At
+        // this edge it covers the ragged right instead.
+        .frame(maxWidth: .infinity, alignment: .trailing)
+        .transition(.opacity)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(label)
     }
 }
 
@@ -85,7 +105,10 @@ struct TypingIndicatorView: View {
 /// Motion is the whole content here — the dots say "still going" in a way no static
 /// glyph does — so with Reduce Motion on they are drawn at rest rather than swapped for
 /// something else.
-private struct TypingDots: View {
+///
+/// Shared with ``ConnectionStatusIndicatorView``: a reconnect is the same claim the
+/// dots already make — something is under way that will finish on its own.
+struct TypingDots: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {

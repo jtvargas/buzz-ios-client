@@ -31,6 +31,23 @@ public struct RelayConnectionConfig: Sendable {
     /// a ping — a stronger bound than ``pingInterval`` + ``pingDeadline`` for a
     /// socket that has gone completely silent.
     public var idleTimeout: Duration
+    /// How long an opened socket has to reach ``ConnectionState/ready`` before it
+    /// is declared dead and retried.
+    ///
+    /// The idle watchdog cannot cover this: a successful ping is activity, so it
+    /// resets the idle clock, and a socket that is alive at the WebSocket level but
+    /// wedged above it — a relay that never issues its challenge, a proxy that
+    /// completes the upgrade without forwarding, a lost auth `OK` — pings healthily
+    /// forever while never authenticating. Without this bound such a socket rests in
+    /// ``ConnectionState/connecting`` for the life of the process. Generous, because
+    /// the relay challenges on connect and signing is local: anything approaching it
+    /// is a stall, not a slow network.
+    public var handshakeTimeout: Duration
+    /// The same bound, applied when the app *resumes* mid-handshake. Deliberately far
+    /// tighter, for ``foregroundProbeDeadline``'s reason: a handshake frozen by
+    /// backgrounding may have been talking to a socket the OS has since dropped, and
+    /// the user is now watching the screen wait for it.
+    public var foregroundHandshakeDeadline: Duration
     /// The longest a `publish`/`query` will wait for authentication before
     /// failing. A last-resort bound: an unresumed continuation is not
     /// cancellable, so a race no other guard anticipated is caught here.
@@ -50,6 +67,8 @@ public struct RelayConnectionConfig: Sendable {
         pingDeadline: Duration = .seconds(10),
         foregroundProbeDeadline: Duration = .seconds(2),
         idleTimeout: Duration = .seconds(40),
+        handshakeTimeout: Duration = .seconds(12),
+        foregroundHandshakeDeadline: Duration = .seconds(3),
         authTimeout: Duration = .seconds(30),
         queryTimeout: Duration = .seconds(15),
         publishTimeout: Duration = .seconds(15)
@@ -60,6 +79,8 @@ public struct RelayConnectionConfig: Sendable {
         self.pingDeadline = pingDeadline
         self.foregroundProbeDeadline = foregroundProbeDeadline
         self.idleTimeout = idleTimeout
+        self.handshakeTimeout = handshakeTimeout
+        self.foregroundHandshakeDeadline = foregroundHandshakeDeadline
         self.authTimeout = authTimeout
         self.queryTimeout = queryTimeout
         self.publishTimeout = publishTimeout
