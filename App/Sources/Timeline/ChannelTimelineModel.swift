@@ -117,7 +117,9 @@ final class ChannelTimelineModel {
     /// `ChannelTimelineModel+ReadState.swift`: a `private` member is reachable only from
     /// the file that declares it.
     let readStateMarking: (any ReadStateMarking)?
-    private let pageSize: Int
+    /// Internal for the same reason, so ``fetch(before:)`` can read it from
+    /// `ChannelTimelineModel+Live.swift`. Immutable, so widening it exposes no mutation.
+    let pageSize: Int
     /// The local identity's hex pubkey, for own-reaction highlighting and the
     /// delete affordance on own pending/failed rows. `nil` degrades to no highlight
     /// and no delete, the same keyless fallback presence uses.
@@ -136,7 +138,12 @@ final class ChannelTimelineModel {
 
     /// Loaded rows keyed by id, so a re-read of the head merges into — rather than
     /// duplicates — rows an older page already holds.
-    private var loaded: [String: TimelineRow] = [:]
+    ///
+    /// `private(set)` rather than `private` so the id sets derived from it can sit beside
+    /// their only reader in `+Rows.swift`. Writes stay confined to this file, which is the
+    /// invariant that matters: what is loaded changes only through the head merge, the
+    /// prune, and paging.
+    private(set) var loaded: [String: TimelineRow] = [:]
     /// The oldest loaded row's cursor, the basis of the next older page. Tracks the
     /// *full* loaded set, so a frozen tail never affects where pagination resumes.
     private var earliest: TimelineCursor?
@@ -223,49 +230,20 @@ final class ChannelTimelineModel {
         loaded.values.filter(\.hasThread).map(\.id)
     }
 
-    // MARK: - Live observation
-
-    /// Consumes the observation until cancelled. Attach with SwiftUI's `.task`.
-    nonisolated func run() async {
-        // Typing is delivered by the engine's standing per-channel content subscription
-        // now, whose lifecycle discovery and membership own — the view no longer opens
-        // or closes it. This loop is purely the read side: observe, merge, mark read.
-        do {
-            for try await _ in DatabaseSignal.changes(in: store.reader) {
-                let head = fetch(before: nil)
-                // Merging rebuilds the rendered set, which is also what marks the
-                // channel read up to the newest row the reader can actually see.
-                let ids = await mergeHead(head)
-                // Same signal, same reader, off the main actor: re-read reactions and
-                // mentions for every loaded row so chips and @-tokens track the
-                // timeline exactly.
-                let groups = fetchReactions(for: ids)
-                await applyReactions(groups)
-                let mentions = fetchMentions(for: ids)
-                await applyMentions(mentions)
-                // Only the threaded rows, and only after the merge that decided which
-                // rows those are — a reply landing is exactly the commit that turns a
-                // plain row into a threaded one.
-                let roots = await threadedRowIDs
-                let participants = fetchThreadParticipants(for: roots)
-                await applyThreadParticipants(participants)
-            }
-        } catch {
-            // Ends on cancellation or teardown; last snapshot stays on screen.
-        }
-    }
-
-    /// Reads one page off the main actor. `channel`, `store`, and `pageSize` are
-    /// immutable, so this is safe to call from the `nonisolated` observation loop.
-    private nonisolated func fetch(before cursor: TimelineCursor?) -> [TimelineRow] {
-        (try? store.timeline(channel: channel, before: cursor, limit: pageSize)) ?? []
-    }
+    // MARK: - Merging what the live read returns
 
     /// Merges the newest page into the loaded set and returns every loaded row id,
     /// so the caller can re-read reactions for exactly what is on screen.
+    ///
+    /// `refreshed` carries re-read copies of rows outside the head window. They update
+    /// in place and never insert: the head is the only authority on what has stopped
+    /// existing, and it does not cover these rows — so a row the by-id read no longer
+    /// returns is left alone rather than dropped. Applied after ``prune(against:)`` so a
+    /// row the head *has* retired cannot be resurrected by its own refresh.
     @discardableResult
-    private func mergeHead(_ head: [TimelineRow]) -> [String] {
+    func mergeHead(_ head: [TimelineRow], refreshing refreshed: [TimelineRow] = []) -> [String] {
         prune(against: head)
+        for row in refreshed where loaded[row.id] != nil { loaded[row.id] = row }
         for row in head { loaded[row.id] = row }
         rebuild()
         // Guarded like the rest: written on every commit, read in the timeline's `body`.

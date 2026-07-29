@@ -284,7 +284,7 @@ private extension MessageMediaView {
 
     func open(_ image: UIImage) {
         onTap?()
-        viewing = MessageMediaViewerSubject(media: media, preview: image)
+        viewing = MessageMediaViewerSubject(media: [media], startIndex: 0, preview: image)
     }
 
     func retry() {

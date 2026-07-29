@@ -186,6 +186,10 @@ struct ChannelTimelineView: View {
         }
         .task { await model.run() }
         .task { await presence.run() }
+        // Here rather than inside ``TypingIndicatorView``, which is absent from the view
+        // tree until somebody is typing and so could never start its own model — see the
+        // note on that type. The surface that owns the model runs it, as above.
+        .task { await typing.run() }
     }
 
     /// How this conversation presents itself — a channel, or the person on the other
