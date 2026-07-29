@@ -133,6 +133,48 @@ struct TimelineTests {
         #expect(secondPage.map(\.content) == ["m14", "m13", "m12", "m11", "m10"])
     }
 
+    /// The page is a union of three branches — messages, relay notices, pending sends —
+    /// and each one carries its own `ORDER BY … LIMIT :limit` so it can stop early
+    /// instead of being scanned whole (see ``fetchTimeline``). That is only sound while
+    /// a row in the global newest `limit` is also in the newest `limit` of its own
+    /// branch, so the condition worth pinning is the one where a single branch holds
+    /// **more than a page of its own**: twelve messages against a page of five. If the
+    /// per-branch bound were wrong, the message branch would fill the page by itself and
+    /// the notice and the pending send — both newer than the fifth message — would
+    /// silently vanish rather than error.
+    @Test("a page draws from every branch even when one alone could fill it")
+    func pageDrawsFromEveryBranch() async throws {
+        let database = TempDatabase()
+        defer { database.remove() }
+        let store = try database.open()
+        let fixture = try Fixture()
+        let signer = try InMemorySigner()
+        let someoneElse = try PrivateKey().publicKey.hex
+
+        var batch = try (1 ... 12).map { try fixture.message("m\($0)", at: Int64($0) * 1000) }
+        // One notice inside the newest five, and one far below them: the second proves
+        // the branch is bounded by the page rather than merely present in it.
+        let joined = #"{"type":"member_joined","actor":"\#(fixture.pubkey)","target":"\#(someoneElse)"}"#
+        batch.append(try fixture.event(.systemMessage, joined, tags: [["h", "room-1"]], at: 10_500))
+        batch.append(try fixture.event(.systemMessage, joined, tags: [["h", "room-1"]], at: 500))
+        _ = try await store.ingest(batch: batch, phase: .backfill)
+
+        // A pending send between the newest two messages, so the outbox branch has to
+        // sort into the middle of the page rather than onto either end of it.
+        try await store.enqueue(
+            content: "pending",
+            in: "room-1",
+            with: signer,
+            createdAt: Date(timeIntervalSince1970: 11_500)
+        )
+
+        let page = try store.timeline(channel: "room-1", limit: 5)
+
+        #expect(page.map(\.createdAt) == [12_000, 11_500, 11_000, 10_500, 10_000])
+        #expect(page.map(\.isNotice) == [false, false, false, true, false])
+        #expect(page[1].content == "pending")
+    }
+
     // MARK: - Content resolution
 
     @Test("shows the newest authorized edit in place of the original")

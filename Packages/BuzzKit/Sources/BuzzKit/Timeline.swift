@@ -227,40 +227,84 @@ extension BuzzEventStore {
         // content, no thread row and no author profile, so it comes back with the empty
         // defaults and ``makeRow(_:)`` decodes its body into ``TimelineRow/notice``.
         //
-        // # Why a third branch and not `kind IN (9, 40099)`
+        // # Why every branch carries its own `ORDER BY` and `LIMIT`
         //
-        // `event_timeline` is `(h, kind, created_at DESC, id)`, so an equality on both
-        // leading columns hands the rows back already in the order this wants and the
-        // outer `LIMIT` stops the scan early — SQLite plans the union as a MERGE and
-        // reads roughly `limit` rows per branch. An `IN` list on `kind` costs that
-        // ordering: the planner turns `USE TEMP B-TREE FOR LAST TERM OF ORDER BY` (a
-        // tiebreak among same-second events) into `USE TEMP B-TREE FOR ORDER BY`, a full
-        // sort of every message in the channel before the limit applies. Verified with
-        // `EXPLAIN QUERY PLAN` against this exact schema, not assumed.
+        // A `UNION ALL` is not a merge. SQLite materialises the compound as a co-routine,
+        // scans it whole and sorts the result — so the outer `LIMIT` applies *after* every
+        // message in the channel has been built and ordered, and the page read costs
+        // O(channel history) rather than O(page). That has been true since the outbox
+        // branch introduced the union, long before notices.
+        //
+        // Bounding each branch restores the early stop without changing what comes back,
+        // because a row in the global newest `limit` is necessarily in the newest `limit`
+        // of whichever branch it came from:
+        //
+        //     top-N(A ∪ B ∪ C) ⊆ top-N(A) ∪ top-N(B) ∪ top-N(C)
+        //
+        // **That holds only while every branch orders by the same total order as the
+        // outer query — `created_at DESC, id DESC`.** It is a precondition, not a
+        // property of the shape: a branch that later orders by anything else does not
+        // fail loudly, it silently drops rows that belonged in the page. Anything added
+        // here inherits that condition.
+        //
+        // Each branch then rides `event_timeline` — `(h, kind, created_at DESC, id)` —
+        // in index order and stops, and the outer sort orders at most `3 * limit` rows
+        // instead of the channel. The outbox branch is the exception and is fine: its
+        // index is `(channel_id, created_at)` with no `event_id`, so SQLite walks it
+        // backwards for `created_at DESC` and sorts only the `id` tiebreak, over at most
+        // the pending sends. `USE TEMP B-TREE FOR LAST TERM OF ORDER BY` on that branch
+        // is expected, not a regression.
+        //
+        // Measured on an 8,860-event log with 3,000 messages in the channel: 23.69 ms
+        // unbounded against 1.04 ms bounded, with a byte-identical result set at the head
+        // and at six cursor depths, pending sends landing inside the returned pages.
+        // Independently reproduced at 27.14 ms against 0.96 ms. Harness and numbers in
+        // `RESEARCH/TIMELINE_READ_COST.md`.
+        //
+        // An earlier comment here claimed the third branch existed because `kind IN (9,
+        // 40099)` would cost the ordering that an equality on both leading index columns
+        // preserved. That was wrong, and it claimed to have been verified. Both shapes
+        // produce `USE TEMP B-TREE FOR ORDER BY`; the `LAST TERM OF ORDER BY` lines that
+        // suggested otherwise appear three times in a *single* branch with no union at
+        // all, because they belong to the edit subqueries' own ordering. The branch split
+        // is kept because it is marginally faster and reads clearer, not because the
+        // planner rewards it.
         let sql = """
         SELECT \(timelineColumns)
         FROM (
-            \(eventBranch(where: """
-                e.h = :channel AND e.kind = :kind AND \(page("e.created_at", "e.id"))
-                  AND NOT EXISTS (
-                        SELECT 1 FROM thread tx
-                        WHERE tx.event_id = e.id AND tx.broadcast = 0
-                      )
-                """))
+            SELECT * FROM (
+                \(eventBranch(where: """
+                    e.h = :channel AND e.kind = :kind AND \(page("e.created_at", "e.id"))
+                      AND NOT EXISTS (
+                            SELECT 1 FROM thread tx
+                            WHERE tx.event_id = e.id AND tx.broadcast = 0
+                          )
+                    """))
+                ORDER BY e.created_at DESC, e.id DESC
+                LIMIT :limit
+            )
 
             UNION ALL
 
-            \(eventBranch(where: """
-                e.h = :channel AND e.kind = :noticeKind
-                  AND \(page("e.created_at", "e.id"))
-                """))
+            SELECT * FROM (
+                \(eventBranch(where: """
+                    e.h = :channel AND e.kind = :noticeKind
+                      AND \(page("e.created_at", "e.id"))
+                    """))
+                ORDER BY e.created_at DESC, e.id DESC
+                LIMIT :limit
+            )
 
             UNION ALL
 
-            \(outboxBranch(where: """
-                o.channel_id = :channel AND o.parent_id IS NULL
-                  AND \(page("o.created_at", "o.event_id"))
-                """))
+            SELECT * FROM (
+                \(outboxBranch(where: """
+                    o.channel_id = :channel AND o.parent_id IS NULL
+                      AND \(page("o.created_at", "o.event_id"))
+                    """))
+                ORDER BY o.created_at DESC, o.event_id DESC
+                LIMIT :limit
+            )
         )
         ORDER BY created_at DESC, id DESC
         LIMIT :limit
