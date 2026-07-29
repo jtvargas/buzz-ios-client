@@ -187,6 +187,26 @@ enum ConversationFixture {
 
     A line with *italic*, ***bold italic***, ~~struck~~, and `**bold inside code**` to prove composition.
 
+    ---
+
+    ### The blocks that draw their own frame
+
+    | Gate | Runs on | Cost |
+    |---|---|---:|
+    | SwiftLint | every PR | 40s |
+    | App tests | every PR | 9m |
+
+    > A quote, so the rule above and the fence below have something with an edge on both sides of them.
+
+    ```swift
+    func gap(after previous: RichBlock, before next: RichBlock) -> CGFloat {
+        RichTextSpacing.gap(after: previous, before: next)
+    }
+    ```
+
+    - A bullet, to see a list against a fence
+    - And a second one
+
     `.scratch/eqp-81/` noted. Nothing further from you on #81.
     """
     // swiftlint:enable line_length
