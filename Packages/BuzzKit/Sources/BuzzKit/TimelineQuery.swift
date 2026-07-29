@@ -15,7 +15,7 @@ extension BuzzEventStore {
     /// One column list so the branches and every outer select cannot drift. Internal
     /// rather than private because `TimelineRows.swift` selects the same list.
     static let timelineColumns = """
-    id, pubkey, created_at, content, edited, deleted, rich,
+    id, pubkey, created_at, kind, content, edited, deleted, rich,
     display_name, picture, parent_id, root_id, reply_count, last_reply_at,
     state, last_error, tags, edited_tags
     """
@@ -52,6 +52,7 @@ extension BuzzEventStore {
         SELECT e.id                AS id,
                e.pubkey            AS pubkey,
                e.created_at        AS created_at,
+               e.kind              AS kind,
                e.content           AS content,
                (SELECT ed.content FROM edit ed
                  WHERE ed.target_id = e.id
@@ -165,6 +166,7 @@ extension BuzzEventStore {
         SELECT o.event_id  AS id,
                o.pubkey    AS pubkey,
                o.created_at AS created_at,
+               o.kind      AS kind,
                o.content   AS content,
                NULL        AS edited,
                0           AS deleted,
@@ -202,6 +204,13 @@ extension BuzzEventStore {
         // that carries no `imeta` at all is an edit that removed the attachments, so an
         // empty result here is an answer and not a miss.
         let editedTags: String? = row["edited_tags"]
+        // A relay notice and a message are the same row shape by design (see
+        // ``fetchTimeline``), so the kind is what tells them apart. Decoded here, once
+        // per read, for the same reason `media` is: the alternative is every render pass
+        // re-parsing a JSON body whose answer never changes.
+        let kind: Int? = row["kind"]
+        let isNotice = kind == EventKind.systemMessage.rawValue
+        let notice = isNotice ? SystemNotice.parse(row["content"] ?? "") : nil
         return TimelineRow(
             id: row["id"],
             pubkey: row["pubkey"],
@@ -217,7 +226,9 @@ extension BuzzEventStore {
             rootID: row["root_id"],
             replyCount: row["reply_count"] ?? 0,
             lastReplyAt: row["last_reply_at"],
-            media: MessageMedia.parse(tags: decodeTags(editedTags ?? row["tags"]))
+            media: MessageMedia.parse(tags: decodeTags(editedTags ?? row["tags"])),
+            notice: notice,
+            isNotice: isNotice
         )
     }
 }

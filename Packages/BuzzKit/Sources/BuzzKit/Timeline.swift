@@ -56,6 +56,28 @@ public struct TimelineRow: Sendable, Hashable, Identifiable {
     /// Empty for a message with no attachments, which is nearly all of them.
     public let media: [MessageMedia]
 
+    /// What the relay narrated here, when this row is a kind-40099 channel notice
+    /// rather than something a person wrote.
+    ///
+    /// A notice rides the same query as a message so that paging stays honest: the page
+    /// is a `LIMIT` over a `(created_at, id)` keyset, and a second list merged in
+    /// afterwards could not know how many of its own rows fall inside a page without
+    /// re-reading the same window. One query, one order, one cursor.
+    ///
+    /// `nil` for every message, which is nearly every row. When it is non-`nil`,
+    /// ``content`` is the notice's raw JSON body and must never be shown — the grouping
+    /// step turns these into their own conversation item precisely so no message
+    /// renderer is ever handed one.
+    ///
+    /// It is also `nil` for a notice this build cannot read: a type added to the relay
+    /// since, or a body naming nobody. ``isNotice`` is what tells those apart, and it is
+    /// the reason the two are separate properties — a row that is a notice but decoded
+    /// to nothing must be dropped, not rendered as a message whose text is JSON.
+    public let notice: SystemNotice?
+
+    /// Whether this row is a relay notice at all, decodable or not.
+    public let isNotice: Bool
+
     public init(
         id: String,
         pubkey: String,
@@ -71,7 +93,9 @@ public struct TimelineRow: Sendable, Hashable, Identifiable {
         rootID: String?,
         replyCount: Int,
         lastReplyAt: Int64?,
-        media: [MessageMedia] = []
+        media: [MessageMedia] = [],
+        notice: SystemNotice? = nil,
+        isNotice: Bool = false
     ) {
         self.id = id
         self.pubkey = pubkey
@@ -88,6 +112,10 @@ public struct TimelineRow: Sendable, Hashable, Identifiable {
         self.replyCount = replyCount
         self.lastReplyAt = lastReplyAt
         self.media = media
+        self.notice = notice
+        // A decoded notice is a notice, whatever the caller passed: the two cannot
+        // disagree, and a test that builds one by hand should not have to say so twice.
+        self.isNotice = isNotice || notice != nil
     }
 
     public var isReply: Bool { parentID != nil }
@@ -190,6 +218,25 @@ extension BuzzEventStore {
         // this a threaded conversation reads as a flat pile. A broadcast reply
         // keeps its `thread` row but is deliberately let through — its author
         // echoed it here.
+        //
+        // Relay notices (kind 40099) come from the same query as the messages, because
+        // they interleave with them by time and a page is a `LIMIT` over the
+        // `(created_at, id)` keyset — a second list merged afterwards could not know how
+        // many of its own rows belong inside a page without re-reading the same window.
+        // The joins around a notice all miss harmlessly: it has no edit, no rich
+        // content, no thread row and no author profile, so it comes back with the empty
+        // defaults and ``makeRow(_:)`` decodes its body into ``TimelineRow/notice``.
+        //
+        // # Why a third branch and not `kind IN (9, 40099)`
+        //
+        // `event_timeline` is `(h, kind, created_at DESC, id)`, so an equality on both
+        // leading columns hands the rows back already in the order this wants and the
+        // outer `LIMIT` stops the scan early — SQLite plans the union as a MERGE and
+        // reads roughly `limit` rows per branch. An `IN` list on `kind` costs that
+        // ordering: the planner turns `USE TEMP B-TREE FOR LAST TERM OF ORDER BY` (a
+        // tiebreak among same-second events) into `USE TEMP B-TREE FOR ORDER BY`, a full
+        // sort of every message in the channel before the limit applies. Verified with
+        // `EXPLAIN QUERY PLAN` against this exact schema, not assumed.
         let sql = """
         SELECT \(timelineColumns)
         FROM (
@@ -199,6 +246,13 @@ extension BuzzEventStore {
                         SELECT 1 FROM thread tx
                         WHERE tx.event_id = e.id AND tx.broadcast = 0
                       )
+                """))
+
+            UNION ALL
+
+            \(eventBranch(where: """
+                e.h = :channel AND e.kind = :noticeKind
+                  AND \(page("e.created_at", "e.id"))
                 """))
 
             UNION ALL
@@ -215,6 +269,7 @@ extension BuzzEventStore {
         let rows = try Row.fetchAll(db, sql: sql, arguments: [
             "channel": channel,
             "kind": EventKind.channelMessage.rawValue,
+            "noticeKind": EventKind.systemMessage.rawValue,
             "hasCursor": cursor == nil ? 0 : 1,
             "ts": cursor?.createdAt ?? 0,
             "id": cursor?.id ?? "",

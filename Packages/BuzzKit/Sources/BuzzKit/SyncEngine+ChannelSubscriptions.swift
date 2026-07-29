@@ -36,13 +36,20 @@ extension SyncEngine {
     /// connect gap drops nothing. Deep history is the window reconcile's job.
     ///
     /// Kinds, in wire order: channel message (9), rich message (40002), message edit
-    /// (40003), reaction (7), deletion (5), group delete event (9005), typing (20002)
-    /// — the measured live-delivering shape. This is a single filter by design (see
-    /// the type doc): one `#h` filter per REQ.
+    /// (40003), system message (40099), reaction (7), deletion (5), group delete event
+    /// (9005), typing (20002) — the measured live-delivering shape. This is a single
+    /// filter by design (see the type doc): one `#h` filter per REQ.
+    ///
+    /// The system message is the relay narrating the channel to itself — somebody
+    /// joined, was added, left. It is `#h`-scoped like a message, so it belongs here
+    /// and not among the global filters: what *is* global is the `#p`-scoped
+    /// 44100/44101 pair, and those only ever speak about the local identity's own
+    /// membership, which is why nothing has ever shown a reader that somebody else
+    /// arrived.
     func contentFilter(forChannel channel: String) -> Filter {
         Filter(
             kinds: [
-                .channelMessage, .richMessage, .messageEdit,
+                .channelMessage, .richMessage, .messageEdit, .systemMessage,
                 .reaction, .deletion, .groupDeleteEvent, .typing,
             ],
             since: Int64(now().timeIntervalSince1970) - Int64(config.liveSinceWindow),
