@@ -37,17 +37,14 @@ targets:
         # not a bare white/black flash. The colour asset lives in the app's catalog.
         UILaunchScreen:
           UIColorName: LaunchBackground
-        # Lato, the app's typeface, bundled from App/Resources/Fonts under the SIL
-        # Open Font License (OFL.txt ships beside them). Six cuts, not Lato's nine:
-        # see `HiveTypography` for why a weight names its own face and why the
-        # unused ones are not carried.
+        # The mobile client's Inter body and GeistMono code families, both under SIL
+        # Open Font License 1.1. Their variable `wght` axis is resolved in
+        # `HiveTypography`, so no SwiftUI trait modifier can silently flatten weight.
         UIAppFonts:
-          - Lato-Regular.ttf
-          - Lato-Italic.ttf
-          - Lato-Medium.ttf
-          - Lato-SemiBold.ttf
-          - Lato-Bold.ttf
-          - Lato-BoldItalic.ttf
+          - InterVariable.ttf
+          - InterVariable-Italic.ttf
+          - GeistMono-Variable.ttf
+          - GeistMono-Italic-Variable.ttf
         # The relay is owner-configured and may be a plaintext `ws://` endpoint on
         # a LAN or Tailscale address (the Pi in the slice's live run), which ATS
         # blocks by default. This is a self-hosted developer client, not an App

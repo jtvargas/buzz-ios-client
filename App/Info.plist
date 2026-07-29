@@ -31,12 +31,10 @@
 	<string>Hive connects to the Buzz relay you configure, which may be on your local or Tailscale network.</string>
 	<key>UIAppFonts</key>
 	<array>
-		<string>Lato-Regular.ttf</string>
-		<string>Lato-Italic.ttf</string>
-		<string>Lato-Medium.ttf</string>
-		<string>Lato-SemiBold.ttf</string>
-		<string>Lato-Bold.ttf</string>
-		<string>Lato-BoldItalic.ttf</string>
+		<string>InterVariable.ttf</string>
+		<string>InterVariable-Italic.ttf</string>
+		<string>GeistMono-Variable.ttf</string>
+		<string>GeistMono-Italic-Variable.ttf</string>
 	</array>
 	<key>UILaunchScreen</key>
 	<dict>

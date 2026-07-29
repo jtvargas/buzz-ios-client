@@ -9,6 +9,43 @@ import Testing
 /// rule.
 @Suite("Rich text blocks")
 struct RichTextBlockTests {
+    // MARK: - Code highlighting
+
+    @Test("the One Light scanner colours Swift tokens with the mobile map")
+    func oneLightSwiftHighlighting() {
+        let highlighted = RichCodeHighlighter.highlight(
+            "let total: Int = 42 // count",
+            language: "swift",
+            theme: .light
+        )
+        let colors = highlighted.runs.compactMap(\.foregroundColor)
+        #expect(colors.contains(RichCodeTheme.light.keyword))
+        #expect(colors.contains(RichCodeTheme.light.type))
+        #expect(colors.contains(RichCodeTheme.light.number))
+        #expect(colors.contains(RichCodeTheme.light.comment))
+    }
+
+    @Test("the One Dark scanner colours JSON keys and values distinctly")
+    func oneDarkJSONHighlighting() {
+        let highlighted = RichCodeHighlighter.highlight(
+            "{\"name\": \"Buzz\", \"enabled\": true}",
+            language: "json",
+            theme: .dark
+        )
+        let colors = highlighted.runs.compactMap(\.foregroundColor)
+        #expect(colors.contains(RichCodeTheme.dark.name))
+        #expect(colors.contains(RichCodeTheme.dark.string))
+        #expect(colors.contains(RichCodeTheme.dark.type))
+    }
+
+    @Test("unknown and incomplete languages use unstyled base text")
+    func codeHighlightFallback() {
+        let unknown = RichCodeHighlighter.highlight("let x = 1", language: "haskell", theme: .light)
+        let incomplete = RichCodeHighlighter.highlight("let title = \"Buzz", language: "swift", theme: .light)
+        #expect(unknown.runs.allSatisfy { $0.foregroundColor == nil })
+        #expect(incomplete.runs.allSatisfy { $0.foregroundColor == nil })
+    }
+
     // MARK: - Thematic rules
 
     @Test(
