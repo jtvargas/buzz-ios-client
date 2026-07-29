@@ -126,13 +126,17 @@ struct SystemNoticeSentenceTests {
         #expect(sentence(.memberJoined(actor: jt, target: sentry), reader: sentry) == "You were added by JT")
         #expect(sentence(.memberJoined(actor: sentry, target: sentry), reader: sentry) == "You joined the channel")
         #expect(sentence(.memberLeft(actor: sentry), reader: sentry) == "You left the channel")
-        #expect(sentence(.memberRemoved(actor: jt, target: sentry), reader: jt) == "You removed Sentry from the channel")
+        #expect(
+            sentence(.memberRemoved(actor: jt, target: sentry), reader: jt) == "You removed Sentry from the channel"
+        )
     }
 
     @Test("the reader in object position takes the object form")
     func readerAsObject() {
         #expect(sentence(.memberJoined(actor: jt, target: sentry), reader: jt) == "Sentry was added by you")
-        #expect(sentence(.memberRemoved(actor: jt, target: sentry), reader: sentry) == "JT removed you from the channel")
+        #expect(
+            sentence(.memberRemoved(actor: jt, target: sentry), reader: sentry) == "JT removed you from the channel"
+        )
     }
 
     @Test("a keyless session reads every notice in the third person, which is true for it")
