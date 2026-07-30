@@ -77,9 +77,16 @@ struct DraftsScreenTests {
     /// conversation with the keyboard down would be a slower sidebar.
     @Test("both routes carry the request to focus the composer")
     func routesFocusTheComposer() {
-        let thread = ThreadRoute(root: "opener", channel: "room-1", anchor: .opener, focusesComposer: true)
+        let thread = ThreadRoute(
+            root: "opener",
+            channel: "room-1",
+            anchor: DraftDestination.threadLanding,
+            focusesComposer: true
+        )
         #expect(thread.focusesComposer)
-        #expect(thread.anchor == .opener)
+        // The newest reply, not the opener: a draft is the last thing that happened in
+        // that thread, and the keyboard is about to cover the bottom of the screen.
+        #expect(thread.anchor == .latestReply)
 
         let row = ChannelListRow(
             id: "room-1",

@@ -145,7 +145,7 @@ struct HomeShortcutCard: View {
 
     private var height: CGFloat { Self.height * typeScale }
 
-    private static let padding: CGFloat = 12
+    private static let padding: CGFloat = 10
     /// Between the name and the count. Small — they are one statement read together — but
     /// not nothing, which set them as tight as two lines of a wrapped sentence.
     private static let betweenLines: CGFloat = 2
@@ -153,9 +153,12 @@ struct HomeShortcutCard: View {
     /// left over above it, which is what puts the glyph at the top of the card and the two
     /// lines of text at the bottom of it rather than spreading all three evenly.
     private static let underGlyph: CGFloat = 8
-    /// Roughly the proportion Slack's own shortcut cards carry at three across — three
-    /// short bands, none of them cramped. The width is now the row's own, divided.
-    private static let height: CGFloat = 100
+    /// Three short bands, none of them cramped, and no taller than they need to be: the
+    /// cards are a place to go from, and the conversations under them are the screen. The
+    /// floor is the content — glyph, title, count, and the padding around them come to
+    /// about 78 at default type — so this leaves a little air above the title and no more.
+    /// The width is the row's own, divided.
+    private static let height: CGFloat = 86
     private static let cornerRadius: CGFloat = 12
     /// One weight for both states, so a card does not change shape when its count does —
     /// only its colour. Thinner than the 2pt a text field draws, which would make a card

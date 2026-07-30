@@ -568,9 +568,7 @@ private extension ChannelListView {
             openedThread = ThreadRoute(
                 root: root,
                 channel: channel,
-                // The opener, not the newest reply: someone returning to unsent writing is
-                // coming back to what they were answering.
-                anchor: .opener,
+                anchor: DraftDestination.threadLanding,
                 focusesComposer: true
             )
         case let .conversation(channel):
