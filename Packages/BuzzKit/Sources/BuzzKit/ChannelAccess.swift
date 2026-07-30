@@ -9,12 +9,27 @@ import NostrCore
 /// the sidebar or writable.
 public enum ChannelAccessState: String, Codable, Sendable, Hashable, CaseIterable {
     case active
+    /// A direct message this identity has hidden from their own sidebar (NIP-DV).
+    ///
+    /// The odd one out: every other non-`active` state is a loss of access, and takes
+    /// the conversation read-only. This one is *presentation*. The relay still counts
+    /// you as an active participant, still delivers, and still lets you write — hiding
+    /// a DM is how you clear it off your list without leaving it, and re-opening the DM
+    /// (kind 41010) brings it straight back. So it keeps ``isWritable``, and the only
+    /// thing it changes is that ``BuzzEventStore/activeChannelIDs(identity:)`` stops
+    /// listing it.
+    case hidden
     case archived
     case notMember
     case unavailable
     case deleted
 
-    public var isWritable: Bool { self == .active }
+    /// Whether the relay will accept what this identity writes here.
+    ///
+    /// A hidden DM is writable: hiding is a sidebar choice, not a lock, and telling
+    /// someone their own conversation is read-only would be a lie the relay would
+    /// immediately contradict.
+    public var isWritable: Bool { self == .active || self == .hidden }
 }
 
 public struct ChannelAccessRecord: Sendable, Hashable {
@@ -221,10 +236,14 @@ public extension BuzzEventStore {
         }
     }
 
-    /// Access rows that were active in the last complete directory snapshot,
-    /// independent of the rebuildable metadata projection. These are the channels
-    /// the next directory pass must re-check even if metadata has since vanished
-    /// or arrived archived through another path.
+    /// Access rows this identity still holds a live relationship with, independent of
+    /// the rebuildable metadata projection. These are the channels the next directory
+    /// pass must re-check even if metadata has since vanished or arrived archived
+    /// through another path.
+    ///
+    /// Hidden DMs are in here for the same reason: hiding is not leaving, so a hidden
+    /// DM whose membership *does* later change still has to be able to reach
+    /// `.notMember` rather than sit hidden forever.
     func previouslyActiveChannelIDs(identity: String) async throws -> Set<String> {
         try await reader.read { db in
             Set(try String.fetchAll(
@@ -232,9 +251,13 @@ public extension BuzzEventStore {
                 sql: """
                 SELECT channel_id
                   FROM channel_access
-                 WHERE identity_pubkey = ? AND state = ?
+                 WHERE identity_pubkey = ? AND state IN (?, ?)
                 """,
-                arguments: [identity, ChannelAccessState.active.rawValue]
+                arguments: [
+                    identity,
+                    ChannelAccessState.active.rawValue,
+                    ChannelAccessState.hidden.rawValue,
+                ]
             ))
         }
     }

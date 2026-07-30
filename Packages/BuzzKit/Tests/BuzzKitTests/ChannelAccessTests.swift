@@ -276,6 +276,9 @@ struct ChannelAccessTests {
             )
         }
         let pageBody = try JSONEncoder().encode(membershipPage)
+        // The visibility snapshot goes first and is answered empty here; pagination is
+        // what this test is about.
+        await transport.enqueue(status: 200, body: "[]")
         await transport.enqueue(status: 200, body: pageBody)
         await transport.enqueue(status: 200, body: "[]")
         for _ in 0 ..< 5 {
@@ -289,14 +292,14 @@ struct ChannelAccessTests {
         #expect(snapshot.states.count == ChannelDirectoryClient.pageSize)
 
         let requests = await transport.requests
-        #expect(requests.count == 7)
+        #expect(requests.count == 8)
         let secondPage = try #require(
-            try JSONSerialization.jsonObject(with: requests[1].body) as? [[String: Any]]
+            try JSONSerialization.jsonObject(with: requests[2].body) as? [[String: Any]]
         )
         #expect(secondPage[0]["until"] as? Int == 1_700_000_000)
         #expect(secondPage[0]["before_id"] as? String == String(repeating: "0", count: 64))
 
-        for request in requests.dropFirst(2) {
+        for request in requests.dropFirst(3) {
             let filters = try #require(
                 try JSONSerialization.jsonObject(with: request.body) as? [[String: Any]]
             )

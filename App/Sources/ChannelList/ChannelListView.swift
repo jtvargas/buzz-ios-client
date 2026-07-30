@@ -25,6 +25,10 @@ struct ChannelListView: View {
     @State private var directory: EntityDirectoryModel
     @State private var ticker = RelativeTimeTicker()
     @State private var router: DirectMessageRouter
+    /// Hiding a direct message. Owned here rather than injected, because this is the only
+    /// surface that offers the action and the only one that can report its refusal — the
+    /// row it was pressed on is gone by then.
+    @State private var hider: HideDirectMessageModel
     /// The reader's starred conversations, on this device. Owned here because this view
     /// both groups by it and offers the action that changes it.
     @State private var starred = StarredConversations()
@@ -77,6 +81,7 @@ struct ChannelListView: View {
         _presence = State(initialValue: PresenceModel(store: engine.presenceStore))
         _directory = State(initialValue: EntityDirectoryModel(store: store))
         _router = State(initialValue: DirectMessageRouter(opener: engine))
+        _hider = State(initialValue: HideDirectMessageModel(hider: engine))
     }
 
     var body: some View {
@@ -197,6 +202,19 @@ struct ChannelListView: View {
             Button("OK", role: .cancel) { router.failure = nil }
         } message: {
             Text(router.failure ?? "")
+        }
+        // On the stack rather than on the row: a successful hide removes the row that was
+        // pressed, and a refused one has to be reported from something that outlives it.
+        .alert(
+            "Could not hide the conversation",
+            isPresented: Binding(
+                get: { hider.failure != nil },
+                set: { if !$0 { hider.failure = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) { hider.failure = nil }
+        } message: {
+            Text(hider.failure ?? "")
         }
         .task { await model.run() }
         .task { await presence.run() }
@@ -354,7 +372,14 @@ private extension ChannelListView {
             .swipeActions(edge: .leading, allowsFullSwipe: true) { starAction(row) }
             // The same action a second way. A swipe is the fast path for someone who
             // knows it is there; a long press is how anyone else finds it at all.
-            .contextMenu { starAction(row) }
+            .contextMenu {
+                starAction(row)
+                // Only a one-to-one conversation, and only in the menu. A hide is not
+                // reachable by swipe on purpose: the leading edge already means "star",
+                // and putting a conversation-removing action under a flick — beside it,
+                // on a row that is about to vanish — is how one gets pressed by accident.
+                if row.conversation.isDirect { hideAction(row) }
+            }
         }
     }
 
@@ -370,6 +395,24 @@ private extension ChannelListView {
             )
         }
         .tint(.yellow)
+    }
+
+    /// Takes one direct message off this sidebar — the relay's kind-41012 command, read
+    /// back by every other client of this identity, Desktop included, from the same
+    /// NIP-DV snapshot Hive reads.
+    ///
+    /// Not `role: .destructive`, and the wording is deliberate. Nothing is deleted and
+    /// nobody is left: the messages stay, the other person keeps the conversation, and
+    /// messaging them again brings it straight back — the relay's open command is what
+    /// clears the hide. A red *Delete*-shaped item would promise a permanence this action
+    /// does not have.
+    func hideAction(_ row: SidebarRow) -> some View {
+        Button {
+            hider.hide(row.id)
+        } label: {
+            Label("Hide", systemImage: "eye.slash")
+        }
+        .disabled(hider.isHiding(row.id))
     }
 
     /// The relay answered, and the answer is that this key is in nothing.
