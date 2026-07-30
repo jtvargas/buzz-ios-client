@@ -3,8 +3,8 @@ import SwiftUI
 
 /// The sidebar (§8): Starred, Channels, Direct Messages, and Agents as expandable
 /// sections of compact rows, live from the store, with your face and the connection state
-/// in the toolbar. Tapping a conversation pushes its timeline; a swipe or a long press
-/// stars it; the Channels heading's `+` makes a new one; a pull refreshes the workspace.
+/// in the toolbar. Tapping a conversation pushes its timeline; a long press stars it; the
+/// Channels heading's `+` makes a new one; a pull refreshes the workspace.
 ///
 /// # Why the app-wide environment lives here
 ///
@@ -369,22 +369,24 @@ private extension ChannelListView {
             // No per-row rule: sections of ruled rows read as a form, not as one
             // navigation surface. The section headings do the separating.
             .listRowSeparator(.hidden)
-            .swipeActions(edge: .leading, allowsFullSwipe: true) { starAction(row) }
-            // The same action a second way. A swipe is the fast path for someone who
-            // knows it is there; a long press is how anyone else finds it at all.
+            // Starring is a long press only. It had a leading swipe as well, and that swipe
+            // is gone deliberately: a `List` row's swipe actions claim horizontal panning
+            // for the row, which is the one axis this sidebar needs for navigating between
+            // conversations. Losing it costs the fast path for someone who knew the flick
+            // was there; keeping it would cost every reader the gesture that gets them back
+            // to what they were reading.
             .contextMenu {
                 starAction(row)
-                // Only a one-to-one conversation, and only in the menu. A hide is not
-                // reachable by swipe on purpose: the leading edge already means "star",
-                // and putting a conversation-removing action under a flick — beside it,
-                // on a row that is about to vanish — is how one gets pressed by accident.
+                // Only a one-to-one conversation. It was never reachable by swipe even when
+                // this row had one: putting a conversation-removing action under a flick, on
+                // a row that is about to vanish, is how one gets pressed by accident.
                 if row.conversation.isDirect { hideAction(row) }
             }
         }
     }
 
-    /// Star or unstar one conversation. One definition, used by both the swipe and the
-    /// context menu, so the two can never offer different words for the same action.
+    /// Star or unstar one conversation — the long press's only item, and the one place the
+    /// wording of it is decided.
     func starAction(_ row: SidebarRow) -> some View {
         Button {
             withAnimation(.snappy(duration: 0.22)) { starred.toggle(row.id) }
