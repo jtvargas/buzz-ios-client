@@ -56,6 +56,7 @@ struct EngineHarness {
         nowSeconds: Int64 = 1_700_000_000,
         batchSize: Int = 2,
         storeClock: @escaping @Sendable () -> Date = { Date() },
+        threadFetchLimit: Int = 1000,
         backoffSleep: @escaping @Sendable (Duration) async throws -> Void = { _ in }
     ) throws {
         self.path = path
@@ -110,7 +111,7 @@ struct EngineHarness {
                 windowClient: windowClient,
                 directoryClient: directoryClient,
                 signer: signer,
-                config: SyncEngineConfig(presenceSweepInterval: .seconds(3600)),
+                config: SyncEngineConfig(presenceSweepInterval: .seconds(3600), threadFetchLimit: threadFetchLimit),
                 now: { Date(timeIntervalSince1970: TimeInterval(seconds)) }
             )
         } else {
@@ -121,7 +122,7 @@ struct EngineHarness {
                 presence: presence,
                 windowClient: windowClient,
                 signer: signer,
-                config: SyncEngineConfig(presenceSweepInterval: .seconds(3600)),
+                config: SyncEngineConfig(presenceSweepInterval: .seconds(3600), threadFetchLimit: threadFetchLimit),
                 now: { Date(timeIntervalSince1970: TimeInterval(seconds)) }
             )
         }

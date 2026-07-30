@@ -155,6 +155,31 @@ public extension BuzzEventStore {
         result.duplicates = outcome.duplicates
         return result
     }
+
+    /// Records that this device now holds a thread in full, naming the relay summary
+    /// that fetch supersedes.
+    ///
+    /// Called after ``SyncEngine/openThread(root:)`` has ingested a thread's replies,
+    /// and it is what lets the reply tally prefer this device's own count from then on
+    /// — including down, when a summary the relay pushed into a dropped frame is still
+    /// advertising a reply that has since been withdrawn.
+    ///
+    /// The summary is captured in the same statement that writes the row rather than
+    /// read first and passed in, so a summary arriving between the two can only ever be
+    /// recorded as *not* accounted for. That is the safe direction: the reader then
+    /// prefers the relay for one more round instead of suppressing a correction.
+    func recordThreadFetch(root: String) async throws {
+        try await writer.write { db in
+            try db.execute(
+                sql: """
+                INSERT INTO thread_fetch (root_id, summary_event_id)
+                VALUES (?, (SELECT event_id FROM thread_summary WHERE root_id = ?))
+                ON CONFLICT(root_id) DO UPDATE SET summary_event_id = excluded.summary_event_id
+                """,
+                arguments: [root, root]
+            )
+        }
+    }
 }
 
 // MARK: - Shared internals

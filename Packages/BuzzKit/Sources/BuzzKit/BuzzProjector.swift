@@ -326,22 +326,46 @@ struct BuzzProjector: EventProjecting {
 
     /// Kind 39005: a relay-signed thread-summary overlay, keyed by the root id it
     /// describes (its `d` binding) and collapsed latest-wins per root.
+    ///
+    /// The tallies are parsed here, once per overlay received, rather than read out of
+    /// the payload at query time — the timeline asks this question for every message on
+    /// every screen, and a JSON parse per row per read is a cost paid forever for an
+    /// answer that only changes when a new overlay arrives.
+    ///
+    /// Latest-wins is what makes a *withdrawn* reply come back down: the relay pushes a
+    /// fresh overlay on a deletion as well as on an insert, and because that one is
+    /// newer it replaces the count outright instead of being merged into a high-water
+    /// mark. A summary that only ever grew would leave a thread whose replies were all
+    /// removed still advertising them.
+    ///
+    /// An unparseable payload still stores — the blob is kept verbatim and the tally
+    /// columns land NULL. That is the honest outcome: the store records what the relay
+    /// said, and a summary this client cannot read contributes nothing to a count
+    /// rather than contributing a zero (see ``ThreadSummaryPayload``).
     private static func projectThreadSummary(_ event: NostrEvent, into db: Database) throws {
         guard let root = event.addressableIdentifier else { return }
+        let payload = ThreadSummaryPayload.decode(event.content)
 
         try db.execute(
             sql: """
-            INSERT INTO thread_summary (root_id, event_id, payload, updated_at)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO thread_summary (
+                root_id, event_id, payload, updated_at, descendant_count, last_reply_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
             ON CONFLICT(root_id) DO UPDATE SET
                 event_id = excluded.event_id,
                 payload = excluded.payload,
-                updated_at = excluded.updated_at
+                updated_at = excluded.updated_at,
+                descendant_count = excluded.descendant_count,
+                last_reply_at = excluded.last_reply_at
             WHERE excluded.updated_at > thread_summary.updated_at
                OR (excluded.updated_at = thread_summary.updated_at
                    AND excluded.event_id > thread_summary.event_id)
             """,
-            arguments: [root, event.id, event.content, event.createdAt]
+            arguments: [
+                root, event.id, event.content, event.createdAt,
+                payload?.storedDescendantCount, payload?.storedLastReplyAt,
+            ]
         )
     }
 

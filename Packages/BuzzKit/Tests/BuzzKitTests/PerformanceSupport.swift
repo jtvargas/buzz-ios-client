@@ -102,4 +102,31 @@ struct PerfCorpus {
     func deletion(of target: NostrEvent, at seconds: Int64) throws -> NostrEvent {
         try author.event(.deletion, "", tags: [["e", target.id]], at: seconds)
     }
+
+    /// A relay-signed thread summary for every one of `roots`, signed in parallel for
+    /// the same reason the messages are.
+    ///
+    /// The relay signs these, not the author, and the distinction matters to what is
+    /// being measured: they arrive as ordinary logged events through the same ingest
+    /// choke point, so a corpus carrying one per row is what the timeline's summary
+    /// join actually meets in a busy channel.
+    func summaries(for roots: [NostrEvent], in channel: String, startAt: Int64) async throws -> [NostrEvent] {
+        let relay = try Fixture()
+        return try await withThrowingTaskGroup(of: NostrEvent.self) { group in
+            for (index, root) in roots.enumerated() {
+                group.addTask {
+                    let content = """
+                    {"reply_count":3,"descendant_count":3,\
+                    "last_reply_at":\(root.createdAt + 10),"participants":[]}
+                    """
+                    return try relay.event(
+                        .threadSummary, content,
+                        tags: [["e", root.id], ["d", root.id], ["h", channel]],
+                        at: startAt + Int64(index)
+                    )
+                }
+            }
+            return try await group.reduce(into: []) { $0.append($1) }
+        }
+    }
 }

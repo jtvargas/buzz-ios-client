@@ -42,7 +42,10 @@ extension BuzzEventStore {
     /// blank another member's messages on every screen.
     ///
     /// The reply tallies exclude deleted replies, so a thread whose only reply was
-    /// removed stops advertising one.
+    /// removed stops advertising one. They are composed from this device's own replies
+    /// and the relay's summary of the thread rather than counted purely locally — see
+    /// ``replyCount``, which is where a message gets to advertise a thread whose
+    /// replies this device has never held.
     ///
     /// `tags` and `edited_tags` come back as raw JSON rather than as anything decoded,
     /// because only ``makeRow(_:)`` knows which of the two to read. Nothing in SQL can
@@ -65,20 +68,8 @@ extension BuzzEventStore {
                p.picture           AS picture,
                t.parent_id         AS parent_id,
                t.root_id           AS root_id,
-               (SELECT COUNT(*) FROM thread tc
-                 WHERE tc.root_id = e.id
-                   AND NOT \(deletionApplies(
-                       target: "tc.event_id",
-                       author: "tc.pubkey",
-                       owner: "(SELECT owner_pubkey FROM event_owner WHERE event_id = tc.event_id)"
-                   ))) AS reply_count,
-               (SELECT MAX(tl.created_at) FROM thread tl
-                 WHERE tl.root_id = e.id
-                   AND NOT \(deletionApplies(
-                       target: "tl.event_id",
-                       author: "tl.pubkey",
-                       owner: "(SELECT owner_pubkey FROM event_owner WHERE event_id = tl.event_id)"
-                   ))) AS last_reply_at,
+               \(replyCount)       AS reply_count,
+               \(lastReplyAt)      AS last_reply_at,
                'sent'              AS state,
                NULL                AS last_error,
                0                   AS is_retryable,
@@ -89,7 +80,125 @@ extension BuzzEventStore {
         LEFT JOIN profile p ON p.pubkey = e.pubkey
         LEFT JOIN thread t ON t.event_id = e.id
         LEFT JOIN event_owner eo ON eo.event_id = e.id
+        LEFT JOIN thread_summary tsum ON tsum.root_id = e.id
+        LEFT JOIN thread_fetch tfetch ON tfetch.root_id = e.id
         WHERE \(predicate)
+        """
+    }
+
+    // MARK: - The reply tally
+
+    /// How many replies a message has, composed from the two sources that can know.
+    ///
+    /// # Why one source is not enough
+    ///
+    /// A channel page is `top_level: true` — that is what NIP-CW is *for* — so replies
+    /// are never rows in it. Counting only what this device holds therefore reads zero
+    /// across all of history on a cold launch, and a message advertised its thread only
+    /// once you pressed it, the press being what fetched the replies that made its own
+    /// CTA appear. The relay answers this without anybody fetching a reply: it ships a
+    /// `kind:39005` beside every window page and pushes a freshly signed one to channel
+    /// subscribers on every reply insert and every deletion.
+    ///
+    /// So the relay's tally is what makes the count independent of holding the replies
+    /// — the property that keeps it constant as a thread grows without bound. But it
+    /// cannot simply be trusted over the local one, because it has no recovery: the
+    /// push is fan-out only and never stored, so one dropped by a full socket buffer
+    /// (backgrounded, locked, flaky signal) is gone, and nothing re-fetches it — not
+    /// reconnect, not reconcile, which only re-pages above its watermark.
+    ///
+    /// # The rule
+    ///
+    /// *The later word wins, and a fetch is a word.* Taking the larger of the two would
+    /// be wrong in exactly one direction and permanently: a deletion the relay
+    /// announced into a dropped frame would leave a withdrawn reply advertised forever,
+    /// which is a worse lie than the one this fixes. So:
+    ///
+    /// - No summary, or one this client could not parse: the local count, unchanged
+    ///   from before this existed.
+    /// - A summary this device's fetch already accounted for (``Schema`` `thread_fetch`):
+    ///   the local count. This device holds the whole thread and every later reply and
+    ///   deletion reaches it as an ordinary stored event, so it is the fresher of the
+    ///   two — and this is the branch that heals a stale-high summary the moment
+    ///   somebody opens the thread.
+    /// - Otherwise: the larger of the two. Neither is complete here — the summary may
+    ///   predate replies that arrived live, and the local count is missing all of
+    ///   history — and *for a count that has never been superseded by a fetch* the
+    ///   larger is the one that has seen more.
+    ///
+    /// Both branches read a PK lookup on `thread_summary`/`thread_fetch`, and `CASE`
+    /// evaluates only the branch it takes, so the local subquery still runs at most
+    /// once per row.
+    private static var replyCount: String {
+        """
+        CASE WHEN tsum.descendant_count IS NULL OR \(fetchAccountsForSummary)
+             THEN \(localReplyCount)
+             ELSE MAX(\(localReplyCount), tsum.descendant_count)
+        END
+        """
+    }
+
+    /// When a message's newest surviving reply arrived, composed by the same rule as
+    /// ``replyCount`` so a row cannot show a count from one source beside a time from
+    /// the other.
+    ///
+    /// `MAX` here is the two-argument scalar, which is NULL if either side is, hence
+    /// the `COALESCE`: a device holding none of a thread's replies has no local time,
+    /// and the summary's is then the only answer there is.
+    ///
+    /// It defers to `descendant_count` being present as well as its own field, so the
+    /// count and the time can never be drawn from different sources — a summary the
+    /// client could half-read would otherwise put a reply time on a message the same
+    /// row says has no replies.
+    private static var lastReplyAt: String {
+        """
+        CASE WHEN tsum.descendant_count IS NULL OR tsum.last_reply_at IS NULL
+                  OR \(fetchAccountsForSummary)
+             THEN \(localLastReplyAt)
+             ELSE MAX(COALESCE(\(localLastReplyAt), 0), tsum.last_reply_at)
+        END
+        """
+    }
+
+    /// Whether the summary currently on file is the same one this device's last full
+    /// fetch of the thread already took into account.
+    ///
+    /// An identity test, deliberately, and not a comparison of times: `updated_at` is
+    /// the relay's clock and a fetch happens on the device's, so the timestamp form of
+    /// this question is unanswerable without trusting two clocks to agree. `IS` rather
+    /// than `=` because both sides are legitimately NULL — no fetch, or a fetch made
+    /// when the relay had sent no summary yet — and `=` would yield NULL there, which
+    /// `CASE WHEN` reads as false.
+    private static let fetchAccountsForSummary = "tfetch.summary_event_id IS tsum.event_id"
+
+    /// This device's own count of a message's surviving replies.
+    ///
+    /// Keyed on `root_id`, so it counts the whole subtree — which is why the summary
+    /// field it composes with is `descendant_count` and not `reply_count`. The two
+    /// agree in a flat thread and diverge the moment somebody replies to a reply.
+    private static var localReplyCount: String {
+        """
+        (SELECT COUNT(*) FROM thread tc
+          WHERE tc.root_id = e.id
+            AND NOT \(deletionApplies(
+                target: "tc.event_id",
+                author: "tc.pubkey",
+                owner: "(SELECT owner_pubkey FROM event_owner WHERE event_id = tc.event_id)"
+            )))
+        """
+    }
+
+    /// The newest surviving reply this device holds for a message, or NULL for none —
+    /// so a thread whose only reply was removed stops advertising one.
+    private static var localLastReplyAt: String {
+        """
+        (SELECT MAX(tl.created_at) FROM thread tl
+          WHERE tl.root_id = e.id
+            AND NOT \(deletionApplies(
+                target: "tl.event_id",
+                author: "tl.pubkey",
+                owner: "(SELECT owner_pubkey FROM event_owner WHERE event_id = tl.event_id)"
+            )))
         """
     }
 

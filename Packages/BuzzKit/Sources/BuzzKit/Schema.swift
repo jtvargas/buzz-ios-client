@@ -38,7 +38,14 @@ enum Schema {
     /// Version 4 adds the persisted Buzz agent directory (kind 10100), used by
     /// composer autocomplete to include eligible non-member agents.
     /// Version 5 adds the relay-authored archived bit to channel metadata.
-    static let projectionVersion = 5
+    ///
+    /// Version 6 lifts the thread summary's tallies out of its opaque payload into
+    /// real columns, so the timeline can read a message's reply count without holding
+    /// the replies. The rebuild refills them for an existing store at no network cost:
+    /// a `kind:39005` is an ordinary logged event (``BuzzEventStore/commitWindowPage``
+    /// admits `rows + aux + summaries` through the same choke point), so the replay
+    /// re-derives every cached summary the store ever received.
+    static let projectionVersion = 6
 
     /// The `meta` key under which the applied projection version is recorded.
     static let projectionVersionKey = "projection_version"
@@ -133,6 +140,42 @@ enum Schema {
             // Terminal relay refusals retain their content and reason, but must not
             // advertise an action that can only repeat the same refusal.
             try db.execute(sql: "ALTER TABLE outbox ADD COLUMN is_retryable INTEGER NOT NULL DEFAULT 1")
+        }
+
+        // A record that this device has held a thread in full, and of which relay
+        // summary that fetch superseded.
+        //
+        // Local, not a projection, and the distinction is the whole point: it records
+        // something about *this device's knowledge*, not about any event, so the pure
+        // keyless ``BuzzProjector`` could not reproduce it and a rebuild replay would
+        // only ever write it empty.
+        //
+        // It exists to settle which of two disagreeing tallies is the newer one. The
+        // obvious way to ask that — compare timestamps — cannot be done honestly here:
+        // a summary's `updated_at` is the *relay's* clock and a fetch happens on the
+        // *device's*, so a phone whose clock runs slow would rule its own complete
+        // count stale forever. So the fetch names the summary instead. `summary_event_id`
+        // is whichever `kind:39005` was current for this root at the moment of the
+        // fetch, or NULL when there was none, and the read's question becomes an
+        // identity test with no clock in it: *is the summary on file still the one this
+        // fetch already accounted for?* If it is, the local count is the later word. If
+        // a different one has arrived since, the relay's is.
+        //
+        // Why the local word deserves to win at all: replies and their deletions are
+        // ordinary stored events, so a live subscription's reconnect replay refills
+        // whatever was missed while the app was away. The relay's tally has no such
+        // recovery — it is pushed once, fan-out only, never stored (see
+        // ``SyncEngine/contentFilter(for:)``) — so a push dropped by a full socket
+        // buffer is gone, and a count composed as "whichever is larger" would keep
+        // advertising a reply that was withdrawn during that gap, permanently and with
+        // no way for the reader to correct it.
+        migrator.registerMigration("v6.thread-fetch") { db in
+            try db.execute(sql: """
+            CREATE TABLE thread_fetch (
+                root_id          TEXT PRIMARY KEY NOT NULL,
+                summary_event_id TEXT
+            )
+            """)
         }
 
         return migrator
@@ -419,12 +462,26 @@ enum Schema {
         // Cached relay-signed thread-summary overlays, kind 39005, keyed by the
         // root id they describe (their `d` binding). Latest-wins per root, guarded
         // by `updated_at`, since a relay can resend an older overlay on reconnect.
+        //
+        // The two tallies the timeline reads are lifted out of `payload` into real
+        // columns, because it reads them for every message on every screen and
+        // `json_extract` over a text blob is a parse per row per read that no index can
+        // help. Only those two: the blob stays beside them and remains the record of
+        // what the relay actually said, so a field this version does not read — the
+        // direct-child `reply_count`, `participants` — is not lost, merely not lifted.
+        //
+        // Nullable, both, and deliberately: a payload this client cannot parse must
+        // leave a summary that says nothing rather than one that says zero. Zero is an
+        // assertion — "this thread has no replies" — and it would take a message's
+        // existing CTA *away* on the strength of a field we failed to read.
         try db.execute(sql: """
         CREATE TABLE thread_summary (
-            root_id    TEXT PRIMARY KEY NOT NULL,
-            event_id   TEXT NOT NULL,
-            payload    TEXT NOT NULL,
-            updated_at INTEGER NOT NULL
+            root_id          TEXT PRIMARY KEY NOT NULL,
+            event_id         TEXT NOT NULL,
+            payload          TEXT NOT NULL,
+            updated_at       INTEGER NOT NULL,
+            descendant_count INTEGER,
+            last_reply_at    INTEGER
         )
         """)
     }

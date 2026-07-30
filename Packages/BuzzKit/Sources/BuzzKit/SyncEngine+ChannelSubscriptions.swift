@@ -37,8 +37,21 @@ extension SyncEngine {
     ///
     /// Kinds, in wire order: channel message (9), rich message (40002), message edit
     /// (40003), system message (40099), reaction (7), deletion (5), group delete event
-    /// (9005), typing (20002) — the measured live-delivering shape. This is a single
-    /// filter by design (see the type doc): one `#h` filter per REQ.
+    /// (9005), typing (20002), thread summary (39005) — the measured live-delivering
+    /// shape. This is a single filter by design (see the type doc): one `#h` filter per
+    /// REQ.
+    ///
+    /// The thread summary is the relay telling a subscriber that a message's reply
+    /// tally moved, without anybody having to fetch the replies to find out. It pushes
+    /// a freshly signed `kind:39005` on every reply insert *and* on every deletion, and
+    /// tags it with the channel — so it was always addressed to this subscription, and
+    /// this filter's kind list was the only reason it never arrived. Leaving it out
+    /// meant a reply tally could only move by fetching the thread, which is what made a
+    /// message advertise its replies only once you pressed it.
+    ///
+    /// It is a row in no timeline: every read that draws messages selects an explicit
+    /// kind (`e.kind = :kind`, plus the notice kind), so a 39005 in the log is reachable
+    /// only through the `thread_summary` projection it feeds.
     ///
     /// The system message is the relay narrating the channel to itself — somebody
     /// joined, was added, left. It is `#h`-scoped like a message, so it belongs here
@@ -50,7 +63,7 @@ extension SyncEngine {
         Filter(
             kinds: [
                 .channelMessage, .richMessage, .messageEdit, .systemMessage,
-                .reaction, .deletion, .groupDeleteEvent, .typing,
+                .reaction, .deletion, .groupDeleteEvent, .typing, .threadSummary,
             ],
             since: Int64(now().timeIntervalSince1970) - Int64(config.liveSinceWindow),
             tagQueries: ["h": [channel]]
