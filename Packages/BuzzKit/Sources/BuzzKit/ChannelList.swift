@@ -58,6 +58,13 @@ public struct ChannelListRow: Sendable, Hashable, Identifiable {
     /// Zero without a local identity, which is the honest answer rather than a
     /// degradation — with no key there is nobody for a message to be addressed to.
     public let unreadMentionCount: Int
+    /// What the relay calls this room — `stream`, `forum`, or `dm` — from the `["t", …]`
+    /// on its kind-39000 metadata. `nil` for a channel whose metadata carries no type.
+    ///
+    /// The client asks this exactly one question, ``isDirectMessage``, but the raw string
+    /// is what is carried: collapsing it here would mean the projection remembers only the
+    /// answer to today's question.
+    public let channelType: String?
 
     public init(
         id: String,
@@ -71,7 +78,8 @@ public struct ChannelListRow: Sendable, Hashable, Identifiable {
         lastMessageAuthor: String?,
         lastMessageAuthorPubkey: String? = nil,
         unreadCount: Int = 0,
-        unreadMentionCount: Int = 0
+        unreadMentionCount: Int = 0,
+        channelType: String? = nil
     ) {
         self.id = id
         self.name = name
@@ -85,7 +93,17 @@ public struct ChannelListRow: Sendable, Hashable, Identifiable {
         self.lastMessageAuthorPubkey = lastMessageAuthorPubkey
         self.unreadCount = unreadCount
         self.unreadMentionCount = unreadMentionCount
+        self.channelType = channelType
     }
+
+    /// Whether the relay calls this room a direct message — one person or several.
+    ///
+    /// The relay's answer, not an inference from the roster. A DM of two is already
+    /// recognisable by having exactly two members, but a DM of four and a private channel
+    /// of four are the same shape from here, and only the relay knows which is which: a
+    /// group DM is created through the participant-hash path (kind 41010) and can never
+    /// be created as a channel (`channel_type: "dm"` is refused by kind 9007).
+    public var isDirectMessage: Bool { channelType == "dm" }
 
     /// Whether the channel carries any unread messages — the bold-name / count-pill gate.
     public var hasUnread: Bool { unreadCount > 0 }
@@ -229,6 +247,7 @@ extension BuzzEventStore {
                c.about         AS about,
                c.picture       AS picture,
                c.is_private    AS is_private,
+               c.channel_type  AS channel_type,
                n.msg_id        AS last_message_id,
                -- The winner is a log row or a queued row, never both — the queue branch
                -- excludes anything the log already holds — so the pair of joins below
@@ -326,7 +345,8 @@ extension BuzzEventStore {
             lastMessageAuthor: author,
             lastMessageAuthorPubkey: authorPubkey,
             unreadCount: row["unread_count"] ?? 0,
-            unreadMentionCount: row["mention_count"] ?? 0
+            unreadMentionCount: row["mention_count"] ?? 0,
+            channelType: row["channel_type"]
         )
     }
 }

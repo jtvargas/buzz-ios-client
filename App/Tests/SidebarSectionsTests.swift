@@ -149,13 +149,14 @@ extension SidebarSectionsTests {
     func sectionForKind() {
         #expect(SidebarSection.section(for: .channel) == .channels)
         #expect(SidebarSection.section(for: .direct) == .directMessages)
+        #expect(SidebarSection.section(for: .group) == .directMessages)
         #expect(SidebarSection.section(for: .agent) == .agents)
         // Starred leads: it is the shortlist, and a shortlist below the full list is a
         // second list rather than a shortcut.
         #expect(SidebarSection.allCases == [.starred, .channels, .directMessages, .agents])
         #expect(SidebarSection.starred.title == "Starred")
         #expect(SidebarSection.channels.title == "Channels")
-        #expect(SidebarSection.directMessages.title == "Direct Messages")
+        #expect(SidebarSection.directMessages.title == "DMs")
         #expect(SidebarSection.agents.title == "Agents")
         #expect(SidebarSection.starred.symbol == "star.fill")
         #expect(SidebarSection.channels.symbol == "number")

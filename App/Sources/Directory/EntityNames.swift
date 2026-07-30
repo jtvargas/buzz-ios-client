@@ -107,9 +107,8 @@ struct EntityNames: Equatable, Sendable {
 
     // MARK: - Conversations
 
-    /// How `channel` presents itself: a channel, a direct message with a person, or
-    /// a direct message with an agent — with the title, artwork, and peer that go
-    /// with it.
+    /// How `channel` presents itself: a channel, a direct message with a person, with an
+    /// agent, or with several people — with the title, artwork, and peer that go with it.
     func conversation(for channel: String) -> ConversationIdentity {
         conversation(for: channelsByID[channel], id: channel)
     }
@@ -144,6 +143,7 @@ struct EntityNames: Equatable, Sendable {
         id: String,
         knownPeer: String? = nil
     ) -> ConversationIdentity {
+        let members = snapshot.members(of: id)
         if let peer = directPeer(in: id) ?? unprojectedPeer(in: id, hint: knownPeer) {
             return ConversationIdentity(
                 channelID: id,
@@ -152,7 +152,24 @@ struct EntityNames: Equatable, Sendable {
                 peer: peer,
                 picture: picture(for: peer),
                 initials: initials(for: peer),
-                isPrivate: row?.isPrivate ?? true
+                isPrivate: row?.isPrivate ?? true,
+                memberCount: members.count
+            )
+        }
+        // A direct message with more than one other person in it. The *relay* decides
+        // this, not the roster: a group DM and a private channel are the same shape from
+        // here — several people, no name they chose — and only one of them should be
+        // filed and titled by who is in it.
+        if row?.isDirectMessage == true, members.count > 2 {
+            return ConversationIdentity(
+                channelID: id,
+                kind: .group,
+                title: groupTitle(for: row, id: id),
+                peer: nil,
+                picture: nil,
+                initials: Self.initials(from: row?.name),
+                isPrivate: row?.isPrivate ?? true,
+                memberCount: members.count
             )
         }
         return ConversationIdentity(
@@ -162,8 +179,63 @@ struct EntityNames: Equatable, Sendable {
             peer: nil,
             picture: row?.picture.flatMap(URL.init(string:)),
             initials: Self.initials(from: row?.name),
-            isPrivate: row?.isPrivate ?? false
+            isPrivate: row?.isPrivate ?? false,
+            memberCount: members.count
         )
+    }
+
+    /// What to call a group direct message: the people in it, by name — the Slack
+    /// convention, and the one the Buzz desktop and Flutter clients already follow.
+    ///
+    /// A name somebody *chose* wins. Everything else is the relay's own placeholder —
+    /// `DM`, `Group DM (4)` — which names nobody and, unlike a channel's name, is not a
+    /// thing anyone typed; rendering it is the same category of mistake as rendering a
+    /// group id. Falls back to the placeholder only when there is nobody left to list,
+    /// which is a roster that has not arrived rather than a group of one.
+    ///
+    /// Ordered by the rendered name and then by key, because a roster is a `Set`: without
+    /// a total order the same conversation would list its people differently on each pass.
+    private func groupTitle(for row: ChannelListRow?, id: String) -> String {
+        let given = row?.name?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let given, !Self.isGenericDirectMessageName(given) { return given }
+        let others = snapshot.members(of: id).filter { $0 != selfPubkey }
+        guard !others.isEmpty else { return channelName(for: id) }
+        return others
+            .map { (pubkey: $0, label: name(for: $0)) }
+            .sorted { lhs, rhs in
+                let comparison = lhs.label.localizedCaseInsensitiveCompare(rhs.label)
+                if comparison != .orderedSame { return comparison == .orderedAscending }
+                return lhs.pubkey < rhs.pubkey
+            }
+            .map(\.label)
+            .joined(separator: ", ")
+    }
+
+    /// Whether a direct message's name is the relay's placeholder rather than one a
+    /// person chose: `DM`, `Direct message`, `Group DM`, `Group DM (4)`.
+    ///
+    /// The exact set the desktop and Flutter clients test for
+    /// (`channelLabels.ts`, `dm_channel_labels.dart`), so the three agree about which
+    /// group DMs are titled by their people. The relay writes `DM` for two and
+    /// `Group DM (N)` for three or more (`RESEARCH/BUZZ_DM_OPEN_PROTOCOL.md`).
+    static func isGenericDirectMessageName(_ name: String?) -> Bool {
+        let normalized = (name ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        if normalized.isEmpty
+            || normalized == "dm"
+            || normalized == "direct message"
+            || normalized == "direct messages" {
+            return true
+        }
+        guard normalized.hasPrefix("group dm") else { return false }
+        let suffix = normalized
+            .dropFirst("group dm".count)
+            .trimmingCharacters(in: .whitespaces)
+        if suffix.isEmpty { return true }
+        guard suffix.hasPrefix("("), suffix.hasSuffix(")") else { return false }
+        let digits = suffix.dropFirst().dropLast()
+        return !digits.isEmpty && digits.allSatisfy(\.isNumber)
     }
 
     /// A caller's peer hint, but only while the roster cannot answer for itself.
@@ -290,36 +362,4 @@ struct EntityNames: Equatable, Sendable {
         let npub = NIP19.encodePublicKey(raw)
         return "\(npub.prefix(9))…\(npub.suffix(4))"
     }
-}
-
-/// How one conversation presents itself: a channel, a DM with a person, or a DM with
-/// an agent — resolved once by ``EntityNames`` and reused by the sidebar, the
-/// conversation header, and the thread header, so all three agree.
-struct ConversationIdentity: Hashable, Sendable, Identifiable {
-    enum Kind: Hashable, Sendable {
-        case channel
-        case direct
-        case agent
-    }
-
-    /// The underlying channel's group id. Never rendered — carried so a view can act
-    /// on the conversation it names.
-    let channelID: String
-    let kind: Kind
-    /// The name to show: the channel's name, or the peer's for a direct message.
-    let title: String
-    /// The other person in a direct message; `nil` for a channel.
-    let peer: String?
-    let picture: URL?
-    let initials: String
-    let isPrivate: Bool
-
-    var id: String { channelID }
-
-    /// Whether this is a one-to-one conversation (with a person or an agent).
-    var isDirect: Bool { kind != .channel }
-
-    /// The seed for a monogram's colour — the peer for a DM so a person keeps one
-    /// tint everywhere, the channel otherwise.
-    var avatarSeed: String { peer ?? channelID }
 }

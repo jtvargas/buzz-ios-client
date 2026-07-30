@@ -37,7 +37,8 @@ struct EntityNamesTests {
     private func channel(
         _ id: String,
         name: String? = nil,
-        isPrivate: Bool = false
+        isPrivate: Bool = false,
+        type: String? = nil
     ) -> ChannelListRow {
         ChannelListRow(
             id: id,
@@ -47,7 +48,8 @@ struct EntityNamesTests {
             isPrivate: isPrivate,
             lastMessageAt: nil,
             lastMessageSnippet: nil,
-            lastMessageAuthor: nil
+            lastMessageAuthor: nil,
+            channelType: type
         )
     }
 
@@ -157,6 +159,9 @@ struct EntityNamesTests {
         ]
         let rows = [channel("room-1", name: "general"), channel("room-2", name: "elsewhere")]
 
+        // `room-1` is three people and no relay type, which is the case the group-DM rule
+        // must not swallow: a private channel of three looks exactly like a group DM from
+        // here, and only the relay's own word tells them apart.
         let resolver = names(entities: entities, rosters: rosters, channels: rows, selfPubkey: me)
         #expect(resolver.conversation(for: "room-1").kind == .channel)
         #expect(resolver.conversation(for: "room-1").title == "general")

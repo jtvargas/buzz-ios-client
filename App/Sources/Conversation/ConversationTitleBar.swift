@@ -57,6 +57,9 @@ struct ConversationTitleBar: ViewModifier {
         /// The peer's picture, falling back to their monogram. A person is recognised by
         /// their face before their name, which a glyph cannot do.
         case avatar(url: URL?, seed: String, initials: String)
+        /// How many people are in a group direct message. Drawn where a face would be, and
+        /// costed as a glyph: it is a digit or two, not a 26-point picture.
+        case count(Int)
     }
 
     /// The line beneath the name, and whether it carries a presence dot.
@@ -190,6 +193,14 @@ struct ConversationTitleBar: ViewModifier {
                 .accessibilityHidden(true)
         case let .avatar(url, seed, initials):
             AvatarView(url: url, seed: seed, monogram: initials, size: Self.avatarSize)
+        case let .count(count):
+            Text(ConversationMark.countText(count))
+                .font(.hive(.body, weight: .bold))
+                .monospacedDigit()
+                // Named, for the reason above the name: a hierarchical style inside a
+                // control resolves against the tint and would turn this amber.
+                .foregroundStyle(Color.secondary)
+                .accessibilityHidden(true)
         }
     }
 
@@ -266,17 +277,19 @@ struct ConversationTitleBar: ViewModifier {
         return "\(members) · \(present) online"
     }
 
-    /// The mark for a conversation: a `#` for a channel, and the peer's own face for a
-    /// direct message.
+    /// The mark for a conversation: a `#` for a channel, the peer's own face for a direct
+    /// message, and how many people are in it for a group one.
     ///
     /// Pure and tested rather than branched at each call site, because "what marks a
     /// conversation" is a product rule and there are three surfaces that could each answer it
     /// differently. A `#` in front of a person's name would be a category error, and so would
-    /// a face in front of a room's name.
+    /// a face in front of a room's name — or in front of a list of four of them.
     static func mark(for conversation: ConversationIdentity) -> Mark {
         switch conversation.kind {
         case .channel:
             .symbol("number")
+        case .group:
+            .count(conversation.memberCount)
         case .direct, .agent:
             .avatar(
                 url: conversation.picture,
@@ -300,7 +313,7 @@ struct ConversationTitleBar: ViewModifier {
     /// heading into the `…` menu on a narrow screen.
     static func reservedChrome(for mark: Mark) -> CGFloat {
         switch mark {
-        case .none, .symbol:
+        case .none, .symbol, .count:
             glyphChrome
         case .avatar:
             // The face, less the glyph it stands in for: a `#` at `.title3` measures ~14pt

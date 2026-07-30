@@ -45,7 +45,12 @@ enum Schema {
     /// a `kind:39005` is an ordinary logged event (``BuzzEventStore/commitWindowPage``
     /// admits `rows + aux + summaries` through the same choke point), so the replay
     /// re-derives every cached summary the store ever received.
-    static let projectionVersion = 6
+    ///
+    /// Version 7 keeps the relay's `["t", <type>]` on channel metadata, so a group
+    /// direct message can be told from a private channel by what the relay says it is
+    /// rather than by counting its roster. The rebuild reads it back out of every
+    /// kind:39000 already in the log, so an existing store gains it without a resync.
+    static let projectionVersion = 7
 
     /// The `meta` key under which the applied projection version is recorded.
     static let projectionVersionKey = "projection_version"
@@ -379,6 +384,12 @@ enum Schema {
             picture         TEXT,
             is_private      INTEGER NOT NULL DEFAULT 0,
             is_archived     INTEGER NOT NULL DEFAULT 0,
+            -- The relay's own `["t", <type>]`: `stream`, `forum`, or `dm`. Held as the
+            -- raw string rather than collapsed to a flag, because the relay has three
+            -- types and a projection that only remembers the answer to today's question
+            -- has to be re-derived from the log to answer tomorrow's. NULL for a channel
+            -- whose metadata predates the tag, which is a *don't know* and not a `stream`.
+            channel_type    TEXT,
             source_event_id TEXT NOT NULL,
             updated_at      INTEGER NOT NULL
         )

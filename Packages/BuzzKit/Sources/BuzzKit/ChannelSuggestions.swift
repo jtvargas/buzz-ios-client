@@ -67,11 +67,18 @@ extension BuzzEventStore {
     /// text: SQLite's `TRIM` and `String.trimmingCharacters(in: .whitespacesAndNewlines)`
     /// do not agree on non-ASCII whitespace, and the *rendered* name must be the
     /// trimmed one.
+    ///
+    /// Direct messages are excluded. A `#`-link names a room anyone reading it could go
+    /// and find, which a DM is not — and the only name one has to offer is the relay's
+    /// own placeholder, `DM` or `Group DM (4)`, which is exactly the string the rest of
+    /// the app now refuses to render. A `NULL` type is kept: it means the metadata
+    /// predates the tag, not that the channel is a DM.
     static func fetchChannelSuggestions(_ db: Database) throws -> [ChannelSuggestion] {
         let rows = try Row.fetchAll(db, sql: """
         SELECT id, name, is_private
         FROM channel
         WHERE name IS NOT NULL AND TRIM(name) <> ''
+          AND (channel_type IS NULL OR channel_type <> 'dm')
         ORDER BY TRIM(name) COLLATE NOCASE, id
         """)
 
