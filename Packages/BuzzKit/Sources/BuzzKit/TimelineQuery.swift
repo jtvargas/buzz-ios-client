@@ -169,7 +169,13 @@ extension BuzzEventStore {
     /// than `=` because both sides are legitimately NULL — no fetch, or a fetch made
     /// when the relay had sent no summary yet — and `=` would yield NULL there, which
     /// `CASE WHEN` reads as false.
-    private static let fetchAccountsForSummary = "tfetch.summary_event_id IS tsum.event_id"
+    ///
+    /// Internal rather than private because the Threads screen composes its own reply
+    /// count by the same rule (``threadActivity(selfPubkey:limit:)``), and two surfaces
+    /// deciding *which tally is the later word* from two separately written predicates is
+    /// how one of them silently stops agreeing with the other. A query using it must have
+    /// `thread_summary` in scope as `tsum` and `thread_fetch` as `tfetch`.
+    static let fetchAccountsForSummary = "tfetch.summary_event_id IS tsum.event_id"
 
     /// This device's own count of a message's surviving replies.
     ///

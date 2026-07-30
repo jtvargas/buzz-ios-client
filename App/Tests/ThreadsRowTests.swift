@@ -165,10 +165,52 @@ struct ThreadsRowTests {
         // strip with it even before `summarisedReply` has had a say.
         #expect(!ThreadSummary.summarisedReply(thread.latestReply).hasThread)
     }
+
+    // MARK: - What the unseen dot says out loud
+
+    /// The dot is the same dot however much is unread, so the number reaches only a screen
+    /// reader — and this is the one place in the app that states
+    /// ``BuzzKit/ThreadActivity/newReplyCount`` as a quantity. A bounded prefetch can leave
+    /// that count short of the truth (see ``BuzzKit/ThreadActivity/newReplyCountIsExact``),
+    /// and stating a floor as a total is the kind of wrong a listener has no way to notice.
+    @Test("an exact unread count is read out as a number")
+    func exactCountReadsPlainly() {
+        #expect(ThreadActivityRow.unseenLabel(for: activity(newReplyCount: 1)) == "1 new reply")
+        #expect(ThreadActivityRow.unseenLabel(for: activity(newReplyCount: 4)) == "4 new replies")
+    }
+
+    @Test("an unread count the device cannot complete is read out as a floor")
+    func aFloorSaysSo() {
+        let label = ThreadActivityRow.unseenLabel(for: activity(newReplyCount: 20, isExact: false))
+        #expect(label == "at least 20 new replies")
+    }
+
+    /// Singular survives the qualification: `at least 1 new replies` is the sort of string
+    /// that only ever appears once the two rules are written separately.
+    @Test("a floor of one is still singular")
+    func aFloorOfOneIsSingular() {
+        let label = ThreadActivityRow.unseenLabel(for: activity(newReplyCount: 1, isExact: false))
+        #expect(label == "at least 1 new reply")
+    }
 }
 
 private extension ThreadsRowTests {
     static var author: String { String(repeating: "aa", count: 32) }
+
+    /// A thread whose only interesting properties are its unread count and whether that
+    /// count is the whole answer.
+    func activity(newReplyCount: Int, isExact: Bool = true) -> ThreadActivity {
+        ThreadActivity(
+            rootID: "root",
+            channelID: "room-1",
+            opener: row("root", at: 1_000),
+            latestReply: row("reply", at: 2_000),
+            latestReplyByOthersAt: 2_000,
+            replyCount: 30,
+            newReplyCount: newReplyCount,
+            newReplyCountIsExact: isExact
+        )
+    }
 
     func row(
         _ id: String,

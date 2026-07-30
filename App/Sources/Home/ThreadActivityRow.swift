@@ -124,11 +124,28 @@ struct ThreadActivityRow: View {
                 Circle()
                     .fill(Color.hiveAccent)
                     .frame(width: 8, height: 8)
-                    .accessibilityLabel(
-                        activity.newReplyCount == 1 ? "1 new reply" : "\(activity.newReplyCount) new replies"
-                    )
+                    .accessibilityLabel(ThreadActivityRow.unseenLabel(for: activity))
             }
         }
+    }
+
+    /// What the unseen dot says when it is read out.
+    ///
+    /// The dot itself is the same dot however much is unread — the number reaches nobody
+    /// looking at the screen, only somebody listening to it, and this is the one place in
+    /// the app where ``BuzzKit/ThreadActivity/newReplyCount`` is stated as a quantity. So
+    /// it is the one place that has to care whether the quantity is the whole answer.
+    ///
+    /// It is not, for a thread held only in part: a bounded prefetch takes a thread's newest
+    /// replies, and if the reader's frontier sits below all of them then more unread replies
+    /// may lie further back. `at least` rather than a bare number there — read aloud it is a
+    /// sentence, where `20+` is a symbol a screen reader has to guess at.
+    ///
+    /// Static and pure so the sentence is asserted directly, without a row to render.
+    static func unseenLabel(for activity: ThreadActivity) -> String {
+        let count = activity.newReplyCount
+        let replies = count == 1 ? "1 new reply" : "\(count) new replies"
+        return activity.newReplyCountIsExact ? replies : "at least \(replies)"
     }
 
     /// The thread's newest reply, as a message this row can draw — or `nil` in the one shape
