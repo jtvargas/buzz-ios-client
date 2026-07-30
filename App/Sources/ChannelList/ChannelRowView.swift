@@ -66,32 +66,17 @@ struct ChannelRowView: View {
     /// and a channel's dot could only ever mean "somebody in here is online" — which in a
     /// workspace whose agents hold a heartbeat is every channel, all the time, so the
     /// list read as a column of green that distinguished nothing.
-    @ViewBuilder
+    /// The mark itself is ``ConversationMark``, shared with the Drafts screen. Only the
+    /// dot and the unread tint are this list's own — see below.
     private var leading: some View {
-        switch row.conversation.kind {
-        case .channel:
-            channelGlyph
-        case .direct, .agent:
-            AvatarView(
-                url: row.conversation.picture,
-                seed: row.conversation.avatarSeed,
-                monogram: row.conversation.initials,
-                size: Self.glyphSize
-            )
-            .overlay(alignment: .bottomTrailing) { presenceDot }
-        }
-    }
-
-    private var channelGlyph: some View {
-        RoundedRectangle(cornerRadius: AvatarShape.roundedSquare.cornerRadius(for: Self.glyphSize))
-            .fill(Color.secondary.opacity(0.12))
-            .frame(width: Self.glyphSize, height: Self.glyphSize)
-            .overlay {
-                Image(systemName: row.isPrivate ? "lock.fill" : "number")
-                    .font(.hiveSymbol(.subheadline, weight: .semibold))
-                    .foregroundStyle(row.indicator.isUnread ? Color.primary : Color.secondary)
-            }
-            .accessibilityHidden(true)
+        ConversationMark(
+            conversation: row.conversation,
+            size: Self.glyphSize,
+            glyphTint: row.indicator.isUnread ? .primary : .secondary
+        )
+        // On the mark rather than only on the face: a channel has no peer, so
+        // ``isOnline`` is false for one and this draws nothing.
+        .overlay(alignment: .bottomTrailing) { presenceDot }
     }
 
     @ViewBuilder

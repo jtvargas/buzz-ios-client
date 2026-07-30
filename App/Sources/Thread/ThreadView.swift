@@ -47,7 +47,8 @@ struct ThreadView: View {
     /// Whether the reply composer takes the keyboard once this thread has settled on screen.
     ///
     /// Set by the actions sheet's "Reply in thread" and by nothing else — see
-    /// ``focusComposerWhenSettled()`` for why it waits rather than firing on appearance.
+    /// ``SwiftUI/View/focusesComposerOnArrival(_:focus:)`` for why it waits rather than
+    /// firing on appearance.
     private let focusesComposer: Bool
 
     /// The production initialiser: the engine is all three of the collaborators below.
@@ -152,6 +153,7 @@ struct ThreadView: View {
             accessory
         }
         .overlay { emptyState }
+        .focusesComposerOnArrival(focusesComposer) { model.mentionAutocomplete.isComposerFocused = true }
         // The tab bar is hidden for a thread, for the same reason it is hidden for a
         // channel: a thread is a reading surface with a composer, and the bar would be a
         // second bottom inset under it. Declared by the view that owns the stack rather than
@@ -176,7 +178,6 @@ struct ThreadView: View {
         // After the first render, so the scaffold's `onChange(of: jumpToken)` is installed
         // and the bump is a transition it sees — see ``ThreadModel/landOnOpener()``.
         .task { if landing == .opener { model.landOnOpener() } }
-        .task { await focusComposerWhenSettled() }
         .task { await model.run() }
         .task { await presence.run() }
         // Here rather than inside ``TypingIndicatorView``, which is absent from the view
@@ -327,27 +328,6 @@ struct ThreadView: View {
     /// Raises the reply composer's keyboard for a thread opened by "Reply in thread" — and
     /// waits for the push to finish first.
     ///
-    /// The wait is the whole content of this function. ``TokenTextView`` applies focus only
-    /// once its view is in a window, because `becomeFirstResponder` before that fails
-    /// silently and leaves SwiftUI's flag and UIKit's responder disagreeing; and
-    /// ``ConversationKeyboardRelease`` records the other half of the same asymmetry — a
-    /// keyboard that arrives while the view is *not* settled leaves the root's bottom safe
-    /// area at the home-indicator value, because SwiftUI's keyboard avoidance is driven by
-    /// the keyboard appearing under a view that is on screen. A `.task` runs at the *start*
-    /// of the push, which is neither of those moments.
-    ///
-    /// `UINavigationController`'s push is a third of a second; this clears it with room and
-    /// is still short enough that the keyboard reads as part of the same movement.
-    private func focusComposerWhenSettled() async {
-        guard focusesComposer else { return }
-        try? await Task.sleep(for: Self.composerFocusDelay)
-        guard !Task.isCancelled else { return }
-        model.mentionAutocomplete.isComposerFocused = true
-    }
-
-    /// How long the composer waits before taking the keyboard. See
-    /// ``focusComposerWhenSettled()``.
-    private static let composerFocusDelay: Duration = .milliseconds(450)
 }
 
 /// The reply composer: a Liquid Glass capsule field and a prominent send button, the

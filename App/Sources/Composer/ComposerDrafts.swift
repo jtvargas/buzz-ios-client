@@ -190,6 +190,27 @@ final class ComposerDrafts {
         }
     }
 
+    /// Discards these composers' drafts outright — the Drafts screen's delete.
+    ///
+    /// Goes through this object rather than straight to the store because the cache is
+    /// the authority within a session (see ``draft(for:)``): deleting only the row would
+    /// leave the text in memory, and the next visit to that conversation would restore a
+    /// draft the reader had just thrown away.
+    ///
+    /// `consulted` keeps each key, so a later visit answers "nothing here" from memory
+    /// rather than reading the row back — the delete is queued through the same
+    /// coalescing drain as everything else and may not have landed yet.
+    func discard(_ keys: [ComposerDraftKey]) {
+        for key in keys {
+            cache.removeValue(forKey: key)
+            recency.removeAll { $0 == key }
+            consulted.insert(key)
+            pending[key] = .clear
+        }
+        guard !keys.isEmpty else { return }
+        startDrainIfNeeded()
+    }
+
     /// Forgets every draft held in memory, on sign-out.
     ///
     /// This object outlives a session — it is built once in ``AppEnvironment`` — so

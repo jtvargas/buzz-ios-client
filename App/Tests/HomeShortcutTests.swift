@@ -45,7 +45,7 @@ struct HomeShortcutTests {
         #expect(HomeShortcutCard.accessibilityLabel(.later, count: 0) == "Later, 0 items")
     }
 
-    @Test("both shortcuts name a symbol the system actually has")
+    @Test("every shortcut names a symbol the system actually has")
     func symbolsExist() {
         // A missing symbol name renders as nothing at all, silently — the same trap
         // ``ThreadView/threadSymbol`` is pinned against.
@@ -54,16 +54,31 @@ struct HomeShortcutTests {
         }
     }
 
-    @Test("the card draws the .fill cut when the system has one, and the outline otherwise")
-    func filledSymbolFallsBackWhenNoFillExists() {
+    @Test("a card with items draws the .fill cut, and the outline when it is empty")
+    func symbolFollowsTheCount() {
+        // Empty is always the outline.
+        #expect(HomeShortcut.drafts.symbol(hasItems: false) == "paperplane")
+        #expect(HomeShortcut.later.symbol(hasItems: false) == "bookmark")
+        // With items, the filled cut — the second signal beside the card's accent edge.
+        #expect(HomeShortcut.drafts.symbol(hasItems: true) == "paperplane.fill")
+        #expect(HomeShortcut.later.symbol(hasItems: true) == "bookmark.fill")
         // `text.append` has no `.fill` counterpart. String-appending `.fill` onto it and
         // trusting the result draws nothing at all — this pins the fallback, not the glue.
-        #expect(HomeShortcut.threads.filledSymbol == "text.append")
-        // `bookmark` does, and this is the shortcut expected to actually draw filled.
-        #expect(HomeShortcut.later.filledSymbol == "bookmark.fill")
+        #expect(HomeShortcut.threads.symbol(hasItems: true) == "text.append")
         for shortcut in HomeShortcut.allCases {
-            #expect(UIImage(systemName: shortcut.filledSymbol) != nil, "\(shortcut.filledSymbol) is missing")
+            for hasItems in [true, false] {
+                let name = shortcut.symbol(hasItems: hasItems)
+                #expect(UIImage(systemName: name) != nil, "\(name) is missing")
+            }
         }
+    }
+
+    @Test("Drafts counts items, like Later")
+    func draftsCountLabel() {
+        #expect(HomeShortcut.drafts.countLabel(0) == "0 items")
+        #expect(HomeShortcut.drafts.countLabel(1) == "1 item")
+        #expect(HomeShortcut.drafts.countLabel(4) == "4 items")
+        #expect(HomeShortcutCard.accessibilityLabel(.drafts, count: 2) == "Drafts, 2 items")
     }
 
     // MARK: - Summarising a thread

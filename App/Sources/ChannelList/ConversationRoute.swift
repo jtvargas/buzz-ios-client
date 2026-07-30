@@ -13,6 +13,15 @@ struct ConversationRoute: Hashable {
     /// The peer this conversation was just opened with, or `nil` when the roster is the
     /// only thing that should name it.
     var knownPeer: String?
+    /// Whether the composer takes the keyboard once the conversation has settled. Set only
+    /// by the Drafts screen, which is a request to finish writing something — the same
+    /// meaning ``ThreadRoute/focusesComposer`` carries.
+    ///
+    /// Deliberately part of `Hashable`, unlike ``ThreadRoute``'s: the identity that stops
+    /// a conversation stacking on itself is ``pushed(onto:)``'s explicit `channel.id`
+    /// comparison, not this type's equality, so folding it in costs nothing and keeps two
+    /// routes to the same channel distinguishable in a path.
+    var focusesComposer = false
 }
 
 extension ConversationRoute {
