@@ -1,9 +1,19 @@
-// Shared build settings. Nothing personal belongs in this file.
+// Shared build settings.
 SWIFT_VERSION = 6.0
 IPHONEOS_DEPLOYMENT_TARGET = 26.0
-PRODUCT_BUNDLE_IDENTIFIER = com.example.hive
-CODE_SIGN_STYLE = Automatic
-DEVELOPMENT_TEAM =
 
-// Personal overrides (team ID, bundle id). Gitignored — see Local.xcconfig.example.
+// The app's identity, committed on purpose.
+//
+// Neither of these is a secret — a team ID and a bundle id are printed inside
+// every copy of every app either one has ever signed. They are here because a
+// build machine has no `Local.xcconfig`: it clones the repo and nothing else, so
+// with these left blank it built `com.example.hive` for no team, which cannot be
+// signed for distribution and so cannot reach TestFlight.
+PRODUCT_BUNDLE_IDENTIFIER = com.jtvargas.hive
+DEVELOPMENT_TEAM = J7K9Z79S5F
+CODE_SIGN_STYLE = Automatic
+
+// Personal overrides. Anyone building this under a different Apple ID sets their
+// own team and bundle id here rather than editing the lines above. Gitignored —
+// see Local.xcconfig.example.
 #include? "Local.xcconfig"
