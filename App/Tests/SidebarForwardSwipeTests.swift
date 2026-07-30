@@ -2,6 +2,7 @@ import BuzzKit
 @testable import Hive
 import Foundation
 import Testing
+import UIKit
 
 /// The leftward drag on the sidebar that reopens the conversation just left: what it
 /// remembers, and what a hand's travel means.
@@ -142,6 +143,26 @@ struct SidebarForwardSwipeTests {
         // A shade that reached 1 would black the conversation out rather than sit it behind
         // the sidebar, and one at 0 would lose the depth the gesture reads by.
         #expect(ForwardSwipeGeometry.shade > 0 && ForwardSwipeGeometry.shade < 0.3)
+    }
+
+    // MARK: - What a drag will share a touch with
+
+    @MainActor
+    @Test("a drag shares a touch with a scroll and with nothing else")
+    func aDragSharesOnlyWithScrolling() {
+        let sidebar = SidebarForwardSwipeView()
+        let drag = LeftwardPanGestureRecognizer()
+
+        // The list's own vertical scrolling, which has to keep running: this recogniser
+        // cannot know the hand's direction until 10pt in, and a scroll made to wait for that
+        // would begin late every time.
+        #expect(sidebar.gestureRecognizer(drag, shouldRecognizeSimultaneouslyWith: UIPanGestureRecognizer()))
+
+        // Everything else. A row is a `Button`, and sharing the touch with its press is what
+        // let a drag beginning on row C navigate to C on release — on top of the conversation
+        // the drag had just reopened.
+        #expect(!sidebar.gestureRecognizer(drag, shouldRecognizeSimultaneouslyWith: UITapGestureRecognizer()))
+        #expect(!sidebar.gestureRecognizer(drag, shouldRecognizeSimultaneouslyWith: UILongPressGestureRecognizer()))
     }
 
     // MARK: - Fixtures

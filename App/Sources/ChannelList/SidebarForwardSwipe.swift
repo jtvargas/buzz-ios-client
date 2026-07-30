@@ -312,14 +312,35 @@ final class SidebarForwardSwipeView: UIView, UIGestureRecognizerDelegate {
         return navigationController()?.viewControllers.count == 1
     }
 
-    /// Alongside the list's own scrolling rather than instead of it. This recogniser only
-    /// begins on a leftward-dominant drag, and the sidebar it is competing with is gone a
-    /// frame later anyway — what is under the finger from then on is a picture.
+    /// Alongside the list's own scrolling, and nothing else.
+    ///
+    /// A drag has to take the touch away from whatever it began on, the way a scroll does.
+    /// The first version of this claimed simultaneity with *everything*, on the reasoning
+    /// that the direction gate above protected taps. It does not. That gate stops a drag
+    /// beginning on a tap; nothing in it stops a tap **finishing** on a drag. Each row here
+    /// is a `Button` with a custom `ButtonStyle`, so its press is SwiftUI's own gesture
+    /// rather than the cell's, and a full-width row is still under the finger when it lifts
+    /// three hundred points to the left — so the row navigated on top of the conversation
+    /// this drag had already reopened. Measured in the harness: `BUTTON 3 fired`, between the
+    /// last `changed` and the `ended` of a drag that had opened channel 7.
+    ///
+    /// Naming pans keeps the one exception that matters. The list's vertical scrolling has to
+    /// stay alive because this recogniser cannot know the hand's direction until 10pt in, and
+    /// a scroll made to wait for that would begin late every time. Everything else — the
+    /// row's press, the section headings, the `+`, the context menu's long press — is now
+    /// exclusive with the drag, settled in whichever direction UIKit needs: a press that has
+    /// already recognised prevents the drag, and a drag that begins cancels the press.
+    ///
+    /// Apple documents that a `false` here is not binding, because the *other* recogniser's
+    /// delegate may answer `true` and either answer is enough. So this is a measured claim
+    /// rather than a guaranteed one: driven with a real finger against a row of this exact
+    /// shape, the row no longer fires, while the scroll, the tap, the long press and a
+    /// cancelled drag all still behave.
     func gestureRecognizer(
         _: UIGestureRecognizer,
-        shouldRecognizeSimultaneouslyWith _: UIGestureRecognizer
+        shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer
     ) -> Bool {
-        true
+        other is UIPanGestureRecognizer
     }
 }
 
