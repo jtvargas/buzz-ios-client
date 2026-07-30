@@ -117,6 +117,46 @@ struct ChannelTypeTests {
         #expect(row.channelType == "forum")
     }
 
+    /// The migration promise, from the side that has to hold: a phone that has been
+    /// running this app for weeks already has the `["t", …]` sitting in its log, because
+    /// the log keeps the whole event and only the projection was narrower. So the version
+    /// bump re-derives the type from what is already on disk — no resync, no relay round
+    /// trip, and no window where a group DM is still filed under Channels.
+    ///
+    /// Nulling the column first is what makes this non-vacuous: the projection tables are
+    /// created from the *current* schema at every open, so a store seeded by this test
+    /// would otherwise arrive at the reopen already holding the answer, and the rebuild
+    /// would have nothing left to prove.
+    @Test("a store projected before the type existed gains it from its own log")
+    func versionBumpRederivesTheTypeFromTheLog() async throws {
+        let database = TempDatabase()
+        defer { database.remove() }
+        let relay = try Fixture()
+
+        do {
+            let store = try database.open(projectionVersion: Schema.projectionVersion - 1)
+            _ = try await store.ingest(batch: [
+                try relay.event(
+                    .groupMetadata,
+                    #"{"name":"Group DM (3)"}"#,
+                    tags: [["d", "dm-3"], ["private"], ["hidden"], ["t", "dm"]],
+                    at: 1_000
+                ),
+            ], phase: .backfill)
+
+            try await store.executeForTest("UPDATE channel SET channel_type = NULL")
+            let stale = try #require(try store.channelList().first { $0.id == "dm-3" })
+            #expect(stale.channelType == nil)
+            #expect(!stale.isDirectMessage)
+        }
+
+        // Reopened at the current version, with nothing further ingested.
+        let reopened = try database.open()
+        let row = try #require(try reopened.channelList().first { $0.id == "dm-3" })
+        #expect(row.channelType == "dm")
+        #expect(row.isDirectMessage)
+    }
+
     /// A `#`-link names a room a reader could go and find. A DM is not one, and the only
     /// name it has to offer is the relay's placeholder — the exact string the rest of the
     /// app now refuses to render.
