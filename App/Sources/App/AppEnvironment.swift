@@ -50,6 +50,10 @@ final class AppEnvironment {
     /// history is on screen the instant the engine reconnects.
     let store: BuzzEventStore
     let signer: KeychainSigner
+    /// Every composer's unsent text. Owned here because a draft outlives the screen it
+    /// was typed on, and because the two moments that decide its fate — leaving the
+    /// foreground, and signing out — are both handled here.
+    let drafts: ComposerDrafts
 
     /// Built once an identity and relay URL are known; `nil` until then.
     private(set) var engine: SyncEngine?
@@ -75,7 +79,9 @@ final class AppEnvironment {
     /// waits until an identity is present (a returning user) or entered (the gate).
     init() throws {
         signer = KeychainSigner(account: "primary")
-        store = try Self.makeStore()
+        let store = try Self.makeStore()
+        self.store = store
+        drafts = ComposerDrafts(persistence: StoredComposerDrafts(store: store))
         // Resolve this synchronously so a returning user never gets one frame of
         // onboarding while the launch task is being scheduled.
         phase = try signer.loadPrivateKey() != nil ? .bootstrapping : .needsIdentity
@@ -210,6 +216,8 @@ final class AppEnvironment {
         }
         heartbeat = nil
         engine = nil
+        // Held in memory across sessions otherwise — see ``ComposerDrafts/reset()``.
+        drafts.reset()
         selfPubkeyHex = nil
         engineState = .stopped
         hasConnectedBefore = false
@@ -239,6 +247,12 @@ final class AppEnvironment {
     /// grace window, so the departure goes out while the socket is still live; on
     /// foreground it forwards first, then resumes beating.
     func handleScenePhase(_ phase: ScenePhase) {
+        // Unsent text first, and outside the engine guard: leaving the foreground is the
+        // last moment this process is guaranteed to still be here. Usually there is
+        // nothing outstanding — the write-through has normally already landed.
+        if phase != .active {
+            Task { await drafts.flush() }
+        }
         guard let engine else { return }
         let heartbeat = self.heartbeat
         Task {
@@ -276,6 +290,9 @@ final class AppEnvironment {
         if let intendedPubkey {
             if StoreOwnership.shouldWipe(forIncoming: intendedPubkey) {
                 try await store.wipe()
+                // Beside the wipe, so "a different key never sees the last one's drafts"
+                // holds in memory wherever the handover happens, not only on sign-out.
+                drafts.reset()
             }
             StoreOwnership.ownerPubkeyHex = intendedPubkey
         }

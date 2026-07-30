@@ -58,12 +58,12 @@ final class ChannelTimelineModel {
     private(set) var hasMoreOlder = false
     private(set) var isLoadingOlder = false
 
-    /// The composer's wire text plus identity-bearing selected mention tokens.
-    var mentionDraft = MentionDraft()
-    var draft: String {
-        get { mentionDraft.text }
-        set { mentionDraft = MentionDraft(text: newValue) }
-    }
+    /// The composer's wire text plus identity-bearing selected mention tokens. Every
+    /// change is written through to this channel's draft — see
+    /// `ChannelTimelineModel+Drafts.swift`, which is also where the `didSet` is explained.
+    var mentionDraft = MentionDraft() { didSet { recordDraft(replacing: oldValue) } }
+    /// Where that draft is kept between visits. `nil` in tests, which then keep nothing.
+    let drafts: ComposerDrafts?
     let mentionAutocomplete: MentionAutocompleteModel
     /// Set when a send is refused before it leaves the device (over the 64 KiB
     /// ceiling); the view shows it and the draft text is preserved.
@@ -171,6 +171,7 @@ final class ChannelTimelineModel {
         sender: any MessageSending,
         typing: any EphemeralPublishing = NoopEphemeralPublisher(),
         readStateMarking: (any ReadStateMarking)? = nil,
+        drafts: ComposerDrafts? = nil,
         selfPubkey: String? = nil,
         pageSize: Int = 50,
         typingThrottle: Duration = .seconds(3),
@@ -181,6 +182,7 @@ final class ChannelTimelineModel {
         self.sender = sender
         self.typing = typing
         self.readStateMarking = readStateMarking
+        self.drafts = drafts
         self.selfPubkey = selfPubkey
         self.pageSize = pageSize
         self.typingThrottle = typingThrottle
@@ -213,6 +215,7 @@ final class ChannelTimelineModel {
     func primeIfNeeded() {
         guard !hasPrimed else { return }
         hasPrimed = true
+        restoreDraft()
         mergeHead(fetch(before: nil))
         let ids = Array(loaded.keys)
         applyReactions(fetchReactions(for: ids))
