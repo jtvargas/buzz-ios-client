@@ -38,6 +38,22 @@ struct MessageMediaZoomFitTests {
         }
     }
 
+    /// A viewer's worth of UIKit, held together so a test can drive it.
+    struct Harness {
+        let coordinator: MessageMediaZoomView.Coordinator
+        let scrollView: MessageMediaScrollView
+        let imageView: UIImageView
+        /// Held for the length of the test: the layout below only happens because these
+        /// views are in a window, and a released window takes the layout with it.
+        let window: UIWindow
+
+        /// What the reader is actually looking at — the picture's size on screen.
+        var drawn: CGSize { imageView.frame.size }
+
+        /// Lays out the way the device does after a mutation.
+        func settle() { window.layoutIfNeeded() }
+    }
+
     /// A coordinator attached to a scroll view of `viewport`, already showing `first`.
     ///
     /// **In a window, and laid out.** A scroll view applies the zoom as a transform on the
@@ -49,7 +65,7 @@ struct MessageMediaZoomFitTests {
     static func fitted(
         first: CGSize,
         in viewport: CGSize = MessageMediaZoomFitTests.viewport
-    ) -> (MessageMediaZoomView.Coordinator, MessageMediaScrollView, UIImageView, UIWindow) {
+    ) -> Harness {
         let window = UIWindow(frame: CGRect(origin: .zero, size: viewport))
         let scrollView = MessageMediaScrollView()
         scrollView.frame = CGRect(origin: .zero, size: viewport)
@@ -64,7 +80,7 @@ struct MessageMediaZoomFitTests {
         scrollView.delegate = coordinator
         coordinator.fitToBounds(preservingMagnification: false)
         window.layoutIfNeeded()
-        return (coordinator, scrollView, imageView, window)
+        return Harness(coordinator: coordinator, scrollView: scrollView, imageView: imageView, window: window)
     }
 
     /// The size a picture of `image` comes out at when fitted into `viewport`, to the
@@ -83,13 +99,13 @@ extension MessageMediaZoomFitTests {
     /// fitted scale divided back out of the frame — against a 402pt viewport.
     @Test("replacing the picture lays the new one out fitted, not scaled by the old one's zoom")
     func replacedPictureIsFitted() {
-        let (coordinator, _, imageView, window) = Self.fitted(first: CGSize(width: 960, height: 960))
-        coordinator.show(Self.image(CGSize(width: 1200, height: 1200)))
-        window.layoutIfNeeded()
+        let harness = Self.fitted(first: CGSize(width: 960, height: 960))
+        harness.coordinator.show(Self.image(CGSize(width: 1200, height: 1200)))
+        harness.settle()
 
         let expected = Self.expectedFit(image: CGSize(width: 1200, height: 1200))
-        #expect(abs(imageView.frame.width - expected.width) < 0.5)
-        #expect(abs(imageView.frame.height - expected.height) < 0.5)
+        #expect(abs(harness.drawn.width - expected.width) < 0.5)
+        #expect(abs(harness.drawn.height - expected.height) < 0.5)
     }
 
     /// Every shape the viewer has to answer for, replaced from a preview of the same shape
@@ -107,15 +123,15 @@ extension MessageMediaZoomFitTests {
     func replacedPictureFitsTheViewport(size: CGSize) {
         let previewScale = min(1, 960 / max(size.width, size.height))
         let preview = CGSize(width: size.width * previewScale, height: size.height * previewScale)
-        let (coordinator, _, imageView, window) = Self.fitted(first: preview)
-        coordinator.show(Self.image(size))
-        window.layoutIfNeeded()
+        let harness = Self.fitted(first: preview)
+        harness.coordinator.show(Self.image(size))
+        harness.settle()
 
-        #expect(imageView.frame.width <= Self.viewport.width + 0.5)
-        #expect(imageView.frame.height <= Self.viewport.height + 0.5)
+        #expect(harness.drawn.width <= Self.viewport.width + 0.5)
+        #expect(harness.drawn.height <= Self.viewport.height + 0.5)
         // And it fills one of the two, or it is not fitted — it is merely small.
-        let fillsWidth = abs(imageView.frame.width - Self.viewport.width) < 0.5
-        let fillsHeight = abs(imageView.frame.height - Self.viewport.height) < 0.5
+        let fillsWidth = abs(harness.drawn.width - Self.viewport.width) < 0.5
+        let fillsHeight = abs(harness.drawn.height - Self.viewport.height) < 0.5
         #expect(fillsWidth || fillsHeight)
     }
 
@@ -123,11 +139,11 @@ extension MessageMediaZoomFitTests {
     /// viewport would pass the bounds check above and be worse than the crop it replaced.
     @Test("a replaced picture keeps its aspect ratio")
     func replacedPictureKeepsItsShape() {
-        let (coordinator, _, imageView, window) = Self.fitted(first: CGSize(width: 480, height: 854))
-        coordinator.show(Self.image(CGSize(width: 900, height: 1600)))
-        window.layoutIfNeeded()
+        let harness = Self.fitted(first: CGSize(width: 480, height: 854))
+        harness.coordinator.show(Self.image(CGSize(width: 900, height: 1600)))
+        harness.settle()
 
-        let ratio = imageView.frame.width / imageView.frame.height
+        let ratio = harness.drawn.width / harness.drawn.height
         #expect(abs(ratio - 900.0 / 1600.0) < 0.01)
     }
 
@@ -135,44 +151,44 @@ extension MessageMediaZoomFitTests {
     /// `preservingMagnification` exists, and the thing the fix must not have cost.
     @Test("a magnified reader keeps their magnification when the full decode lands")
     func magnificationSurvivesTheSwap() {
-        let (coordinator, scrollView, imageView, window) = Self.fitted(first: CGSize(width: 960, height: 960))
-        scrollView.zoomScale = scrollView.minimumZoomScale * 2
-        coordinator.show(Self.image(CGSize(width: 1200, height: 1200)))
-        window.layoutIfNeeded()
+        let harness = Self.fitted(first: CGSize(width: 960, height: 960))
+        harness.scrollView.zoomScale = harness.scrollView.minimumZoomScale * 2
+        harness.coordinator.show(Self.image(CGSize(width: 1200, height: 1200)))
+        harness.settle()
 
         let expected = Self.expectedFit(image: CGSize(width: 1200, height: 1200))
-        #expect(abs(imageView.frame.width - expected.width * 2) < 1)
-        #expect(abs(scrollView.zoomScale / scrollView.minimumZoomScale - 2) < 0.01)
+        #expect(abs(harness.drawn.width - expected.width * 2) < 1)
+        #expect(abs(harness.scrollView.zoomScale / harness.scrollView.minimumZoomScale - 2) < 0.01)
     }
 
     /// A rotation, which is the other caller: same bounds change, no new picture.
     @Test("a picture re-fits when the viewport changes")
     func refitsOnANewViewport() {
-        let (coordinator, scrollView, imageView, window) = Self.fitted(first: CGSize(width: 1200, height: 1200))
-        scrollView.frame = CGRect(origin: .zero, size: CGSize(width: 778, height: 402))
-        coordinator.fitToBounds(preservingMagnification: true)
-        window.layoutIfNeeded()
+        let harness = Self.fitted(first: CGSize(width: 1200, height: 1200))
+        harness.scrollView.frame = CGRect(origin: .zero, size: CGSize(width: 778, height: 402))
+        harness.coordinator.fitToBounds(preservingMagnification: true)
+        harness.settle()
 
         let expected = Self.expectedFit(
             image: CGSize(width: 1200, height: 1200),
             viewport: CGSize(width: 778, height: 402)
         )
-        #expect(abs(imageView.frame.height - expected.height) < 0.5)
+        #expect(abs(harness.drawn.height - expected.height) < 0.5)
     }
 
     /// The fitted scale is the floor, so a reader can never pinch a picture smaller than
     /// whole — and the ceiling stays where the type says it is.
     @Test("the fitted scale is the minimum and the magnification limit is relative to it")
     func limitsAreRelativeToTheFit() {
-        let (coordinator, scrollView, _, window) = Self.fitted(first: CGSize(width: 960, height: 960))
-        coordinator.show(Self.image(CGSize(width: 1200, height: 1200)))
-        window.layoutIfNeeded()
+        let harness = Self.fitted(first: CGSize(width: 960, height: 960))
+        harness.coordinator.show(Self.image(CGSize(width: 1200, height: 1200)))
+        harness.settle()
 
-        #expect(abs(scrollView.zoomScale - scrollView.minimumZoomScale) < 0.001)
+        #expect(abs(harness.scrollView.zoomScale - harness.scrollView.minimumZoomScale) < 0.001)
         #expect(
             abs(
-                scrollView.maximumZoomScale
-                    - scrollView.minimumZoomScale * MessageMediaZoomView.maximumMagnification
+                harness.scrollView.maximumZoomScale
+                    - harness.scrollView.minimumZoomScale * MessageMediaZoomView.maximumMagnification
             ) < 0.001
         )
     }
