@@ -36,7 +36,7 @@ extension SidebarSectionsTests {
         #expect(Set(content.sections[0].rows.map(\.id)) == ["general", "dm-peer"])
         #expect(content.sections[1].rows.map(\.id) == ["random"])
 
-        // Every row knows its own star, so a swipe label and the heading agree.
+        // Every row knows its own star, so the menu's label and the heading agree.
         #expect(content.sections[0].rows.map(\.isStarred) == [true, true])
         #expect(content.sections[1].rows.map(\.isStarred) == [false])
     }
