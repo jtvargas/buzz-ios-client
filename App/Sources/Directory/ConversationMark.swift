@@ -14,9 +14,17 @@ import SwiftUI
 struct ConversationMark: View {
     let conversation: ConversationIdentity
     let size: CGFloat
-    /// The glyph's colour, for the one caller that varies it: the sidebar draws an unread
-    /// channel's `#` at full strength. Everywhere else the mark is quiet.
+    /// The glyph's colour. The sidebar draws an unread channel's `#` at full strength and
+    /// a read one quietly; the Drafts screen draws every mark at full strength, because
+    /// there is no read state on that screen for a quiet mark to mean.
     var glyphTint: Color = .secondary
+    /// Replaces the channel glyph. The Drafts screen passes a thread's own mark here, so a
+    /// draft in a thread is distinguishable from a draft in the channel around it before
+    /// the title is read.
+    ///
+    /// Ignored for a direct message. A face names the person, which is more use than any
+    /// symbol — and a thread in a DM is still a conversation with that person.
+    var symbol: String?
 
     var body: some View {
         switch conversation.kind {
@@ -25,7 +33,7 @@ struct ConversationMark: View {
                 .fill(Color.secondary.opacity(Self.tileOpacity))
                 .frame(width: size, height: size)
                 .overlay {
-                    Image(systemName: conversation.isPrivate ? "lock.fill" : "number")
+                    Image(systemName: symbol ?? (conversation.isPrivate ? "lock.fill" : "number"))
                         .font(.hiveSymbol(.subheadline, weight: .semibold))
                         .foregroundStyle(glyphTint)
                 }

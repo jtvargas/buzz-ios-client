@@ -31,6 +31,24 @@ struct DraftsScreenTests {
         )
     }
 
+    // MARK: - The card
+
+    /// The owner called the Drafts card too loud: a filled glyph and an amber edge say the
+    /// same thing twice. A card that can fill its glyph gives the edge up; one that cannot
+    /// keeps it, because the edge is then the only thing it has.
+    @Test("only a card whose glyph cannot fill spends the accent on its edge")
+    func accentOnEdgeOnlyWhereTheGlyphCannotSpeak() {
+        #expect(HomeShortcut.threads.signalsWithGlyph == false)
+        #expect(HomeShortcut.drafts.signalsWithGlyph)
+        #expect(HomeShortcut.later.signalsWithGlyph)
+
+        #expect(HomeShortcutCard.spendsAccentOnEdge(.threads, count: 3))
+        #expect(!HomeShortcutCard.spendsAccentOnEdge(.drafts, count: 3))
+        // Empty is a hairline for everyone.
+        #expect(!HomeShortcutCard.spendsAccentOnEdge(.threads, count: 0))
+        #expect(!HomeShortcutCard.spendsAccentOnEdge(.drafts, count: 0))
+    }
+
     // MARK: - What a row says
 
     /// The distinction that decides where a press lands, so it has to be readable before
@@ -55,6 +73,21 @@ struct DraftsScreenTests {
         // Unreachable through the composer — a whitespace-only draft is never stored — but
         // a row must never render as an empty second line.
         #expect(DraftRowText.preview(of: "   ") == "Draft")
+    }
+
+    /// A draft in a channel's thread has to be tellable from a draft in the channel around
+    /// it before the title is read — they are different destinations.
+    @Test("a channel thread draws the thread's mark; a channel and a DM draw their own")
+    func rowMark() {
+        let channel = identity(title: "design")
+        #expect(DraftRowMark.symbol(for: summary(), in: channel) == nil)
+        #expect(DraftRowMark.symbol(for: summary(root: "opener"), in: channel) == ThreadView.threadSymbol)
+
+        // A face names the person, which is more use than any symbol — including in their
+        // threads.
+        let dm = identity(title: "Allison Drake", kind: .direct)
+        #expect(DraftRowMark.symbol(for: summary(), in: dm) == nil)
+        #expect(DraftRowMark.symbol(for: summary(root: "opener"), in: dm) == nil)
     }
 
     // MARK: - Where a press goes

@@ -103,19 +103,28 @@ struct HomeShortcutCard: View {
         .accessibilityAddTraits(.isButton)
     }
 
-    /// The card's edge: the accent when there is something in it, and a hairline otherwise.
+    /// The card's edge: a hairline, and the accent only where the glyph cannot speak.
     ///
-    /// Every card is bordered, because the border is the card — what changes is only the
-    /// colour. Swapping a drawn edge for nothing would make an empty card read as absent
-    /// rather than empty, which is the question these cards exist to answer.
+    /// Every card is bordered, because the border *is* the card — swapping a drawn edge for
+    /// nothing would make an empty card read as absent rather than empty, which is the
+    /// question these cards exist to answer. What changes is the colour, and now only for
+    /// the cards that need it.
+    ///
+    /// A card whose symbol has a `.fill` cut already says "there is something here" by
+    /// filling, so spending the accent on its edge as well says it twice — the owner called
+    /// the Drafts card too loud for exactly that reason. Threads' `text.append` has no
+    /// filled counterpart, so its edge is the only thing it can say it with, and it keeps
+    /// the accent. Derived from the symbol rather than switched on the case, so a fourth
+    /// destination gets the right treatment without anyone remembering this rule.
     private var border: Color {
-        Self.hasSomethingWaiting(count) ? .hiveAccent : Self.restingBorder
+        Self.spendsAccentOnEdge(shortcut, count: count) ? .hiveAccent : Self.restingBorder
     }
 
-    /// The card's wash: the same rule the border reads its colour from, so a card never
-    /// carries the fill without the border that explains it. `0.18` is the app's own
-    /// number for "this is mine, lightly" — the opacity a reacted chip and a sent bubble
-    /// already draw the accent at.
+    /// The card's wash — still the accent, still only when something is waiting. The wash is
+    /// what the filled glyph explains on a card that has given up its amber edge; taking
+    /// both away would leave a card with something in it looking exactly like an empty one
+    /// from across the screen. `0.18` is the app's own number for "this is mine, lightly",
+    /// the opacity a reacted chip and a sent bubble already draw the accent at.
     private var fill: Color {
         Self.hasSomethingWaiting(count) ? Color.hiveAccent.opacity(Self.fillOpacity) : .clear
     }
@@ -131,6 +140,13 @@ struct HomeShortcutCard: View {
     /// something a test can read back off a rendered card.
     static func hasSomethingWaiting(_ count: Int) -> Bool {
         count > 0
+    }
+
+    /// Whether this card draws its edge in the accent — see ``border``. Pure and exposed
+    /// for the same reason ``hasSomethingWaiting(_:)`` is: what a border looks like is not
+    /// something a test can read back off a rendered card.
+    static func spendsAccentOnEdge(_ shortcut: HomeShortcut, count: Int) -> Bool {
+        hasSomethingWaiting(count) && !shortcut.signalsWithGlyph
     }
 
     /// What a screen reader hears: the destination, then what is in it.
@@ -220,8 +236,21 @@ enum HomeShortcut: String, CaseIterable, Hashable, Identifiable {
     /// without one simply keeps its outline in both states.
     func symbol(hasItems: Bool) -> String {
         guard hasItems else { return symbol }
+        return filledSymbol ?? symbol
+    }
+
+    /// Whether this card's glyph can say "there is something here" on its own — whether the
+    /// system ships a `.fill` cut of ``symbol``. The ones that can do not also spend the
+    /// accent on their edge; see ``HomeShortcutCard/border``.
+    var signalsWithGlyph: Bool { filledSymbol != nil }
+
+    /// ``symbol``'s filled counterpart, or `nil` where the system has none. Resolved at
+    /// runtime rather than assumed: asking for a name the system does not have draws
+    /// nothing at all, silently, which is the exact trap ``symbol`` is pinned against in
+    /// `HomeShortcutTests`.
+    private var filledSymbol: String? {
         let filled = "\(symbol).fill"
-        return UIImage(systemName: filled) != nil ? filled : symbol
+        return UIImage(systemName: filled) != nil ? filled : nil
     }
 
     /// What the count counts, singular and plural. Threads counts *new* ones — the

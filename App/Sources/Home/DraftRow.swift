@@ -10,6 +10,15 @@ import SwiftUI
 /// The leading mark is the sidebar's, from ``ConversationMark``: a face for a direct
 /// message, a `#` or a lock for a channel. A draft is about a conversation, and a
 /// conversation should be recognisable by the same thing everywhere.
+///
+/// With one addition of this screen's own. A draft in a **channel's thread** draws the
+/// thread's mark instead of the channel's, so the two are told apart before the title is
+/// read — they are different destinations, and this list is the one place they sit next to
+/// each other. A thread in a *direct message* keeps the peer's face: it is still a
+/// conversation with that person, and a symbol would say less.
+///
+/// The glyph is drawn at full strength here, unlike the sidebar's, where a quiet mark
+/// means read. There is no read state on this screen for quiet to mean.
 struct DraftRow: View {
     let summary: ComposerDraftSummary
     /// How the conversation names itself, resolved through the shared directory so this
@@ -20,7 +29,12 @@ struct DraftRow: View {
 
     var body: some View {
         HStack(spacing: Self.betweenMarkAndText) {
-            ConversationMark(conversation: conversation, size: Self.markSize)
+            ConversationMark(
+                conversation: conversation,
+                size: Self.markSize,
+                glyphTint: .primary,
+                symbol: DraftRowMark.symbol(for: summary, in: conversation)
+            )
             VStack(alignment: .leading, spacing: Self.betweenLines) {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Text(title)
@@ -56,6 +70,20 @@ struct DraftRow: View {
     private static let markSize: CGFloat = 36
     private static let betweenMarkAndText: CGFloat = 10
     private static let betweenLines: CGFloat = 2
+}
+
+/// Which mark a draft row draws over its channel tile, as a pure function.
+///
+/// `nil` leaves ``ConversationMark`` to draw what it draws everywhere else — the `#`, the
+/// lock, or the peer's face.
+enum DraftRowMark {
+    static func symbol(for summary: ComposerDraftSummary, in conversation: ConversationIdentity) -> String? {
+        // A thread inside a channel is a different destination from the channel, and this
+        // list is the one place the two sit next to each other. A thread inside a direct
+        // message keeps the face: it is still a conversation with that person.
+        guard summary.rootID != nil, conversation.kind == .channel else { return nil }
+        return ThreadView.threadSymbol
+    }
 }
 
 /// The two strings a draft row draws, as pure functions.
