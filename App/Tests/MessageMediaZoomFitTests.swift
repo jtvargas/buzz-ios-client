@@ -23,9 +23,9 @@ import UIKit
 @MainActor
 @Suite("Message media zoom fit")
 struct MessageMediaZoomFitTests {
-    /// A viewport the size of the room the viewer leaves a picture on a tall phone, once
-    /// the status bar, the header and the home indicator have taken theirs.
-    static let viewport = CGSize(width: 402, height: 778)
+    /// A tall phone's whole screen, which is the room the viewer gives a picture: the
+    /// chrome floats on it rather than taking a bar's worth off the top.
+    static let viewport = CGSize(width: 402, height: 874)
 
     /// A blank bitmap of `size`, at scale 1 so its `size` is its pixel count — which is
     /// what a downsampled decode hands the viewer.
@@ -118,6 +118,10 @@ extension MessageMediaZoomFitTests {
             CGSize(width: 1600, height: 700),
             CGSize(width: 1200, height: 1200),
             CGSize(width: 300, height: 200),
+            // The two extremes, where a fit that is even slightly wrong runs a long way
+            // off the screen rather than a little way.
+            CGSize(width: 2400, height: 600),
+            CGSize(width: 800, height: 2400),
         ]
     )
     func replacedPictureFitsTheViewport(size: CGSize) {

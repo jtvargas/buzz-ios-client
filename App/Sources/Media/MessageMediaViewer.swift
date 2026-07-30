@@ -46,30 +46,40 @@ struct MessageMediaViewerSubject: Identifiable {
 ///   Two entries for one attachment is the intended cost: the inline bitmap is a 320-pt
 ///   box's worth and would be mush blown up to the screen.
 /// - **The header** is ``MessageMediaViewerHeader`` — the author's face, their name, the
-///   hour, and the conversation the picture was posted in. It is declared as a *safe area
-///   inset* rather than as an overlay, which is the whole reason a picture can never open
-///   underneath it: an inset is a promise the layout keeps, where an overlay is a
-///   rectangle drawn on top and the picture beneath it has to be told separately to move.
+///   hour, and the conversation the picture was posted in. It floats on the picture beside
+///   the close button; see below.
 /// - **Dismissal** is a `Done` button *and* the zoom transition's own interactive drag.
 ///   The button is the one that is certain — it is a control, it is reachable by
 ///   VoiceOver, and it works whatever a gesture recogniser underneath decides. The drag is
 ///   the one that feels right, and ``MessageMediaZoomView`` disables the scroll view's pan
 ///   at the fitted scale so that it can begin.
 ///
-/// # Why the picture is fitted inside the safe area rather than bled to the edges
+/// # Why the picture takes the whole screen and the chrome floats on it
 ///
-/// A picture drawn edge to edge puts its own corners under the clock, the Dynamic Island
-/// and the home indicator — on the tallest phones that is over 90pt of a photograph
-/// standing behind system chrome, and the whole point of this screen is to look at the
-/// thing whole. So the black bleeds and the picture does not. The header takes its own
-/// room out of the same inset, and the bottom seam below would take room the same way.
+/// Two layers, and they are told apart by which one ignores the safe area:
+///
+/// - **The picture ignores it.** It is fitted into the *whole screen* — a portrait
+///   photograph gets the full height of the phone to be whole in, rather than the height
+///   left over after a bar. This is the owner's own drawing: `image content behind`, with
+///   the pill and the close button drawn over it.
+/// - **The chrome respects it.** The pill and the button sit inside the safe area, so
+///   nothing readable is ever under the clock, the Dynamic Island or the home indicator.
+///
+/// The earlier arrangement — the picture inset to clear a header declared as a
+/// `safeAreaInset` — was rejected on sight: it spends the top of the screen on chrome at
+/// the one moment the reader came here to look at a photograph, and a tall picture pays
+/// for it twice, losing width to keep its shape.
+///
+/// What the chrome costs the picture is now *overlap* rather than *room*, and it is
+/// bounded: the pill is one object in a corner, the picture behind it is still whole, and
+/// a reader who wants the covered corner can pan it out from under with one finger.
 ///
 /// # Where the bottom action bar goes
 ///
 /// The owner deferred the row of actions Slack draws under a picture — share, save,
-/// forward. When it arrives it is a second `safeAreaInset(edge: .bottom)` here, beside the
-/// header's; nothing else has to change, because the picture already fits whatever room
-/// the insets leave it and re-fits when that room changes.
+/// forward. When it arrives it joins the chrome layer as a second row, at the bottom of
+/// the same safe-area-respecting stack; the picture behind it does not move, for the same
+/// reason it does not move for the header.
 ///
 /// # Why the background is black and the scheme is forced dark
 ///
@@ -81,6 +91,9 @@ struct MessageMediaViewer: View {
     let subject: MessageMediaViewerSubject
     var loader: RemoteImageLoader = .messageMedia
 
+    /// The accessibility identifier on each page's picture. See the use site.
+    static let pictureIdentifier = "mediaViewerPicture"
+
     @State private var selection: Int
     @Environment(\.dismiss) private var dismiss
 
@@ -91,34 +104,33 @@ struct MessageMediaViewer: View {
     }
 
     var body: some View {
+        // Two layers, told apart by which one ignores the safe area — and the reader is
+        // deliberately *outside* the ignoring, because a `GeometryReader` that has
+        // ignored the safe area reports its insets as **zero**. It is the only thing here
+        // that still knows what they are, and the chrome's whole placement is that number.
         GeometryReader { proxy in
-            ZStack {
-                // The only thing that bleeds. Everything else — the pictures, the header,
-                // the close button — lives inside the safe area.
+            ZStack(alignment: .top) {
                 Color.black.ignoresSafeArea()
-                TabView(selection: $selection) {
-                    // By position, for the same reason the mosaic is — the group can hold
-                    // one URL twice, and ``BuzzKit/MessageMedia/id`` is the URL. Here the
-                    // consequence would be a page the reader cannot reach: `.tag(index)`
-                    // stays distinct while the identity behind it does not.
-                    ForEach(Array(subject.media.enumerated()), id: \.offset) { index, media in
-                        MessageMediaViewerPage(
-                            media: media,
-                            preview: index == subject.startIndex ? subject.preview : nil,
-                            screenSize: proxy.size,
-                            loader: loader
-                        )
-                        .tag(index)
-                    }
-                }
-                // Paging only earns its chrome once there is more than one page — a
-                // single attachment's viewer must read exactly as it did before
-                // grouping existed, dots and all.
-                .tabViewStyle(.page(indexDisplayMode: subject.media.count > 1 ? .automatic : .never))
-                .safeAreaInset(edge: .top, spacing: 0) { headerBar }
+                pictures(screenSize: screen(in: proxy))
+                chrome
+                    .padding(.horizontal, 12)
+                    .padding(.top, 4)
             }
         }
         .preferredColorScheme(.dark)
+    }
+
+    /// The whole screen, from a reader that was given the room inside the safe area.
+    ///
+    /// What the pixel size of each page's decode is derived from, so a picture is decoded
+    /// for the screen it is actually drawn on rather than for the smaller rectangle this
+    /// reader was proposed.
+    private func screen(in proxy: GeometryProxy) -> CGSize {
+        let insets = proxy.safeAreaInsets
+        return CGSize(
+            width: proxy.size.width + insets.leading + insets.trailing,
+            height: proxy.size.height + insets.top + insets.bottom
+        )
     }
 }
 
@@ -146,6 +158,13 @@ private struct MessageMediaViewerPage: View {
     var body: some View {
         content
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            // A `TabView` page is hosted inside a collection view cell, and that boundary
+            // re-reads the window's safe area and applies it to the SwiftUI content in the
+            // cell — an ancestor having already ignored it counts for nothing here. Without
+            // this the cell is the full 874pt of a tall phone and the picture inside it is
+            // 778, which is the picture stopping 96pt short of the screen it was supposed
+            // to fill. Measured, and gated by ``MediaViewerLayoutTests``.
+            .ignoresSafeArea()
             // Keyed by the pixel size rather than by the geometry: the target is derived
             // from the screen's *longest* edge, so a rotation cannot change it and cannot
             // re-run a decode that would produce the identical bitmap.
@@ -166,6 +185,11 @@ private extension MessageMediaViewerPage {
                 .accessibilityElement()
                 .accessibilityLabel(MessageMediaDescription.label(for: media, state: .loaded))
                 .accessibilityAddTraits(.isImage)
+                // Named apart from the inline picture, which carries the same label — the
+                // author's `alt` — and is still in the hierarchy behind the cover. The
+                // rectangle this reports is the *page*, which is what says whether the
+                // picture layer takes the whole screen or stops at a bar.
+                .accessibilityIdentifier(MessageMediaViewer.pictureIdentifier)
         } else if didFail {
             failureNotice
         } else {
@@ -218,25 +242,55 @@ private extension MessageMediaViewerPage {
 }
 
 private extension MessageMediaViewer {
-    /// The header pill and the close button on one line — and the room the pictures fit
-    /// inside of, since this is what the top safe area inset is made of.
+    /// The pictures, filling the screen the chrome is drawn over.
     ///
-    /// The pill takes its own width and no more — it is an object floating on the
-    /// picture, not a bar across it — and the `Spacer` between the two is what makes a
-    /// long name or a group DM's list of names truncate rather than push the close button
-    /// off the screen. When there is no attribution the line is the button alone, which is
-    /// what the viewer looked like before this existed.
-    var headerBar: some View {
-        HStack(alignment: .top, spacing: 8) {
-            if let attribution = subject.attribution {
-                MessageMediaViewerHeader(attribution: attribution)
+    /// `screenSize` comes from the surface's own reader rather than a second one here: it
+    /// is the expanded size, so the pixel size every page decodes to is the phone's whole
+    /// screen and not the room left by a bar.
+    func pictures(screenSize: CGSize) -> some View {
+        TabView(selection: $selection) {
+            // By position, for the same reason the mosaic is — the group can hold one URL
+            // twice, and ``BuzzKit/MessageMedia/id`` is the URL. Here the consequence
+            // would be a page the reader cannot reach: `.tag(index)` stays distinct while
+            // the identity behind it does not.
+            ForEach(Array(subject.media.enumerated()), id: \.offset) { index, media in
+                MessageMediaViewerPage(
+                    media: media,
+                    preview: index == subject.startIndex ? subject.preview : nil,
+                    screenSize: screenSize,
+                    loader: loader
+                )
+                .tag(index)
             }
-            Spacer(minLength: 0)
-            doneButton
         }
-        .padding(.horizontal, 12)
-        .padding(.top, 4)
-        .padding(.bottom, 8)
+        // Paging only earns its chrome once there is more than one page — a single
+        // attachment's viewer must read exactly as it did before grouping existed, dots
+        // and all.
+        .tabViewStyle(.page(indexDisplayMode: subject.media.count > 1 ? .automatic : .never))
+        .ignoresSafeArea()
+    }
+
+    /// The header pill and the close button, floating on the picture.
+    ///
+    /// One row at the top of the screen; the surface pushes it back down by the safe area
+    /// the pictures behind it are ignoring, so nothing readable stands under the clock or
+    /// the Dynamic Island.
+    ///
+    /// The pill takes its own width and no more — it is an object on the picture, not a
+    /// bar across it — and the `Spacer` between the two is what makes a long name or a
+    /// group DM's list of names truncate rather than push the close button off the screen.
+    /// When there is no attribution the row is the button alone, which is what the viewer
+    /// looked like before this existed.
+    var chrome: some View {
+        GlassEffectContainer(spacing: 8) {
+            HStack(alignment: .top, spacing: 8) {
+                if let attribution = subject.attribution {
+                    MessageMediaViewerHeader(attribution: attribution)
+                }
+                Spacer(minLength: 0)
+                doneButton
+            }
+        }
     }
 
     var doneButton: some View {
@@ -250,6 +304,9 @@ private extension MessageMediaViewer {
                 // other hand holds the phone.
                 .frame(minWidth: 44, minHeight: 44)
         }
+        // `.glass` is already the interactive material for a control — it lights under a
+        // finger because a button is a thing that can be pressed. The pill beside it has
+        // to ask for that appearance explicitly; see ``MessageMediaViewerHeader``.
         .buttonStyle(.glass)
         .accessibilityLabel("Done")
     }

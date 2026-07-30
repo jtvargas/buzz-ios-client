@@ -56,12 +56,25 @@ struct MessageMediaViewerHeader: View {
         .padding(.leading, 6)
         .padding(.trailing, 14)
         .padding(.vertical, 6)
-        .background(.black.opacity(0.55), in: .capsule)
-        // Over a photograph the material is the only thing separating white text from
-        // whatever is behind it, so the wash above is drawn *under* the glass rather than
-        // instead of it — a light picture would otherwise take the text with it.
-        .glassEffect(.regular, in: .capsule)
+        // Glass and nothing under it. An opaque wash beneath the material was the first
+        // build's answer to legibility over a light photograph, and it reads as a dark
+        // plate with a sheen rather than as glass — which is not what was asked for. The
+        // viewer forces a dark scheme, so `.regular` resolves to its dark variant whatever
+        // the picture behind it is doing, and that is what keeps white text on it.
+        //
+        // `.interactive()` is the owner's ask, and it is honest here rather than
+        // decorative: the pill is hit-testable — its own material takes the touch that
+        // would otherwise reach the picture — so a finger landing on it gets the
+        // material's response instead of nothing at all.
+        .glassEffect(.regular.interactive(), in: .capsule)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(attribution.accessibilityLabel)
+        // Named for ``MediaViewerLayoutTests``, which asks where this landed relative to
+        // the screen — a question the label cannot answer, since the label is a sentence
+        // about a person and this is a question about a rectangle.
+        .accessibilityIdentifier(MessageMediaViewerHeader.identifier)
     }
+
+    /// The pill's accessibility identifier.
+    static let identifier = "mediaViewerHeader"
 }
