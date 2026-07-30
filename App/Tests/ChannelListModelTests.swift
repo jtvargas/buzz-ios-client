@@ -175,10 +175,201 @@ struct ChannelListModelTests {
 
     @Test("launch and fallback surfaces expose stable recovery copy")
     func directoryPresentationCopy() {
-        #expect(ChannelBootstrapView.message == "Checking channels…")
+        #expect(ChannelBootstrapView.message == "Connecting…")
         #expect(
             ChannelDirectoryFallbackBanner.message
                 == "Couldn’t refresh channels — showing saved conversations"
         )
+    }
+}
+
+/// What the sidebar is allowed to draw before the relay has answered for this identity.
+@MainActor
+@Suite("Channel directory surface", .timeLimit(.minutes(1)))
+struct ChannelDirectorySurfaceTests {
+    /// The defect this whole surface exists for: the store holds a row for a channel the
+    /// relay has since removed, and until the relay has answered there is no way to tell it
+    /// from a row that is still real. So a launch draws neither.
+    @Test("a cached channel is held but never listed before the relay has answered")
+    func cachedChannelIsNotListedBeforeAuthority() async throws {
+        let temp = TempStore()
+        defer { temp.remove() }
+        let store = try temp.open()
+        let relay = try Fixture()
+        let reader = try Fixture()
+
+        _ = try await store.ingest(batch: [
+            try relay.channelMetadata("stale", name: "Deleted Elsewhere", at: 500),
+        ], phase: .backfill)
+        try await store.markChannelAccess(identity: reader.pubkey, channel: "stale", state: .active)
+
+        let model = ChannelListModel(store: store, selfPubkey: reader.pubkey)
+
+        #expect(model.surface == .connecting)
+        // Held, because a name still resolves from it…
+        #expect(model.channels.map(\.id) == ["stale"])
+        // …and not listed, because nothing has confirmed it exists.
+        #expect(model.visibleChannels.isEmpty)
+    }
+
+    @Test("an authoritative verdict is what lets the sidebar list conversations")
+    func authoritativeVerdictRevealsConversations() async throws {
+        let temp = TempStore()
+        defer { temp.remove() }
+        let store = try temp.open()
+        let relay = try Fixture()
+        let reader = try Fixture()
+
+        _ = try await store.ingest(batch: [
+            try relay.channelMetadata("general", name: "General", at: 500),
+        ], phase: .backfill)
+        try await store.markChannelAccess(identity: reader.pubkey, channel: "general", state: .active)
+
+        let model = ChannelListModel(store: store, selfPubkey: reader.pubkey)
+        #expect(model.visibleChannels.isEmpty)
+
+        model.adopt(.authoritative)
+
+        #expect(model.surface == .conversations)
+        #expect(model.visibleChannels.map(\.id) == ["general"])
+    }
+
+    /// The read has to land *before* the flip, in one step. The verdict stream and the
+    /// store's change observation are independent, so a flip that trusted the observation
+    /// to have already fired would draw the pre-snapshot rows for a frame — the flash.
+    @Test("adopting an authoritative verdict re-reads the store rather than waiting to be told")
+    func authoritativeVerdictReReadsTheStore() async throws {
+        let temp = TempStore()
+        defer { temp.remove() }
+        let store = try temp.open()
+        let relay = try Fixture()
+        let reader = try Fixture()
+
+        let model = ChannelListModel(store: store, selfPubkey: reader.pubkey)
+        // No observation is running: `run()` is deliberately never started here, so the
+        // only thing that can put this channel on screen is the adoption itself.
+        _ = try await store.ingest(batch: [
+            try relay.channelMetadata("arrived", name: "Arrived", at: 500),
+        ], phase: .backfill)
+        try await store.markChannelAccess(identity: reader.pubkey, channel: "arrived", state: .active)
+        #expect(model.visibleChannels.isEmpty)
+
+        model.adopt(.authoritative)
+
+        #expect(model.visibleChannels.map(\.id) == ["arrived"])
+    }
+
+    @Test("a re-check after a good answer keeps that answer on screen")
+    func recheckDoesNotBlankAnAnsweredList() async throws {
+        let temp = TempStore()
+        defer { temp.remove() }
+        let store = try temp.open()
+        let relay = try Fixture()
+        let reader = try Fixture()
+
+        _ = try await store.ingest(batch: [
+            try relay.channelMetadata("general", name: "General", at: 500),
+        ], phase: .backfill)
+        try await store.markChannelAccess(identity: reader.pubkey, channel: "general", state: .active)
+
+        let model = ChannelListModel(store: store, selfPubkey: reader.pubkey, answerDeadline: .milliseconds(30))
+        model.adopt(.authoritative)
+
+        model.adopt(.checking)
+        #expect(model.surface == .conversations)
+        // The same for a refresh that fails outright: the banner says so, the list stays.
+        model.adopt(.cachedFallback)
+        // Long enough that a deadline armed in error would have fired.
+        try await Task.sleep(for: .milliseconds(120))
+        #expect(model.surface == .conversations)
+        #expect(model.visibleChannels.map(\.id) == ["general"])
+    }
+
+    @Test("a first attempt that fails says so, and offers no saved list in its place")
+    func failedFirstAttemptBecomesUnreachable() async throws {
+        let temp = TempStore()
+        defer { temp.remove() }
+        let store = try temp.open()
+        let relay = try Fixture()
+        let reader = try Fixture()
+
+        _ = try await store.ingest(batch: [
+            try relay.channelMetadata("stale", name: "Deleted Elsewhere", at: 500),
+        ], phase: .backfill)
+        try await store.markChannelAccess(identity: reader.pubkey, channel: "stale", state: .active)
+
+        let model = ChannelListModel(store: store, selfPubkey: reader.pubkey, answerDeadline: .milliseconds(30))
+        model.adopt(.cachedFallback)
+
+        await waitUntil { model.surface == .unreachable }
+        #expect(model.visibleChannels.isEmpty)
+    }
+
+    /// The deadline is armed by a verdict that is merely *outstanding*, not only by one that
+    /// failed. Nothing bounds the signed directory request itself, so a relay that accepts
+    /// the connection and never answers never produces a failure to react to — and the
+    /// reader would wait on placeholder rows indefinitely.
+    @Test("a relay that never answers at all is still reported")
+    func outstandingVerdictAlsoArmsTheDeadline() async throws {
+        let temp = TempStore()
+        defer { temp.remove() }
+        let store = try temp.open()
+        let reader = try Fixture()
+
+        let model = ChannelListModel(store: store, selfPubkey: reader.pubkey, answerDeadline: .milliseconds(30))
+        model.adopt(.checking)
+
+        await waitUntil { model.surface == .unreachable }
+    }
+
+    /// The other half of the deadline: an answer inside it takes the pending word with it.
+    @Test("an answer inside the deadline cancels it")
+    func answerCancelsTheDeadline() async throws {
+        let temp = TempStore()
+        defer { temp.remove() }
+        let store = try temp.open()
+        let reader = try Fixture()
+
+        let model = ChannelListModel(store: store, selfPubkey: reader.pubkey, answerDeadline: .milliseconds(40))
+        model.adopt(.checking)
+        model.adopt(.authoritative)
+
+        try await Task.sleep(for: .milliseconds(150))
+        #expect(model.surface == .conversations)
+    }
+
+    /// The engine cycles between `.checking` and `.cachedFallback` while it retries. Each
+    /// pass used to re-arm the wait, so the recovery screen — and the Retry button on it —
+    /// flickered back to placeholder rows, sometimes under the reader's finger.
+    @Test("the unreachable surface is not taken back by further retry verdicts")
+    func unreachableLatchesUntilAnswered() async throws {
+        let temp = TempStore()
+        defer { temp.remove() }
+        let store = try temp.open()
+        let reader = try Fixture()
+
+        let model = ChannelListModel(store: store, selfPubkey: reader.pubkey, answerDeadline: .milliseconds(20))
+        model.adopt(.cachedFallback)
+        await waitUntil { model.surface == .unreachable }
+
+        model.adopt(.checking)
+        #expect(model.surface == .unreachable)
+        model.adopt(.cachedFallback)
+        #expect(model.surface == .unreachable)
+
+        // Only an answer takes it back.
+        model.adopt(.authoritative)
+        #expect(model.surface == .conversations)
+    }
+
+    @Test("the pill names the connection, not the directory")
+    func pillNamesTheConnection() {
+        #expect(SidebarStatusPill.label(for: .stopped, hasConnectedBefore: false) == "Connecting…")
+        #expect(SidebarStatusPill.label(for: .starting, hasConnectedBefore: false) == "Connecting…")
+        #expect(SidebarStatusPill.label(for: .starting, hasConnectedBefore: true) == "Reconnecting…")
+        // A live socket with the answer still outstanding: the connection is no longer
+        // what the reader is waiting on.
+        #expect(SidebarStatusPill.label(for: .running, hasConnectedBefore: true) == "Loading…")
+        #expect(SidebarStatusPill.label(for: .suspended, hasConnectedBefore: true) == "Loading…")
     }
 }

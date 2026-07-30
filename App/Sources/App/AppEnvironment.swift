@@ -18,8 +18,10 @@ final class AppEnvironment {
     enum Phase: Equatable {
         /// The store is open but no identity is stored yet — show the gate.
         case needsIdentity
-        /// A returning identity is known, but its first signed channel-directory
-        /// attempt has not reached a definitive success or fallback verdict.
+        /// A returning identity is known and the engine is being composed around it. Ends
+        /// when the engine *exists*, not when it has connected — deliberately not a network
+        /// wait. Draws the sidebar's own waiting state, so the launch reads as one surface
+        /// filling in rather than a spinner handing over to a screen.
         case bootstrapping
         /// An identity is loaded and the engine started — show the app.
         case running
@@ -58,6 +60,13 @@ final class AppEnvironment {
 
     private var engineStateTask: Task<Void, Never>?
     private var directoryStatusTask: Task<Void, Never>?
+    /// A returning user's engine start, which runs *underneath* the mounted workspace
+    /// rather than in front of it. Held so sign-out can wait it out.
+    private var engineStartTask: Task<Void, Never>?
+    /// Whether that start is still in flight. Read by the account sheet, which keeps Sign
+    /// Out disabled while it is: signing out mid-start is a teardown racing a setup that
+    /// cannot be cancelled (see ``signOut()``), and there is no session to leave yet anyway.
+    private(set) var isStartingEngine = false
     /// Publishes our own presence: `"online"` every 60 s while foregrounded, and
     /// `"offline"` on background. Built alongside the engine.
     private var heartbeat: PresenceHeartbeat?
@@ -77,7 +86,10 @@ final class AppEnvironment {
     func bootstrap() async {
         do {
             if try signer.loadPrivateKey() != nil {
-                try await startEngine(relayURLString: RelayEndpoint.storedURLString)
+                try await startEngine(
+                    relayURLString: RelayEndpoint.storedURLString,
+                    mountsBeforeConnect: true
+                )
             } else {
                 phase = .needsIdentity
             }
@@ -182,6 +194,17 @@ final class AppEnvironment {
         engineStateTask = nil
         directoryStatusTask?.cancel()
         directoryStatusTask = nil
+        // Let a launch in flight finish rather than interleaving with it. `SyncEngine.start`
+        // suspends on work that cannot be cancelled, so a `stop()` landing mid-start returns
+        // first and then start *resumes*, re-arming the observers, the presence sweep and
+        // the socket the stop just closed — an authenticated connection for the key this
+        // method has already deleted. ``isStartingEngine`` keeps the affordance off screen
+        // while this is pending, so there is normally nothing to wait for; this is the
+        // guarantee behind that.
+        if let engineStartTask {
+            await engineStartTask.value
+        }
+        engineStartTask = nil
         if let engine {
             await engine.stop()
         }
@@ -236,7 +259,10 @@ final class AppEnvironment {
 
     // MARK: - Engine composition
 
-    private func startEngine(relayURLString: String) async throws {
+    /// - Parameter mountsBeforeConnect: whether the workspace may appear before the engine
+    ///   has started. True for a returning user's launch, where a blocking wait is the bug;
+    ///   false for the identity gate, where the caller is waiting on a verdict.
+    private func startEngine(relayURLString: String, mountsBeforeConnect: Bool = false) async throws {
         guard let websocketURL = RelayEndpoint.websocketURL(from: relayURLString),
               let queryURL = RelayEndpoint.queryURL(for: websocketURL)
         else {
@@ -254,45 +280,51 @@ final class AppEnvironment {
             StoreOwnership.ownerPubkeyHex = intendedPubkey
         }
 
-        let connection = RelayConnection(url: websocketURL, signer: signer)
-        let subscriptions = SubscriptionManager(connection: connection, signer: signer)
-        let presence = PresenceStore()
-        let httpTransport = URLSessionHTTPTransport()
-        let windowClient = WindowClient(
-            transport: httpTransport,
-            queryURL: queryURL,
-            signer: signer
-        )
-        let directoryClient = ChannelDirectoryClient(
-            transport: httpTransport,
-            queryURL: queryURL,
-            signer: signer
-        )
-        let engine = SyncEngine(
-            connection: connection,
-            subscriptions: subscriptions,
-            store: store,
-            presence: presence,
-            windowClient: windowClient,
-            directoryClient: AnyChannelDirectoryFetcher(directoryClient),
-            signer: signer
-        )
+        let engine = makeEngine(websocketURL: websocketURL, queryURL: queryURL)
         self.engine = engine
         heartbeat = PresenceHeartbeat(publisher: engine)
 
         observeEngineState(of: engine)
         observeDirectoryStatus(of: engine)
         selfPubkeyHex = intendedPubkey
-        try await engine.start()
-        // The workspace mounts only from a readable signed snapshot. Opening the
-        // database succeeded in `init`, but this final identity-scoped read keeps a
-        // later store failure fatal instead of presenting a verified-looking empty
-        // sidebar.
+        // Opening the database succeeded in `init`; this final identity-scoped read keeps
+        // a later store failure fatal rather than presenting a workspace that cannot
+        // answer for itself.
         _ = try store.channelList(selfPubkey: intendedPubkey)
+
+        guard mountsBeforeConnect else {
+            // The identity gate. Someone is watching a form they have just filled in, and
+            // a relay URL that cannot be reached is their own typing to correct — so here
+            // the engine's start *is* awaited, and its failure is the gate's answer.
+            try await engine.start()
+            phase = .running
+            heartbeat?.startForeground()
+            return
+        }
+
+        // A returning user's launch is not gated on the network. The workspace mounts now —
+        // into the sidebar's connecting state, which draws no conversation the relay has not
+        // confirmed — and the engine comes up underneath it. There is no longer a window in
+        // which a cached list is the best thing on hand, because it is never drawn.
         phase = .running
-        // Launch is a foreground start; scene-phase `.onChange` does not fire for the
-        // initial value, so begin beating explicitly here.
-        heartbeat?.startForeground()
+        isStartingEngine = true
+        engineStartTask = Task { [weak self] in
+            defer { self?.isStartingEngine = false }
+            do {
+                try await engine.start()
+                // Launch is a foreground start, and scene-phase `.onChange` does not fire
+                // for the initial value — so the first beat is explicit. After the engine,
+                // because presence is published through it.
+                self?.heartbeat?.startForeground()
+            } catch {
+                // Both guards matter: a sign-out while this was in flight has already moved
+                // to `.needsIdentity` and dropped the engine, and this throw is likely
+                // *because* of it — the key it needed is gone. A terminal failure written
+                // over the onboarding gate strands the user on a screen with nothing on it.
+                guard let self, self.engine === engine, self.phase == .running else { return }
+                self.phase = .failed(String(describing: error))
+            }
+        }
     }
 
     private func observeEngineState(of engine: SyncEngine) {

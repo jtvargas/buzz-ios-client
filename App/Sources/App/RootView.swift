@@ -70,13 +70,29 @@ struct RootView: View {
     }
 }
 
-/// Stable returning-user launch surface. The workspace is intentionally not
-/// constructed until the first signed directory attempt has completed.
+/// The returning user's first frames, while the engine is composed around their key.
+///
+/// It draws the same waiting sidebar the mounted workspace draws — deliberately, so this
+/// hands over to ``ChannelListView`` without a visible seam. It replaced a full-screen
+/// "Checking channels…" spinner that also waited on the *relay*, which made a slow network
+/// into a blocked app; nothing here waits on the network.
 struct ChannelBootstrapView: View {
-    static let message = "Checking channels…"
+    /// Nothing has connected yet by definition — this is the frame before the engine
+    /// exists — so the word is fixed rather than read off an engine state.
+    static let message = "Connecting…"
 
     var body: some View {
-        ProgressView(Self.message)
-            .accessibilityIdentifier("channel-directory-checking")
+        NavigationStack {
+            ChannelDirectoryPlaceholderList(label: Self.message)
+                // The workspace's own heading, and not decoration: the navigation bar it
+                // draws is the same top inset ``ChannelListView`` has, so the placeholder
+                // rows are already where the real ones will be and the handover moves
+                // nothing. It leads nowhere on purpose — there is no account to open until
+                // the engine holding the identity exists.
+                .conversationTitle(
+                    mark: ChannelListView.communityMark,
+                    title: CommunityIdentity.name()
+                )
+        }
     }
 }
