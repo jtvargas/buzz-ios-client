@@ -40,6 +40,9 @@ struct ChannelTimelineView: View {
     private let presenceStore: PresenceStore
     private let lifecycleEngine: SyncEngine?
     private let selfPubkey: String?
+    /// Whether the composer takes the keyboard once this conversation has settled. Set
+    /// only by the Drafts screen — see ``SwiftUI/View/focusesComposerOnArrival(_:focus:)``.
+    private let focusesComposer: Bool
     /// The peer this conversation was opened with, when it was reached by opening a direct
     /// message rather than from the sidebar. Only ever consulted while the roster has
     /// nothing to say — see ``EntityNames/conversation(for:knownPeer:)``.
@@ -58,7 +61,8 @@ struct ChannelTimelineView: View {
         engine: SyncEngine,
         drafts: ComposerDrafts? = nil,
         selfPubkey: String?,
-        knownPeer: String? = nil
+        knownPeer: String? = nil,
+        focusingComposer focusesComposer: Bool = false
     ) {
         self.init(
             channel: channel,
@@ -72,7 +76,8 @@ struct ChannelTimelineView: View {
             drafts: drafts,
             selfPubkey: selfPubkey,
             knownPeer: knownPeer,
-            lifecycleEngine: engine
+            lifecycleEngine: engine,
+            focusingComposer: focusesComposer
         )
     }
 
@@ -98,8 +103,10 @@ struct ChannelTimelineView: View {
         drafts: ComposerDrafts? = nil,
         selfPubkey: String?,
         knownPeer: String? = nil,
-        lifecycleEngine: SyncEngine? = nil
+        lifecycleEngine: SyncEngine? = nil,
+        focusingComposer focusesComposer: Bool = false
     ) {
+        self.focusesComposer = focusesComposer
         self.channel = channel
         channelID = channel.id
         self.store = store
@@ -164,6 +171,7 @@ struct ChannelTimelineView: View {
             accessory
         }
         .overlay { emptyState }
+        .focusesComposerOnArrival(focusesComposer) { model.mentionAutocomplete.isComposerFocused = true }
         .modifier(header)
         // A conversation takes the whole screen. The tab bar is not just visual clutter
         // under the composer: it is a second bottom inset, and every scroll and keyboard
@@ -386,10 +394,16 @@ struct ChannelTimelineView: View {
         .map(ConversationTitleBar.Subtitle.text)
     }
 
+}
+
+/// The four small things the body reaches for. In an extension rather than the struct
+/// itself — the house style ``ChannelListView`` already follows — so the type reads as
+/// its state and its slots, and the helpers sit under them.
+private extension ChannelTimelineView {
     /// The scaffold's "the top of history is near" report. It arrives as a level
     /// rather than an edge and can fire several times across one page load, which the
     /// model's own guard absorbs.
-    private func loadOlderPage() {
+    func loadOlderPage() {
         Task { await model.loadOlder() }
     }
 
@@ -397,7 +411,7 @@ struct ChannelTimelineView: View {
     /// focus and its suggestion panel, so a keyboard raised for this channel cannot
     /// outlive it into a thread — or be restored under it on the way back. The scaffold
     /// has already resigned the responder; this is the observed half of the same state.
-    private func releaseComposer() {
+    func releaseComposer() {
         model.mentionAutocomplete.dismissComposer()
     }
 
@@ -407,7 +421,7 @@ struct ChannelTimelineView: View {
     /// `focusingComposer` is set only by the actions sheet's "Reply in thread". The row's own
     /// tap and its replies strip are someone going to *read*, and raising a keyboard over
     /// what they came to read is the wrong answer to both.
-    private func open(thread row: TimelineRow, focusingComposer: Bool = false) {
+    func open(thread row: TimelineRow, focusingComposer: Bool = false) {
         let root = row.rootID ?? row.id
         openedThread = ThreadRoute(root: root, channel: channelID, focusesComposer: focusingComposer)
     }
@@ -415,7 +429,7 @@ struct ChannelTimelineView: View {
     /// A typer's name, through the injected directory — the same answer the sidebar,
     /// a message row, and a mention give. It replaces a scan of the loaded rows, which
     /// could only name someone who had already spoken in the page on screen.
-    private func authorName(_ pubkey: String) -> String {
+    func authorName(_ pubkey: String) -> String {
         names.name(for: pubkey)
     }
 }

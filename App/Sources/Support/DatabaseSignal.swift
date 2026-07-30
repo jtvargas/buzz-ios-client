@@ -108,4 +108,51 @@ enum DatabaseSignal {
             }
             .values(in: reader)
     }
+
+    /// A change signal over `composer_draft` alone.
+    ///
+    /// Deliberately **not** folded into ``changes(in:)``, and this is the load-bearing part:
+    /// that region is tracked by every timeline, the sidebar and the Threads screen, and a
+    /// draft is written on essentially every keystroke. Putting the table in there would
+    /// make typing one word re-read every conversation list in the app.
+    ///
+    /// Emits on any write to the table — including a draft's text changing, which no caller
+    /// of this is currently interested in. That is the honest region to track for a list of
+    /// drafts, and the surfaces that read it (a pushed screen, and a count that
+    /// ``draftCount(in:)`` de-duplicates) are the only ones awake for it.
+    static func composerDrafts(in reader: any DatabaseReader) -> AsyncValueObservation<Int> {
+        ValueObservation
+            .tracking { db in
+                var token = 0
+                let rows = try Row.fetchAll(
+                    db,
+                    sql: "SELECT channel_id, root_id, updated_at FROM composer_draft"
+                )
+                for row in rows {
+                    let channel: String = row["channel_id"] ?? ""
+                    let root: String = row["root_id"] ?? ""
+                    let updatedAt: Int64 = row["updated_at"] ?? 0
+                    token = token
+                        &+ channel.hashValue
+                        &+ root.hashValue
+                        &+ Int(truncatingIfNeeded: updatedAt)
+                }
+                return token
+            }
+            .values(in: reader)
+    }
+
+    /// How many composers hold unsent text, emitted only when the number actually changes.
+    ///
+    /// `removeDuplicates` is what makes this safe to run behind the sidebar for the life of
+    /// the session: the underlying table is written on every keystroke, and without it the
+    /// shortcut card would be invalidated at typing speed to be told the same number.
+    static func draftCount(in reader: any DatabaseReader) -> AsyncValueObservation<Int> {
+        ValueObservation
+            .tracking { db in
+                try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM composer_draft") ?? 0
+            }
+            .removeDuplicates()
+            .values(in: reader)
+    }
 }

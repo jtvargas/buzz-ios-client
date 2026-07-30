@@ -120,6 +120,68 @@ struct ComposerDraftTests {
         #expect(!kept.contains("room-1"))
     }
 
+    // MARK: - The Drafts screen
+
+    @Test("summaries come back newest edit first, clipped, and counted")
+    func summaries() async throws {
+        let database = TempDatabase()
+        defer { database.remove() }
+        let clock = MutableDateClock(Date(timeIntervalSince1970: 1_000))
+        let store = try BuzzEventStore(path: database.path, projector: NullProjector(), clock: clock.reader)
+
+        clock.advance(by: 1)
+        try await store.saveComposerDraft(channel: "room-1", root: nil, text: "older", tokens: "")
+        clock.advance(by: 1)
+        try await store.saveComposerDraft(channel: "room-1", root: "opener", text: "newer", tokens: "")
+
+        let rows = try store.composerDraftSummaries()
+        #expect(rows.map(\.snippet) == ["newer", "older"])
+        #expect(rows.map(\.rootID) == ["opener", nil])
+        #expect(try store.composerDraftCount() == 2)
+        // A row's identity is its composer's coordinate, so the two are distinct even
+        // though they share a channel.
+        #expect(Set(rows.map(\.id)).count == 2)
+    }
+
+    /// A draft may run to the message ceiling and the row shows one line of it. Reading the
+    /// whole column to draw a hundred single lines is the one shape of this that could cost
+    /// something.
+    @Test("a long draft is clipped in SQL, not in the row")
+    func summariesClip() async throws {
+        let database = TempDatabase()
+        defer { database.remove() }
+        let store = try database.open()
+        try await store.saveComposerDraft(
+            channel: "room-1",
+            root: nil,
+            text: String(repeating: "a", count: 5_000),
+            tokens: ""
+        )
+
+        let clipped = try #require(try store.composerDraftSummaries(snippetLength: 32).first)
+        #expect(clipped.snippet.count == 32)
+        // And the draft itself is untouched — the clip is the list's, not the store's.
+        #expect(try store.composerDraft(channel: "room-1", root: nil)?.text.count == 5_000)
+    }
+
+    @Test("several drafts are discarded together, and only the named ones")
+    func batchDelete() async throws {
+        let database = TempDatabase()
+        defer { database.remove() }
+        let store = try database.open()
+        try await store.saveComposerDraft(channel: "room-1", root: nil, text: "a", tokens: "")
+        try await store.saveComposerDraft(channel: "room-1", root: "opener", text: "b", tokens: "")
+        try await store.saveComposerDraft(channel: "room-2", root: nil, text: "c", tokens: "")
+
+        try await store.deleteComposerDrafts([
+            (channel: "room-1", root: nil),
+            (channel: "room-1", root: "opener"),
+        ])
+
+        #expect(try store.composerDraftSummaries().map(\.channelID) == ["room-2"])
+        #expect(try store.composerDraftCount() == 1)
+    }
+
     /// The reason drafts live in this database rather than in `UserDefaults`: this is the
     /// only unsent-words store an identity change is guaranteed to erase.
     @Test("an identity change wipes every stored draft")

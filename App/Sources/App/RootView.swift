@@ -52,6 +52,7 @@ struct RootView: View {
                 ChannelListView(
                     store: environment.store,
                     engine: engine,
+                    drafts: environment.drafts,
                     selfPubkey: environment.selfPubkeyHex
                 )
             } label: {

@@ -30,6 +30,35 @@ public struct ComposerDraftRecord: Sendable, Equatable {
     }
 }
 
+/// One draft as a *list* reads it: where it belongs, enough of it to recognise, and when
+/// it was last touched.
+///
+/// Distinct from ``ComposerDraftRecord`` because the two answer different questions. A
+/// record is the draft, and exists to be put back into a composer. A summary is a row on
+/// a screen, and its text is clipped in SQL — a draft may run to the 64 KiB message
+/// ceiling, the row shows one line of it, and the list is re-read on every keystroke the
+/// author makes anywhere. Reading the whole column to draw a hundred single lines is the
+/// one shape of this feature that could actually cost something.
+public struct ComposerDraftSummary: Sendable, Equatable, Identifiable {
+    public let channelID: String
+    public let rootID: String?
+    /// The draft's opening characters — see ``ComposerDraftPolicy/snippetLength``. Never
+    /// the whole draft.
+    public let snippet: String
+    public let updatedAt: Int64
+
+    /// Stable across re-reads, so a list keeps a row's identity while its text changes.
+    /// The composer's coordinate, which is exactly what a row stands for.
+    public var id: String { "\(channelID)\u{1F}\(rootID ?? "")" }
+
+    public init(channelID: String, rootID: String?, snippet: String, updatedAt: Int64) {
+        self.channelID = channelID
+        self.rootID = rootID
+        self.snippet = snippet
+        self.updatedAt = updatedAt
+    }
+}
+
 public enum ComposerDraftPolicy {
     /// How many conversations may hold a draft at once. Beyond this, the least recently
     /// edited one is dropped on the next save.
@@ -43,6 +72,12 @@ public enum ComposerDraftPolicy {
     /// hundred conversations with unsent text in them is not a state anyone arrives at by
     /// accident, while ten is one busy morning.
     public static let capacity = 100
+
+    /// How much of a draft a list row reads. Comfortably more than one line at any text
+    /// size, so the row truncates from a string it already holds rather than asking for
+    /// more; small enough that the whole screen is a few kilobytes however long the drafts
+    /// behind it are.
+    public static let snippetLength = 200
 }
 
 /// The composer-draft seam onto the store.
@@ -157,6 +192,59 @@ public extension BuzzEventStore {
                 sql: "DELETE FROM composer_draft WHERE channel_id = ? AND root_id = ?",
                 arguments: [channel, root ?? ""]
             )
+        }
+    }
+
+    // MARK: - The Drafts screen
+
+    /// Every stored draft as a list row, most recently edited first.
+    ///
+    /// The text is clipped in SQL rather than in Swift — see ``ComposerDraftSummary``.
+    nonisolated func composerDraftSummaries(
+        snippetLength: Int = ComposerDraftPolicy.snippetLength
+    ) throws -> [ComposerDraftSummary] {
+        try reader.read { db in
+            try Row.fetchAll(
+                db,
+                sql: """
+                SELECT channel_id, root_id, substr(text, 1, ?) AS snippet, updated_at
+                FROM composer_draft ORDER BY updated_at DESC, rowid
+                """,
+                arguments: [max(1, snippetLength)]
+            )
+            .map { row in
+                let root: String = row["root_id"]
+                return ComposerDraftSummary(
+                    channelID: row["channel_id"],
+                    rootID: root.isEmpty ? nil : root,
+                    snippet: row["snippet"],
+                    updatedAt: row["updated_at"]
+                )
+            }
+        }
+    }
+
+    /// How many composers are holding unsent text. The shortcut card's number, read on its
+    /// own rather than as `summaries.count` so the sidebar never carries the text.
+    nonisolated func composerDraftCount() throws -> Int {
+        try reader.read { db in
+            try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM composer_draft") ?? 0
+        }
+    }
+
+    /// Discards several drafts at once — the Drafts screen's delete.
+    ///
+    /// One transaction, so a multi-selection either goes or does not: a partial delete
+    /// would leave the reader looking at a list they have to work out the state of.
+    func deleteComposerDrafts(_ keys: [(channel: String, root: String?)]) async throws {
+        guard !keys.isEmpty else { return }
+        try await writer.write { db in
+            for key in keys {
+                try db.execute(
+                    sql: "DELETE FROM composer_draft WHERE channel_id = ? AND root_id = ?",
+                    arguments: [key.channel, key.root ?? ""]
+                )
+            }
         }
     }
 }

@@ -36,12 +36,18 @@ struct ChannelListView: View {
     /// stars are: this view draws the number the marks subtract from, and it is the one
     /// place above both the Threads screen and the thread views that write them.
     @State private var threadReads = ThreadReadMarks()
+    /// Every composer holding unsent text. Owned here for the reason the thread read
+    /// marks are: this view draws the count and the pushed screen draws the list.
+    @State private var draftsModel: DraftsModel
     @State private var showAccount = false
     /// Whether the new-channel sheet is up.
     @State private var showsCreateChannel = false
     /// The Threads screen, when it is pushed. A value rather than a `Bool` so it goes
     /// through `navigationDestination(item:)` like every other push in the app.
     @State private var showsThreads: ThreadsRoute?
+    /// The Drafts screen, when it is pushed. A value rather than a `Bool`, like every
+    /// other push here.
+    @State private var showsDrafts: DraftsRoute?
     /// The thread the **Threads screen** has open, hoisted out of ``ThreadsView`` to here.
     ///
     /// State in the wrong place, but for ``ChannelListTabBar``: this stack has to know about
@@ -76,9 +82,10 @@ struct ChannelListView: View {
     private let store: BuzzEventStore
     private let engine: SyncEngine
 
-    init(store: BuzzEventStore, engine: SyncEngine, selfPubkey: String?) {
+    init(store: BuzzEventStore, engine: SyncEngine, drafts: ComposerDrafts? = nil, selfPubkey: String?) {
         self.store = store
         self.engine = engine
+        _draftsModel = State(initialValue: DraftsModel(store: store, drafts: drafts))
         _model = State(initialValue: ChannelListModel(store: store, selfPubkey: selfPubkey))
         _presence = State(initialValue: PresenceModel(store: engine.presenceStore))
         _directory = State(initialValue: EntityDirectoryModel(store: store))
@@ -138,7 +145,8 @@ struct ChannelListView: View {
                         engine: engine,
                         drafts: environment.drafts,
                         selfPubkey: environment.selfPubkeyHex,
-                        knownPeer: route.knownPeer
+                        knownPeer: route.knownPeer,
+                        focusingComposer: route.focusesComposer
                     )
                 }
                 .toolbar {
@@ -155,11 +163,28 @@ struct ChannelListView: View {
                 .createChannelSheet(isPresented: $showsCreateChannel, engine: engine) { channelID in
                     path = ConversationRoute(channel: conversationRow(for: channelID)).pushed(onto: path)
                 }
+                .navigationDestination(item: $showsDrafts) { _ in
+                    DraftsView(model: draftsModel, open: openDraft)
+                }
+                // Declared here rather than inside the screen that pushes, because two
+                // screens now open threads — the Threads screen and Drafts — and a stack
+                // may hold only one destination per route type.
+                .navigationDestination(item: $openedThread) { route in
+                    ThreadView(
+                        root: route.root,
+                        channel: route.channel,
+                        store: store,
+                        engine: engine,
+                        drafts: environment.drafts,
+                        selfPubkey: environment.selfPubkeyHex,
+                        landingOn: route.anchor,
+                        focusingComposer: route.focusesComposer
+                    )
+                }
                 .navigationDestination(item: $showsThreads) { _ in
                     ThreadsView(
                         store: store,
                         engine: engine,
-                        drafts: environment.drafts,
                         selfPubkey: environment.selfPubkeyHex,
                         openedThread: $openedThread
                     )
@@ -237,6 +262,9 @@ struct ChannelListView: View {
             Text(hider.failure ?? "")
         }
         .task { await model.run() }
+        // The card's number only. The list itself is read by the pushed screen, so a table
+        // written on every keystroke is not re-read behind a sidebar nobody is looking at.
+        .task { await draftsModel.runCount() }
         .task { await presence.run() }
         .task { await directory.run() }
         .task { await ticker.run() }
@@ -362,6 +390,8 @@ private extension ChannelListView {
         case .threads: threadReads.unseenCount(among: model.unreadThreads)
         // Nothing is saved anywhere yet, so this is the truth rather than a placeholder.
         case .later: 0
+        // Live from the store, de-duplicated so a keystroke does not move the card.
+        case .drafts: draftsModel.count
         }
     }
 
@@ -369,6 +399,7 @@ private extension ChannelListView {
         switch shortcut {
         case .threads: showsThreads = ThreadsRoute()
         case .later: showsLaterNotice = true
+        case .drafts: showsDrafts = DraftsRoute()
         }
     }
 
@@ -522,6 +553,33 @@ private extension ChannelListView {
     /// this synthesises the minimum row the destination needs — everything a reader sees is
     /// resolved by ``EntityNames``. Two calls can legitimately answer with the same row;
     /// keeping one instance on the stack is ``ConversationRoute/pushed(onto:)``'s job.
+    /// Opens the conversation a draft belongs to, with the composer already focused.
+    ///
+    /// Both destinations push *over* the Drafts screen rather than replacing it, so backing
+    /// out returns to the list — a reader clearing several drafts one at a time should not
+    /// have to walk back in from the sidebar each time.
+    ///
+    /// A thread carries its channel with it, so a thread draft pushes the thread alone: the
+    /// channel underneath is not where the text is, and stacking it would put a screen the
+    /// reader did not ask for between them and the way back.
+    func openDraft(_ summary: ComposerDraftSummary) {
+        switch DraftDestination.of(summary) {
+        case let .thread(root, channel):
+            openedThread = ThreadRoute(
+                root: root,
+                channel: channel,
+                anchor: DraftDestination.threadLanding,
+                focusesComposer: true
+            )
+        case let .conversation(channel):
+            let route = ConversationRoute(
+                channel: conversationRow(for: channel),
+                focusesComposer: true
+            )
+            path = route.pushed(onto: path)
+        }
+    }
+
     func conversationRow(for channelID: String) -> ChannelListRow {
         if let existing = model.channels.first(where: { $0.id == channelID }) { return existing }
         return ChannelListRow(

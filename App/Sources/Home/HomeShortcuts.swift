@@ -1,7 +1,7 @@
 import SwiftUI
 import UIKit
 
-/// The shortcut cards above the conversation list: Threads, and Later.
+/// The shortcut cards above the conversation list: Threads, Later, and Drafts.
 ///
 /// Slack's shape, and Slack's reason for it. Threads and saved items are not conversations
 /// — you do not open "Threads" the way you open a channel — so drawing them as list rows
@@ -10,10 +10,13 @@ import UIKit
 /// what they are: a small set of destinations above the list, rather than the first two
 /// entries in it.
 ///
-/// The cards sit at their own size at the leading edge rather than dividing the width
-/// between them. Two cards stretched across the screen read as a banner — a thing the
-/// screen is *about* — and these are shortcuts above the list, not its headline. Slack
-/// draws them the same way, and leaves the same air to their trailing side.
+/// The cards divide the row between them. They sat at a fixed width at the leading edge
+/// while there were two of them, for a reason that was right at the time — two cards
+/// stretched across the screen read as a banner rather than as shortcuts above a list.
+/// Three does not: a third card at 112pt overflows the narrowest phone before Dynamic
+/// Type is considered, and at an accessibility size it overflows every phone. Sharing the
+/// width is what makes the row fit at every size, and three cards across reads as a set of
+/// destinations rather than as a headline.
 struct HomeShortcutCards: View {
     /// The number on each card. Every card has one — see ``HomeShortcutCard/count``.
     let count: (HomeShortcut) -> Int
@@ -30,13 +33,10 @@ struct HomeShortcutCards: View {
                 // already drawing its own edge.
                 .buttonStyle(.plain)
             }
-            // What keeps the pair at the leading edge. Without it the `HStack` centres
-            // two cards that no longer fill the row.
-            Spacer(minLength: 0)
         }
     }
 
-    /// Between the two cards.
+    /// Between adjacent cards.
     private static let betweenCards: CGFloat = 10
 }
 
@@ -59,7 +59,7 @@ struct HomeShortcutCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Self.betweenLines) {
-            Image(systemName: shortcut.filledSymbol)
+            Image(systemName: shortcut.symbol(hasItems: Self.hasSomethingWaiting(count)))
                 // Bold, in the text's own colour: at this size a glyph in the regular
                 // weight reads as thinner than the word under it, which is what made the
                 // card look assembled out of two different things.
@@ -78,10 +78,12 @@ struct HomeShortcutCard: View {
                 .lineLimit(1)
         }
         .padding(Self.padding)
-        // A size of its own, and one that grows with the type inside it: the frame is in
-        // `@ScaledMetric` points, so a reader at an accessibility size gets a bigger card
-        // rather than a clipped word.
-        .frame(width: width, height: height, alignment: .leading)
+        // An equal share of the row, at a height that grows with the type inside it: the
+        // height is in `@ScaledMetric` points, so a reader at an accessibility size gets a
+        // taller card rather than a clipped word, while the width stays whatever a third
+        // of the row is on their phone.
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(height: height)
         // Behind the border rather than a `ZStack` layer of its own: a `RoundedRectangle`
         // filled in `.clear` still costs a shape, and `background` is the same one line
         // the border already reaches for below.
@@ -101,19 +103,28 @@ struct HomeShortcutCard: View {
         .accessibilityAddTraits(.isButton)
     }
 
-    /// The card's edge: the accent when there is something in it, and a hairline otherwise.
+    /// The card's edge: a hairline, and the accent only where the glyph cannot speak.
     ///
-    /// Every card is bordered, because the border is the card — what changes is only the
-    /// colour. Swapping a drawn edge for nothing would make an empty card read as absent
-    /// rather than empty, which is the question these cards exist to answer.
+    /// Every card is bordered, because the border *is* the card — swapping a drawn edge for
+    /// nothing would make an empty card read as absent rather than empty, which is the
+    /// question these cards exist to answer. What changes is the colour, and now only for
+    /// the cards that need it.
+    ///
+    /// A card whose symbol has a `.fill` cut already says "there is something here" by
+    /// filling, so spending the accent on its edge as well says it twice — the owner called
+    /// the Drafts card too loud for exactly that reason. Threads' `text.append` has no
+    /// filled counterpart, so its edge is the only thing it can say it with, and it keeps
+    /// the accent. Derived from the symbol rather than switched on the case, so a fourth
+    /// destination gets the right treatment without anyone remembering this rule.
     private var border: Color {
-        Self.hasSomethingWaiting(count) ? .hiveAccent : Self.restingBorder
+        Self.spendsAccentOnEdge(shortcut, count: count) ? .hiveAccent : Self.restingBorder
     }
 
-    /// The card's wash: the same rule the border reads its colour from, so a card never
-    /// carries the fill without the border that explains it. `0.18` is the app's own
-    /// number for "this is mine, lightly" — the opacity a reacted chip and a sent bubble
-    /// already draw the accent at.
+    /// The card's wash — still the accent, still only when something is waiting. The wash is
+    /// what the filled glyph explains on a card that has given up its amber edge; taking
+    /// both away would leave a card with something in it looking exactly like an empty one
+    /// from across the screen. `0.18` is the app's own number for "this is mine, lightly",
+    /// the opacity a reacted chip and a sent bubble already draw the accent at.
     private var fill: Color {
         Self.hasSomethingWaiting(count) ? Color.hiveAccent.opacity(Self.fillOpacity) : .clear
     }
@@ -131,6 +142,13 @@ struct HomeShortcutCard: View {
         count > 0
     }
 
+    /// Whether this card draws its edge in the accent — see ``border``. Pure and exposed
+    /// for the same reason ``hasSomethingWaiting(_:)`` is: what a border looks like is not
+    /// something a test can read back off a rendered card.
+    static func spendsAccentOnEdge(_ shortcut: HomeShortcut, count: Int) -> Bool {
+        hasSomethingWaiting(count) && !shortcut.signalsWithGlyph
+    }
+
     /// What a screen reader hears: the destination, then what is in it.
     static func accessibilityLabel(_ shortcut: HomeShortcut, count: Int) -> String {
         "\(shortcut.title), \(shortcut.countLabel(count))"
@@ -141,10 +159,9 @@ struct HomeShortcutCard: View {
     /// same three lines. Relative to `.subheadline`, the size the title is set in.
     @ScaledMetric(relativeTo: .subheadline) private var typeScale: CGFloat = 1
 
-    private var width: CGFloat { Self.width * typeScale }
     private var height: CGFloat { Self.height * typeScale }
 
-    private static let padding: CGFloat = 12
+    private static let padding: CGFloat = 10
     /// Between the name and the count. Small — they are one statement read together — but
     /// not nothing, which set them as tight as two lines of a wrapped sentence.
     private static let betweenLines: CGFloat = 2
@@ -152,12 +169,12 @@ struct HomeShortcutCard: View {
     /// left over above it, which is what puts the glyph at the top of the card and the two
     /// lines of text at the bottom of it rather than spreading all three evenly.
     private static let underGlyph: CGFloat = 8
-    /// Narrow enough that the pair occupy about two thirds of the row: they are a place to
-    /// go from, not the subject of the screen.
-    private static let width: CGFloat = 112
-    /// Slightly taller than wide, the proportion Slack's own shortcut cards carry — three
-    /// short bands, none of them cramped.
-    private static let height: CGFloat = 100
+    /// Three short bands, none of them cramped, and no taller than they need to be: the
+    /// cards are a place to go from, and the conversations under them are the screen. The
+    /// floor is the content — glyph, title, count, and the padding around them come to
+    /// about 78 at default type — so this leaves a little air above the title and no more.
+    /// The width is the row's own, divided.
+    private static let height: CGFloat = 86
     private static let cornerRadius: CGFloat = 12
     /// One weight for both states, so a card does not change shape when its count does —
     /// only its colour. Thinner than the 2pt a text field draws, which would make a card
@@ -170,10 +187,10 @@ struct HomeShortcutCard: View {
     private static let restingBorder = Color.primary.opacity(0.15)
 }
 
-/// The two shortcuts, and everything that differs between them.
+/// The shortcuts, and everything that differs between them.
 ///
-/// An enum rather than two views: they differ in a symbol, a word, and what a tap does,
-/// and writing them as one card means the second cannot quietly drift to different metrics
+/// An enum rather than a view each: they differ in a symbol, a word, and what a tap does,
+/// and writing them as one card means a second cannot quietly drift to different metrics
 /// from the first.
 enum HomeShortcut: String, CaseIterable, Hashable, Identifiable {
     /// Recent thread activity across every channel.
@@ -181,6 +198,8 @@ enum HomeShortcut: String, CaseIterable, Hashable, Identifiable {
     /// Saved-for-later items. Not built yet — the card exists so the shape of the home
     /// screen is right, and says so when pressed.
     case later
+    /// Conversations holding unsent text. See ``DraftsView``.
+    case drafts
 
     var id: String { rawValue }
 
@@ -188,6 +207,7 @@ enum HomeShortcut: String, CaseIterable, Hashable, Identifiable {
         switch self {
         case .threads: "Threads"
         case .later: "Later"
+        case .drafts: "Drafts"
         }
     }
 
@@ -197,18 +217,40 @@ enum HomeShortcut: String, CaseIterable, Hashable, Identifiable {
         // it opens are recognisably the same thing.
         case .threads: "text.append"
         case .later: "bookmark"
+        // What sending looks like, unsent.
+        case .drafts: "paperplane"
         }
     }
 
-    /// ``symbol``'s `.fill` cut, when the system has one.
+    /// The glyph to draw: the outline when the card is empty, the `.fill` cut when it is
+    /// not — a second way of saying what the card's border already says in colour.
     ///
-    /// Resolved at runtime rather than assumed: not every SF Symbol ships a filled
-    /// counterpart — ``threads``' `text.append` does not — and asking for a name the
-    /// system does not have draws nothing at all, silently, which is the exact trap
-    /// ``symbol`` is already pinned against in `HomeShortcutTests`.
-    var filledSymbol: String {
+    /// A rule about the *card*, not about any one shortcut, which is why it takes the
+    /// state rather than being switched on `self`: a `case .drafts` here is a rule the
+    /// next destination silently opts out of.
+    ///
+    /// The filled name is resolved at runtime rather than assumed. Not every SF Symbol
+    /// ships a filled counterpart — ``threads``' `text.append` does not — and asking for a
+    /// name the system does not have draws nothing at all, silently, which is the exact
+    /// trap ``symbol`` is already pinned against in `HomeShortcutTests`. A shortcut
+    /// without one simply keeps its outline in both states.
+    func symbol(hasItems: Bool) -> String {
+        guard hasItems else { return symbol }
+        return filledSymbol ?? symbol
+    }
+
+    /// Whether this card's glyph can say "there is something here" on its own — whether the
+    /// system ships a `.fill` cut of ``symbol``. The ones that can do not also spend the
+    /// accent on their edge; see ``HomeShortcutCard/border``.
+    var signalsWithGlyph: Bool { filledSymbol != nil }
+
+    /// ``symbol``'s filled counterpart, or `nil` where the system has none. Resolved at
+    /// runtime rather than assumed: asking for a name the system does not have draws
+    /// nothing at all, silently, which is the exact trap ``symbol`` is pinned against in
+    /// `HomeShortcutTests`.
+    private var filledSymbol: String? {
         let filled = "\(symbol).fill"
-        return UIImage(systemName: filled) != nil ? filled : symbol
+        return UIImage(systemName: filled) != nil ? filled : nil
     }
 
     /// What the count counts, singular and plural. Threads counts *new* ones — the
@@ -217,7 +259,7 @@ enum HomeShortcut: String, CaseIterable, Hashable, Identifiable {
     func countLabel(_ count: Int) -> String {
         switch self {
         case .threads: count == 1 ? "1 new" : "\(count) new"
-        case .later: count == 1 ? "1 item" : "\(count) items"
+        case .later, .drafts: count == 1 ? "1 item" : "\(count) items"
         }
     }
 }

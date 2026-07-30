@@ -45,8 +45,11 @@ struct ThreadsView: View {
     /// Held by ``ChannelListView`` rather than here, because the view that owns the
     /// `NavigationStack` is the one that declares whether the tab bar is up, and it cannot
     /// declare that for a push it cannot see (``ChannelListView/hidesTabBar``). Only the
-    /// storage moved: this screen still declares the destination below, so what it renders
-    /// and when is unchanged.
+    /// The destination it opens is declared by that view too, now that the Drafts screen
+    /// opens threads as well: two screens on one stack cannot each declare a destination
+    /// for the same route type, and the stack that owns the push is the honest place for
+    /// the one declaration. This screen still *sets* the route, so what it opens is
+    /// unchanged.
     @Binding var openedThread: ThreadRoute?
     /// Whose profile is open, if anyone's — set by pressing a mention inside a summary.
     @State private var profilePeer: ProfilePeer?
@@ -55,34 +58,25 @@ struct ThreadsView: View {
     @State private var presence: PresenceModel
 
     private let store: BuzzEventStore
-    private let sender: any MessageSending
-    private let opener: any ThreadOpening
     private let refresher: any ConversationRefreshing
     /// Fills in the threads this device is behind on, once, on arrival. Optional for the
     /// reason given on ``ThreadPrefetching``.
     private let prefetcher: (any ThreadPrefetching)?
     private let presenceStore: PresenceStore
-    /// Unsent composer text, carried so a thread pushed from a row keeps its own draft
-    /// in the same place the channel timeline's threads keep theirs.
-    private let drafts: ComposerDrafts?
     private let selfPubkey: String?
 
     /// The production initialiser: the engine is every collaborator below.
     init(
         store: BuzzEventStore,
         engine: SyncEngine,
-        drafts: ComposerDrafts? = nil,
         selfPubkey: String?,
         openedThread: Binding<ThreadRoute?>
     ) {
         self.init(
             store: store,
-            sender: engine,
-            opener: engine,
             refresher: engine,
             prefetcher: engine,
             presence: engine.presenceStore,
-            drafts: drafts,
             selfPubkey: selfPubkey,
             openedThread: openedThread
         )
@@ -96,22 +90,16 @@ struct ThreadsView: View {
     /// that taps a row and asserts a thread opened would fail with nothing wrong on screen.
     init(
         store: BuzzEventStore,
-        sender: any MessageSending,
-        opener: any ThreadOpening,
         refresher: any ConversationRefreshing,
         prefetcher: (any ThreadPrefetching)? = nil,
         presence: PresenceStore,
-        drafts: ComposerDrafts? = nil,
         selfPubkey: String?,
         openedThread: Binding<ThreadRoute?>
     ) {
         self.store = store
-        self.sender = sender
-        self.opener = opener
         self.refresher = refresher
         self.prefetcher = prefetcher
         presenceStore = presence
-        self.drafts = drafts
         self.selfPubkey = selfPubkey
         _openedThread = openedThread
         _model = State(initialValue: ThreadsModel(store: store, selfPubkey: selfPubkey))
@@ -153,19 +141,6 @@ struct ThreadsView: View {
         // The same modifier the timeline and a thread use, so pressing a mention here
         // presents the sheet those surfaces present rather than a second one.
         .profileSheet(peer: $profilePeer, presence: presence)
-        .navigationDestination(item: $openedThread) { route in
-            ThreadView(
-                root: route.root,
-                channel: route.channel,
-                store: store,
-                sender: sender,
-                opener: opener,
-                presence: presenceStore,
-                drafts: drafts,
-                selfPubkey: selfPubkey,
-                landingOn: route.anchor
-            )
-        }
         .task { await model.run() }
         .task { await presence.run() }
         // Every channel's threads, because that is what this screen lists. It runs on
