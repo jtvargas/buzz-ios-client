@@ -178,6 +178,45 @@ enum Schema {
             """)
         }
 
+        // A record that this device has *attempted* a prefetch for a thread, and against
+        // which relay summary. Local for the same reason ``thread_fetch`` is: it is a fact
+        // about this device's knowledge, not about any event.
+        //
+        // It is the brake on the prefetch, and the prefetch needs one because its question
+        // — "does the relay know about a reply newer than anything I hold?" — can become
+        // permanently unanswerable. A reply that carries no NIP-10 `reply` marker resolves
+        // to no parent and no root, so ``BuzzProjector`` writes it no `thread` row at all
+        // (deliberately: only a real reply may be excluded from a channel timeline). The
+        // relay counts that reply regardless — it does not share our threading
+        // conventions — so `last_reply_at` sits permanently above anything local, the
+        // predicate stays true no matter how often it is asked, and the same fetch is
+        // reissued on every reconnect for the life of the process. `.ready` re-walks every
+        // known channel, so one such reply anywhere is a background fetch that never stops.
+        //
+        // Recording the attempt turns that into one fetch per *new* summary: a thread costs
+        // work when it gains activity, which is the same bound a well-formed thread has.
+        //
+        // Separate from ``thread_fetch`` rather than folded into it, because the two make
+        // different claims. `thread_fetch` says "this device holds the thread in full", and
+        // only an unclipped answer may say it — that claim is what suppresses the relay's
+        // tally. This one says only "we already asked about this summary", which a clipped
+        // answer may say perfectly well. Writing a bounded prefetch into `thread_fetch`
+        // would suppress a larger and more correct relay count with a local one that is
+        // genuinely short.
+        migrator.registerMigration("v7.thread-prefetch") { db in
+            try db.execute(sql: """
+            CREATE TABLE thread_prefetch (
+                root_id          TEXT PRIMARY KEY NOT NULL,
+                summary_event_id TEXT
+            )
+            """)
+            // The order the prefetch picks its candidates in. Also created by
+            // ``createContentTables(_:)`` so a projection rebuild restores it — this branch
+            // is for a store that already exists at v6, where that function has long since
+            // run. Both spell it from the same string, which is `IF NOT EXISTS`.
+            try db.execute(sql: threadSummaryRecentIndexSQL)
+        }
+
         return migrator
     }
 
@@ -484,7 +523,23 @@ enum Schema {
             last_reply_at    INTEGER
         )
         """)
+
+        // Most recently active thread first, which is the order the prefetch chooses its
+        // twenty in (``BuzzEventStore/threadPrefetchCandidates(channel:limit:)``). Without
+        // it that read scans every summary and sorts them to answer a question about the
+        // top of the list — and it evaluates a per-row correlated subquery while doing it,
+        // so the cost is the whole table rather than the twenty rows wanted. `IF NOT
+        // EXISTS` because the migration that introduced this index for existing installs
+        // creates the same one; a fresh install runs both, and a projection rebuild drops
+        // and re-runs this.
+        try db.execute(sql: Self.threadSummaryRecentIndexSQL)
     }
+
+    /// Shared between ``createContentTables(_:)`` and the migration that adds the index to
+    /// a store created before it existed, so the two cannot define it differently.
+    static let threadSummaryRecentIndexSQL = """
+    CREATE INDEX IF NOT EXISTS thread_summary_recent ON thread_summary(last_reply_at DESC)
+    """
 
     /// Every projection table, in an order safe to drop (no cross-table foreign
     /// keys bind them).

@@ -34,6 +34,9 @@ struct ChannelTimelineView: View {
     /// collaborators as this screen; `presenceStore` backs the channel-details sheet.
     private let sender: any MessageSending
     private let opener: any ThreadOpening
+    /// Fills in this channel's threads, once, on arrival. Optional for the reason given on
+    /// ``ThreadPrefetching``.
+    private let prefetcher: (any ThreadPrefetching)?
     private let presenceStore: PresenceStore
     private let lifecycleEngine: SyncEngine?
     private let selfPubkey: String?
@@ -63,6 +66,7 @@ struct ChannelTimelineView: View {
             typing: engine,
             readStateMarking: engine,
             opener: engine,
+            prefetcher: engine,
             presence: engine.presenceStore,
             selfPubkey: selfPubkey,
             knownPeer: knownPeer,
@@ -87,6 +91,7 @@ struct ChannelTimelineView: View {
         typing: any EphemeralPublishing,
         readStateMarking: (any ReadStateMarking)?,
         opener: any ThreadOpening,
+        prefetcher: (any ThreadPrefetching)? = nil,
         presence: PresenceStore,
         selfPubkey: String?,
         knownPeer: String? = nil,
@@ -97,6 +102,7 @@ struct ChannelTimelineView: View {
         self.store = store
         self.sender = sender
         self.opener = opener
+        self.prefetcher = prefetcher
         presenceStore = presence
         self.lifecycleEngine = lifecycleEngine
         self.selfPubkey = selfPubkey
@@ -205,6 +211,11 @@ struct ChannelTimelineView: View {
         // note on that type. The surface that owns the model runs it, as above.
         .task { await typing.run() }
         .task { await access.run() }
+        // This channel's threads only. A message row's reply *count* needs no replies
+        // (the relay's tally supplies it), but the faces on its replies strip are read from
+        // the replies themselves, so on a cold launch a row would otherwise say "3 replies"
+        // over an empty strip. See ``BuzzKit/SyncEngine/prefetchThreads(in:)``.
+        .task { await prefetcher?.prefetchThreads(in: channelID) }
     }
 
     /// How this conversation presents itself — a channel, or the person on the other

@@ -34,16 +34,44 @@ public struct SyncEngineConfig: Sendable {
     /// favour of this device's own count.
     public var threadFetchLimit: Int
 
+    /// How many threads one ``SyncEngine/prefetchThreads(in:)`` may reach for.
+    ///
+    /// The prefetch exists so a Threads screen has content before anything has been
+    /// opened, and this is the number that keeps it from growing with a channel's
+    /// history: the *most recently active* threads, not every thread that has ever had
+    /// a reply. Twenty because the screen's own cap is fifty and a reader catching up
+    /// reads the top of it — reaching for all fifty would triple the cost of arriving
+    /// for rows most people never scroll to.
+    public var threadPrefetchRootLimit: Int
+
+    /// The reply budget for one prefetched thread.
+    ///
+    /// Deliberately far below ``threadFetchLimit``: this is a fetch nobody asked for,
+    /// issued for twenty threads at once, and its job is to make a row *readable* —
+    /// the newest reply, who is in it, and how much is unread. Twenty covers all of
+    /// that for any thread of ordinary size, and a thread larger than that is one the
+    /// reader will open, at which point ``SyncEngine/openThread(root:)`` fetches it
+    /// properly.
+    ///
+    /// The consequence is that a prefetched thread may be held only in part, and the
+    /// reads over it say so rather than presenting a floor as a total — see
+    /// ``ThreadActivity/newReplyCountIsExact``.
+    public var threadPrefetchReplyLimit: Int
+
     public init(
         liveSinceWindow: TimeInterval = 5,
         presenceSweepInterval: Duration = .seconds(1),
         windowPageLimit: Int = 50,
-        threadFetchLimit: Int = 1000
+        threadFetchLimit: Int = 1000,
+        threadPrefetchRootLimit: Int = 20,
+        threadPrefetchReplyLimit: Int = 20
     ) {
         self.liveSinceWindow = liveSinceWindow
         self.presenceSweepInterval = presenceSweepInterval
         self.windowPageLimit = windowPageLimit
         self.threadFetchLimit = threadFetchLimit
+        self.threadPrefetchRootLimit = threadPrefetchRootLimit
+        self.threadPrefetchReplyLimit = threadPrefetchReplyLimit
     }
 
     public static let `default` = SyncEngineConfig()

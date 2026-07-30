@@ -58,6 +58,9 @@ struct ThreadsView: View {
     private let sender: any MessageSending
     private let opener: any ThreadOpening
     private let refresher: any ConversationRefreshing
+    /// Fills in the threads this device is behind on, once, on arrival. Optional for the
+    /// reason given on ``ThreadPrefetching``.
+    private let prefetcher: (any ThreadPrefetching)?
     private let presenceStore: PresenceStore
     private let selfPubkey: String?
 
@@ -73,6 +76,7 @@ struct ThreadsView: View {
             sender: engine,
             opener: engine,
             refresher: engine,
+            prefetcher: engine,
             presence: engine.presenceStore,
             selfPubkey: selfPubkey,
             openedThread: openedThread
@@ -90,6 +94,7 @@ struct ThreadsView: View {
         sender: any MessageSending,
         opener: any ThreadOpening,
         refresher: any ConversationRefreshing,
+        prefetcher: (any ThreadPrefetching)? = nil,
         presence: PresenceStore,
         selfPubkey: String?,
         openedThread: Binding<ThreadRoute?>
@@ -98,6 +103,7 @@ struct ThreadsView: View {
         self.sender = sender
         self.opener = opener
         self.refresher = refresher
+        self.prefetcher = prefetcher
         presenceStore = presence
         self.selfPubkey = selfPubkey
         _openedThread = openedThread
@@ -154,6 +160,14 @@ struct ThreadsView: View {
         }
         .task { await model.run() }
         .task { await presence.run() }
+        // Every channel's threads, because that is what this screen lists. It runs on
+        // arrival rather than on a sync, so a channel nobody looks at costs nothing — and
+        // it is cheap to repeat, because a thread stops being a candidate once it has been
+        // fetched. See ``BuzzKit/SyncEngine/prefetchThreads(in:)``.
+        //
+        // Its results arrive through `model.run()`'s observation, like a reply from the
+        // relay would, so this awaits nothing and reads nothing back.
+        .task { await prefetcher?.prefetchThreads(in: nil) }
     }
 
     @ViewBuilder

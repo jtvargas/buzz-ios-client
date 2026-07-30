@@ -57,6 +57,8 @@ struct EngineHarness {
         batchSize: Int = 2,
         storeClock: @escaping @Sendable () -> Date = { Date() },
         threadFetchLimit: Int = 1000,
+        threadPrefetchRootLimit: Int = 20,
+        threadPrefetchReplyLimit: Int = 20,
         backoffSleep: @escaping @Sendable (Duration) async throws -> Void = { _ in }
     ) throws {
         self.path = path
@@ -102,6 +104,15 @@ struct EngineHarness {
         let windowClient = WindowClient(transport: http, queryURL: Self.queryURL, signer: signer)
 
         let seconds = nowSeconds
+        // Hoisted rather than spelled once per branch: the two constructions below differ
+        // only in whether a directory client is passed, and a knob added to one copy and
+        // not the other is a harness that silently stops configuring what a test set.
+        let engineConfig = SyncEngineConfig(
+            presenceSweepInterval: .seconds(3600),
+            threadFetchLimit: threadFetchLimit,
+            threadPrefetchRootLimit: threadPrefetchRootLimit,
+            threadPrefetchReplyLimit: threadPrefetchReplyLimit
+        )
         if let directoryClient {
             engine = SyncEngine(
                 connection: connection,
@@ -111,7 +122,7 @@ struct EngineHarness {
                 windowClient: windowClient,
                 directoryClient: directoryClient,
                 signer: signer,
-                config: SyncEngineConfig(presenceSweepInterval: .seconds(3600), threadFetchLimit: threadFetchLimit),
+                config: engineConfig,
                 now: { Date(timeIntervalSince1970: TimeInterval(seconds)) }
             )
         } else {
@@ -122,7 +133,7 @@ struct EngineHarness {
                 presence: presence,
                 windowClient: windowClient,
                 signer: signer,
-                config: SyncEngineConfig(presenceSweepInterval: .seconds(3600), threadFetchLimit: threadFetchLimit),
+                config: engineConfig,
                 now: { Date(timeIntervalSince1970: TimeInterval(seconds)) }
             )
         }

@@ -39,10 +39,27 @@ public struct ThreadActivity: Sendable, Hashable, Identifiable {
     /// Nothing anybody else said is nothing to be behind on, and `nil` says so outright.
     public let latestReplyByOthersAt: Int64?
     /// Every surviving reply, the newest one included.
+    ///
+    /// Composed with the relay's tally by the same rule a message row's own count takes,
+    /// so this device holding only part of a thread does not understate it.
     public let replyCount: Int
     /// How many of those replies are newer than the channel's read frontier and were
     /// written by somebody else — the number behind the Threads card.
+    ///
+    /// **A floor rather than a total when ``newReplyCountIsExact`` is false**, because it is
+    /// counted over the replies this device holds: "new to *you*" needs each reply's author
+    /// and time, and the relay's tally carries neither.
     public let newReplyCount: Int
+    /// Whether ``newReplyCount`` is the whole answer or only as much of it as this device
+    /// can see.
+    ///
+    /// True in the ordinary case, and in more cases than "is the whole thread held" would be
+    /// — which is why it is this question and not that one. A bounded prefetch holds a
+    /// thread's *newest* replies, so a frontier falling anywhere inside them means every
+    /// reply past it is here and the count is exact, however much older history is not. It
+    /// is a floor only when the frontier sits below everything held, where unread replies
+    /// may lie below the window too and how many is unanswerable here.
+    public let newReplyCountIsExact: Bool
 
     public var id: String { rootID }
 
@@ -53,7 +70,8 @@ public struct ThreadActivity: Sendable, Hashable, Identifiable {
         latestReply: TimelineRow,
         latestReplyByOthersAt: Int64?,
         replyCount: Int,
-        newReplyCount: Int
+        newReplyCount: Int,
+        newReplyCountIsExact: Bool = true
     ) {
         self.rootID = rootID
         self.channelID = channelID
@@ -62,6 +80,7 @@ public struct ThreadActivity: Sendable, Hashable, Identifiable {
         self.latestReplyByOthersAt = latestReplyByOthersAt
         self.replyCount = replyCount
         self.newReplyCount = newReplyCount
+        self.newReplyCountIsExact = newReplyCountIsExact
     }
 
     /// The replies between the opener and the newest one — what a row summarises as
@@ -285,7 +304,8 @@ extension BuzzEventStore {
                 latestReply: reply,
                 latestReplyByOthersAt: byOthersAt,
                 replyCount: summary["reply_count"] ?? 0,
-                newReplyCount: summary["new_count"] ?? 0
+                newReplyCount: summary["new_count"] ?? 0,
+                newReplyCountIsExact: summary["new_count_is_exact"] ?? true
             )
         }
     }
@@ -327,7 +347,13 @@ extension BuzzEventStore {
                          WHEN r.created_at > r.read_at
                           AND (:selfPubkey IS NULL OR r.pubkey <> :selfPubkey)
                          THEN 1 ELSE 0
-                       END) AS new_count
+                       END) AS new_count,
+                   -- The bottom edge of what is held, and the frontier it is judged against:
+                   -- together they say whether `new_count` could be missing replies below the
+                   -- window. The frontier is one value per root, so `MAX` over it is only how
+                   -- a constant leaves a GROUP BY.
+                   MIN(r.created_at) AS oldest_held_at,
+                   MAX(r.read_at)    AS read_at
             FROM reply r
             GROUP BY r.root_id
         )
@@ -336,11 +362,29 @@ extension BuzzEventStore {
                newest.event_id   AS latest_reply_id,
                newest.created_at AS latest_reply_at,
                tally.latest_other_reply_at AS latest_other_reply_at,
-               tally.reply_count AS reply_count,
-               tally.new_count   AS new_count
+               -- The same composition a message row's own tally takes, so the total on a
+               -- Threads row and the total on the message it summarises cannot disagree.
+               -- See ``BuzzEventStore/fetchAccountsForSummary``.
+               CASE WHEN tsum.descendant_count IS NULL OR \(fetchAccountsForSummary)
+                    THEN tally.reply_count
+                    ELSE MAX(tally.reply_count, tsum.descendant_count)
+               END AS reply_count,
+               tally.new_count   AS new_count,
+               -- Whether `new_count` is the whole answer or only the part this device can
+               -- see, argued in full on ``ThreadActivity/newReplyCountIsExact``. A partial
+               -- hold is a floor *only* when the oldest held reply is still newer than the
+               -- frontier: a prefetch holds a thread's newest replies, so a frontier falling
+               -- anywhere inside them means everything past it is here.
+               CASE WHEN tsum.descendant_count IS NULL OR \(fetchAccountsForSummary)
+                      OR tally.reply_count >= tsum.descendant_count
+                    THEN 1
+                    ELSE tally.oldest_held_at <= tally.read_at
+               END AS new_count_is_exact
         FROM tally
         JOIN event root ON root.id = tally.root_id
         LEFT JOIN event_owner reo ON reo.event_id = root.id
+        LEFT JOIN thread_summary tsum ON tsum.root_id = tally.root_id
+        LEFT JOIN thread_fetch tfetch ON tfetch.root_id = tally.root_id
         -- The newest surviving reply on the same `(created_at, id)` keyset the timeline
         -- pages on, so "newest" means one thing across the app.
         JOIN reply newest ON newest.root_id = tally.root_id
