@@ -62,12 +62,16 @@ struct ThreadsView: View {
     /// reason given on ``ThreadPrefetching``.
     private let prefetcher: (any ThreadPrefetching)?
     private let presenceStore: PresenceStore
+    /// Unsent composer text, carried so a thread pushed from a row keeps its own draft
+    /// in the same place the channel timeline's threads keep theirs.
+    private let drafts: ComposerDrafts?
     private let selfPubkey: String?
 
     /// The production initialiser: the engine is every collaborator below.
     init(
         store: BuzzEventStore,
         engine: SyncEngine,
+        drafts: ComposerDrafts? = nil,
         selfPubkey: String?,
         openedThread: Binding<ThreadRoute?>
     ) {
@@ -78,6 +82,7 @@ struct ThreadsView: View {
             refresher: engine,
             prefetcher: engine,
             presence: engine.presenceStore,
+            drafts: drafts,
             selfPubkey: selfPubkey,
             openedThread: openedThread
         )
@@ -96,6 +101,7 @@ struct ThreadsView: View {
         refresher: any ConversationRefreshing,
         prefetcher: (any ThreadPrefetching)? = nil,
         presence: PresenceStore,
+        drafts: ComposerDrafts? = nil,
         selfPubkey: String?,
         openedThread: Binding<ThreadRoute?>
     ) {
@@ -105,6 +111,7 @@ struct ThreadsView: View {
         self.refresher = refresher
         self.prefetcher = prefetcher
         presenceStore = presence
+        self.drafts = drafts
         self.selfPubkey = selfPubkey
         _openedThread = openedThread
         _model = State(initialValue: ThreadsModel(store: store, selfPubkey: selfPubkey))
@@ -154,6 +161,7 @@ struct ThreadsView: View {
                 sender: sender,
                 opener: opener,
                 presence: presenceStore,
+                drafts: drafts,
                 selfPubkey: selfPubkey,
                 landingOn: route.anchor
             )

@@ -45,12 +45,10 @@ final class ThreadModel {
     private(set) var mentionRefs: [String: MentionRefList] = [:]
     private(set) var hasLoaded = false
 
-    /// The reply composer's wire text plus identity-bearing selected mentions.
-    var mentionDraft = MentionDraft()
-    var draft: String {
-        get { mentionDraft.text }
-        set { mentionDraft = MentionDraft(text: newValue) }
-    }
+    /// The reply composer's text and mention tokens — see `ThreadModel+Drafts.swift`.
+    var mentionDraft = MentionDraft() { didSet { recordDraft(replacing: oldValue) } }
+    /// Where that draft is kept between visits. `nil` in tests, which then keep nothing.
+    let drafts: ComposerDrafts?
     let mentionAutocomplete: MentionAutocompleteModel
     /// Set when a reply is refused before it leaves the device (over the 64 KiB
     /// ceiling); the view shows it and the draft text is preserved.
@@ -120,6 +118,7 @@ final class ThreadModel {
         sender: any MessageSending,
         opener: any ThreadOpening,
         typing: any EphemeralPublishing = NoopEphemeralPublisher(),
+        drafts: ComposerDrafts? = nil,
         selfPubkey: String?,
         typingThrottle: Duration = .seconds(3),
         clock: @escaping @Sendable () -> ContinuousClock.Instant = { ContinuousClock.now }
@@ -130,6 +129,7 @@ final class ThreadModel {
         self.sender = sender
         self.opener = opener
         self.typing = typing
+        self.drafts = drafts
         self.typingThrottle = typingThrottle
         self.clock = clock
         self.selfPubkey = selfPubkey
@@ -154,6 +154,7 @@ final class ThreadModel {
     func primeIfNeeded() {
         guard !hasPrimed else { return }
         hasPrimed = true
+        restoreDraft()
         let ids = apply(fetchThread())
         applyReactions(fetchReactions(for: ids))
         applyMentions(fetchMentions(for: ids))

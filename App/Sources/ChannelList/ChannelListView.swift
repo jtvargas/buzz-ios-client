@@ -136,6 +136,7 @@ struct ChannelListView: View {
                         channel: route.channel,
                         store: store,
                         engine: engine,
+                        drafts: environment.drafts,
                         selfPubkey: environment.selfPubkeyHex,
                         knownPeer: route.knownPeer
                     )
@@ -158,6 +159,7 @@ struct ChannelListView: View {
                     ThreadsView(
                         store: store,
                         engine: engine,
+                        drafts: environment.drafts,
                         selfPubkey: environment.selfPubkeyHex,
                         openedThread: $openedThread
                     )

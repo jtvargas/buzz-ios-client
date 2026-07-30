@@ -217,6 +217,49 @@ enum Schema {
             try db.execute(sql: threadSummaryRecentIndexSQL)
         }
 
+        // The unsent text sitting in each conversation's composer.
+        //
+        // Local for the usual reason — it is a fact about this device, not about any
+        // event, so the keyless projector could only ever rebuild it empty — and
+        // *precious* for a sharper one: this is the only table holding words their
+        // author has not decided to publish. That is what puts it here rather than in
+        // `UserDefaults` beside the stars and the thread read marks, which hold ids.
+        // ``BuzzEventStore/wipe()`` erases it on an identity change and vacuums the
+        // file afterwards, so identity A's half-written message cannot survive on disk
+        // into identity B's session; a defaults blob is covered by neither.
+        //
+        // Keyed by `(channel_id, root_id)` with `''` standing for "the channel's own
+        // composer", which is the whole product requirement expressed as a primary key:
+        // a channel and each of its threads are separate composers and cannot read each
+        // other's text. `root_id` is `TEXT NOT NULL DEFAULT ''` rather than nullable
+        // because SQLite does not treat two `NULL`s as equal in a primary key, so a
+        // nullable column would let a channel accumulate a new draft row per save.
+        //
+        // `tokens` is an opaque payload the app layer owns and this layer never reads —
+        // the mention tokens that carry a `@Name`'s pubkey, which the visible text does
+        // not. Storing only `text` would restore a draft whose mentions look right and
+        // notify nobody.
+        //
+        // Text only, deliberately. An attachment draft would be a second column here
+        // (or a child table keyed the same way) plus a payload in
+        // ``ComposerDraftRecord``; nothing else about this table would move.
+        migrator.registerMigration("v8.composer-draft") { db in
+            try db.execute(sql: """
+            CREATE TABLE composer_draft (
+                channel_id TEXT NOT NULL,
+                root_id    TEXT NOT NULL DEFAULT '',
+                text       TEXT NOT NULL,
+                tokens     TEXT NOT NULL DEFAULT '',
+                updated_at INTEGER NOT NULL,
+                PRIMARY KEY (channel_id, root_id)
+            )
+            """)
+            // The order the capacity trim keeps by. The composer's own read goes through
+            // the primary key's implicit index and never touches this one; this is for
+            // the trim, which runs on every save and reads it as a covering index.
+            try db.execute(sql: "CREATE INDEX composer_draft_recency ON composer_draft(updated_at DESC)")
+        }
+
         return migrator
     }
 

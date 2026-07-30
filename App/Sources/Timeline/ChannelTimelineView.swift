@@ -56,6 +56,7 @@ struct ChannelTimelineView: View {
         channel: ChannelListRow,
         store: BuzzEventStore,
         engine: SyncEngine,
+        drafts: ComposerDrafts? = nil,
         selfPubkey: String?,
         knownPeer: String? = nil
     ) {
@@ -68,6 +69,7 @@ struct ChannelTimelineView: View {
             opener: engine,
             prefetcher: engine,
             presence: engine.presenceStore,
+            drafts: drafts,
             selfPubkey: selfPubkey,
             knownPeer: knownPeer,
             lifecycleEngine: engine
@@ -93,6 +95,7 @@ struct ChannelTimelineView: View {
         opener: any ThreadOpening,
         prefetcher: (any ThreadPrefetching)? = nil,
         presence: PresenceStore,
+        drafts: ComposerDrafts? = nil,
         selfPubkey: String?,
         knownPeer: String? = nil,
         lifecycleEngine: SyncEngine? = nil
@@ -113,6 +116,7 @@ struct ChannelTimelineView: View {
             sender: sender,
             typing: typing,
             readStateMarking: readStateMarking,
+            drafts: drafts,
             selfPubkey: selfPubkey
         ))
         _presence = State(initialValue: PresenceModel(store: presence))
@@ -200,6 +204,9 @@ struct ChannelTimelineView: View {
                 sender: sender,
                 opener: opener,
                 presence: presenceStore,
+                // The model's, not a second copy: a thread pushed from a row keeps its
+                // own draft in the same place this channel keeps its own.
+                drafts: model.drafts,
                 selfPubkey: selfPubkey,
                 focusingComposer: route.focusesComposer
             )

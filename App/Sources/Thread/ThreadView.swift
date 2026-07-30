@@ -56,6 +56,7 @@ struct ThreadView: View {
         channel: String,
         store: BuzzEventStore,
         engine: SyncEngine,
+        drafts: ComposerDrafts? = nil,
         selfPubkey: String?,
         landingOn landing: ThreadLanding = .latestReply,
         focusingComposer focusesComposer: Bool = false
@@ -68,6 +69,7 @@ struct ThreadView: View {
             opener: engine,
             presence: engine.presenceStore,
             typing: engine,
+            drafts: drafts,
             selfPubkey: selfPubkey,
             landingOn: landing,
             focusingComposer: focusesComposer
@@ -93,6 +95,7 @@ struct ThreadView: View {
         opener: any ThreadOpening,
         presence: PresenceStore,
         typing: any EphemeralPublishing = NoopEphemeralPublisher(),
+        drafts: ComposerDrafts? = nil,
         selfPubkey: String?,
         landingOn landing: ThreadLanding = .latestReply,
         focusingComposer focusesComposer: Bool = false
@@ -107,6 +110,7 @@ struct ThreadView: View {
             sender: sender,
             opener: opener,
             typing: typing,
+            drafts: drafts,
             selfPubkey: selfPubkey
         ))
         _presence = State(initialValue: PresenceModel(store: presence))
