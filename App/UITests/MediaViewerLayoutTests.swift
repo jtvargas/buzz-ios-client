@@ -51,6 +51,10 @@ final class MediaViewerLayoutTests: XCTestCase {
         static let header = "mediaViewerHeader"
     }
 
+    /// What a system navigation control measures on this phone — the size of the back
+    /// button the viewer's close button is asked to match.
+    static let closeButtonSide: CGFloat = 44
+
     override func setUp() {
         super.setUp()
         continueAfterFailure = false
@@ -166,6 +170,20 @@ final class MediaViewerLayoutTests: XCTestCase {
             "\(alt): the header pill is against the top of the screen, under the status bar"
         )
         XCTAssertTrue(close.isHittable, "\(alt): the close button cannot be tapped")
+        // The size of a system navigation control, and round rather than oval. The owner
+        // has now rejected this button twice on its shape: first as a 68x58 oval, then as a
+        // circle too small to read as one of the phone's own. `Self.closeButtonSide` is the
+        // number iOS uses for the back button beside a title, and the message prints what
+        // it actually got, because the point of this assertion is to tell me the number.
+        XCTAssertEqual(
+            close.frame.width, Self.closeButtonSide, accuracy: 3,
+            "\(alt): the close button is \(Int(close.frame.width))x\(Int(close.frame.height))pt, "
+                + "where a system one is \(Int(Self.closeButtonSide))"
+        )
+        XCTAssertEqual(
+            close.frame.height, close.frame.width, accuracy: 2,
+            "\(alt): the close button is an oval — \(Int(close.frame.width))x\(Int(close.frame.height))pt"
+        )
         XCTAssertLessThan(
             pill.frame.maxX, close.frame.minX,
             "\(alt): the header pill has run into the close button"

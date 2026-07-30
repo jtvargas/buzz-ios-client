@@ -291,6 +291,14 @@ private extension MessageMediaViewer {
     ///   that accent by default; nowhere else on the phone is a close button the app's
     ///   brand colour.
     ///
+    /// And the **size**, which is the third thing the owner sent it back for. Left to size
+    /// itself around a bare glyph the circle came out at **30pt**, which does not read as
+    /// one of the phone's own controls beside a 44pt back button. The glass style adds a
+    /// measured ~14pt around whatever it is given, so the *label* is sized and the circle
+    /// follows: 30 + 14 = 44. That arithmetic is empirical and would not survive a change
+    /// in the style's padding, which is exactly why ``MediaViewerLayoutTests`` measures the
+    /// button on a real screen rather than trusting it.
+    ///
     /// It is centred on the pill beside it rather than aligned to its top; see ``chrome``.
     var closeButton: some View {
         Button(role: .close) {
@@ -298,6 +306,7 @@ private extension MessageMediaViewer {
         } label: {
             Image(systemName: "xmark")
                 .font(.hiveSymbol(.body, weight: .semibold))
+                .frame(width: 30, height: 30)
         }
         // `.glass` is already the interactive material for a control — it lights under a
         // finger because a button is a thing that can be pressed. The pill beside it has
