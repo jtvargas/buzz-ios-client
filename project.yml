@@ -24,7 +24,22 @@ targets:
     platform: iOS
     sources:
       - App/Sources
-      - App/Resources
+      # The Icon Composer icon is declared separately below, so this entry must not
+      # also walk into it.
+      - path: App/Resources
+        excludes:
+          - hive-buzz-app.icon
+          - hive-buzz-app.icon/**
+      # `hive-buzz-app.icon` is a FILE WRAPPER, not a folder: `actool` compiles it
+      # into the icon variants iOS 26 needs (light, dark, clear, tinted). XcodeGen
+      # 2.44 does not know the `.icon` extension, so left to its own devices it
+      # recurses in and adds `icon.json` and the layer images as four LOOSE
+      # resources — which copies 330 KB of raw art into the bundle and leaves the
+      # icon uncompiled. `type: file` keeps the wrapper whole; Xcode types it from
+      # the extension and routes it to `actool`.
+      - path: App/Resources/hive-buzz-app.icon
+        type: file
+        buildPhase: resources
     dependencies:
       - package: NostrCore
       - package: BuzzKit
@@ -65,9 +80,14 @@ targets:
         CURRENT_PROJECT_VERSION: 1
         MARKETING_VERSION: 0.1.0
         SWIFT_STRICT_CONCURRENCY: complete
-        # The app icon and the global accent (a honey amber that tints buttons,
-        # reaction chips, and the unread pill) live in App/Resources/Assets.xcassets.
-        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        # The app icon is `App/Resources/hive-buzz-app.icon` — the Icon Composer
+        # document, named here WITHOUT its extension. It is the only app icon in the
+        # project: there is deliberately no `AppIcon` set in the catalog to fall back
+        # to, because a second one is how this setting came to name the wrong icon.
+        # `AppIconTests` fails if the two ever drift apart again.
+        ASSETCATALOG_COMPILER_APPICON_NAME: hive-buzz-app
+        # The global accent — a honey amber that tints buttons, reaction chips and the
+        # unread pill — lives in App/Resources/Assets.xcassets.
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
   HiveTests:
     type: bundle.unit-test
