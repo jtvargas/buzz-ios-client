@@ -111,6 +111,12 @@ struct AccountView: View {
                 showSignOutConfirm = true
             }
             .frame(maxWidth: .infinity)
+            // Not while the session is still coming up. The workspace now mounts before the
+            // engine has started (so a slow relay never blocks the app), which put this
+            // button on screen during a launch for the first time — and a teardown that
+            // lands mid-start races a setup that cannot be cancelled. See
+            // ``AppEnvironment/signOut()``. There is also nothing to leave yet.
+            .disabled(environment.isStartingEngine)
             .confirmationDialog(
                 "Sign out of Hive?",
                 isPresented: $showSignOutConfirm,

@@ -49,6 +49,15 @@ public enum ChannelDirectoryError: Error, Equatable {
 /// that leaves the prior store state untouched.
 public struct ChannelDirectoryClient: ChannelDirectoryFetching, Sendable {
     public static let pageSize = 500
+    /// How many channels one state request asks about.
+    ///
+    /// **This has to stay below a third of ``pageSize``.** That request names three kinds
+    /// (39000, 39001, 39002) under one `limit`, so it can return `3 × channelBatchSize`
+    /// rows — and the relay clamps and then truncates a single `limit` in
+    /// `created_at DESC` order (`buzz/crates/buzz-db/src/event.rs:346` and `:531`). Past
+    /// that ratio the answer silently loses the least-recently-updated channels' state,
+    /// and a channel with no metadata row reads as one that no longer exists. At 100 the
+    /// worst case is 300 of 500, and the pagination below never even engages.
     public static let channelBatchSize = 100
 
     private let transport: any HTTPTransport

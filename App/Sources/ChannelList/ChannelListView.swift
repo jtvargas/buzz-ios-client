@@ -88,8 +88,12 @@ struct ChannelListView: View {
         NavigationStack(path: $path) {
             sidebar(names: names)
                 .overlay(alignment: .top) {
+                    // Gated on the surface and not on having rows: an identity the relay
+                    // confirmed is in *nothing* still needs to be told when a later refresh
+                    // failed, and it is the reader who cannot tell "empty" from "offline"
+                    // who most needs the Retry this carries.
                     if environment.channelDirectoryStatus == .cachedFallback,
-                       !model.channels.isEmpty {
+                       model.surface == .conversations {
                         ChannelDirectoryFallbackBanner {
                             Task { await environment.retryConnectionAndDirectory() }
                         }
@@ -198,6 +202,10 @@ struct ChannelListView: View {
         .task { await presence.run() }
         .task { await directory.run() }
         .task { await ticker.run() }
+        // Straight off the engine, deliberately not keyed on the mirrored status: a view
+        // samples, and two verdicts in one main-actor turn are one body pass. See
+        // ``ChannelListModel/trackDirectory(of:)``.
+        .task { await model.trackDirectory(of: engine) }
     }
 
     /// The mark on the home heading: one cell of the honeycomb, for the workspace as a
@@ -209,6 +217,13 @@ struct ChannelListView: View {
     /// The one heading drawn in the accent: the workspace's own name is what the colour
     /// is *for*, where every other heading names a conversation inside it.
     static let communityMark = ConversationTitleBar.Mark.symbol(communitySymbol, accented: true)
+
+    /// Why the sidebar is empty when the relay cannot be reached. It names the rule rather
+    /// than apologising for it: Hive lists the conversations the relay confirms, so with no
+    /// relay there is nothing it can honestly list.
+    static let unreachableMessage =
+        "Hive lists the conversations the relay confirms you’re in, so there’s nothing to show "
+            + "until it answers. Your messages are still saved."
 }
 
 // MARK: - Content
@@ -225,9 +240,33 @@ private extension ChannelListView {
     /// The pull is the reader's escape hatch — ``SyncEngine/refresh()``. Here and on the
     /// Threads screen, and deliberately *not* on a conversation, where pulling down at the
     /// top of the history already means "load older messages".
+    ///
+    /// # Why there are three of these and not two
+    ///
+    /// A launch has a third state, and conflating it with "empty" is what put deleted
+    /// channels on screen: until the relay has answered for this key, the app does not
+    /// *know* what exists, and the honest thing to draw is neither a list nor "no
+    /// conversations" but ``ChannelDirectoryPlaceholderList``.
     @ViewBuilder
     func sidebar(names: EntityNames) -> some View {
-        if model.channels.isEmpty {
+        switch model.surface {
+        case .connecting:
+            ChannelDirectoryPlaceholderList(
+                label: SidebarStatusPill.label(
+                    for: environment.engineState,
+                    hasConnectedBefore: environment.hasConnectedBefore
+                )
+            )
+        case .unreachable:
+            unreachableState
+        case .conversations:
+            conversations(names: names)
+        }
+    }
+
+    @ViewBuilder
+    func conversations(names: EntityNames) -> some View {
+        if model.visibleChannels.isEmpty {
             emptyState
         } else {
             List {
@@ -333,29 +372,32 @@ private extension ChannelListView {
         .tint(.yellow)
     }
 
-    @ViewBuilder
+    /// The relay answered, and the answer is that this key is in nothing.
     var emptyState: some View {
-        if environment.channelDirectoryStatus == .cachedFallback {
-            ContentUnavailableView {
-                Label("Couldn’t refresh channels", systemImage: "wifi.exclamationmark")
-            } description: {
-                Text(ChannelDirectoryFallbackBanner.message)
-            } actions: {
-                Button("Retry") {
-                    Task { await environment.retryConnectionAndDirectory() }
-                }
-                .buttonStyle(.borderedProminent)
-                .accessibilityIdentifier("channel-directory-retry")
+        ContentUnavailableView(
+            "No conversations yet",
+            systemImage: "bubble.left.and.bubble.right",
+            description: Text("Channels and direct messages appear here as they sync from the relay.")
+        )
+    }
+
+    /// The relay did not answer, and the grace period is over.
+    ///
+    /// It offers no list, and that is the point: the alternative is the saved one, which
+    /// is a list of what *was* true and cannot be told apart from what is.
+    var unreachableState: some View {
+        ContentUnavailableView {
+            Label("Can’t reach the relay", systemImage: "wifi.exclamationmark")
+        } description: {
+            Text(Self.unreachableMessage)
+        } actions: {
+            Button("Retry") {
+                Task { await environment.retryConnectionAndDirectory() }
             }
-        } else if model.hasLoaded {
-            ContentUnavailableView(
-                "No conversations yet",
-                systemImage: "bubble.left.and.bubble.right",
-                description: Text("Channels and direct messages appear here as they sync from the relay.")
-            )
-        } else {
-            ProgressView()
+            .buttonStyle(.borderedProminent)
+            .accessibilityIdentifier("channel-directory-retry")
         }
+        .accessibilityIdentifier("channel-directory-unreachable")
     }
 
     static let rowInsets = EdgeInsets(top: 2, leading: 16, bottom: 2, trailing: 16)
@@ -407,7 +449,7 @@ private extension ChannelListView {
     /// row instead, so a heartbeat invalidates the small views that draw a dot rather than
     /// re-deriving every section (§9).
     func sidebarContent(names: EntityNames) -> SidebarContent {
-        SidebarContent.build(channels: model.channels, names: names, starred: starred.ids)
+        SidebarContent.build(channels: model.visibleChannels, names: names, starred: starred.ids)
     }
 
     /// The persisted expansion flag for a section.
@@ -418,31 +460,5 @@ private extension ChannelListView {
         case .directMessages: $directMessagesExpanded
         case .agents: $agentsExpanded
         }
-    }
-}
-
-/// A floating recovery status: because it is an overlay, showing or removing it
-/// never changes the list's row positions or scroll geometry.
-struct ChannelDirectoryFallbackBanner: View {
-    static let message = "Couldn’t refresh channels — showing saved conversations"
-
-    let retry: () -> Void
-
-    var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "wifi.exclamationmark")
-                .accessibilityHidden(true)
-            Text(Self.message)
-                .font(.footnote)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            Button("Retry", action: retry)
-                .buttonStyle(.bordered)
-                .accessibilityIdentifier("channel-directory-retry")
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(.regularMaterial, in: .rect(cornerRadius: 12))
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("channel-directory-cached-fallback")
     }
 }
