@@ -3,6 +3,7 @@ import BuzzKit
 import Foundation
 import NostrCore
 import SwiftUI
+import UIKit
 
 /// A conversation of a requested *shape*, opened straight from a launch argument, so a UI
 /// test can drive the real ``ThreadView`` and ``ChannelTimelineView`` without a relay.
@@ -65,6 +66,22 @@ enum ConversationFixture {
         /// exercises the inline renderer. It is a visual regression sampler, not a scroll
         /// shape, so it remains inert unless explicitly requested at launch.
         var markdownSampler = false
+        /// Adds one message per picture shape — tall, wide, square — so the full-screen
+        /// viewer and its header can be looked at on a simulator.
+        ///
+        /// Off by default and never passed by the scroll suite, for `-links`' reason: a
+        /// picture is height a `LazyVStack` has to estimate, and the shapes are about that
+        /// estimate. This is a way to *see* the viewer, not a shape.
+        var images = false
+        /// One shape's name — `Tall`, `Wide`, `Square`, `Panorama`, `Column`, `Light`,
+        /// `Small`, `Pair` — instead of all of them.
+        ///
+        /// Why a suite would want that: with every shape in one conversation, reaching the
+        /// oldest of them means scrolling, and a tap issued at a conversation that is still
+        /// moving lands on the row rather than on the picture — which opens a *thread*.
+        /// Measured, twice. One picture per launch is a conversation that never has to be
+        /// scrolled, so the tap is the only interaction in the test.
+        var imageShape: String?
 
         /// Parses the arguments the test launched us with, or `nil` for a normal run.
         ///
@@ -88,6 +105,10 @@ enum ConversationFixture {
             options.spread = arguments.contains("-spread")
             options.links = arguments.contains("-links")
             options.markdownSampler = arguments.contains("-markdownSampler")
+            options.images = arguments.contains("-images")
+            options.imageShape = arguments
+                .first { $0.hasPrefix("-imageShape=") }
+                .map { String($0.dropFirst("-imageShape=".count)) }
             return options
         }
     }
@@ -143,6 +164,24 @@ enum ConversationFixture {
             )
             events.append(event)
             if rootID == nil, options.surface == .thread { rootID = event.id }
+        }
+        if options.images || options.imageShape != nil {
+            for (offset, picture) in pictureSampler(only: options.imageShape).enumerated() {
+                var tags: [[String]] = [["h", channelID]]
+                if let rootID {
+                    tags.append(["e", rootID, "", "root"])
+                    tags.append(["e", rootID, "", "reply"])
+                }
+                events.append(try NostrEvent.signed(
+                    kind: .channelMessage,
+                    content: picture,
+                    tags: tags,
+                    createdAt: Date(
+                        timeIntervalSince1970: TimeInterval(1_700_000_000 + (options.messages + offset) * 60)
+                    ),
+                    with: key
+                ))
+            }
         }
         return events
     }

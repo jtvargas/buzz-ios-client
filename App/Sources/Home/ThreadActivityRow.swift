@@ -37,6 +37,13 @@ struct ThreadActivityRow: View {
     @ScaledMetric(relativeTo: .subheadline)
     private var avatarSize: CGFloat = MessageRowMetrics.avatarSize
 
+    /// The conversation these two messages live in, for a picture's viewer header. The
+    /// Threads screen draws rows from several at once, which is why it is per row here
+    /// rather than per screen.
+    private var conversation: ConversationIdentity {
+        names.conversation(for: activity.channelID)
+    }
+
     var body: some View {
         // One spacing for the whole stack, and it is the gap the channel and the thread put
         // between two messages. The two messages in this row are a conversation and should
@@ -56,6 +63,7 @@ struct ThreadActivityRow: View {
                 onRetry: { _ in },
                 onOpenThread: onOpen,
                 onOpenProfile: onOpenProfile,
+                conversation: conversation,
                 contentLineLimit: Self.messageLineLimit
             )
             if let latestReply {
@@ -72,6 +80,7 @@ struct ThreadActivityRow: View {
                     onRetry: { _ in },
                     onOpenThread: onReply,
                     onOpenProfile: onOpenProfile,
+                    conversation: conversation,
                     contentLineLimit: Self.messageLineLimit
                 )
             }

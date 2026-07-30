@@ -56,6 +56,11 @@ struct RichTextView: View {
 
     let message: RichMessage
     var mode: RichTextRenderMode = .full
+    /// Who posted this message and where, for a picture's full-screen viewer.
+    ///
+    /// Deliberately *not* part of ``RichMessageCache``'s key: it is who said something,
+    /// not what was said, and two readings of one message must stay one cache entry.
+    var attribution: MessageMediaAttribution?
 
     /// How long a pressed pill stays lit.
     ///
@@ -84,9 +89,11 @@ struct RichTextView: View {
         text: String,
         media: [MessageMedia] = [],
         resolver: MentionResolver,
-        mode: RichTextRenderMode = .full
+        mode: RichTextRenderMode = .full,
+        attribution: MessageMediaAttribution? = nil
     ) {
         self.init(RichMessageCache.message(for: text, media: media, resolver: resolver), mode: mode)
+        self.attribution = attribution
     }
 
     var body: some View {
@@ -203,7 +210,7 @@ private extension RichTextView {
             // presents that itself. Without it a press would open the picture *and*
             // push the thread behind it, which is the defect the reaction chips'
             // `onOpenPalette` exists to avoid.
-            MessageMediaGroupView(media: media, onTap: { claimRowTap?() })
+            MessageMediaGroupView(media: media, onTap: { claimRowTap?() }, attribution: attribution)
 
         case let .linkPreview(preview):
             // The surface's own `openURL`, captured above — *not* the flashing wrapper

@@ -26,13 +26,17 @@ struct MessageMediaGroupView: View {
     /// whichever path handles the tap.
     var onTap: (() -> Void)?
 
+    /// Who posted these pictures and where, for the full-screen viewer's header.
+    /// Forwarded unchanged, exactly like the tap claim. See ``MessageMediaAttribution``.
+    var attribution: MessageMediaAttribution?
+
     var loader: RemoteImageLoader = .messageMedia
 
     var body: some View {
         if media.count > 1 {
-            MessageMediaMosaicView(media: media, onTap: onTap, loader: loader)
+            MessageMediaMosaicView(media: media, onTap: onTap, attribution: attribution, loader: loader)
         } else if let only = media.first {
-            MessageMediaView(media: only, onTap: onTap, loader: loader)
+            MessageMediaView(media: only, onTap: onTap, attribution: attribution, loader: loader)
         }
     }
 }
@@ -49,6 +53,7 @@ struct MessageMediaGroupView: View {
 private struct MessageMediaMosaicView: View {
     let media: [MessageMedia]
     var onTap: (() -> Void)?
+    var attribution: MessageMediaAttribution?
     var loader: RemoteImageLoader
 
     @State private var viewing: MessageMediaViewerSubject?
@@ -67,7 +72,12 @@ private struct MessageMediaMosaicView: View {
             ForEach(Array(media.enumerated()), id: \.offset) { index, item in
                 MessageMediaMosaicCellView(media: item, position: index, onOpen: { image in
                     onTap?()
-                    viewing = MessageMediaViewerSubject(media: media, startIndex: index, preview: image)
+                    viewing = MessageMediaViewerSubject(
+                        media: media,
+                        startIndex: index,
+                        preview: image,
+                        attribution: attribution
+                    )
                 }, loader: loader)
                 .matchedTransitionSource(id: item.url, in: zoom)
             }

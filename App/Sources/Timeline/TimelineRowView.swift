@@ -94,6 +94,14 @@ struct TimelineRowView: View {
     /// asks and the surface presents. Absent on a surface with nowhere to present it,
     /// where the identity then renders as plain text rather than as a dead control.
     var onOpenProfile: ((String) -> Void)?
+    /// The conversation this row is being drawn in, when the surface knows one.
+    ///
+    /// Used only to name the place a picture was posted in, in the full-screen viewer's
+    /// header — the row itself draws nothing from it. `nil` on a surface that is not a
+    /// conversation, where a picture's viewer then draws no header. ``TimelineRow`` cannot
+    /// answer this itself: it carries no channel id, deliberately, and the Threads screen
+    /// draws rows from several conversations at once.
+    var conversation: ConversationIdentity?
     /// How many lines of the message body to draw, or `nil` for all of them.
     ///
     /// `nil` on both conversation surfaces: a message being read is read whole. The Threads
@@ -297,7 +305,12 @@ struct TimelineRowView: View {
             // One engine for both kind-40002 rich markdown and plain kind-9 content:
             // block layout, safe links, and resolved @mention / #channel tokens, so a
             // message renders identically on every surface (WS-1 #7/#9).
-            RichTextView(text: bodyText, media: row.media, resolver: resolver)
+            RichTextView(
+                text: bodyText,
+                media: row.media,
+                resolver: resolver,
+                attribution: mediaAttribution
+            )
                 // Applied here rather than inside the renderer: it is a property of a
                 // message being read in a timeline, not of the markdown, and the
                 // channel-list snippet wants its single line tight.

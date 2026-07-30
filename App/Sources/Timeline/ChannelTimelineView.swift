@@ -302,7 +302,8 @@ struct ChannelTimelineView: View {
             onToggleReaction: { model.toggleReaction($0, on: row.id) },
             onOpenThread: row.isDeleted ? nil : { open(thread: row) },
             onLongPress: { messageActions = MessageActionTarget(row: row, isOwn: model.isOwn(row)) },
-            onOpenProfile: { profilePeer = ProfilePeer(pubkey: $0) }
+            onOpenProfile: { profilePeer = ProfilePeer(pubkey: $0) },
+            conversation: conversation
         )
         // The shared constant, not a bare `.padding(.horizontal)`: the day separator starts
         // on this same line, and two defaults agreeing is not the same as one number.

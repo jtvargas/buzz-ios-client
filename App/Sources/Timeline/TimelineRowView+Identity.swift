@@ -76,6 +76,26 @@ extension TimelineRowView {
         EntityNames.initials(from: authorHumanName)
     }
 
+    /// Everything a picture in this message needs to name itself in the full-screen
+    /// viewer: this row's author as the directory currently resolves them, when the
+    /// message was sent, and the conversation the surface said it is drawing.
+    ///
+    /// `nil` when the surface named no conversation — the viewer then draws no header
+    /// rather than one that cannot say where the picture came from. Built here rather than
+    /// by the viewer because this is the only place all three halves are in hand at once.
+    var mediaAttribution: MessageMediaAttribution? {
+        guard let conversation else { return nil }
+        return MessageMediaAttribution(
+            authorName: authorName,
+            authorPictureURL: authorPictureURL,
+            authorInitials: authorInitials,
+            authorSeed: row.pubkey,
+            sentAt: row.date,
+            conversationTitle: conversation.title,
+            conversationIsDirect: conversation.isDirect
+        )
+    }
+
     /// The directory's artwork, falling back to whatever the message's own joined
     /// profile row carried.
     private var authorPictureURL: URL? {

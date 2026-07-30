@@ -242,7 +242,8 @@ struct ThreadView: View {
                 // No `onOpenThread`: a reply inside a thread has nowhere further to go,
                 // which is also why no row here draws a reply preview.
                 onLongPress: { messageActions = MessageActionTarget(row: row, isOwn: model.isOwn(row)) },
-                onOpenProfile: { profilePeer = ProfilePeer(pubkey: $0) }
+                onOpenProfile: { profilePeer = ProfilePeer(pubkey: $0) },
+                conversation: conversation
             )
             // The shared constant rather than a bare `.padding(.horizontal)`, so a reply
             // starts on the same line as the header pill and the day separators above it.
