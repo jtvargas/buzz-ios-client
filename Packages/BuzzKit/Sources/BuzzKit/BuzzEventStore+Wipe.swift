@@ -9,7 +9,7 @@ public extension BuzzEventStore {
     /// re-login (fast, history intact) and calls this only when a *different* key
     /// takes over. Everything derivable from the relay is dropped — the append-only
     /// `event` log (which cascades `event_tag`), every projection, and the precious
-    /// local tables (`outbox`, `channel_sync`, `read_state`). `meta` is preserved so
+    /// local tables (`outbox`, `channel_sync`, `read_state`, `thread_fetch`). `meta` is preserved so
     /// the projection version still matches and no rebuild is triggered; the empty
     /// projections are already consistent with the now-empty log.
     ///
@@ -31,6 +31,7 @@ public extension BuzzEventStore {
             try db.execute(sql: "DELETE FROM channel_access")
             try db.execute(sql: "DELETE FROM channel_directory_request")
             try db.execute(sql: "DELETE FROM read_state")
+            try db.execute(sql: "DELETE FROM thread_fetch")
             for table in Schema.projectionTables {
                 try db.execute(sql: "DELETE FROM \(table)")
             }

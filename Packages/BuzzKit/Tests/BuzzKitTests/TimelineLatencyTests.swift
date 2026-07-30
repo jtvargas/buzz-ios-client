@@ -82,4 +82,66 @@ struct TimelineLatencyTests {
         #expect(firstSeconds < 2)
         #expect(deepSeconds < 2)
     }
+
+    /// The same page, over a channel where the relay has a reply tally for **every**
+    /// message — the shape a busy channel actually reaches.
+    ///
+    /// This is the loaded case for the summary composition in ``eventBranch(where:)``.
+    /// The unloaded case is the test above: its store holds no summaries at all, so its
+    /// two `LEFT JOIN`s find nothing and the `CASE` always takes its local branch. Run
+    /// the pair and the difference between them is the cost of the composition, which
+    /// is the only honest way to quote one.
+    ///
+    /// Both joins are primary-key lookups, so the expectation is that this costs
+    /// approximately nothing per row; the measurement is what says so.
+    @Test("Page latency when the relay has a tally for every message")
+    func pageLatencyWithSummaries() async throws {
+        let database = TempDatabase()
+        defer { database.remove() }
+        let store = try database.open()
+
+        let corpus = try PerfCorpus()
+        let topLevelCount = 8_000
+
+        let queriedMessages = try await corpus.messages(
+            count: topLevelCount, channels: [queried], startAt: 1_700_000_000
+        )
+        let summaries = try await corpus.summaries(
+            for: queriedMessages, in: queried, startAt: 1_700_500_000
+        )
+
+        _ = try await store.ingest(batch: queriedMessages, phase: .backfill)
+        _ = try await store.ingest(batch: summaries, phase: .backfill)
+        Perf.report(
+            "timeline.summaryCorpus",
+            "\(queriedMessages.count) messages, \(summaries.count) relay tallies"
+        )
+
+        let (first, firstSeconds) = try await Perf.measure {
+            try store.timeline(channel: queried, before: nil, limit: limit)
+        }
+        Perf.report(
+            "timeline.firstPageWithSummaries",
+            String(format: "%d rows in %.2f ms", first.count, firstSeconds * 1000)
+        )
+
+        let deepCursor = TimelineCursor(
+            createdAt: queriedMessages[60].createdAt, id: queriedMessages[60].id
+        )
+        let (deep, deepSeconds) = try await Perf.measure {
+            try store.timeline(channel: queried, before: deepCursor, limit: limit)
+        }
+        Perf.report(
+            "timeline.deepPageWithSummaries",
+            String(format: "%d rows in %.2f ms", deep.count, deepSeconds * 1000)
+        )
+
+        // Non-vacuity: the tallies must actually be reaching the rows, or this would be
+        // measuring the empty-join case a second time and reporting it as the loaded one.
+        #expect(first.count == limit)
+        #expect(first.allSatisfy { $0.replyCount == 3 })
+        #expect(deep.allSatisfy { $0.replyCount == 3 })
+        #expect(firstSeconds < 2)
+        #expect(deepSeconds < 2)
+    }
 }

@@ -1,8 +1,9 @@
 import BuzzKit
 import GRDB
 
-/// A change signal over the three tables that back every timeline and channel-list
-/// read: the append-only `event` log, the `outbox`, and `read_state`.
+/// A change signal over the tables that back every timeline and channel-list read:
+/// the append-only `event` log, the `outbox`, `read_state`, `thread_fetch`, and
+/// `channel_access`.
 ///
 /// # Why these tables are sufficient
 ///
@@ -16,6 +17,10 @@ import GRDB
 ///   failed`, or the confirm that deletes the row), is an `outbox` write.
 /// - A read-state change — this device marking a channel read, or another device's
 ///   blob arriving — is a `read_state` write, which moves a channel's unread count.
+/// - The relay's reply tally for a message (kind 39005) is itself a logged event, so
+///   a badge moving because the relay said so is already covered by `event`. The
+///   *other* half of that tally is not: `thread_fetch` records this device holding a
+///   thread in full, and one such write has no event behind it at all.
 ///
 /// So tracking the full-table regions of `event`, `outbox`, and `read_state` re-fires
 /// the observation on every change either read would reflect, while the *value* is
@@ -64,6 +69,22 @@ enum DatabaseSignal {
                     let context: String = row["context_id"] ?? ""
                     let readAt: Int64 = row["read_at"] ?? 0
                     token = token &+ context.hashValue &+ Int(truncatingIfNeeded: readAt)
+                }
+
+                // A thread fetch is this device recording that it now holds a thread in
+                // full, which changes that message's reply tally (see
+                // `BuzzEventStore.recordThreadFetch`) — and it is the one such change
+                // that can happen with **no event row behind it**: opening a thread
+                // whose replies were all withdrawn ingests nothing, so `COUNT(*) FROM
+                // event` does not move and the badge would keep advertising replies
+                // that are not there until some unrelated event happened along. Both
+                // columns, because a second fetch of the same root updates the row in
+                // place rather than adding one.
+                let fetches = try Row.fetchAll(db, sql: "SELECT root_id, summary_event_id FROM thread_fetch")
+                for row in fetches {
+                    let root: String = row["root_id"] ?? ""
+                    let summary: String = row["summary_event_id"] ?? ""
+                    token = token &+ root.hashValue &+ summary.hashValue
                 }
 
                 // Directory snapshots and accepted lifecycle commands update

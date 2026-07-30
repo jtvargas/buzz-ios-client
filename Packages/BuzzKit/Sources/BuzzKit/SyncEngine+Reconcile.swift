@@ -318,11 +318,26 @@ extension SyncEngine {
     // MARK: - Thread open
 
     /// Fetches a thread's replies one-shot by root id and ingests them, so opening a
-    /// thread pulls its contents on demand. Engine support only — the UI is Phase 3.
+    /// thread pulls its contents on demand.
+    ///
+    /// `kind:9` alone is the complete ask: it is the only kind ``BuzzProjector`` turns
+    /// into a `thread` row, so nothing else the relay could return would change this
+    /// device's count of the thread.
+    ///
+    /// The fetch is then recorded (``BuzzEventStore/recordThreadFetch(root:)``), which
+    /// is what promotes this device's own count over the relay's cached tally for this
+    /// root. Recorded only on a complete answer, and only when the ingest succeeded:
+    /// claiming to hold a thread that was clipped at the relay's limit, or that failed
+    /// to write, would suppress the relay's larger and more correct count in favour of
+    /// a local one that is genuinely short.
     public func openThread(root: String) async throws -> [NostrEvent] {
-        let filter = Filter(kinds: [.channelMessage], tagQueries: ["e": [root]])
+        let limit = config.threadFetchLimit
+        let filter = Filter(kinds: [.channelMessage], limit: limit, tagQueries: ["e": [root]])
         let events = try await subscriptions.query([filter])
-        _ = try? await store.ingest(batch: events, phase: .backfill)
+        guard (try? await store.ingest(batch: events, phase: .backfill)) != nil else { return events }
+        if events.count < limit {
+            try? await store.recordThreadFetch(root: root)
+        }
         return events
     }
 }

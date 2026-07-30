@@ -24,7 +24,7 @@ struct ChannelSubscriptionTests {
     /// until this kind was added.
     private static let contentKinds: [EventKind] = [
         .channelMessage, .richMessage, .messageEdit, .systemMessage,
-        .reaction, .deletion, .groupDeleteEvent, .typing,
+        .reaction, .deletion, .groupDeleteEvent, .typing, .threadSummary,
     ]
 
     // MARK: - Filter shapes

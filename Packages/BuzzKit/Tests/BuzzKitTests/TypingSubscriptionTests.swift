@@ -22,7 +22,7 @@ struct TypingSubscriptionTests {
     /// notice (40099), and typing (20002).
     private static let contentKinds: [EventKind] = [
         .channelMessage, .richMessage, .messageEdit, .systemMessage,
-        .reaction, .deletion, .groupDeleteEvent, .typing,
+        .reaction, .deletion, .groupDeleteEvent, .typing, .threadSummary,
     ]
 
     @Test("the standing content sub is a single #h-scoped filter carrying exactly the live kinds")
