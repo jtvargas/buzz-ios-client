@@ -58,6 +58,8 @@ struct ChannelListView: View {
     /// the answer is what stops a DM opened from inside itself stacking on itself
     /// (see ``ConversationRoute/pushed(onto:)``).
     @State private var path: [ConversationRoute] = []
+    /// Where the reader last was, for the leftward drag that takes them back to it.
+    @State private var resume = ConversationResume()
 
     // Expansion persists across launches, one `UserDefaults` flag per section. The keys
     // come from ``SidebarSection/expansionStorageKey`` so the view and the tests that
@@ -89,9 +91,12 @@ struct ChannelListView: View {
         // are each built one time rather than once for the environment and again for the rows.
         let names = entityNames
         let channelNames = ChannelNameMap(channels: model.channels)
+        // Resolved once per pass for the same reason the two above are: the highlight asks
+        // about it on every row, and the answer is the same for all of them.
+        let resumable = resume.resolved(among: model.visibleChannels)
 
         NavigationStack(path: $path) {
-            sidebar(names: names)
+            sidebar(names: names, resumable: resumable?.channel.id)
                 .overlay(alignment: .top) {
                     // Gated on the surface and not on having rows: an identity the relay
                     // confirmed is in *nothing* still needs to be told when a later refresh
@@ -117,6 +122,14 @@ struct ChannelListView: View {
                     actionHint: "Double tap to show your account"
                 ) {
                     showAccount = true
+                }
+                // Drag left anywhere here to reopen the conversation just left — the
+                // system's back swipe, mirrored. Declared inside the stack because the
+                // transition it drives is that stack's own push.
+                .sidebarForwardSwipe(reopening: resumable) { route in
+                    path = route.pushed(onto: path)
+                } close: {
+                    path = []
                 }
                 .navigationDestination(for: ConversationRoute.self) { route in
                     ChannelTimelineView(
@@ -179,6 +192,11 @@ struct ChannelListView: View {
             let route = ConversationRoute(channel: conversationRow(for: channelID))
             path = route.pushed(onto: path)
         })
+        // Watched rather than written at the two places that pop, so the system's own back
+        // swipe — which runs no app code — fills the slot too. See ``ConversationResume``.
+        .onChange(of: path) { previous, current in
+            resume.observe(path: current, previously: previous)
+        }
         // The router hands back an opened conversation once; this is the one place that turns
         // it into a push, and it clears the value so an unrelated body pass cannot re-push.
         .onChange(of: router.pendingConversation) { _, opened in
@@ -236,6 +254,10 @@ struct ChannelListView: View {
     /// is *for*, where every other heading names a conversation inside it.
     static let communityMark = ConversationTitleBar.Mark.symbol(communitySymbol, accented: true)
 
+    /// What VoiceOver is told about the marked row. Names the gesture rather than the
+    /// colour, because the colour is not the point and cannot be perceived here anyway.
+    static let resumeHint = "Last opened. Swipe left on this screen to reopen it."
+
     /// Why the sidebar is empty when the relay cannot be reached. It names the rule rather
     /// than apologising for it: Hive lists the conversations the relay confirms, so with no
     /// relay there is nothing it can honestly list.
@@ -266,7 +288,7 @@ private extension ChannelListView {
     /// *know* what exists, and the honest thing to draw is neither a list nor "no
     /// conversations" but ``ChannelDirectoryPlaceholderList``.
     @ViewBuilder
-    func sidebar(names: EntityNames) -> some View {
+    func sidebar(names: EntityNames, resumable: String?) -> some View {
         switch model.surface {
         case .connecting:
             ChannelDirectoryPlaceholderList(
@@ -278,12 +300,12 @@ private extension ChannelListView {
         case .unreachable:
             unreachableState
         case .conversations:
-            conversations(names: names)
+            conversations(names: names, resumable: resumable)
         }
     }
 
     @ViewBuilder
-    func conversations(names: EntityNames) -> some View {
+    func conversations(names: EntityNames, resumable: String?) -> some View {
         if model.visibleChannels.isEmpty {
             emptyState
         } else {
@@ -302,7 +324,7 @@ private extension ChannelListView {
                     .listRowInsets(Self.headerInsets)
                     .listRowSeparator(.hidden)
                     if expansion(for: section.section).wrappedValue {
-                        rows(of: section)
+                        rows(of: section, resumable: resumable)
                     }
                 }
             }
@@ -354,7 +376,7 @@ private extension ChannelListView {
     /// link inside a `List` draws a disclosure indicator no modifier can decline. The push is
     /// the link's own — same route, same explicit path — and the press feedback it gave for
     /// free is ``PressFeedbackButtonStyle``.
-    func rows(of section: SidebarSectionContent) -> some View {
+    func rows(of section: SidebarSectionContent, resumable: String?) -> some View {
         ForEach(section.rows) { row in
             // No peer hint from here: a conversation reached from the sidebar is one the
             // channel list already knows, so its roster is in hand.
@@ -369,6 +391,11 @@ private extension ChannelListView {
             // No per-row rule: sections of ruled rows read as a form, not as one
             // navigation surface. The section headings do the separating.
             .listRowSeparator(.hidden)
+            .listRowBackground(resumeMark(isResumable: row.id == resumable))
+            // Spoken, because the highlight is the only thing that says so and a colour
+            // says nothing to VoiceOver. A hint rather than part of the label: it describes
+            // a second way to get here, not what this row is.
+            .accessibilityHint(row.id == resumable ? Self.resumeHint : "")
             // Starring is a long press only. It had a leading swipe as well, and that swipe
             // is gone deliberately: a `List` row's swipe actions claim horizontal panning
             // for the row, which is the one axis this sidebar needs for navigating between
@@ -382,6 +409,25 @@ private extension ChannelListView {
                 // a row that is about to vanish, is how one gets pressed by accident.
                 if row.conversation.isDirect { hideAction(row) }
             }
+        }
+    }
+
+    /// The mark on the row a leftward drag would reopen — where you just were.
+    ///
+    /// A wash of the accent behind the whole row rather than a bar, a dot or a badge: it has
+    /// to be legible at a glance without competing with the two things this list already
+    /// says with weight and colour — unread, and mentioned. A tinted row reads as *place*,
+    /// which is what it means, and nothing else in the sidebar is trying to say that.
+    ///
+    /// Inset from the row's own bounds so it reads as a marked row rather than a full-width
+    /// band, and rounded to match the glyph beside it.
+    @ViewBuilder
+    func resumeMark(isResumable: Bool) -> some View {
+        if isResumable {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color.hiveAccent.opacity(0.14))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 1)
         }
     }
 
