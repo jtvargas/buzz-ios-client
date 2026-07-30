@@ -1,13 +1,11 @@
 {
-  "fill" : {
-    "automatic-gradient" : "extended-gray:0.00000,1.00000"
-  },
+  "fill" : "system-dark",
   "groups" : [
     {
       "blend-mode-specializations" : [
         {
           "appearance" : "dark",
-          "value" : "screen"
+          "value" : "normal"
         }
       ],
       "blur-material-specializations" : [
@@ -26,7 +24,7 @@
           "fill" : "automatic",
           "glass-specializations" : [
             {
-              "value" : false
+              "value" : true
             },
             {
               "appearance" : "dark",
@@ -38,16 +36,23 @@
           "name" : "Group 2678"
         },
         {
+          "glass" : false,
           "hidden" : true,
           "image-name" : "collhig.png",
           "name" : "collhig"
         },
         {
           "blend-mode" : "darken",
-          "fill" : {
-            "solid" : "srgb:0.00000,0.00000,0.00000,1.00000"
-          },
-          "glass" : true,
+          "fill" : "none",
+          "glass-specializations" : [
+            {
+              "value" : false
+            },
+            {
+              "appearance" : "dark",
+              "value" : false
+            }
+          ],
           "hidden" : true,
           "image-name" : "bgg-his.svg",
           "name" : "bgg-his"
@@ -59,7 +64,7 @@
         },
         {
           "appearance" : "dark",
-          "value" : "individual"
+          "value" : "combined"
         }
       ],
       "shadow-specializations" : [
