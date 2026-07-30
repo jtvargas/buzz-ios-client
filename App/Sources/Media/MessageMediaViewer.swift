@@ -94,13 +94,23 @@ struct MessageMediaViewer: View {
     /// The accessibility identifier on each page's picture. See the use site.
     static let pictureIdentifier = "mediaViewerPicture"
 
-    @State private var selection: Int
+    /// Which page the scroll view is resting on, by position in ``MessageMediaViewerSubject/media``.
+    ///
+    /// Optional because that is what `scrollPosition(id:)` binds to — `nil` means the
+    /// scroll view is between pages, which a paging behaviour only passes through.
+    @State private var page: Int?
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.displayScale) private var displayScale
 
     init(subject: MessageMediaViewerSubject, loader: RemoteImageLoader = .messageMedia) {
         self.subject = subject
         self.loader = loader
-        self._selection = State(initialValue: subject.startIndex)
+        // Deliberately not seeded with `startIndex`: a `scrollPosition` set before the
+        // first layout is not honoured, and seeding it makes the dots claim a page the
+        // scroll view is not on. The opening page is placed by `ScrollViewReader`; this
+        // binding only ever *reports* where the reader has got to. Until it does, every
+        // use of it falls back to `startIndex`, which is where the scroll view is going.
+        self._page = State(initialValue: nil)
     }
 
     var body: some View {
@@ -115,6 +125,9 @@ struct MessageMediaViewer: View {
                 chrome
                     .padding(.horizontal, 12)
                     .padding(.top, 4)
+                pageDots
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+                    .padding(.bottom, 8)
             }
         }
         .preferredColorScheme(.dark)
@@ -134,113 +147,6 @@ struct MessageMediaViewer: View {
     }
 }
 
-// MARK: - One page
-
-/// One picture of the gallery, full screen. Its own load and its own failure notice,
-/// because each page decodes a different source at whatever pixel size the shared screen
-/// geometry implies for *its* declared dimensions — the one thing neighbouring pages
-/// cannot answer for each other.
-private struct MessageMediaViewerPage: View {
-    let media: MessageMedia
-    /// The bitmap already on screen when this page's gallery was opened, or `nil` for
-    /// every page but the one that was tapped — see ``MessageMediaViewerSubject``.
-    let preview: UIImage?
-    /// The viewer's own bounds, read once by the container's `GeometryReader` rather than
-    /// once per page: every page targets the same screen, so there is nothing for a
-    /// second reader to learn that the first one has not already.
-    let screenSize: CGSize
-    var loader: RemoteImageLoader
-
-    @State private var full: UIImage?
-    @State private var didFail = false
-    @Environment(\.displayScale) private var displayScale
-
-    var body: some View {
-        content
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            // A `TabView` page is hosted inside a collection view cell, and that boundary
-            // re-reads the window's safe area and applies it to the SwiftUI content in the
-            // cell — an ancestor having already ignored it counts for nothing here. Without
-            // this the cell is the full 874pt of a tall phone and the picture inside it is
-            // 778, which is the picture stopping 96pt short of the screen it was supposed
-            // to fill. Measured, and gated by ``MediaViewerLayoutTests``.
-            .ignoresSafeArea()
-            // Keyed by the pixel size rather than by the geometry: the target is derived
-            // from the screen's *longest* edge, so a rotation cannot change it and cannot
-            // re-run a decode that would produce the identical bitmap.
-            .task(id: pixelSize) {
-                await load(pixelSize: pixelSize)
-            }
-    }
-}
-
-private extension MessageMediaViewerPage {
-    @ViewBuilder
-    var content: some View {
-        if let image = full ?? preview {
-            MessageMediaZoomView(image: image)
-                // Labelled here rather than left to the bridge: a `UIImageView` reports
-                // itself to VoiceOver as an unlabelled image, and the author's `alt` is the
-                // only description of it that exists.
-                .accessibilityElement()
-                .accessibilityLabel(MessageMediaDescription.label(for: media, state: .loaded))
-                .accessibilityAddTraits(.isImage)
-                // Named apart from the inline picture, which carries the same label — the
-                // author's `alt` — and is still in the hierarchy behind the cover. The
-                // rectangle this reports is the *page*, which is what says whether the
-                // picture layer takes the whole screen or stops at a bar.
-                .accessibilityIdentifier(MessageMediaViewer.pictureIdentifier)
-        } else if didFail {
-            failureNotice
-        } else {
-            ProgressView()
-                .controlSize(.large)
-                .tint(.white)
-        }
-    }
-
-    /// The failure state here can only be reached by opening the viewer on an attachment
-    /// that has no inline bitmap either, which today means a `data:` payload that decodes
-    /// at one size and not another — rare, and still not allowed to be a black rectangle
-    /// with nothing in it.
-    var failureNotice: some View {
-        VStack(spacing: 10) {
-            Image(systemName: "photo")
-                .font(.hiveSymbol(.largeTitle))
-                .foregroundStyle(.white.opacity(0.7))
-            Text(MessageMediaDescription.placeholderText(for: media, state: .failed))
-                .font(.hive(.callout))
-                .foregroundStyle(.white.opacity(0.7))
-                .multilineTextAlignment(.center)
-        }
-        .padding(24)
-        .accessibilityElement(children: .combine)
-    }
-
-    var pixelSize: CGFloat {
-        MessageMediaLayout.viewerPixelSize(screen: screenSize, displayScale: displayScale, declared: media.pixelSize)
-    }
-
-    func load(pixelSize: CGFloat) async {
-        guard media.kind == .image, let url = URL(string: media.url) else {
-            didFail = preview == nil
-            return
-        }
-        // A cache hit answers without suspending and without a request; a miss shares the
-        // fetch with anything else asking for the same picture at the same size.
-        let image = await loader.image(for: url, pixelSize: pixelSize)
-        guard !Task.isCancelled else { return }
-        if let image {
-            full = image
-        } else {
-            // Only a failure if there is nothing at all to show. Falling back to the
-            // inline bitmap — soft, but the right picture — beats replacing a picture the
-            // reader is already looking at with an apology.
-            didFail = preview == nil
-        }
-    }
-}
-
 private extension MessageMediaViewer {
     /// The pictures, filling the screen the chrome is drawn over.
     ///
@@ -248,26 +154,101 @@ private extension MessageMediaViewer {
     /// is the expanded size, so the pixel size every page decodes to is the phone's whole
     /// screen and not the room left by a bar.
     func pictures(screenSize: CGSize) -> some View {
-        TabView(selection: $selection) {
-            // By position, for the same reason the mosaic is — the group can hold one URL
-            // twice, and ``BuzzKit/MessageMedia/id`` is the URL. Here the consequence
-            // would be a page the reader cannot reach: `.tag(index)` stays distinct while
-            // the identity behind it does not.
-            ForEach(Array(subject.media.enumerated()), id: \.offset) { index, media in
-                MessageMediaViewerPage(
-                    media: media,
-                    preview: index == subject.startIndex ? subject.preview : nil,
-                    screenSize: screenSize,
-                    loader: loader
-                )
-                .tag(index)
-            }
+        ScrollViewReader { reader in
+            pages(screenSize: screenSize)
+                // A `scrollPosition` seeded before the first layout is NOT honoured: the
+                // scroll view rested on the first page while the binding — and so the dots
+                // — said the second, which is a gallery opening on a picture the reader did
+                // not tap. Measured on the second cell of a two-picture message, and the
+                // reason ``MediaViewerLayoutTests`` now asks *where* the page is and not
+                // merely whether it exists. `ScrollViewReader` is the mechanism that does
+                // work against a lazy stack, and is what the message list here uses for the
+                // same reason.
+                .onAppear { reader.scrollTo(subject.startIndex, anchor: .center) }
         }
-        // Paging only earns its chrome once there is more than one page — a single
-        // attachment's viewer must read exactly as it did before grouping existed, dots
-        // and all.
-        .tabViewStyle(.page(indexDisplayMode: subject.media.count > 1 ? .automatic : .never))
+    }
+
+    func pages(screenSize: CGSize) -> some View {
+        ScrollView(.horizontal) {
+            LazyHStack(spacing: 0) {
+                // By position, for the same reason the mosaic is — the group can hold one
+                // URL twice, and ``BuzzKit/MessageMedia/id`` is the URL. Here the
+                // consequence would be a page the reader cannot reach: the offset stays
+                // distinct while the identity behind it does not.
+                ForEach(Array(subject.media.enumerated()), id: \.offset) { index, media in
+                    MessageMediaViewerPage(
+                        media: media,
+                        preview: index == subject.startIndex ? subject.preview : nil,
+                        screenSize: screenSize,
+                        loader: loader
+                    )
+                    // Exactly one screen, which is what makes the paging land on a picture
+                    // rather than between two.
+                    .frame(width: screenSize.width, height: screenSize.height)
+                    .id(index)
+                }
+            }
+            .scrollTargetLayout()
+        }
+        .scrollTargetBehavior(.paging)
+        .scrollPosition(id: $page)
+        .scrollIndicators(.hidden)
+        // A gallery of one is not a gallery: with nothing to page to, the horizontal drag
+        // belongs to the presentation's interactive dismissal, exactly as the zoom view
+        // hands it over at the fitted scale.
+        .scrollDisabled(subject.media.count <= 1)
         .ignoresSafeArea()
+        // The neighbours are decoded before the reader arrives at them. A `LazyHStack`
+        // builds a page as it comes into reach, so without this the decode starts *during*
+        // the swipe and the page lands as a spinner that becomes a picture.
+        .task(id: page) { await prefetchNeighbours(of: page ?? subject.startIndex, screenSize: screenSize) }
+    }
+
+    /// Warms the loader's cache for the pages either side of `index`.
+    ///
+    /// Nothing is kept: the point is that the page's own load finds the picture already
+    /// decoded and can show it without suspending.
+    func prefetchNeighbours(of index: Int, screenSize: CGSize) async {
+        for neighbour in [index - 1, index + 1] {
+            guard subject.media.indices.contains(neighbour) else { continue }
+            let media = subject.media[neighbour]
+            guard media.kind == .image, let url = URL(string: media.url) else { continue }
+            _ = await loader.image(
+                for: url,
+                pixelSize: MessageMediaLayout.viewerPixelSize(
+                    screen: screenSize,
+                    displayScale: displayScale,
+                    declared: media.pixelSize
+                )
+            )
+            if Task.isCancelled { return }
+        }
+    }
+
+    /// Which page of a gallery the reader is on. Drawn rather than taken from the paging
+    /// container, which no longer has any: `.scrollTargetBehavior(.paging)` is a scroll
+    /// view's own crisp snap and comes with no chrome of its own.
+    ///
+    /// Sits above the home indicator because the whole chrome layer does — it is inside
+    /// the safe area, and the pictures behind it are not.
+    @ViewBuilder
+    var pageDots: some View {
+        if subject.media.count > 1 {
+            HStack(spacing: 7) {
+                ForEach(subject.media.indices, id: \.self) { index in
+                    Circle()
+                        .fill(.white.opacity(index == (page ?? subject.startIndex) ? 1 : 0.4))
+                        .frame(width: 7, height: 7)
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            // The same material as the pill, for the same reason: a white dot on a white
+            // photograph is not a dot.
+            .glassEffect(.regular, in: .capsule)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Page \((page ?? subject.startIndex) + 1) of \(subject.media.count)")
+        }
     }
 
     /// The header pill and the close button, floating on the picture.
@@ -283,31 +264,47 @@ private extension MessageMediaViewer {
     /// looked like before this existed.
     var chrome: some View {
         GlassEffectContainer(spacing: 8) {
-            HStack(alignment: .top, spacing: 8) {
+            // Centred on each other, not on their tops: the pill is two lines of text and
+            // the button is a circle, so aligning their tops leaves the circle riding high
+            // above the name it sits beside.
+            HStack(alignment: .center, spacing: 8) {
                 if let attribution = subject.attribution {
                     MessageMediaViewerHeader(attribution: attribution)
                 }
                 Spacer(minLength: 0)
-                doneButton
+                closeButton
             }
         }
     }
 
-    var doneButton: some View {
-        Button {
+    /// The system's own close button: a glass circle carrying the standard `xmark`.
+    ///
+    /// Three parts, and each replaces something that was wrong:
+    ///
+    /// - **`role: .close`** is iOS 26's dismissal semantic. Its *default* label is the word
+    ///   `Close`, which is right in a sheet's toolbar and wrong floating on a photograph,
+    ///   so the label is the standard glyph and the role carries the meaning.
+    /// - **`.buttonBorderShape(.circle)`** is what makes it round. The first build asked
+    ///   for a 44pt minimum frame on the glyph instead, and the glass style's own padding
+    ///   turned that into a 68x58 **oval** — which is what read as weird.
+    /// - **`.tint(.primary)`** takes the app's amber accent off it. Every control inherits
+    ///   that accent by default; nowhere else on the phone is a close button the app's
+    ///   brand colour.
+    ///
+    /// It is centred on the pill beside it rather than aligned to its top; see ``chrome``.
+    var closeButton: some View {
+        Button(role: .close) {
             dismiss()
         } label: {
             Image(systemName: "xmark")
                 .font(.hiveSymbol(.body, weight: .semibold))
-                // A minimum square rather than the glyph's own size: the system's 44-pt
-                // target is the whole reason this is reachable with a thumb while the
-                // other hand holds the phone.
-                .frame(minWidth: 44, minHeight: 44)
         }
         // `.glass` is already the interactive material for a control — it lights under a
         // finger because a button is a thing that can be pressed. The pill beside it has
         // to ask for that appearance explicitly; see ``MessageMediaViewerHeader``.
         .buttonStyle(.glass)
+        .buttonBorderShape(.circle)
+        .tint(.primary)
         .accessibilityLabel("Done")
     }
 }

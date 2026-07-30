@@ -26,8 +26,10 @@ final class MediaViewerLayoutTests: XCTestCase {
     /// Each shape the fixture can hang off a conversation, and the alt text of the
     /// picture that is tapped to open it.
     ///
-    /// `Pair` is the odd one: two pictures in one message, so the tap goes through a
-    /// mosaic cell and the viewer opens as a *gallery* with paging chrome of its own.
+    /// `Pair` is two pictures in one message, so the tap goes through a mosaic cell and
+    /// the viewer opens as a *gallery*. It appears twice on purpose: opening it on its
+    /// **second** cell is the only thing that says a gallery lands on the picture that was
+    /// tapped rather than on the first one in the message.
     static let shapes = [
         (shape: "Tall", alt: "Tall picture"),
         (shape: "Wide", alt: "Wide picture"),
@@ -37,6 +39,7 @@ final class MediaViewerLayoutTests: XCTestCase {
         (shape: "Light", alt: "Light picture"),
         (shape: "Small", alt: "Small picture"),
         (shape: "Pair", alt: "Pair one"),
+        (shape: "Pair", alt: "Pair two"),
     ]
 
     /// The identifiers the viewer puts on the two things measured here, repeated rather
@@ -81,11 +84,20 @@ final class MediaViewerLayoutTests: XCTestCase {
             let close = app.buttons["Done"]
             let opened = close.waitForExistence(timeout: 10)
             // Before the assertions, so a failure leaves behind the picture of what failed.
-            attach(XCUIScreen.main.screenshot(), named: String(format: "%02d-%@", offset + 1, shape.shape))
+            attach(XCUIScreen.main.screenshot(), named: String(format: "%02d-%@", offset + 1, shape.alt))
             XCTAssertTrue(opened, "\(shape.alt): the viewer did not open")
-            let picture = app.descendants(matching: .any).matching(identifier: Identifier.picture).firstMatch
-            XCTAssertTrue(picture.waitForExistence(timeout: 10), "\(shape.alt): the viewer drew no picture")
+            // By the picture's own alt text, not by the viewer's identifier: a gallery
+            // holds more than one page, and "some page is on screen" would pass while the
+            // wrong one is. The inline picture in the conversation carries the same label
+            // but is a Button, so this is unambiguous.
+            let picture = app.images[shape.alt]
+            XCTAssertTrue(picture.waitForExistence(timeout: 10), "\(shape.alt): the viewer did not open on it")
+            XCTAssertEqual(
+                picture.identifier, Identifier.picture,
+                "\(shape.alt): what is on screen is not the viewer's own picture"
+            )
             assertOwnersDrawing(app: app, picture: picture, close: close, named: shape.alt)
+            if shape.alt == "Pair one" { swipeToTheNextPage(in: app, named: "Pair two") }
 
             close.tap()
             XCTAssertTrue(
@@ -93,6 +105,27 @@ final class MediaViewerLayoutTests: XCTestCase {
                 "\(shape.alt): the viewer did not return to the conversation"
             )
         }
+    }
+
+    /// Swipes a gallery on by one and waits for it to come to rest.
+    ///
+    /// The property being asserted is the one a paging scroll view has and a loose,
+    /// free-scrolling one does not: it settles **exactly** on a page, never between two.
+    /// That is the mechanical half of the owner's report that swiping felt slippy, and it
+    /// is the half a test can hold — the rest of it is his eye on a device.
+    private func swipeToTheNextPage(in app: XCUIApplication, named alt: String) {
+        app.swipeLeft()
+        let next = app.images[alt]
+        XCTAssertTrue(next.waitForExistence(timeout: 5), "\(alt): swiping did not reach it")
+        let window = app.frame
+        let deadline = Date().addingTimeInterval(5)
+        while Date() < deadline, abs(next.frame.minX - window.minX) > 1 {
+            Thread.sleep(forTimeInterval: 0.2)
+        }
+        XCTAssertEqual(
+            next.frame.minX, window.minX, accuracy: 1,
+            "\(alt): the gallery came to rest \(Int(next.frame.minX - window.minX))pt off a page"
+        )
     }
 
     /// The owner's drawing, as rectangles: `image content behind`, with the pill and the
@@ -104,6 +137,15 @@ final class MediaViewerLayoutTests: XCTestCase {
         named alt: String
     ) {
         let window = app.frame
+        // FIRST, because it is the one an existence check cannot make. A gallery holds its
+        // other pages in the same scroll view, at the same size, one screen to the side —
+        // so "the tapped picture exists and is the size of the window" was true of a page
+        // sitting off screen while the reader looked at a different one. Where it *is* is
+        // the whole claim.
+        XCTAssertEqual(
+            picture.frame.minX, window.minX, accuracy: 1,
+            "\(alt): is \(Int(picture.frame.minX - window.minX))pt off to the side — the viewer opened on another page"
+        )
         let short = Int(window.height - picture.frame.height)
         XCTAssertEqual(
             picture.frame.height, window.height, accuracy: 1,
