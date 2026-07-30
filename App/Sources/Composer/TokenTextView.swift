@@ -18,6 +18,7 @@ struct TokenTextView: UIViewRepresentable {
     @Binding var document: MentionDraft
     @Binding var isFocused: Bool
     let placeholder: String
+    var isEditable = true
     /// Where the caret went, for a move the text did not cause. Mention completion is
     /// anchored to the caret, and UIKit is the only thing that knows a tap or an arrow
     /// key moved it — an edit carries its own caret in the draft, but a bare selection
@@ -63,6 +64,7 @@ struct TokenTextView: UIViewRepresentable {
         // message list owns keyboard dismissal, not the text view.
         view.keyboardDismissMode = .none
         view.accessibilityLabel = placeholder
+        view.isEditable = isEditable
         // At the end of whatever is already there, not at zero: a draft restored after a
         // failed send arrives non-empty, and `makeUIView` marks it as rendered, so the
         // caret placed here is the one the author gets.
@@ -73,6 +75,7 @@ struct TokenTextView: UIViewRepresentable {
     func updateUIView(_ view: UITextView, context: Context) {
         let coordinator = context.coordinator
         coordinator.parent = self
+        view.isEditable = isEditable
         if coordinator.renderedDocument != document {
             // The text view's own `selectedRange` still describes the string it last
             // rendered, so it is only a fallback. The draft carries where the caret
@@ -85,7 +88,9 @@ struct TokenTextView: UIViewRepresentable {
         // anything and without telling anyone. Applying focus then is how the two
         // states start disagreeing, so nothing is applied until there is a window.
         guard view.window != nil else { return }
-        if isFocused, !view.isFirstResponder {
+        if !isEditable, view.isFirstResponder {
+            coordinator.reconcilingFocus { _ = view.resignFirstResponder() }
+        } else if isEditable, isFocused, !view.isFirstResponder {
             coordinator.reconcilingFocus { _ = view.becomeFirstResponder() }
         } else if !isFocused, view.isFirstResponder {
             coordinator.reconcilingFocus { _ = view.resignFirstResponder() }
@@ -163,6 +168,7 @@ struct TokenTextView: UIViewRepresentable {
             shouldChangeTextIn range: NSRange,
             replacementText text: String
         ) -> Bool {
+            guard parent.isEditable else { return false }
             var next = parent.document
             let cursor = next.replaceCharacters(in: range, with: text)
             if parent.document.requiresAtomicEdit(in: range) {

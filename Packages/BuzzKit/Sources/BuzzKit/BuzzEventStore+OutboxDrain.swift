@@ -50,7 +50,14 @@ public extension BuzzEventStore {
             try db.execute(sql: "DELETE FROM outbox WHERE event_id = ?", arguments: [oldID])
             try Self.insertOutboxRow(fresh, channel: channel, state: .pending, into: db)
         }
-        return OutboxEntry(event: fresh, channelID: channel, state: .pending, attempts: 0, lastError: nil)
+        return OutboxEntry(
+            event: fresh,
+            channelID: channel,
+            state: .pending,
+            attempts: 0,
+            lastError: nil,
+            isRetryable: true
+        )
     }
 
     // MARK: - Reads
@@ -139,7 +146,8 @@ public extension BuzzEventStore {
             channelID: row["channel_id"],
             state: OutboxState(rawValue: row["state"]) ?? .pending,
             attempts: row["attempts"],
-            lastError: row["last_error"]
+            lastError: row["last_error"],
+            isRetryable: row["is_retryable"] ?? true
         )
     }
 }

@@ -71,6 +71,9 @@ struct TimelineRowView: View {
     /// The local identity's hex pubkey, for self-mention emphasis. `nil` degrades to
     /// no self-emphasis (keyless fallback).
     var selfPubkey: String?
+    /// Whether this conversation currently accepts writes. Reading the timeline,
+    /// opening threads, copying, and profiles remain available while stale.
+    var allowsInteraction = true
     /// Re-queue a failed send — the action on the strip under the row.
     ///
     /// The row no longer asks whether the message is the local identity's own: only an own
@@ -118,6 +121,7 @@ struct TimelineRowView: View {
                         // would read as "open the thread".
                         onOpenPalette: { claimTap() }
                     )
+                    .allowsHitTesting(allowsInteraction)
                 }
                 if row.hasThread, let onOpenThread {
                     RepliesButton(
@@ -130,7 +134,10 @@ struct TimelineRowView: View {
                     )
                 }
                 if case let .failed(reason) = row.delivery {
-                    RetryStrip(reason: reason) {
+                    RetryStrip(
+                        reason: reason,
+                        canRetry: row.failureIsRetryable && allowsInteraction
+                    ) {
                         performControlAction { onRetry(row.id) }
                     }
                 }

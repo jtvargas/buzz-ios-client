@@ -22,6 +22,7 @@ struct ThreadView: View {
     /// Who is typing *in this thread*. A second model rather than a shared one: the
     /// channel's and the thread's are different audiences — see ``ChannelTypingModel``.
     @State private var typing: ChannelTypingModel
+    @State private var access: ChannelAccessModel
     /// Whose profile is open, if anyone's — set by a tap on a reply's avatar or name.
     @State private var profilePeer: ProfilePeer?
     /// The reply whose actions sheet is open, if any — set by a long press on a row.
@@ -115,6 +116,11 @@ struct ThreadView: View {
             store: presence,
             selfPubkey: selfPubkey
         ))
+        _access = State(initialValue: ChannelAccessModel(
+            channelID: channel,
+            identity: selfPubkey,
+            store: store
+        ))
     }
 
     var body: some View {
@@ -137,6 +143,7 @@ struct ThreadView: View {
             list
         } bar: {
             ThreadComposerView(model: model)
+                .disabled(!access.isWritable)
         } accessory: {
             accessory
         }
@@ -157,7 +164,11 @@ struct ThreadView: View {
         )
         .profileSheet(peer: $profilePeer, presence: presence)
         // The channel's sheet, minus "Reply in thread": this *is* the thread.
-        .messageActionsSheet(target: $messageActions, actions: model)
+        .messageActionsSheet(
+            target: $messageActions,
+            actions: model,
+            isReadOnly: !access.isWritable
+        )
         // After the first render, so the scaffold's `onChange(of: jumpToken)` is installed
         // and the bump is a transition it sees — see ``ThreadModel/landOnOpener()``.
         .task { if landing == .opener { model.landOnOpener() } }
@@ -168,6 +179,7 @@ struct ThreadView: View {
         // tree until somebody is typing and so could never start its own model — see the
         // note on that type. The surface that owns the model runs it, as above.
         .task { await typing.run() }
+        .task { await access.run() }
         // Mark-on-view, the same discipline the channel's read state follows — and the
         // *rendered* newest row for the same reason: a reply held behind a frozen tail has
         // not been seen, so it must still count as new. Being here rather than in the model
@@ -218,6 +230,7 @@ struct ThreadView: View {
                 reactions: model.reactions(for: row.id),
                 mentions: model.mentions(for: row.id),
                 selfPubkey: model.selfPubkey,
+                allowsInteraction: access.isWritable,
                 onRetry: { model.retry($0) },
                 onReact: { model.react($0, on: row.id) },
                 onToggleReaction: { model.toggleReaction($0, on: row.id) },
@@ -247,6 +260,7 @@ struct ThreadView: View {
         // invalidating this whole view where only the composer needed to hear about it.
         @Bindable var model = model
         return VStack(spacing: 8) {
+            ChannelAccessBanner(state: access.state)
             // The channel's control, reading the thread's own jump state — see the
             // note on ``ChannelTimelineView``'s accessory for why the count is read
             // inside that view and not here.

@@ -17,7 +17,7 @@ extension BuzzEventStore {
     static let timelineColumns = """
     id, pubkey, created_at, kind, content, edited, deleted, rich,
     display_name, picture, parent_id, root_id, reply_count, last_reply_at,
-    state, last_error, tags, edited_tags
+    state, last_error, is_retryable, tags, edited_tags
     """
 
     /// The keyset paging predicate over a `(created_at, id)` cursor. Descending id
@@ -81,6 +81,7 @@ extension BuzzEventStore {
                    ))) AS last_reply_at,
                'sent'              AS state,
                NULL                AS last_error,
+               0                   AS is_retryable,
                e.tags              AS tags,
                \(editedTags)       AS edited_tags
         FROM event e
@@ -179,6 +180,7 @@ extension BuzzEventStore {
                NULL        AS last_reply_at,
                o.state     AS state,
                o.last_error AS last_error,
+               o.is_retryable AS is_retryable,
                -- The queue denormalizes the signed event's tags for exactly this: a
                -- message still in flight shows its own attachments, not none of them.
                o.tags      AS tags,
@@ -220,6 +222,7 @@ extension BuzzEventStore {
             isDeleted: row["deleted"] ?? false,
             richContent: row["rich"],
             delivery: Delivery(state: row["state"], lastError: row["last_error"]),
+            failureIsRetryable: row["is_retryable"] ?? false,
             authorName: row["display_name"],
             authorPicture: row["picture"],
             parentID: row["parent_id"],

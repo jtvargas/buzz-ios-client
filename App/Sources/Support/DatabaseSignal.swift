@@ -65,6 +65,24 @@ enum DatabaseSignal {
                     let readAt: Int64 = row["read_at"] ?? 0
                     token = token &+ context.hashValue &+ Int(truncatingIfNeeded: readAt)
                 }
+
+                // Directory snapshots and accepted lifecycle commands update
+                // channel access without necessarily inserting a relay event.
+                let accessRows = try Row.fetchAll(
+                    db,
+                    sql: "SELECT identity_pubkey, channel_id, state, updated_at FROM channel_access"
+                )
+                for row in accessRows {
+                    let identity: String = row["identity_pubkey"] ?? ""
+                    let channel: String = row["channel_id"] ?? ""
+                    let state: String = row["state"] ?? ""
+                    let updatedAt: Int64 = row["updated_at"] ?? 0
+                    token = token
+                        &+ identity.hashValue
+                        &+ channel.hashValue
+                        &+ state.hashValue
+                        &+ Int(truncatingIfNeeded: updatedAt)
+                }
                 return token
             }
             .values(in: reader)

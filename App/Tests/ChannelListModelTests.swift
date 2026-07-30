@@ -60,6 +60,7 @@ struct ChannelListModelTests {
             try peer.message("one", in: "general", at: 1_000),
             try peer.message("two", in: "general", at: 2_000),
         ], phase: .backfill)
+        try await store.markChannelAccess(identity: reader.pubkey, channel: "general", state: .active)
 
         await waitUntil { model.channels.first?.unreadCount == 2 }
         #expect(model.channels.first?.hasUnread == true)
@@ -95,6 +96,7 @@ struct ChannelListModelTests {
                 tags: [["h", "general"], ["p", reader.pubkey]], at: 2_000
             ),
         ], phase: .backfill)
+        try await store.markChannelAccess(identity: reader.pubkey, channel: "general", state: .active)
 
         await waitUntil { model.channels.first?.unreadCount == 2 }
         #expect(model.channels.first?.unreadMentionCount == 1)
@@ -132,5 +134,51 @@ struct ChannelListModelTests {
         await waitUntil { model.channels.first?.lastMessageSnippet == "second" }
 
         #expect(model.channels.first?.lastMessageAt == 2_000)
+    }
+
+    @Test("initialization primes the first workspace frame from the verified snapshot")
+    func initializationPrimesVerifiedSnapshot() async throws {
+        let temp = TempStore()
+        defer { temp.remove() }
+        let store = try temp.open()
+        let relay = try Fixture()
+        let reader = try Fixture()
+
+        _ = try await store.ingest(batch: [
+            try relay.channelMetadata("general", name: "General", at: 500),
+        ], phase: .backfill)
+        try await store.markChannelAccess(identity: reader.pubkey, channel: "general", state: .active)
+
+        let model = ChannelListModel(store: store, selfPubkey: reader.pubkey)
+
+        #expect(model.hasLoaded)
+        #expect(model.channels.map(\.id) == ["general"])
+    }
+
+    @Test("channel access initializes from persisted terminal state")
+    func channelAccessInitializesFromStore() async throws {
+        let temp = TempStore()
+        defer { temp.remove() }
+        let store = try temp.open()
+        let reader = try Fixture()
+        try await store.markChannelAccess(identity: reader.pubkey, channel: "gone", state: .deleted)
+
+        let model = ChannelAccessModel(
+            channelID: "gone",
+            identity: reader.pubkey,
+            store: store
+        )
+
+        #expect(model.state == .deleted)
+        #expect(model.isWritable == false)
+    }
+
+    @Test("launch and fallback surfaces expose stable recovery copy")
+    func directoryPresentationCopy() {
+        #expect(ChannelBootstrapView.message == "Checking channels…")
+        #expect(
+            ChannelDirectoryFallbackBanner.message
+                == "Couldn’t refresh channels — showing saved conversations"
+        )
     }
 }

@@ -55,6 +55,7 @@ struct UnreadMentionTests {
                 at: 7000
             ),
         ], phase: .backfill)
+        try await store.markChannelAccess(identity: selfPubkey, channel: "room-1", state: .active)
         return store
     }
 
@@ -119,6 +120,7 @@ struct UnreadMentionTests {
             try meta(relay, "room-1", name: "One", at: 500),
             mention,
         ], phase: .backfill)
+        try await store.markChannelAccess(identity: selfPubkey, channel: "room-1", state: .active)
         #expect(try store.channelList(selfPubkey: selfPubkey).first?.unreadMentionCount == 1)
 
         // Without a local identity there is nobody for a message to be addressed to.
@@ -156,6 +158,7 @@ struct UnreadMentionTests {
                 tags: [["h", "room-1"], ["p", selfPubkey.uppercased()]], at: 3000
             ),
         ], phase: .backfill)
+        try await store.markChannelAccess(identity: selfPubkey, channel: "room-1", state: .active)
 
         #expect(try store.channelList(selfPubkey: selfPubkey).first?.unreadMentionCount == 2)
     }

@@ -24,7 +24,7 @@ extension ThreadModel {
         switch error {
         case let .contentTooLarge(bytes, limit):
             "Reply is too large (\(bytes) bytes; limit \(limit))."
-        case .invalidEvent, .notQueued, .encodingFailed:
+        case .invalidEvent, .notQueued, .notRetryable, .encodingFailed:
             "Couldn't send that reply."
         }
     }

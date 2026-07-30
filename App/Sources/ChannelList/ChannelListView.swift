@@ -87,6 +87,16 @@ struct ChannelListView: View {
 
         NavigationStack(path: $path) {
             sidebar(names: names)
+                .overlay(alignment: .top) {
+                    if environment.channelDirectoryStatus == .cachedFallback,
+                       !model.channels.isEmpty {
+                        ChannelDirectoryFallbackBanner {
+                            Task { await environment.retryConnectionAndDirectory() }
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.top, 8)
+                    }
+                }
                 // The heading every other screen carries, naming the workspace this app is
                 // signed in to (§ ``CommunityIdentity``). It leads to the same account sheet
                 // the face at the trailing edge does, and is the larger target.
@@ -325,7 +335,19 @@ private extension ChannelListView {
 
     @ViewBuilder
     var emptyState: some View {
-        if model.hasLoaded {
+        if environment.channelDirectoryStatus == .cachedFallback {
+            ContentUnavailableView {
+                Label("Couldn’t refresh channels", systemImage: "wifi.exclamationmark")
+            } description: {
+                Text(ChannelDirectoryFallbackBanner.message)
+            } actions: {
+                Button("Retry") {
+                    Task { await environment.retryConnectionAndDirectory() }
+                }
+                .buttonStyle(.borderedProminent)
+                .accessibilityIdentifier("channel-directory-retry")
+            }
+        } else if model.hasLoaded {
             ContentUnavailableView(
                 "No conversations yet",
                 systemImage: "bubble.left.and.bubble.right",
@@ -396,5 +418,31 @@ private extension ChannelListView {
         case .directMessages: $directMessagesExpanded
         case .agents: $agentsExpanded
         }
+    }
+}
+
+/// A floating recovery status: because it is an overlay, showing or removing it
+/// never changes the list's row positions or scroll geometry.
+struct ChannelDirectoryFallbackBanner: View {
+    static let message = "Couldn’t refresh channels — showing saved conversations"
+
+    let retry: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "wifi.exclamationmark")
+                .accessibilityHidden(true)
+            Text(Self.message)
+                .font(.footnote)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Button("Retry", action: retry)
+                .buttonStyle(.bordered)
+                .accessibilityIdentifier("channel-directory-retry")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(.regularMaterial, in: .rect(cornerRadius: 12))
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("channel-directory-cached-fallback")
     }
 }

@@ -332,7 +332,10 @@ extension SyncEngine {
     func adoptOpenedChannel(_ channel: String) async {
         let events = (try? await subscriptions.query(Self.channelStateFilters(channel))) ?? []
         _ = try? await store.ingest(batch: events, phase: .backfill)
+        if let identity = selfPubkeyHex {
+            try? await store.markChannelAccess(identity: identity, channel: channel, state: .active)
+        }
         _ = try? await subscribeChannelContent(channel)
-        scheduleChannelReconcile(channel)
+        requestDirectoryRefresh()
     }
 }

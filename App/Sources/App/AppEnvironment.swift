@@ -18,6 +18,9 @@ final class AppEnvironment {
     enum Phase: Equatable {
         /// The store is open but no identity is stored yet — show the gate.
         case needsIdentity
+        /// A returning identity is known, but its first signed channel-directory
+        /// attempt has not reached a definitive success or fallback verdict.
+        case bootstrapping
         /// An identity is loaded and the engine started — show the app.
         case running
         /// Launch failed in a way the user cannot resolve in-app (e.g. the store
@@ -37,6 +40,9 @@ final class AppEnvironment {
     /// opened mid-reconnect has itself never seen a live engine and would otherwise
     /// call a dropped connection a cold start. Reset with the engine on sign-out.
     private(set) var hasConnectedBefore = false
+    /// The authority behind the currently mounted channel list. On retry this
+    /// moves through `.checking` without unmounting the workspace.
+    private(set) var channelDirectoryStatus: ChannelDirectoryStatus = .checking
 
     /// The store, opened at launch regardless of identity so a returning user's
     /// history is on screen the instant the engine reconnects.
@@ -51,6 +57,7 @@ final class AppEnvironment {
     private(set) var selfPubkeyHex: String?
 
     private var engineStateTask: Task<Void, Never>?
+    private var directoryStatusTask: Task<Void, Never>?
     /// Publishes our own presence: `"online"` every 60 s while foregrounded, and
     /// `"offline"` on background. Built alongside the engine.
     private var heartbeat: PresenceHeartbeat?
@@ -60,7 +67,9 @@ final class AppEnvironment {
     init() throws {
         signer = KeychainSigner(account: "primary")
         store = try Self.makeStore()
-        phase = .needsIdentity
+        // Resolve this synchronously so a returning user never gets one frame of
+        // onboarding while the launch task is being scheduled.
+        phase = try signer.loadPrivateKey() != nil ? .bootstrapping : .needsIdentity
     }
 
     /// Resolves launch state: if a key is already stored, start the engine against
@@ -95,9 +104,11 @@ final class AppEnvironment {
         do {
             try signer.store(key)
             RelayEndpoint.storedURLString = relayURLString
+            phase = .bootstrapping
             try await startEngine(relayURLString: relayURLString)
             return nil
         } catch {
+            phase = .needsIdentity
             return .couldNotStart(String(describing: error))
         }
     }
@@ -119,9 +130,11 @@ final class AppEnvironment {
         do {
             try signer.store(key)
             RelayEndpoint.storedURLString = relayURLString
+            phase = .bootstrapping
             try await startEngine(relayURLString: relayURLString)
             return nil
         } catch {
+            phase = .needsIdentity
             return .couldNotStart(String(describing: error))
         }
     }
@@ -138,9 +151,11 @@ final class AppEnvironment {
     /// the session acknowledge), so this only brings the connection up.
     func completePairing() async -> IdentityGateError? {
         do {
+            phase = .bootstrapping
             try await startEngine(relayURLString: RelayEndpoint.storedURLString)
             return nil
         } catch {
+            phase = .needsIdentity
             return .couldNotStart(String(describing: error))
         }
     }
@@ -165,6 +180,8 @@ final class AppEnvironment {
         }
         engineStateTask?.cancel()
         engineStateTask = nil
+        directoryStatusTask?.cancel()
+        directoryStatusTask = nil
         if let engine {
             await engine.stop()
         }
@@ -173,8 +190,14 @@ final class AppEnvironment {
         selfPubkeyHex = nil
         engineState = .stopped
         hasConnectedBefore = false
+        channelDirectoryStatus = .checking
         phase = .needsIdentity
         return .signedOut
+    }
+
+    /// Recovery action shared by the fallback banner and empty state.
+    func retryConnectionAndDirectory() async {
+        await engine?.retryConnectionAndDirectory()
     }
 
     /// Loads the stored secret key for a gated backup/reveal, or `nil` if none is
@@ -234,8 +257,14 @@ final class AppEnvironment {
         let connection = RelayConnection(url: websocketURL, signer: signer)
         let subscriptions = SubscriptionManager(connection: connection, signer: signer)
         let presence = PresenceStore()
+        let httpTransport = URLSessionHTTPTransport()
         let windowClient = WindowClient(
-            transport: URLSessionHTTPTransport(),
+            transport: httpTransport,
+            queryURL: queryURL,
+            signer: signer
+        )
+        let directoryClient = ChannelDirectoryClient(
+            transport: httpTransport,
             queryURL: queryURL,
             signer: signer
         )
@@ -245,16 +274,21 @@ final class AppEnvironment {
             store: store,
             presence: presence,
             windowClient: windowClient,
+            directoryClient: AnyChannelDirectoryFetcher(directoryClient),
             signer: signer
         )
         self.engine = engine
         heartbeat = PresenceHeartbeat(publisher: engine)
 
         observeEngineState(of: engine)
-        try await engine.start()
-        // The identity, resolved above, keys presence and excludes our own typing
-        // echo; a nil (Keychain read failure) degrades presence to keyless.
+        observeDirectoryStatus(of: engine)
         selfPubkeyHex = intendedPubkey
+        try await engine.start()
+        // The workspace mounts only from a readable signed snapshot. Opening the
+        // database succeeded in `init`, but this final identity-scoped read keeps a
+        // later store failure fatal instead of presenting a verified-looking empty
+        // sidebar.
+        _ = try store.channelList(selfPubkey: intendedPubkey)
         phase = .running
         // Launch is a foreground start; scene-phase `.onChange` does not fire for the
         // initial value, so begin beating explicitly here.
@@ -268,6 +302,16 @@ final class AppEnvironment {
             for await state in states {
                 self?.engineState = state
                 if state == .running { self?.hasConnectedBefore = true }
+            }
+        }
+    }
+
+    private func observeDirectoryStatus(of engine: SyncEngine) {
+        directoryStatusTask?.cancel()
+        directoryStatusTask = Task { [weak self] in
+            let statuses = await engine.channelDirectoryStatuses()
+            for await status in statuses {
+                self?.channelDirectoryStatus = status
             }
         }
     }

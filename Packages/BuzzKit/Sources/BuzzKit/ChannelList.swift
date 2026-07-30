@@ -298,6 +298,10 @@ extension BuzzEventStore {
         -- attached to the new column rather than to this join.
         LEFT JOIN outbox lo ON lo.event_id = n.msg_id AND le.id IS NULL
         LEFT JOIN profile p ON p.pubkey = COALESCE(le.pubkey, lo.pubkey)
+        LEFT JOIN channel_access ca
+          ON ca.channel_id = c.id AND ca.identity_pubkey = :selfPubkey
+        WHERE :selfPubkey IS NULL
+           OR (ca.state = 'active' AND c.is_archived = 0)
         ORDER BY last_message_at DESC NULLS LAST, c.name ASC, c.id ASC
         """
 

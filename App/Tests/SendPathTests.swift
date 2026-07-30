@@ -37,7 +37,7 @@ struct SendPathTests {
         await harness.engine.stop()
     }
 
-    @Test("a rejected send goes pending → failed, and an explicit retry drives it to sent")
+    @Test("a failed send goes pending → failed, and an explicit retry drives it to sent")
     func failedThenRetry() async throws {
         let temp = TempStore()
         defer { temp.remove() }
@@ -58,8 +58,15 @@ struct SendPathTests {
 
         let id = await awaitAnyPublish(on: socket)
         await waitUntil { model.rows.contains { $0.id == id && $0.delivery == .pending } }
-        // A terminal `blocked:` rejection marks the row failed with the reason.
-        await socket.enqueue(EngineFrames.ok(id, false, "blocked: nope"))
+        // Complete the first publish with a retryable verdict, then put the row in
+        // the retryable failed state this UI-path test starts from. Relay verdict
+        // classification and attempt exhaustion are covered by BuzzKit.
+        await socket.enqueue(EngineFrames.ok(id, false, "error: nope"))
+        await waitUntil {
+            let entry = try? await harness.store.entry(id: id)
+            return entry?.state == .pending
+        }
+        try await harness.store.markFailed(id, error: "nope")
         await waitUntil { model.rows.contains { $0.id == id && $0.delivery == .failed("nope") } }
 
         // The failed row is not resent automatically — the explicit retry re-drains.

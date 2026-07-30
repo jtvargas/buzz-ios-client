@@ -39,6 +39,9 @@ final class ChannelListModel {
     init(store: BuzzEventStore, selfPubkey: String? = nil) {
         self.store = store
         self.selfPubkey = selfPubkey
+        channels = (try? store.channelList(selfPubkey: selfPubkey)) ?? []
+        unreadThreads = (try? store.unreadThreads(selfPubkey: selfPubkey)) ?? []
+        hasLoaded = true
     }
 
     /// Consumes the observation until cancelled. Attach with SwiftUI's `.task`,

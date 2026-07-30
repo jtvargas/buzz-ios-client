@@ -52,9 +52,11 @@ struct EngineHarness {
         identity: PrivateKey,
         relays: [ScriptedRelay],
         http: FakeHTTPTransport = FakeHTTPTransport(),
+        directoryClient: TestChannelDirectoryClient? = nil,
         nowSeconds: Int64 = 1_700_000_000,
         batchSize: Int = 2,
-        storeClock: @escaping @Sendable () -> Date = { Date() }
+        storeClock: @escaping @Sendable () -> Date = { Date() },
+        backoffSleep: @escaping @Sendable (Duration) async throws -> Void = { _ in }
     ) throws {
         self.path = path
         self.identity = identity
@@ -82,7 +84,8 @@ struct EngineHarness {
             signer: signer,
             config: inertEngineConfig(),
             makeTransport: { await transports.next() },
-            backoffSleep: { _ in },
+            makePathMonitor: { InertPathMonitor() },
+            backoffSleep: backoffSleep,
             graceSleep: { _ in }
         )
         self.connection = connection
@@ -98,16 +101,30 @@ struct EngineHarness {
         let windowClient = WindowClient(transport: http, queryURL: Self.queryURL, signer: signer)
 
         let seconds = nowSeconds
-        engine = SyncEngine(
-            connection: connection,
-            subscriptions: subscriptions,
-            store: store,
-            presence: presence,
-            windowClient: windowClient,
-            signer: signer,
-            config: SyncEngineConfig(presenceSweepInterval: .seconds(3600)),
-            now: { Date(timeIntervalSince1970: TimeInterval(seconds)) }
-        )
+        if let directoryClient {
+            engine = SyncEngine(
+                connection: connection,
+                subscriptions: subscriptions,
+                store: store,
+                presence: presence,
+                windowClient: windowClient,
+                directoryClient: directoryClient,
+                signer: signer,
+                config: SyncEngineConfig(presenceSweepInterval: .seconds(3600)),
+                now: { Date(timeIntervalSince1970: TimeInterval(seconds)) }
+            )
+        } else {
+            engine = SyncEngine(
+                connection: connection,
+                subscriptions: subscriptions,
+                store: store,
+                presence: presence,
+                windowClient: windowClient,
+                signer: signer,
+                config: SyncEngineConfig(presenceSweepInterval: .seconds(3600)),
+                now: { Date(timeIntervalSince1970: TimeInterval(seconds)) }
+            )
+        }
     }
 
     /// Reopens the same database with the same identity and fresh fakes — the
@@ -131,6 +148,19 @@ struct EngineHarness {
         }
     }
 }
+
+private struct InertPathMonitor: NetworkPathMonitoring {
+    func pathAvailability() -> AsyncStream<Bool> {
+        AsyncStream { continuation in
+            continuation.yield(false)
+            continuation.finish()
+        }
+    }
+}
+
+/// The test target names the production concrete eraser at its injection sites so
+/// fakes cannot accidentally cross the actor initializer as an existential.
+typealias TestChannelDirectoryClient = AnyChannelDirectoryFetcher
 
 // MARK: - Signed events for scripts
 

@@ -57,6 +57,7 @@ import SwiftUI
 /// `.animation` here would catch keyboard-driven layout and run the composer's height on
 /// a different clock from the keyboard's.
 struct MessageComposerView: View {
+    @Environment(\.isEnabled) private var isEnabled
     @Binding var document: MentionDraft
     @Bindable var autocomplete: MentionAutocompleteModel
     let placeholder: String
@@ -112,7 +113,7 @@ struct MessageComposerView: View {
     private static var onAccent: Color { .black }
 
     private var canSend: Bool {
-        !document.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        isEnabled && !document.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     var body: some View {
@@ -186,6 +187,7 @@ struct MessageComposerView: View {
             document: $document,
             isFocused: $autocomplete.isComposerFocused,
             placeholder: placeholder,
+            isEditable: isEnabled,
             onSelectionChange: autocomplete.updateSelection
         )
         .frame(maxWidth: .infinity)

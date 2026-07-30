@@ -63,9 +63,19 @@ extension SyncEngine: EventSink {
         // of offline membership changes produces — and only the newest event states the
         // current fact. Acting on per-kind sets with removes applied last would end a
         // leave-then-rejoin unsubscribed and silently live-dead until the next `.ready`.
+        // Duplicates are admitted too: reconnect overlap can replay an already
+        // stored membership notification and it must still reconcile the live
+        // subscription. Only cryptographically rejected events are excluded.
+        let admittedIDs: Set<String>
+        if let result {
+            admittedIDs = Set(result.inserted + result.duplicates)
+        } else {
+            admittedIDs = []
+        }
         var latest: [String: NostrEvent] = [:]
         for event in batch {
             guard event.kind == .memberAdded || event.kind == .memberRemoved,
+                  admittedIDs.contains(event.id),
                   let channel = event.groupID else { continue }
             let cursor = WindowCursor(createdAt: event.createdAt, id: event.id)
             if let current = latest[channel],
@@ -78,12 +88,20 @@ extension SyncEngine: EventSink {
             // Joined (net): start the standing content sub at once so live traffic
             // flows, then reconcile the head/roster the membership change implies.
             _ = try? await subscribeChannelContent(channel)
-            scheduleChannelReconcile(channel)
+            if let identity = selfPubkeyHex {
+                try? await store.markChannelAccess(identity: identity, channel: channel, state: .active)
+            }
         }
         for (channel, event) in latest where event.kind == .memberRemoved {
             // Left (net): drop the standing content sub — the relay would refuse
             // further channel-scoped traffic to a non-member anyway.
             await unsubscribeChannelContent(channel)
+            if let identity = selfPubkeyHex {
+                try? await store.markChannelAccess(identity: identity, channel: channel, state: .notMember)
+            }
+        }
+        if !latest.isEmpty {
+            requestDirectoryRefresh()
         }
     }
 
@@ -100,19 +118,9 @@ extension SyncEngine: EventSink {
     /// connection layer owns reconnect and re-auth and a fresh `.ready` re-registers
     /// it through the manager, so nothing is torn down here.
     public func subscriptionClosed(subscription id: SubscriptionID, error _: SubscriptionError) async {
-        dropClosedChannelSubscription(id)
-    }
-
-    // MARK: - Membership-triggered reconcile
-
-    /// Schedules a re-discovery and head reconcile of a channel whose membership
-    /// just changed. Best-effort and only while running; the reconcile is
-    /// idempotent, so a redundant trigger costs a deduped refetch.
-    func scheduleChannelReconcile(_ channel: String) {
-        guard state == .running else { return }
-        let generation = readyGeneration
-        Task { [weak self] in
-            await self?.rediscoverAndReconcile(channel, generation: generation)
+        if dropClosedChannelSubscription(id) != nil {
+            requestDirectoryRefresh()
         }
     }
+
 }

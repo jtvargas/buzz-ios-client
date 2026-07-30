@@ -246,6 +246,11 @@ struct ChannelListTests {
         _ = try await store.ingest(batch: [
             try meta(relay, "room-1", name: "Room", at: 500), opener, reply,
         ], phase: .backfill)
+        try await store.markChannelAccess(
+            identity: selfKey.publicKey.hex,
+            channel: "room-1",
+            state: .active
+        )
 
         let row = try #require(
             try store.channelList(selfPubkey: selfKey.publicKey.hex).first { $0.id == "room-1" }

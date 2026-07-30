@@ -14,6 +14,8 @@ struct RootView: View {
         switch environment.phase {
         case .needsIdentity:
             OnboardingView()
+        case .bootstrapping:
+            ChannelBootstrapView()
         case .running:
             if let engine = environment.engine {
                 tabs(engine: engine)
@@ -65,5 +67,16 @@ struct RootView: View {
 
     private func label(for item: HomeTab) -> some View {
         Label(item.title, systemImage: item.symbol(isSelected: tab == item))
+    }
+}
+
+/// Stable returning-user launch surface. The workspace is intentionally not
+/// constructed until the first signed directory attempt has completed.
+struct ChannelBootstrapView: View {
+    static let message = "Checking channels…"
+
+    var body: some View {
+        ProgressView(Self.message)
+            .accessibilityIdentifier("channel-directory-checking")
     }
 }

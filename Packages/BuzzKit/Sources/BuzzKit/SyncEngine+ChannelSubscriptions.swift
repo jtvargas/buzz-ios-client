@@ -73,6 +73,17 @@ extension SyncEngine {
         }
     }
 
+    /// Reconciles to the authoritative active-membership set exactly. Cached
+    /// history remains in SQLite; only live delivery follows membership.
+    func reconcileChannelSubscriptions(_ desired: Set<String>) async {
+        let current = Set(channelContentSubscriptions.keys)
+        for channel in current.subtracting(desired) {
+            await unsubscribeChannelContent(channel)
+            channelStates.removeValue(forKey: channel)
+        }
+        await ensureChannelSubscriptions(desired)
+    }
+
     // MARK: - Single-channel add / drop
 
     /// Registers the standing content subscription for `channel`, if one is not
