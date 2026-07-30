@@ -80,7 +80,6 @@ struct LiveDirectMessageVisibilityTests {
 /// so the test above reads as the sequence of relay facts it is asserting.
 private struct LiveDirectMessageProbe: Sendable {
     let engine: SyncEngine
-    let connection: RelayConnection
     let directory: ChannelDirectoryClient
     let signer: InMemorySigner
     let identity: String
@@ -103,7 +102,6 @@ private struct LiveDirectMessageProbe: Sendable {
         }
         return LiveDirectMessageProbe(
             engine: live.engine,
-            connection: live.connection,
             directory: ChannelDirectoryClient(
                 transport: URLSessionHTTPTransport(),
                 queryURL: LiveRelay.queryURL,
@@ -124,22 +122,19 @@ private struct LiveDirectMessageProbe: Sendable {
             .states[channel]
     }
 
-    /// Kind 41012, `h` = the DM, empty content — the same event Desktop's hide button
-    /// publishes. Reports whether the relay accepted it.
+    /// The app's own hide — ``SyncEngine/hideDirectMessage(_:)``, which signs kind 41012
+    /// with `h` = the DM and empty content, the same event Desktop's hide button
+    /// publishes. Deliberately the shipped path and not a hand-signed event here: the
+    /// question this suite exists to answer is whether *what the app sends* makes the
+    /// relay hide the DM. Reports whether the relay accepted it.
     func hide() async -> Bool {
-        guard let event = try? await signer.sign(
-            kind: .directMessageHide,
-            content: "",
-            tags: [["h", channel]]
-        ) else {
-            Issue.record("[LIVE] could not sign the DM hide")
+        do {
+            try await engine.hideDirectMessage(channel)
+            return true
+        } catch {
+            Issue.record("[LIVE] relay refused the DM hide: \(error)")
             return false
         }
-        if let rejection = await tryPublish(event, on: connection) {
-            Issue.record("[LIVE] relay refused the DM hide: \(rejection)")
-            return false
-        }
-        return true
     }
 
     /// Polls until the DM reaches `expected`. The snapshot is republished post-commit
