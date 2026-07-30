@@ -3,6 +3,7 @@ import BuzzKit
 import Foundation
 import NostrCore
 import SwiftUI
+import UIKit
 
 /// A conversation of a requested *shape*, opened straight from a launch argument, so a UI
 /// test can drive the real ``ThreadView`` and ``ChannelTimelineView`` without a relay.
@@ -65,6 +66,13 @@ enum ConversationFixture {
         /// exercises the inline renderer. It is a visual regression sampler, not a scroll
         /// shape, so it remains inert unless explicitly requested at launch.
         var markdownSampler = false
+        /// Adds one message per picture shape — tall, wide, square — so the full-screen
+        /// viewer and its header can be looked at on a simulator.
+        ///
+        /// Off by default and never passed by the scroll suite, for `-links`' reason: a
+        /// picture is height a `LazyVStack` has to estimate, and the shapes are about that
+        /// estimate. This is a way to *see* the viewer, not a shape.
+        var images = false
 
         /// Parses the arguments the test launched us with, or `nil` for a normal run.
         ///
@@ -88,6 +96,7 @@ enum ConversationFixture {
             options.spread = arguments.contains("-spread")
             options.links = arguments.contains("-links")
             options.markdownSampler = arguments.contains("-markdownSampler")
+            options.images = arguments.contains("-images")
             return options
         }
     }
@@ -144,6 +153,24 @@ enum ConversationFixture {
             events.append(event)
             if rootID == nil, options.surface == .thread { rootID = event.id }
         }
+        if options.images {
+            for (offset, picture) in pictureSampler.enumerated() {
+                var tags: [[String]] = [["h", channelID]]
+                if let rootID {
+                    tags.append(["e", rootID, "", "root"])
+                    tags.append(["e", rootID, "", "reply"])
+                }
+                events.append(try NostrEvent.signed(
+                    kind: .channelMessage,
+                    content: picture,
+                    tags: tags,
+                    createdAt: Date(
+                        timeIntervalSince1970: TimeInterval(1_700_000_000 + (options.messages + offset) * 60)
+                    ),
+                    with: key
+                ))
+            }
+        }
         return events
     }
 
@@ -163,6 +190,64 @@ enum ConversationFixture {
             }
             .joined(separator: "\n")
         return links ? text + "\n\n" + linkSampler : text
+    }
+
+    /// One message per picture shape, drawn here rather than fetched: a `data:` URI is a
+    /// picture with no network behind it, which is what lets the viewer be looked at on a
+    /// machine that cannot reach the relay.
+    ///
+    /// The three shapes are the ones the viewer's fit has to answer for — taller than the
+    /// screen, wider than it, and neither. Each is drawn with a border and a mark in every
+    /// corner, so a screenshot says whether the whole picture is on screen: a missing
+    /// corner is a crop, and a corner under the clock or the home indicator is the same
+    /// defect by a different route.
+    private static var pictureSampler: [String] {
+        [
+            ("Tall", CGSize(width: 900, height: 1600), UIColor(red: 0.16, green: 0.22, blue: 0.42, alpha: 1)),
+            ("Wide", CGSize(width: 1600, height: 700), UIColor(red: 0.40, green: 0.20, blue: 0.16, alpha: 1)),
+            ("Square", CGSize(width: 1200, height: 1200), UIColor(red: 0.16, green: 0.34, blue: 0.24, alpha: 1)),
+        ].map { name, size, colour in
+            "![\(name) picture](\(pictureDataURI(size: size, colour: colour)))"
+        } + [picturePair]
+    }
+
+    /// One message carrying two pictures, which is the other way into the viewer: a mosaic
+    /// cell opens a *gallery* rather than a single picture, and the header has to survive
+    /// the paging chrome that comes with it.
+    private static var picturePair: String {
+        let tall = pictureDataURI(
+            size: CGSize(width: 1000, height: 1400),
+            colour: UIColor(red: 0.30, green: 0.24, blue: 0.44, alpha: 1)
+        )
+        let wide = pictureDataURI(
+            size: CGSize(width: 1400, height: 1000),
+            colour: UIColor(red: 0.44, green: 0.36, blue: 0.14, alpha: 1)
+        )
+        return "![Pair one](\(tall)) ![Pair two](\(wide))"
+    }
+
+    /// A `data:` PNG of `size`, deterministic for a given size and colour.
+    private static func pictureDataURI(size: CGSize, colour: UIColor) -> String {
+        let format = UIGraphicsImageRendererFormat.preferred()
+        format.scale = 1
+        let image = UIGraphicsImageRenderer(size: size, format: format).image { context in
+            colour.setFill()
+            context.fill(CGRect(origin: .zero, size: size))
+            UIColor.white.setStroke()
+            let inset = min(size.width, size.height) * 0.02
+            let border = UIBezierPath(rect: CGRect(origin: .zero, size: size).insetBy(dx: inset, dy: inset))
+            border.lineWidth = inset
+            border.stroke()
+            UIColor.white.setFill()
+            let mark = min(size.width, size.height) * 0.12
+            for left in [inset * 2, size.width - inset * 2 - mark] {
+                for top in [inset * 2, size.height - inset * 2 - mark] {
+                    context.fill(CGRect(x: left, y: top, width: mark, height: mark))
+                }
+            }
+        }
+        guard let data = image.pngData() else { return "" }
+        return "data:image/png;base64," + data.base64EncodedString()
     }
 
     /// One of each card the renderer can draw: a provider with a real name, an authored

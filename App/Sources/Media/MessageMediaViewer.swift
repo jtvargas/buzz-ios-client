@@ -24,6 +24,10 @@ struct MessageMediaViewerSubject: Identifiable {
     /// The inline bitmap for `media[startIndex]`, when the view that opened this had one
     /// to give.
     let preview: UIImage?
+    /// Who posted these pictures, when, and where — the viewer's header. `nil` on a
+    /// surface with no message behind the picture, where the viewer draws no header
+    /// rather than a header with holes in it. See ``MessageMediaAttribution``.
+    var attribution: MessageMediaAttribution?
 
     /// Keyed by the tapped picture's URL, matching ``BuzzKit/MessageMedia/id`` and the
     /// transition source the view that opened this registers.
@@ -41,11 +45,31 @@ struct MessageMediaViewerSubject: Identifiable {
 ///   much larger pixel size (``MessageMediaLayout/viewerPixelSize(screen:displayScale:declared:)``).
 ///   Two entries for one attachment is the intended cost: the inline bitmap is a 320-pt
 ///   box's worth and would be mush blown up to the screen.
+/// - **The header** is ``MessageMediaViewerHeader`` — the author's face, their name, the
+///   hour, and the conversation the picture was posted in. It is declared as a *safe area
+///   inset* rather than as an overlay, which is the whole reason a picture can never open
+///   underneath it: an inset is a promise the layout keeps, where an overlay is a
+///   rectangle drawn on top and the picture beneath it has to be told separately to move.
 /// - **Dismissal** is a `Done` button *and* the zoom transition's own interactive drag.
 ///   The button is the one that is certain — it is a control, it is reachable by
 ///   VoiceOver, and it works whatever a gesture recogniser underneath decides. The drag is
 ///   the one that feels right, and ``MessageMediaZoomView`` disables the scroll view's pan
 ///   at the fitted scale so that it can begin.
+///
+/// # Why the picture is fitted inside the safe area rather than bled to the edges
+///
+/// A picture drawn edge to edge puts its own corners under the clock, the Dynamic Island
+/// and the home indicator — on the tallest phones that is over 90pt of a photograph
+/// standing behind system chrome, and the whole point of this screen is to look at the
+/// thing whole. So the black bleeds and the picture does not. The header takes its own
+/// room out of the same inset, and the bottom seam below would take room the same way.
+///
+/// # Where the bottom action bar goes
+///
+/// The owner deferred the row of actions Slack draws under a picture — share, save,
+/// forward. When it arrives it is a second `safeAreaInset(edge: .bottom)` here, beside the
+/// header's; nothing else has to change, because the picture already fits whatever room
+/// the insets leave it and re-fits when that room changes.
 ///
 /// # Why the background is black and the scheme is forced dark
 ///
@@ -68,11 +92,9 @@ struct MessageMediaViewer: View {
 
     var body: some View {
         GeometryReader { proxy in
-            // The picture runs edge to edge and the button does not. Both children of one
-            // stack, with only the pages ignoring the safe area: an overlay on a view
-            // that has already ignored it inherits the same full-bleed frame, which puts
-            // the button under the clock.
-            ZStack(alignment: .topTrailing) {
+            ZStack {
+                // The only thing that bleeds. Everything else — the pictures, the header,
+                // the close button — lives inside the safe area.
                 Color.black.ignoresSafeArea()
                 TabView(selection: $selection) {
                     // By position, for the same reason the mosaic is — the group can hold
@@ -93,8 +115,7 @@ struct MessageMediaViewer: View {
                 // single attachment's viewer must read exactly as it did before
                 // grouping existed, dots and all.
                 .tabViewStyle(.page(indexDisplayMode: subject.media.count > 1 ? .automatic : .never))
-                .ignoresSafeArea()
-                doneButton
+                .safeAreaInset(edge: .top, spacing: 0) { headerBar }
             }
         }
         .preferredColorScheme(.dark)
@@ -197,6 +218,27 @@ private extension MessageMediaViewerPage {
 }
 
 private extension MessageMediaViewer {
+    /// The header pill and the close button on one line — and the room the pictures fit
+    /// inside of, since this is what the top safe area inset is made of.
+    ///
+    /// The pill takes its own width and no more — it is an object floating on the
+    /// picture, not a bar across it — and the `Spacer` between the two is what makes a
+    /// long name or a group DM's list of names truncate rather than push the close button
+    /// off the screen. When there is no attribution the line is the button alone, which is
+    /// what the viewer looked like before this existed.
+    var headerBar: some View {
+        HStack(alignment: .top, spacing: 8) {
+            if let attribution = subject.attribution {
+                MessageMediaViewerHeader(attribution: attribution)
+            }
+            Spacer(minLength: 0)
+            doneButton
+        }
+        .padding(.horizontal, 12)
+        .padding(.top, 4)
+        .padding(.bottom, 8)
+    }
+
     var doneButton: some View {
         Button {
             dismiss()
@@ -210,7 +252,5 @@ private extension MessageMediaViewer {
         }
         .buttonStyle(.glass)
         .accessibilityLabel("Done")
-        .padding(.trailing, 16)
-        .padding(.top, 4)
     }
 }

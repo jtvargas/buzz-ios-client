@@ -58,6 +58,10 @@ struct MessageMediaView: View {
     /// also pushes the thread behind it.
     var onTap: (() -> Void)?
 
+    /// Who posted this picture and where, for the full-screen viewer's header. `nil` on a
+    /// surface with no message behind the picture. See ``MessageMediaAttribution``.
+    var attribution: MessageMediaAttribution?
+
     /// The loader to resolve artwork through. Defaults to the attachment-sized instance;
     /// injectable so a test or a preview can supply its own cache and session.
     var loader: RemoteImageLoader = .messageMedia
@@ -284,7 +288,12 @@ private extension MessageMediaView {
 
     func open(_ image: UIImage) {
         onTap?()
-        viewing = MessageMediaViewerSubject(media: [media], startIndex: 0, preview: image)
+        viewing = MessageMediaViewerSubject(
+            media: [media],
+            startIndex: 0,
+            preview: image,
+            attribution: attribution
+        )
     }
 
     func retry() {

@@ -14,7 +14,11 @@ import UIKit
 /// SwiftUI construction that provides them, so this is a bridge rather than a
 /// reimplementation, and it is the only one in the feature.
 ///
-/// # The two things that are easy to get wrong here
+/// # The three things that are easy to get wrong here
+///
+/// **A zoomed view carries a transform, so it cannot be laid out with `frame`.** See
+/// ``Coordinator/fitToBounds(preservingMagnification:)`` — this one shipped, and it opened
+/// every picture that had been on screen a moment earlier at the wrong size.
 ///
 /// **Centring is `contentInset`, not a frame.** A picture smaller than the scroll view —
 /// which is every picture at its fitted scale — has to be pushed to the middle by insetting
@@ -147,6 +151,27 @@ extension MessageMediaZoomView {
             let magnification = preservingMagnification && scrollView.minimumZoomScale > 0
                 ? scrollView.zoomScale / scrollView.minimumZoomScale
                 : 1
+
+            // Back to identity before the picture is laid out, and this is load-bearing
+            // rather than tidiness.
+            //
+            // A scroll view zooms by putting a *transform* on the view it is zooming, and
+            // `UIView.frame` is derived from `bounds` through that transform — so
+            // assigning a frame to a view that is already scaled makes UIKit divide the
+            // transform back out and lay the picture out at `size / previous scale`. The
+            // second call is the one that bites, which is the one every reader gets: the
+            // viewer shows the inline bitmap first and swaps in the full-resolution decode
+            // a moment later. Measured on the device before the fix — a 1200pt picture
+            // fitted at 0.335 into a 402x778 viewport came out as a 960pt image view,
+            // which is 1200 ÷ 0.41875 (the preview's fitted scale) × 0.335, and the reader
+            // saw the top-left corner of their photograph.
+            //
+            // Normalising the limits first is what makes `zoomScale = 1` reachable: it is
+            // clamped into `[minimum, maximum]`, and the previous picture's limits do not
+            // have to contain 1.
+            scrollView.minimumZoomScale = 1
+            scrollView.maximumZoomScale = 1
+            scrollView.zoomScale = 1
 
             // The image view is laid out at the bitmap's own size and then *scaled* by the
             // scroll view; that is what makes `zoomScale` mean "points per pixel" and what
