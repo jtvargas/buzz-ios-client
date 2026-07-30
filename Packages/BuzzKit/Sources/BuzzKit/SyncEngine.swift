@@ -1,17 +1,34 @@
 import Foundation
 import NostrCore
 
+/// Whether the signed channel directory is still being checked, has supplied a
+/// complete authoritative snapshot, or failed while the last safe snapshot stays
+/// mounted.
+public enum ChannelDirectoryStatus: Sendable, Equatable {
+    case checking
+    case authoritative
+    case cachedFallback
+}
+
+struct ChannelDirectoryRefreshResult: Sendable {
+    let channels: Set<String>
+    let status: ChannelDirectoryStatus
+}
+
 /// Keeps the directory client's existential-backed collaborators behind one
 /// reference in the engine's stored state.
 final class ChannelDirectoryContext: @unchecked Sendable {
-    let client: ChannelDirectoryClient
+    let client: any ChannelDirectoryFetching
     var refreshGeneration = 0
     var refreshInFlight = false
     var refreshPending = false
+    var refreshTask: Task<Void, Never>?
+    var attemptTask: Task<ChannelDirectoryRefreshResult, Never>?
+    var status: ChannelDirectoryStatus = .checking
     var isForeground = true
     var backstopGeneration = 0
 
-    init(client: ChannelDirectoryClient) {
+    init(client: any ChannelDirectoryFetching) {
         self.client = client
     }
 }
@@ -123,7 +140,7 @@ public actor SyncEngine {
     /// Sleeps the presence-sweep cadence. Injected on ``RelayConnection``'s
     /// principle so a test drives the sweep by hand rather than by the wall clock.
     let sleepFor: @Sendable (Duration) async throws -> Void
-    var directoryClient: ChannelDirectoryClient? { directoryContext?.client }
+    var directoryClient: (any ChannelDirectoryFetching)? { directoryContext?.client }
     var directoryRefreshGeneration: Int {
         get { directoryContext?.refreshGeneration ?? 0 }
         set { directoryContext?.refreshGeneration = newValue }
@@ -158,6 +175,8 @@ public actor SyncEngine {
 
     private var stateObservers: [Int: AsyncStream<State>.Continuation] = [:]
     private var nextObserverID = 0
+    var directoryStatusObservers: [Int: AsyncStream<ChannelDirectoryStatus>.Continuation] = [:]
+    private var nextDirectoryStatusObserverID = 0
 
     // MARK: - Sync state
 
@@ -202,9 +221,6 @@ public actor SyncEngine {
     /// only in ``stop()``.
     var channelContentSubscriptions: [String: SubscriptionID] = [:]
 
-    /// Monotonic request generation for authoritative directory reads. It is
-    /// independent of the socket generation because foreground, CLOSED, and
-    /// membership signals can start a newer read on the same socket.
     // MARK: - Tasks
 
     private var stateObserverTask: Task<Void, Never>?
@@ -255,7 +271,7 @@ public actor SyncEngine {
         store: BuzzEventStore,
         presence: PresenceStore,
         windowClient: WindowClient,
-        directoryClient: ChannelDirectoryClient,
+        directoryClient: AnyChannelDirectoryFetcher,
         signer: any EventSigner,
         config: SyncEngineConfig = .default,
         now: @escaping @Sendable () -> Date = { Date() },
@@ -289,6 +305,20 @@ public actor SyncEngine {
         return stream
     }
 
+    /// A live feed of directory authority, seeded with the current value so the
+    /// app can choose its launch or recovery surface without a transient default.
+    public func channelDirectoryStatuses() -> AsyncStream<ChannelDirectoryStatus> {
+        let (stream, continuation) = AsyncStream.makeStream(of: ChannelDirectoryStatus.self)
+        let id = nextDirectoryStatusObserverID
+        nextDirectoryStatusObserverID += 1
+        directoryStatusObservers[id] = continuation
+        continuation.yield(directoryContext?.status ?? .authoritative)
+        continuation.onTermination = { [weak self] _ in
+            Task { await self?.removeDirectoryStatusObserver(id) }
+        }
+        return stream
+    }
+
     /// The current sync state of a channel — ``ChannelSync/unsynced`` for any
     /// channel the engine has not reconciled on this socket.
     public func channelSyncState(_ channel: String) -> ChannelSync {
@@ -305,6 +335,10 @@ public actor SyncEngine {
 
     private func removeStateObserver(_ id: Int) {
         stateObservers.removeValue(forKey: id)
+    }
+
+    private func removeDirectoryStatusObserver(_ id: Int) {
+        directoryStatusObservers.removeValue(forKey: id)
     }
 
     // MARK: - Lifecycle
@@ -362,7 +396,22 @@ public actor SyncEngine {
             startDirectoryBackstop()
         }
 
-        try await connection.connect()
+        if directoryContext != nil {
+            // The socket and signed HTTP directory are independent transports.
+            // Start both now, but only the directory's first definitive result is
+            // a launch gate. A failed initial socket enters automatic reconnect.
+            let connectionStart = Task { [connection] in
+                do {
+                    try await connection.connect()
+                } catch {
+                    await connection.reconnectNow()
+                }
+            }
+            _ = await requestDirectoryRefreshAndWait()
+            await connectionStart.value
+        } else {
+            try await connection.connect()
+        }
     }
 
     /// Tears the engine down: stops observing, drops subscriptions, and stops the
@@ -372,6 +421,12 @@ public actor SyncEngine {
         stateObserverTask?.cancel(); stateObserverTask = nil
         onReadyTask?.cancel(); onReadyTask = nil
         readyWorkInFlight = false
+        directoryContext?.refreshTask?.cancel()
+        directoryContext?.refreshTask = nil
+        directoryContext?.attemptTask?.cancel()
+        directoryContext?.attemptTask = nil
+        directoryContext?.refreshInFlight = false
+        directoryContext?.refreshPending = false
         sweepTask?.cancel(); sweepTask = nil
         await subscriptions.shutdown()
         await connection.stop()
@@ -398,9 +453,7 @@ public actor SyncEngine {
         isForeground = true
         startDirectoryBackstop()
         await connection.foreground()
-        if state == .running {
-            requestDirectoryRefresh()
-        }
+        requestDirectoryRefresh()
     }
 
     // MARK: - Connection-state handling
@@ -506,9 +559,7 @@ public actor SyncEngine {
               isForeground,
               !isStopped
         else { return }
-        if state == .running {
-            requestDirectoryRefresh()
-        }
+        requestDirectoryRefresh()
         startDirectoryBackstop()
     }
 }

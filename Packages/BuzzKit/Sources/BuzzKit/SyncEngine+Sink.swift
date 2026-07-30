@@ -91,7 +91,6 @@ extension SyncEngine: EventSink {
             if let identity = selfPubkeyHex {
                 try? await store.markChannelAccess(identity: identity, channel: channel, state: .active)
             }
-            scheduleChannelReconcile(channel)
         }
         for (channel, event) in latest where event.kind == .memberRemoved {
             // Left (net): drop the standing content sub — the relay would refuse
@@ -124,16 +123,4 @@ extension SyncEngine: EventSink {
         }
     }
 
-    // MARK: - Membership-triggered reconcile
-
-    /// Schedules a re-discovery and head reconcile of a channel whose membership
-    /// just changed. Best-effort and only while running; the reconcile is
-    /// idempotent, so a redundant trigger costs a deduped refetch.
-    func scheduleChannelReconcile(_ channel: String) {
-        guard state == .running else { return }
-        let generation = readyGeneration
-        Task { [weak self] in
-            await self?.rediscoverAndReconcile(channel, generation: generation)
-        }
-    }
 }

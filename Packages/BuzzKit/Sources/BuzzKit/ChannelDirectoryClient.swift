@@ -8,6 +8,33 @@ public protocol ChannelDirectoryFetching: Sendable {
     ) async throws -> ChannelDirectorySnapshot
 }
 
+/// A concrete boundary around any directory fetcher.
+///
+/// ``SyncEngine`` accepts this concrete value rather than putting an existential
+/// or opaque generic directly in an actor initializer. The underlying fetcher is
+/// still injected and retained behind the engine's reference context, while the
+/// stable initializer shape avoids Swift's actor-initializer code-generation
+/// failure for the legacy no-directory overload.
+public struct AnyChannelDirectoryFetcher: ChannelDirectoryFetching, Sendable {
+    private let fetchValue: @Sendable (String, Set<String>) async throws -> ChannelDirectorySnapshot
+
+    public init<Fetcher: ChannelDirectoryFetching>(_ fetcher: Fetcher) {
+        fetchValue = { selfPubkey, previouslyActiveChannels in
+            try await fetcher.fetch(
+                selfPubkey: selfPubkey,
+                previouslyActiveChannels: previouslyActiveChannels
+            )
+        }
+    }
+
+    public func fetch(
+        selfPubkey: String,
+        previouslyActiveChannels: Set<String>
+    ) async throws -> ChannelDirectorySnapshot {
+        try await fetchValue(selfPubkey, previouslyActiveChannels)
+    }
+}
+
 public enum ChannelDirectoryError: Error, Equatable {
     case transport(TransportError)
     case httpStatus(Int)

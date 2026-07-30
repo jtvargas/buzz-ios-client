@@ -32,6 +32,13 @@ extension SyncEngine {
     /// A stopped engine (signed out) does nothing at all.
     public func refresh() async {
         guard !isStopped else { return }
+        if directoryContext != nil {
+            if state != .running {
+                await connection.reconnectNow()
+            }
+            _ = await requestDirectoryRefreshAndWait()
+            return
+        }
         guard state == .running else {
             await connection.reconnectNow()
             return
@@ -42,11 +49,8 @@ extension SyncEngine {
         }
         let generation = readyGeneration
         readyWorkInFlight = true
-        let task: Task<Void, Never>
-        if directoryClient == nil {
-            task = Task { [weak self] in await self?.onReady(generation: generation) }
-        } else {
-            task = Task { [weak self] in await self?.onReadyAuthoritative(generation: generation) }
+        let task: Task<Void, Never> = Task { [weak self] in
+            await self?.onReady(generation: generation)
         }
         onReadyTask = task
         await task.value

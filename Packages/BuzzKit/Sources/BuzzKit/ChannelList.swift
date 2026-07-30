@@ -301,10 +301,6 @@ extension BuzzEventStore {
         LEFT JOIN channel_access ca
           ON ca.channel_id = c.id AND ca.identity_pubkey = :selfPubkey
         WHERE :selfPubkey IS NULL
-           OR NOT EXISTS (
-               SELECT 1 FROM meta
-                WHERE key = 'channel_access_seeded:' || :selfPubkey
-           )
            OR (ca.state = 'active' AND c.is_archived = 0)
         ORDER BY last_message_at DESC NULLS LAST, c.name ASC, c.id ASC
         """

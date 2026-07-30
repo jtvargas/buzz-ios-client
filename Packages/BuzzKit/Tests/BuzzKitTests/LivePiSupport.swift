@@ -53,7 +53,7 @@ struct LiveEngine {
             store: store,
             presence: PresenceStore(),
             windowClient: windowClient,
-            directoryClient: directoryClient,
+            directoryClient: AnyChannelDirectoryFetcher(directoryClient),
             signer: signer
         )
     }

@@ -336,7 +336,6 @@ extension SyncEngine {
             try? await store.markChannelAccess(identity: identity, channel: channel, state: .active)
         }
         _ = try? await subscribeChannelContent(channel)
-        scheduleChannelReconcile(channel)
         requestDirectoryRefresh()
     }
 }

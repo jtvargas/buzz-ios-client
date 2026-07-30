@@ -28,6 +28,11 @@ struct ReadStateEngineTests {
             try relay.event(.groupMetadata, #"{"name":"Room"}"#, tags: [["d", "room-1"]], at: 500),
             try peer.message("hi", in: "room-1", at: 3000),
         ], phase: .live)
+        try await harness.store.markChannelAccess(
+            identity: harness.selfPubkey,
+            channel: "room-1",
+            state: .active
+        )
         #expect(try harness.store.channelList(selfPubkey: harness.selfPubkey).first?.unreadCount == 1)
 
         // markRead awaits its drain, which awaits the relay OK — run it in a Task so the
@@ -103,6 +108,11 @@ struct ReadStateEngineTests {
             try relay.event(.groupMetadata, #"{"name":"Room"}"#, tags: [["d", "room-1"]], at: 500),
             try peer.message("hi", in: "room-1", at: 3000),
         ], phase: .live)
+        try await harness.store.markChannelAccess(
+            identity: harness.selfPubkey,
+            channel: "room-1",
+            state: .active
+        )
         #expect(try harness.store.channelList(selfPubkey: harness.selfPubkey).first?.unreadCount == 1)
 
         // A second device of the same identity publishes "read up to 3000". It is

@@ -52,6 +52,15 @@ extension RelayConnection {
             // A `.ready` that outlived a freeze is unproven; the probe confirms the
             // socket or forces a reconnect. See ``armForegroundProbe()``.
             armForegroundProbe()
+        case .connecting where transport == nil:
+            // An initial transport open failed after setting `.connecting`.
+            // There is no handshake to salvage. Enter automatic reconnect at its
+            // backoff boundary; an explicit retry arriving in `.backingOff` cancels
+            // that sleep and takes the immediate path below.
+            reconnectTask?.cancel()
+            reconnectSuppressed = false
+            reconnectAttempt = 0
+            reconnectTask = Task { [weak self] in await self?.runReconnectLoop() }
         case .connecting, .authenticating:
             // A handshake frozen by backgrounding does *not* reliably resolve on its
             // own: the process could not service the socket while it was away, and the

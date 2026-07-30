@@ -4,7 +4,7 @@ import Observation
 @MainActor
 @Observable
 final class ChannelAccessModel {
-    private(set) var state: ChannelAccessState = .active
+    private(set) var state: ChannelAccessState
 
     private let channelID: String
     private let identity: String?
@@ -14,6 +14,12 @@ final class ChannelAccessModel {
         self.channelID = channelID
         self.identity = identity
         self.store = store
+        if let identity {
+            state = (try? store.channelAccessState(identity: identity, channel: channelID))
+                ?? .unavailable
+        } else {
+            state = .active
+        }
     }
 
     var isWritable: Bool { state.isWritable }

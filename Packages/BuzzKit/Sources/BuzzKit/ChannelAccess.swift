@@ -187,10 +187,19 @@ public extension BuzzEventStore {
                 INSERT INTO channel_access (identity_pubkey, channel_id, state, updated_at)
                 VALUES (?, ?, ?, ?)
                 ON CONFLICT(identity_pubkey, channel_id) DO UPDATE SET
-                    state = excluded.state,
+                    state = CASE
+                        WHEN channel_access.state = ? THEN channel_access.state
+                        ELSE excluded.state
+                    END,
                     updated_at = excluded.updated_at
                 """,
-                arguments: [identity, channel, state.rawValue, now]
+                arguments: [
+                    identity,
+                    channel,
+                    state.rawValue,
+                    now,
+                    ChannelAccessState.deleted.rawValue,
+                ]
             )
         }
     }

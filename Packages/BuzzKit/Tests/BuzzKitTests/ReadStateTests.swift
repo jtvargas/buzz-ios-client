@@ -102,6 +102,16 @@ struct ReadStateTests {
                 tags: [["h", "room-1"], ["e", opener.id, "", "reply"]], at: 3500
             ),
         ], phase: .backfill)
+        try await store.markChannelAccess(
+            identity: selfKey.publicKey.hex,
+            channel: "room-1",
+            state: .active
+        )
+        try await store.markChannelAccess(
+            identity: selfKey.publicKey.hex,
+            channel: "room-2",
+            state: .active
+        )
         return store
     }
 
@@ -154,6 +164,11 @@ struct ReadStateTests {
             try peer.message("older", in: "room-1", at: 2000),
             newest,
         ], phase: .backfill)
+        try await store.markChannelAccess(
+            identity: selfKey.publicKey.hex,
+            channel: "room-1",
+            state: .active
+        )
         #expect(try store.channelList(selfPubkey: selfKey.publicKey.hex).first?.unreadCount == 2)
 
         // The author deletes their own newest: authorized, so it stops counting.
