@@ -103,9 +103,19 @@ struct ChannelRowView: View {
     private var accessibilityLabel: String {
         var parts = [row.title]
         if row.conversation.kind == .channel, row.isPrivate { parts.append("private") }
+        // The count on a group DM's tile is drawn, so `.combine` cannot reach it — and it
+        // is the one thing on the row a list of names does not already say.
+        if let people = Self.peopleDescription(row.conversation) { parts.append(people) }
         if row.isStarred { parts.append("starred") }
         if let description = row.indicator.accessibilityDescription { parts.append(description) }
         return parts.joined(separator: ", ")
+    }
+
+    /// `4 people` for a group direct message, `nil` for everything else — a channel's
+    /// roster is not what its row is about, and a one-to-one's is two by definition.
+    static func peopleDescription(_ conversation: ConversationIdentity) -> String? {
+        guard conversation.kind == .group, conversation.memberCount > 0 else { return nil }
+        return conversation.memberCount == 1 ? "1 person" : "\(conversation.memberCount) people"
     }
 
     /// The glyph/avatar edge. Small enough that a one-line row stays compact, large

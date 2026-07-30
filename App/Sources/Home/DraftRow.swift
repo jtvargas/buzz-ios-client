@@ -8,14 +8,15 @@ import SwiftUI
 /// still sitting in*. Slack's Drafts list is built the same way round.
 ///
 /// The leading mark is the sidebar's, from ``ConversationMark``: a face for a direct
-/// message, a `#` or a lock for a channel. A draft is about a conversation, and a
-/// conversation should be recognisable by the same thing everywhere.
+/// message, how many people for a group one, a `#` or a lock for a channel. A draft is
+/// about a conversation, and a conversation should be recognisable by the same thing
+/// everywhere.
 ///
 /// With one addition of this screen's own. A draft in a **channel's thread** draws the
 /// thread's mark instead of the channel's, so the two are told apart before the title is
 /// read — they are different destinations, and this list is the one place they sit next to
-/// each other. A thread in a *direct message* keeps the peer's face: it is still a
-/// conversation with that person, and a symbol would say less.
+/// each other. A thread in a *direct message*, of either size, keeps the mark of the people
+/// it is with: it is still a conversation with them, and a symbol would say less.
 ///
 /// The glyph is drawn at full strength here, unlike the sidebar's, where a quiet mark
 /// means read. There is no read state on this screen for quiet to mean.
@@ -40,7 +41,7 @@ struct DraftRow: View {
                     Text(title)
                         .font(.hive(.headline, weight: .semibold))
                         .foregroundStyle(.primary)
-                        .lineLimit(1)
+                        .lineLimit(Self.titleLines(for: conversation))
                         .truncationMode(.tail)
                     Spacer(minLength: 0)
                     MessageTimestampView(date: date)
@@ -55,11 +56,29 @@ struct DraftRow: View {
         .padding(.vertical, 6)
         .contentShape(.rect)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(title), draft: \(preview)")
+        .accessibilityLabel(accessibilityLabel)
+    }
+
+    /// The row spoken. The group DM's count is drawn rather than written, so `.combine`
+    /// cannot reach it and it is named here.
+    private var accessibilityLabel: String {
+        var parts = [title]
+        if let people = ChannelRowView.peopleDescription(conversation) { parts.append(people) }
+        parts.append("draft: \(preview)")
+        return parts.joined(separator: ", ")
     }
 
     private var title: String { DraftRowText.title(for: summary, in: conversation) }
     private var preview: String { DraftRowText.preview(of: summary.snippet) }
+
+    /// A group direct message is titled by the people in it, and one line of a phone is
+    /// about two names — so it gets a second, and the `…` falls at the end of that. Every
+    /// other conversation has a name that was *chosen* to be a name and keeps its single
+    /// line, which is what stops this list from growing rows of uneven height for titles
+    /// that had nothing more to say.
+    static func titleLines(for conversation: ConversationIdentity) -> Int {
+        conversation.kind == .group ? 2 : 1
+    }
 
     /// The stored millisecond stamp as a date — see ``ComposerDraftSummary/updatedAt``.
     private var date: Date {

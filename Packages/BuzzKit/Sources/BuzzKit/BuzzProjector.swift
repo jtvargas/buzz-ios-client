@@ -98,14 +98,16 @@ struct BuzzProjector: EventProjecting {
         try db.execute(
             sql: """
             INSERT INTO channel
-                (id, name, about, picture, is_private, is_archived, source_event_id, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                (id, name, about, picture, is_private, is_archived, channel_type,
+                 source_event_id, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 name = excluded.name,
                 about = excluded.about,
                 picture = excluded.picture,
                 is_private = excluded.is_private,
                 is_archived = excluded.is_archived,
+                channel_type = excluded.channel_type,
                 source_event_id = excluded.source_event_id,
                 updated_at = excluded.updated_at
             WHERE excluded.updated_at > channel.updated_at
@@ -124,10 +126,31 @@ struct BuzzProjector: EventProjecting {
                         && $0[0].lowercased() == "archived"
                         && $0[1].lowercased() == "true"
                 },
+                channelType(of: event),
                 event.id,
                 event.createdAt,
             ]
         )
+    }
+
+    /// What kind of room this is, from the relay's own `["t", <type>]` on kind 39000 —
+    /// `stream`, `forum`, or `dm`.
+    ///
+    /// A bare `["hidden"]` stands in when the `t` tag is absent. The relay emits that tag
+    /// on one channel type and no other (`side_effects.rs`: the `hidden` hint, the
+    /// participant `p` tags, and `t=dm` are pushed by the same `channel_type == "dm"`
+    /// branch), so it is the same fact told twice — and the fallback is what lets a relay
+    /// deployed before the `t` tag still identify a DM. Anything else stays `nil`, a
+    /// *don't know*: a channel whose type never arrived must not read as a `stream`,
+    /// because "not a DM" is then a guess presented as the relay's answer.
+    private static func channelType(of event: NostrEvent) -> String? {
+        if let type = event.firstValue(forTag: "t")?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased(),
+            !type.isEmpty {
+            return type
+        }
+        return event.tags.contains { $0.first == "hidden" } ? "dm" : nil
     }
 
     /// Kind 39002: the relay-signed member roster.

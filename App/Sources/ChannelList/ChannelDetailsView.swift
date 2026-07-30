@@ -41,7 +41,10 @@ struct ChannelDetailsView: View {
 
         return NavigationStack {
             List {
-                if conversation.isDirect {
+                // `isOneToOne`, not `isDirect`: a group DM has no peer to put a face, a
+                // presence dot, or a profile link under, and the channel sections — its
+                // member list above all — are exactly what it wants instead.
+                if conversation.isOneToOne {
                     peerSection(conversation)
                     // A DM has no topic to set, so the section appears only when one
                     // somehow exists rather than as an empty placeholder.

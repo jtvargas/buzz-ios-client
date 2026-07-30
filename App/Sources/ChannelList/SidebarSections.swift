@@ -1,7 +1,7 @@
 import BuzzKit
 import Foundation
 
-/// The sidebar's groupings: Starred, then Channels, Direct Messages, Agents.
+/// The sidebar's groupings: Starred, then Channels, DMs, Agents.
 ///
 /// Three of the four are *derived*, never stored: which one a conversation lands in is
 /// a projection of ``ConversationIdentity/Kind``, which the foundation already decided
@@ -24,7 +24,7 @@ enum SidebarSection: String, CaseIterable, Hashable, Sendable, Identifiable {
         switch self {
         case .starred: "Starred"
         case .channels: "Channels"
-        case .directMessages: "Direct Messages"
+        case .directMessages: "DMs"
         case .agents: "Agents"
         }
     }
@@ -58,8 +58,8 @@ enum SidebarSection: String, CaseIterable, Hashable, Sendable, Identifiable {
     /// header's `.title3` bold configuration — so this started at 32 and the test below
     /// failed it. That is the point of having the test: a SwiftUI `.frame` does not clip, so a
     /// column narrower than its glyph does not look wrong here, it silently pushes that one
-    /// symbol out into the 8-point gap and sets "Direct Messages" closer to its icon than
-    /// "Channels" is to the `#`.
+    /// symbol out into the 8-point gap and sets "DMs" closer to its icon than "Channels"
+    /// is to the `#`.
     ///
     /// The test measures every section glyph at that same configuration and asserts this
     /// contains it, so changing a symbol, the text style, or the weight cannot quietly
@@ -80,13 +80,17 @@ enum SidebarSection: String, CaseIterable, Hashable, Sendable, Identifiable {
     /// Which section a resolved conversation belongs in.
     ///
     /// The product rules — "a DM is a channel whose roster is exactly two members
-    /// including me", "an agent DM is one whose peer is an agent" — live once, in
+    /// including me", "an agent DM is one whose peer is an agent", "a group DM is one the
+    /// relay calls a DM with more people than that in it" — live once, in
     /// ``EntityNames/conversation(for:)``. This function only maps the answer onto a
     /// heading.
     static func section(for kind: ConversationIdentity.Kind) -> SidebarSection {
         switch kind {
         case .channel: .channels
-        case .direct: .directMessages
+        // A group DM files with the other direct messages rather than under a heading of
+        // its own: it is the same kind of conversation with more people in it, and a
+        // fifth section holding one or two rows is a heading that costs more than it says.
+        case .direct, .group: .directMessages
         case .agent: .agents
         }
     }
@@ -130,8 +134,9 @@ enum UnreadIndicator: Hashable, Sendable {
     /// read from the *newest* message's `p` tags, so an older unread mention showed as a
     /// plain dot and the badge borrowed the unread count for its number.)
     ///
-    /// - Parameter isDirect: whether this is a one-to-one conversation — with a person or
-    ///   with an agent. Both are rooms of two, so both count every message.
+    /// - Parameter isDirect: whether this is a direct message — with a person, with an
+    ///   agent, or with a few people. None of them is a room you are in for the traffic,
+    ///   so all of them count every message.
     static func resolve(unreadCount: Int, mentionCount: Int, isDirect: Bool) -> UnreadIndicator {
         guard unreadCount > 0 else { return .caughtUp }
         if isDirect { return .directUnread(unreadCount) }
