@@ -26,7 +26,7 @@ This is the living checklist for the headline milestone: feature parity with the
 | Channels (timeline, composer) | `channels` | ✅ | One shared shell for channel, thread and DM |
 | Threads | `channels` | ✅ | Replies row with participant faces; heading pops back to the conversation |
 | Reactions | `channels` | ✅ | A long press opens a sheet: five quick reactions with the full emoji picker beside them, then Reply in thread, Copy Message and Remind Me. Chips with counts under the message, own reaction withdrawable |
-| Direct messages | `channels` | ✅ | A DM is a channel whose roster is exactly two members including you; opened or created from the profile sheet |
+| Direct messages | `channels` | ✅ | A DM is a channel whose roster is exactly two members including you; opened or created from the profile sheet. A DM hidden elsewhere stays off the sidebar here, read from the relay's per-viewer NIP-DV snapshot (kind 30622) — hiding is presentation, so the roster still names you and nothing else on the wire carries it. Like upstream, the app reads hides but cannot make one: only Desktop has the button |
 | Activity feed (mentions/replies/reactions) | `activity` | ☐ | A tab exists and is a placeholder; nothing is collected behind it |
 | Search | `search` | ☐ | No in-app search |
 | Profiles | `profile` | ◐ | Profile sheet (picture, name, member/agent, presence, npub + copy, Message) opens from a message's avatar, name or mention; not yet from the sidebar or the channel roster. Own profile (display name, About) editable in Account |
@@ -56,6 +56,7 @@ Native work already in place that upstream's Flutter app does not have an equiva
 - Jump controls that hold an arrival back while you read history and land you on the first unread rather than the bottom.
 - SVG `data:` URI avatar rendering (iOS ships no SVG decoder in its imaging pipeline).
 - VoiceOver: a message read as one sentence with the author's profile as a rotor action.
+- A hidden DM stays hidden through a network failure. Upstream swallows every failure of the kind-30622 read identically and falls back to "nothing is hidden", so one timed-out query un-hides every hidden DM for that cycle; here a relay that *answers* a refusal is absorbed the same way, but a relay that does not answer fails the whole pass and the last confirmed list stands.
 
 ## Process
 

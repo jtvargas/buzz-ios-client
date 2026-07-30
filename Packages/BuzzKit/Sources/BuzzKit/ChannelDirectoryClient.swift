@@ -76,6 +76,7 @@ public struct ChannelDirectoryClient: ChannelDirectoryFetching, Sendable {
     ) async throws -> ChannelDirectorySnapshot {
         try Task.checkCancellation()
 
+        let hidden = try await fetchHiddenDirectMessages(viewer: selfPubkey)
         let membershipPages = try await fetchAll(
             DirectoryFilter(
                 kinds: [.groupMembers],
@@ -107,9 +108,39 @@ public struct ChannelDirectoryClient: ChannelDirectoryFetching, Sendable {
         }
 
         let events = Self.latestReplaceables(in: membershipPages + stateEvents)
+        var states = Self.accessStates(
+            for: relevantChannels,
+            from: events,
+            viewer: selfPubkey
+        )
+
+        // A hide is not a membership change, so every hidden DM has just been resolved
+        // to `.active` above — correctly, since that is what the roster says. The
+        // viewer's own visibility snapshot is the only thing that knows better.
+        //
+        // It only ever demotes an already-`.active` channel: one that is archived,
+        // gone, or no longer yours is off the sidebar for a stronger reason already,
+        // and calling it merely hidden would replace a real explanation with a weaker
+        // one. Nothing here re-checks that the id names a DM — the relay refuses a hide
+        // for anything else (`handle_dm_hide` requires `channel_type == "dm"`), and it
+        // is the same relay whose roster decided membership one block above, so a
+        // second opinion from this side would be theatre.
+        for channelID in hidden where states[channelID] == .active {
+            states[channelID] = .hidden
+        }
+
+        return ChannelDirectorySnapshot(events: events, states: states)
+    }
+
+    /// Reads each channel's relay-signed state into the viewer's access to it.
+    static func accessStates(
+        for channels: Set<String>,
+        from events: [NostrEvent],
+        viewer: String
+    ) -> [String: ChannelAccessState] {
         let byChannel = Dictionary(grouping: events) { $0.addressableIdentifier ?? "" }
         var states: [String: ChannelAccessState] = [:]
-        for channelID in relevantChannels {
+        for channelID in channels {
             let channelEvents = byChannel[channelID] ?? []
             let roster: NostrEvent? = channelEvents.first {
                 $0.kind == EventKind.groupMembers
@@ -117,7 +148,7 @@ public struct ChannelDirectoryClient: ChannelDirectoryFetching, Sendable {
             let metadata: NostrEvent? = channelEvents.first {
                 $0.kind == EventKind.groupMetadata
             }
-            let isMember = roster.map { Self.roster($0, contains: selfPubkey) } ?? false
+            let isMember = roster.map { Self.roster($0, contains: viewer) } ?? false
             let isArchived = metadata.map(Self.isArchived) ?? false
 
             if isMember {
@@ -131,8 +162,61 @@ public struct ChannelDirectoryClient: ChannelDirectoryFetching, Sendable {
                 states[channelID] = .unavailable
             }
         }
+        return states
+    }
 
-        return ChannelDirectorySnapshot(events: events, states: states)
+    /// The channel ids in the viewer's own NIP-DV visibility snapshot — the DMs they
+    /// currently have hidden.
+    ///
+    /// # Why a relay that will not answer this must not cost you your sidebar
+    ///
+    /// This rides the same authenticated endpoint as the membership query, so the
+    /// obvious shape — let it throw like everything else — would hand a relay that
+    /// does not implement NIP-DV the power to fail the entire directory pass, and the
+    /// app would sit on `Can't reach the relay` against a relay it is talking to
+    /// perfectly well. That is a far worse failure than the one this fetch exists to
+    /// fix, so the two error classes are separated:
+    ///
+    /// - **The relay answered, and its answer was a refusal or unreadable.** Nothing
+    ///   about retrying changes that, and NIP-DV §Client Behavior already defines the
+    ///   fallback: no snapshot means nothing is hidden. Absorbed, and the rest of the
+    ///   pass proceeds normally.
+    /// - **The relay did not answer at all** (transport, cancellation). The membership
+    ///   query is about to hit the same wall, so this propagates and the caller keeps
+    ///   its last good state — which still has the hidden DMs hidden. Preserving the
+    ///   previous answer is the only way a network blip cannot flash a hidden DM back
+    ///   onto the sidebar.
+    private func fetchHiddenDirectMessages(viewer: String) async throws -> Set<String> {
+        let page: [NostrEvent]
+        do {
+            page = try await fetchPage(
+                DirectoryFilter(
+                    kinds: [.dmVisibility],
+                    tagQueries: ["p": [viewer]],
+                    limit: 1
+                )
+            )
+        } catch ChannelDirectoryError.httpStatus, ChannelDirectoryError.unreadableResponse {
+            return []
+        }
+
+        // Addressable and keyed by `d`, so the newest snapshot is the complete hidden
+        // set. The relay orders `created_at DESC` under a limit, but choosing the
+        // newest here rather than trusting position also refuses a snapshot addressed
+        // to somebody else — the tag that authorises the read is `p`, and only `d`
+        // says whose set this is.
+        guard let snapshot = page
+            .filter({ event in
+                event.kind == EventKind.dmVisibility
+                    && event.addressableIdentifier?.caseInsensitiveCompare(viewer) == .orderedSame
+            })
+            .max(by: { ($0.createdAt, $0.id) < ($1.createdAt, $1.id) })
+        else { return [] }
+
+        return Set(snapshot.tags.compactMap { tag in
+            guard tag.count > 1, tag[0] == "h", !tag[1].isEmpty else { return nil }
+            return tag[1]
+        })
     }
 
     private func fetchAll(_ base: DirectoryFilter) async throws -> [NostrEvent] {

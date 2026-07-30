@@ -118,12 +118,38 @@ public struct EventKind: RawRepresentable, Hashable, Sendable, ExpressibleByInte
     /// would answer `Duplicate` with no payload.
     public static let directMessageOpen: EventKind = 41010
 
+    /// Hide a direct message from your own sidebar.
+    ///
+    /// Presentation, not membership: you stay an active participant of the DM, keep
+    /// receiving its messages, and re-open it with ``directMessageOpen``. The relay
+    /// records the hide privately and republishes your ``dmVisibility`` snapshot as a
+    /// post-commit side effect — nothing about the DM's kind-39002 roster changes, which
+    /// is exactly why a client that rebuilds its list from membership alone cannot see
+    /// the hide (NIP-DV §Motivation).
+    ///
+    /// A command kind like ``directMessageOpen``: `h` names the DM, content is empty,
+    /// and the relay refuses it for a non-member or a channel that is not a DM.
+    public static let directMessageHide: EventKind = 41012
+
     // MARK: - Addressable application state
 
     public static let readState: EventKind = 30078
     public static let agentEngram: EventKind = 30174
     public static let persona: EventKind = 30175
     public static let reminder: EventKind = 30300
+
+    /// The relay's per-viewer snapshot of which DMs that viewer currently has hidden
+    /// (NIP-DV): one `h` tag per hidden DM, `d` and `p` both the viewer's pubkey.
+    ///
+    /// Addressable and keyed by `d`, so there is exactly one current snapshot per
+    /// person and the newest one is the complete hidden set — there is no delta to
+    /// merge and no ordering hazard between a hide and an un-hide. Absent means
+    /// nothing is hidden.
+    ///
+    /// Read with `#p` = self: that is the tag the relay's read-authorization gate
+    /// checks, and it refuses the query outright without it, because the snapshot is
+    /// a plaintext list of one person's private choices.
+    public static let dmVisibility: EventKind = 30622
 
     // MARK: - Relay-signed group state (addressable)
 
@@ -175,7 +201,7 @@ public struct EventKind: RawRepresentable, Hashable, Sendable, ExpressibleByInte
         .groupMetadata, .groupAdmins, .groupMembers, .groupRoles,
         .threadSummary, .windowBounds,
         .membershipList, .memberAdded, .memberRemoved,
-        .systemMessage,
+        .systemMessage, .dmVisibility,
     ]
 }
 
