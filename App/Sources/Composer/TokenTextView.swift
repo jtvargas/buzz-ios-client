@@ -26,6 +26,9 @@ struct TokenTextView: UIViewRepresentable {
 
     @Binding var document: MentionDraft
     @Binding var isFocused: Bool
+    /// Handed pictures pasted into the field, which become attachments rather than text —
+    /// see ``ComposerTextView``. `nil` where a surface has nothing to attach them to.
+    var onPasteImages: (([Data]) -> Void)?
     let placeholder: String
     var isEditable = true
     /// Where the caret went, for a move the text did not cause. Mention completion is
@@ -40,7 +43,8 @@ struct TokenTextView: UIViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
     func makeUIView(context: Context) -> UITextView {
-        let view = UITextView()
+        let view = ComposerTextView()
+        view.onPasteImages = onPasteImages
         view.delegate = context.coordinator
         view.backgroundColor = .clear
         // The app's typeface, through `UIFontMetrics` — a `UIFont` does not scale itself,
@@ -85,6 +89,9 @@ struct TokenTextView: UIViewRepresentable {
     }
 
     func updateUIView(_ view: UITextView, context: Context) {
+        // Re-applied rather than captured once: the closure carries the surface's model, and
+        // a view struct is rebuilt on every body pass.
+        (view as? ComposerTextView)?.onPasteImages = onPasteImages
         let coordinator = context.coordinator
         coordinator.parent = self
         view.isEditable = isEditable

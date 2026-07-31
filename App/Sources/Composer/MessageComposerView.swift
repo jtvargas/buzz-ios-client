@@ -203,6 +203,9 @@ struct MessageComposerView: View {
         TokenTextView(
             document: $document,
             isFocused: $autocomplete.isComposerFocused,
+            // A pasted picture goes through the same door as a picked one, so it inherits the
+            // scrub, the upload and the five-picture cap without any of them being restated.
+            onPasteImages: { attachments.add($0.map(PastedPicture.init)) },
             placeholder: placeholder,
             isEditable: isEnabled,
             onSelectionChange: autocomplete.updateSelection
