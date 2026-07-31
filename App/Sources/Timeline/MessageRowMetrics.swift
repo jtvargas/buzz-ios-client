@@ -91,12 +91,4 @@ enum MessageRowMetrics {
         let diameter = max(9, size * 0.32)
         return (diameter, max(1.5, diameter * 0.18))
     }
-
-    /// How far a pressed message's highlight bleeds past the row, vertically. The
-    /// horizontal bleed is ``rowLeading`` — the inset the surface applies — so the
-    /// highlight reaches both screen edges the way a list row's does.
-    ///
-    /// Half ``withinGroup``, so a pressed message inside a block lights up without its
-    /// highlight touching the message stacked under it.
-    static let pressBleed: CGFloat = 3
 }

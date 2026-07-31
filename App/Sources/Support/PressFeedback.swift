@@ -7,29 +7,48 @@ import SwiftUI
 /// shrinks to 0.92 reads as two apps. The same reasoning as ``MessageRowMetrics`` — values
 /// agreeing in eleven files is an accident waiting to be changed in one of them.
 ///
+/// # What answers a finger, and what does not
+///
+/// A **control** shrinks and washes inside its own shape. A **row** only shrinks: the owner
+/// had the amber wash taken off the sidebar entirely, and off a message entirely, so on a
+/// list the movement is the whole answer. A **message** now answers nothing at all — the row
+/// under a finger is content, the long press it is on its way to announces itself with a
+/// haptic and then a sheet, and the wash that used to say *this one* was a third thing
+/// nobody asked for.
+///
 /// # The shape of the gesture
 ///
-/// Three curves, not two, and the third is the one this file was missing when it first
-/// shipped. Down is a fast ease-out, because a press has to answer *immediately*. Up is a
-/// spring, because the release is the moment the control is allowed to feel physical. And a
+/// Three curves. Down is a fast ease-out, because a press has to answer immediately. Up is a
+/// spring, because the release is the moment a control is allowed to feel physical. And a
 /// press that is **abandoned** — the finger moved, the scroll view took the touch — comes off
 /// in a sixth of the time either of those take, with no latch in front of it: a highlight
-/// that trails a scrolling finger is the single most common way this treatment reads as
-/// broken, and it is not a release, so it must not animate like one.
+/// that trails a scrolling finger is the most common way this treatment reads as broken, and
+/// it is not a release, so it must not animate like one.
 enum PressFeedback {
     /// What a pressed control shrinks to.
     ///
-    /// The shallow end of the range a touch can register at all: at 0.95 and below the label
-    /// visibly re-lays out at the accessibility text sizes.
-    static let pressedScale: CGFloat = 0.965
+    /// Six per cent, which is past the brief's original 0.96–0.97 on the owner's instruction
+    /// — he reported the shrink as invisible three times running, the last time with the
+    /// amber taken off, which leaves the movement carrying the whole answer by itself. On the
+    /// widest thing this is applied to, a full-width sidebar row on a 390pt screen, it moves
+    /// each edge about 12pt; on the narrowest, a composer disc, about 1pt. Below 0.94 the
+    /// label re-lays out at the accessibility text sizes, which is the floor this sits on.
+    ///
+    /// The number is only half of that report, and it was the smaller half. The other half is
+    /// ``ScrollTouchDeliveryView``: a scroll view holds a touch for about 150ms before the
+    /// control inside it is told there was one, so on the shortest taps the shrink was
+    /// starting after the finger had already left. A deeper scale cannot be seen through a
+    /// delay in front of it.
+    static let pressedScale: CGFloat = 0.94
 
-    /// The wash a pressed control draws behind itself, over whatever it is sitting on.
+    /// The wash a pressed **control** draws behind itself, inside its own shape.
     ///
     /// The accent at 0.14, which is not a taste call — it is
     /// ``ChannelListView/resumeMark(isResumable:)``, the mark on the conversation you were
-    /// last in, to the number. The owner asked for the two to be the same thing, and they
-    /// now share a colour, an opacity, a corner and an inset: one highlight in the app,
-    /// saying *this one*, whether it is marking a place or answering a finger.
+    /// last in, to the number. It is drawn only where a control has edges of its own now: on
+    /// a list row and on a message the owner had it removed, and the reason is worth keeping
+    /// — the amber is the app's *place* mark, and a list that flashes it under every finger
+    /// is a list saying *this one* about whatever you happened to touch.
     static let pressedFill: Double = 0.14
 
     /// The colour of that wash. Named here so the sidebar's mark and every press in the app
@@ -46,21 +65,17 @@ enum PressFeedback {
     /// the screen the press was drawn on was already being replaced while the shrink was
     /// arriving. A press is worth seeing only if there is something left to see it on — so the
     /// press plays through, and the action runs when it has.
-    ///
-    /// Past the ease-out with room to spare, and short enough that a double tap still reads
-    /// as two.
     static let minimumVisible: TimeInterval = 0.22
 
-    /// How far a full-width row's wash is inset, horizontally and vertically.
+    /// What a pressed control's content fades to.
     ///
-    /// ``ChannelListView/resumeMark(isResumable:)``'s own padding. A row's highlight stopping
-    /// short of both screen edges is what makes it read as *this row* rather than as a band
-    /// laid across the list.
-    static let rowInset = (horizontal: CGFloat(8), vertical: CGFloat(1))
-
-    /// What a pressed control with no shape of its own fades to — the sender's name and
-    /// avatar on a message, which sit directly on the conversation.
-    static let pressedDim: Double = 0.55
+    /// Two depths. A **row** takes the shallow one: with the wash gone the movement is alone,
+    /// and a few per cent of light coming out of the content is the one reinforcement
+    /// available that is not a coloured highlight — which is the thing that was removed. The
+    /// **inline** controls on a message, the sender's face and name, take the deep one,
+    /// because they draw no shape and have nothing else at all.
+    static let pressedDim: Double = 0.92
+    static let inlinePressedDim: Double = 0.55
 
     /// The corner radius the wash is drawn with when a control does not name its own shape.
     /// The sidebar mark's, and `.continuous` like it.
@@ -88,41 +103,38 @@ enum PressFeedback {
     /// The animation for a transition *into* `isPressed`.
     ///
     /// Reduce Motion takes the spring off the release — an overshoot is exactly the
-    /// "unnecessary movement" the setting exists to decline — and leaves the wash, which is
-    /// the part that says the control was hit.
+    /// "unnecessary movement" the setting exists to decline.
     static func animation(pressed: Bool, reduceMotion: Bool) -> Animation {
         guard !reduceMotion else { return press }
         return pressed ? press : release
     }
 
-    /// What a pressed control of this emphasis shrinks to.
-    ///
-    /// Every emphasis shrinks, including a full-width row. It did not, and the reasoning was
-    /// that a row pulling away from both screen edges reads as a card lifting off the list.
-    /// The owner overruled it from a device with the observation that settles it: a row is the
-    /// thing he presses most, and a treatment his most common target opts out of is a
-    /// treatment he cannot see. Only Reduce Motion declines the movement now.
+    /// What a pressed control of this emphasis shrinks to. Only Reduce Motion declines it —
+    /// with the wash gone from rows and messages, movement is most of what is left.
     static func scale(for _: PressFeedbackButtonStyle.Emphasis, reduceMotion: Bool) -> CGFloat {
         reduceMotion ? 1 : pressedScale
     }
 
-    /// What a pressed control of this emphasis fades to. Only the emphasis that draws
-    /// nothing behind itself dims; the others say it with the wash.
+    /// What a pressed control of this emphasis fades to.
     static func dim(for emphasis: PressFeedbackButtonStyle.Emphasis) -> Double {
-        emphasis == .inline ? pressedDim : 1
+        switch emphasis {
+        case .control: 1
+        case .row: pressedDim
+        case .inline: inlinePressedDim
+        }
     }
 
-    /// The wash a pressed control of this emphasis draws in its own shape. Zero for the
-    /// emphasis that draws nothing.
+    /// The wash a pressed control of this emphasis draws in its own shape. Only a control
+    /// with edges of its own draws one — see ``pressedFill``.
     static func fill(for emphasis: PressFeedbackButtonStyle.Emphasis) -> Double {
-        emphasis == .inline ? 0 : pressedFill
+        emphasis == .control ? pressedFill : 0
     }
 }
 
 /// Slack's press treatment, in the three shapes this app's controls come in.
 ///
 /// Every control that draws itself — everything not on a system style — goes through this,
-/// so a press means the same thing in the composer, in the sidebar, and on a message.
+/// so a press means the same thing in the composer, in the sidebar, and in a sheet.
 /// Controls on `.glass`, `.glassProminent`, `.bordered` and `.borderedProminent` are
 /// deliberately left alone: those styles animate their own press, and replacing one to add
 /// a scale would take the glass off the control to do it.
@@ -131,9 +143,9 @@ enum PressFeedback {
 ///
 /// Because a `ButtonStyle` is handed the label and the press state and **not** the action, so
 /// it can draw a press but cannot decide when the press has been seen. That is one half of
-/// the treatment. The other half is the owner's fourth report: *"the action currently fires
-/// too quickly — there needs to be enough time for the scale-down and highlight to be clearly
-/// visible before the action executes."* A `PrimitiveButtonStyle` is given
+/// the treatment. The other half is the owner's report that *"the action fires too quickly —
+/// there needs to be enough time for the scale-down to be clearly visible before the action
+/// executes."* A `PrimitiveButtonStyle` is given
 /// ``PrimitiveButtonStyleConfiguration/trigger()``, which is exactly the missing handle.
 ///
 /// The press itself is still SwiftUI's own: the body wraps the label in an ordinary `Button`
@@ -148,8 +160,8 @@ struct PressFeedbackButtonStyle: PrimitiveButtonStyle {
         /// Something with edges of its own: a button, a chip, a shortcut card, an avatar.
         /// Shrinks, and washes inside its own shape.
         case control
-        /// A full-width row in a list. Shrinks, and washes inset from both screen edges in
-        /// the sidebar mark's own shape.
+        /// A full-width row in a list. Shrinks and dims very slightly; draws no wash — the
+        /// owner had the amber taken off the sidebar entirely.
         case row
         /// A control drawn straight onto content, with no shape of its own: the sender's
         /// name and face on a message. Shrinks and dims; draws nothing. Anything that put a
@@ -165,7 +177,7 @@ struct PressFeedbackButtonStyle: PrimitiveButtonStyle {
     /// The treatment in a named emphasis, washing in whatever shape that emphasis implies.
     init(_ emphasis: Emphasis = .control) {
         self.emphasis = emphasis
-        self.shape = Self.defaultShape(for: emphasis)
+        self.shape = Self.defaultShape
     }
 
     /// The treatment in a named emphasis, washing in a shape the control names for itself —
@@ -175,158 +187,60 @@ struct PressFeedbackButtonStyle: PrimitiveButtonStyle {
         self.shape = AnyShape(shape)
     }
 
-    /// Every emphasis washes in the sidebar mark's own rounded rectangle.
-    ///
-    /// A row used to wash square, on the reasoning that a rounded shape against the screen's
-    /// edges reads as a card. The owner settled it the other way and gave the reason: the
-    /// mark on the conversation you were last in is a rounded rectangle inset from both
-    /// edges, and a press that lit a row differently would be a second highlight in a list
-    /// that already has one.
-    private static func defaultShape(for _: Emphasis) -> AnyShape {
-        AnyShape(.rect(cornerRadius: PressFeedback.cornerRadius, style: .continuous))
-    }
+    /// The sidebar mark's own rounded rectangle, for a control that names no shape.
+    private static let defaultShape = AnyShape(
+        .rect(cornerRadius: PressFeedback.cornerRadius, style: .continuous)
+    )
 
     func makeBody(configuration: Configuration) -> some View {
         PressFeedbackBody(configuration: configuration, emphasis: emphasis, shape: shape)
     }
 }
 
-/// The body of ``PressFeedbackButtonStyle``, as a `View` so it can hold state.
+/// What a press *looks* like, as a modifier over a plain `Bool`.
 ///
-/// A style cannot: `makeBody` is called to produce a view, and `@State` on the style itself
-/// belongs to no view. The state it needs is the timing — when the press went on, whether the
-/// release it is now handling is a *lift* or an *abandonment*, and how much of the minimum is
-/// left to run before the action may fire.
-private struct PressFeedbackBody: View {
-    let configuration: PrimitiveButtonStyleConfiguration
+/// Split out of the style on purpose, and it is the only part of this file a test can hold to
+/// the screen. `ImageRenderer` can render a view; it cannot press a button. So the treatment
+/// is a function of `isShowing` alone, `PressFeedbackTests` renders it at both values and
+/// measures where the ink landed, and "the scale-down is not happening" — reported three
+/// times — stops being a claim anyone has to take on trust.
+struct PressTreatment: ViewModifier {
+    let isShowing: Bool
     let emphasis: PressFeedbackButtonStyle.Emphasis
     let shape: AnyShape
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    /// Whether the press is being *shown*, which is not the same as whether a finger is down.
-    @State private var isShowing = false
-    @State private var shownAt: Date?
-    /// Whether the button's action ran during this press. Set by ``fire()``, which SwiftUI
-    /// calls on touch-up-inside and never on a cancel — so it is the one signal available
-    /// here that separates a finished press from one the scroll view took away.
-    @State private var didTrigger = false
-    @State private var release: Task<Void, Never>?
-    /// The curve the *next* change of ``isShowing`` animates with. Assigned before the flag it
-    /// describes, in the same turn, so one body pass sees both. `.animation(_:value:)` rather
-    /// than `withAnimation` because an ambient animation from here would reach the enclosing
-    /// list and animate a row arriving in a bottom-anchored scroll view.
-    @State private var curve: Animation = PressFeedback.press
-
-    var body: some View {
-        Button(role: configuration.role) {
-            fire()
-        } label: {
-            // Every adopter gets a hit area covering its whole frame; a `Text` otherwise
-            // only accepts taps on its glyphs. Inside the button, because a content shape
-            // applied outside it would not be the button's.
-            configuration.label.contentShape(.rect)
-        }
-        .buttonStyle(PressStateReporter { pressed in
-            if pressed { show() } else { scheduleRelease() }
-        })
-        // Outside the button, so the scale takes the whole interactive view — its padding,
-        // its hit area and its wash — and not just the glyphs of its label.
-        .opacity(isShowing ? PressFeedback.dim(for: emphasis) : 1)
-        .background {
-            shape
-                .fill(PressFeedback.fillColor.opacity(isShowing ? PressFeedback.fill(for: emphasis) : 0))
-                .padding(.horizontal, emphasis == .row ? PressFeedback.rowInset.horizontal : 0)
-                .padding(.vertical, emphasis == .row ? PressFeedback.rowInset.vertical : 0)
-        }
-        .scaleEffect(isShowing ? PressFeedback.scale(for: emphasis, reduceMotion: reduceMotion) : 1)
-        .animation(curve, value: isShowing)
-        .onDisappear { release?.cancel() }
-    }
-
-    /// Runs the button's action, once the press has been on screen long enough to have been
-    /// seen. Immediately when it already has been, which is every press held longer than
-    /// ``PressFeedback/minimumVisible`` and every activation that never showed a press at all
-    /// (a keyboard, VoiceOver).
-    private func fire() {
-        didTrigger = true
-        guard let remaining = remainingVisible() else {
-            configuration.trigger()
-            return
-        }
-        Task { @MainActor in
-            try? await Task.sleep(for: .seconds(remaining))
-            configuration.trigger()
-        }
-    }
-
-    private func show() {
-        release?.cancel()
-        release = nil
-        didTrigger = false
-        shownAt = .now
-        curve = PressFeedback.animation(pressed: true, reduceMotion: reduceMotion)
-        isShowing = true
-    }
-
-    /// Takes the press off — after the minimum if the button fired, and at once if it did not.
-    ///
-    /// The distinction is the owner's first report: a highlight that survives the finger
-    /// leaving is a highlight that trails a scrolling list. A press interrupted by a scroll,
-    /// by a drag off the control, or by the sidebar's forward swipe is not a release and must
-    /// not be paid the minimum — it never became the press it was starting to be.
-    ///
-    /// Deferred by one main-actor turn because SwiftUI reports the press ending and runs the
-    /// action in the same event, in no guaranteed order; a turn later, ``didTrigger`` is
-    /// settled either way.
-    private func scheduleRelease() {
-        release?.cancel()
-        release = Task { @MainActor in
-            await Task.yield()
-            guard !Task.isCancelled else { return }
-            if didTrigger {
-                if let remaining = remainingVisible() {
-                    try? await Task.sleep(for: .seconds(remaining))
-                    guard !Task.isCancelled else { return }
-                }
-                curve = PressFeedback.animation(pressed: false, reduceMotion: reduceMotion)
-            } else {
-                curve = PressFeedback.cancel
+    func body(content: Content) -> some View {
+        content
+            .opacity(isShowing ? PressFeedback.dim(for: emphasis) : 1)
+            .background {
+                shape.fill(
+                    PressFeedback.fillColor
+                        .opacity(isShowing ? PressFeedback.fill(for: emphasis) : 0)
+                )
             }
-            isShowing = false
-        }
-    }
-
-    /// How much of ``PressFeedback/minimumVisible`` this press still owes, or `nil` when it
-    /// owes none.
-    private func remainingVisible() -> TimeInterval? {
-        guard let shownAt else { return nil }
-        let remaining = PressFeedback.minimumVisible - Date.now.timeIntervalSince(shownAt)
-        return remaining > 0 ? remaining : nil
+            .scaleEffect(isShowing ? PressFeedback.scale(for: emphasis, reduceMotion: reduceMotion) : 1)
     }
 }
 
-/// Reports SwiftUI's own press state upward and draws nothing.
-///
-/// The whole reason ``PressFeedbackBody`` can observe a finger without costing the enclosing
-/// scroll view its pan: the press detection is the framework's, unchanged, and this only
-/// forwards the answer.
-private struct PressStateReporter: ButtonStyle {
-    let onPress: (Bool) -> Void
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .onChange(of: configuration.isPressed) { _, pressed in onPress(pressed) }
+extension View {
+    /// Draws this view as pressed, or not. See ``PressTreatment``.
+    func pressTreatment(
+        isShowing: Bool,
+        emphasis: PressFeedbackButtonStyle.Emphasis = .control,
+        in shape: AnyShape = AnyShape(.rect(cornerRadius: PressFeedback.cornerRadius, style: .continuous))
+    ) -> some View {
+        modifier(PressTreatment(isShowing: isShowing, emphasis: emphasis, shape: shape))
     }
 }
 
 /// A control that answers a finger with nothing at all.
 ///
 /// For the two targets on a sidebar section heading. They expand and collapse the section, and
-/// the owner's second report is that they should not light up: the heading is a label with a
-/// hit area, the rows below it are the list, and a heading washing in the same amber as the
-/// conversation you were last in says *this one* about something that is not a conversation.
-/// A style rather than `.plain`, which fades its label on press and so is not "nothing".
+/// the owner's instruction is that they should not light up: the heading is a label with a hit
+/// area, and the rows below it are the list. A style rather than `.plain`, which fades its
+/// label on press and so is not "nothing".
 struct NoPressFeedbackButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label.contentShape(.rect)

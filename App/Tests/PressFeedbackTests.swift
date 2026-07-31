@@ -13,20 +13,28 @@ import UIKit
 /// screen and each of which a later hand can undo without noticing:
 ///
 /// - every emphasis shrinks, a full-width row included;
-/// - a control drawn straight onto a message draws no shape;
+/// - only a control with edges of its own washes: the owner had the amber taken off the
+///   sidebar and off a message entirely;
 /// - Reduce Motion takes the movement off and keeps the feedback;
 /// - a press outlives the curve that draws it, and the action waits behind it;
 /// - an abandoned press comes off faster than a released one, with no minimum in front of it;
-/// - a pressed message actually puts ink on the screen, which is the only one of these that
+/// - a control inside a scroll view is handed the finger at touch-down rather than 150ms
+///   later, which is the half of "the shrink doesn't happen" that no constant could fix;
+/// - and the treatment actually moves ink on a screen, which is the only one of these that
 ///   no amount of reading the code can establish.
 @Suite("Press feedback")
 struct PressFeedbackTests {
-    @Test("a pressed control shrinks by an amount a finger reads and a layout does not")
-    func pressedScaleIsShallow() {
-        // The brief's range. Below it the label re-lays out at the accessibility sizes;
-        // above it nothing happened.
-        #expect(PressFeedback.pressedScale >= 0.96)
-        #expect(PressFeedback.pressedScale <= 0.97)
+    @Test("the shrink is deep enough to be seen on the widest thing it is applied to")
+    func pressedScaleIsVisible() {
+        // Not the constant restating itself: the rule is that the movement has to be legible
+        // on a full-width row, which is the thing the owner presses most and the thing he
+        // reported three times as not moving at all. Half the difference is what each edge
+        // travels on a 390pt phone.
+        let edgeTravel = 390 * (1 - PressFeedback.pressedScale) / 2
+        #expect(edgeTravel >= 9)
+        // And the floor underneath it: below 0.94 the label visibly re-lays out at the
+        // accessibility text sizes, which is a different defect wearing the same clothes.
+        #expect(PressFeedback.pressedScale >= 0.94)
     }
 
     @Test("the press finishes and is held before anything else happens")
@@ -53,16 +61,20 @@ struct PressFeedbackTests {
         #expect(PressFeedback.cancel != PressFeedback.release)
     }
 
-    @Test("a full-width row shrinks and washes like everything else")
-    func rowShrinksAndWashes() {
-        // It did not, once, on the reasoning that a row pulling in from both screen edges
-        // reads as a card lifting off the list. The owner overruled that from a device: a row
-        // is the thing he presses most, so an emphasis that opted out of the movement was an
-        // app where the movement could not be seen.
+    @Test("a full-width row shrinks and draws no wash at all")
+    func rowShrinksAndDoesNotWash() {
+        // Both halves are the owner's, given in that order from a device. First: a row is the
+        // thing he presses most, so an emphasis that opted out of the movement was an app
+        // where the movement could not be seen — every emphasis shrinks now. Then: *remove
+        // the highlight on pressing for the sidebar at all*, because the amber is already the
+        // mark on the conversation you were last in, and a list that flashes it under every
+        // finger is a list saying "this one" about whatever you happened to touch.
         #expect(PressFeedback.scale(for: .row, reduceMotion: false) == PressFeedback.pressedScale)
-        #expect(PressFeedback.fill(for: .row) > 0)
-        // And it does not dim: a row that fades is a row that looks disabled.
-        #expect(PressFeedback.dim(for: .row) == 1)
+        #expect(PressFeedback.fill(for: .row) == 0)
+        // What is left beside the movement: a few per cent of light, and not enough to read
+        // as disabled.
+        #expect(PressFeedback.dim(for: .row) < 1)
+        #expect(PressFeedback.dim(for: .row) > 0.85)
     }
 
     @Test("a control shrinks and washes inside its own shape")
@@ -78,7 +90,9 @@ struct PressFeedbackTests {
         // The whole reason this emphasis exists: a shape here would turn part of a message
         // into a button.
         #expect(PressFeedback.fill(for: .inline) == 0)
-        #expect(PressFeedback.dim(for: .inline) < 1)
+        // And it fades further than a row does, because unlike a row it has nothing else at
+        // all — no shape, no wash, and no edges for the movement to be read against.
+        #expect(PressFeedback.dim(for: .inline) < PressFeedback.dim(for: .row))
     }
 
     @Test("Reduce Motion drops the movement from every emphasis and keeps the feedback")
@@ -92,18 +106,14 @@ struct PressFeedbackTests {
         #expect(PressFeedback.animation(pressed: false, reduceMotion: true) == PressFeedback.press)
     }
 
-    @Test("every wash is drawn in the sidebar mark's own shape")
+    @Test("a wash is drawn in the sidebar mark's own shape unless the control names one")
     func washMatchesTheSidebarMark() {
         // Compared as drawn paths, because that is the only thing a shape can be asked.
-        // The owner's rule: the press highlight and ``ChannelListView/resumeMark`` are the
-        // same highlight — same colour, same opacity, same corner, same inset — so a row and
-        // a control both wash in a 10pt continuous rounded rectangle rather than the row
-        // washing square as it first shipped.
         let box = CGRect(x: 0, y: 0, width: 100, height: 44)
         let mark = RoundedRectangle(cornerRadius: PressFeedback.cornerRadius, style: .continuous).path(in: box)
-        #expect(PressFeedbackButtonStyle(.row).shape.path(in: box) == mark)
         #expect(PressFeedbackButtonStyle(.control).shape.path(in: box) == mark)
-        // And a control that names its own shape keeps it.
+        // And a control that names its own shape keeps it: a wash in the wrong shape is more
+        // visible than no wash at all.
         #expect(PressFeedbackButtonStyle(.control, in: .capsule).shape.path(in: box) == Capsule().path(in: box))
     }
 
@@ -114,8 +124,6 @@ struct PressFeedbackTests {
         // second highlight vocabulary in a list that already has one.
         #expect(PressFeedback.fillColor == Color.hiveAccent)
         #expect(PressFeedback.pressedFill == 0.14)
-        #expect(PressFeedback.rowInset.horizontal == 8)
-        #expect(PressFeedback.rowInset.vertical == 1)
     }
 
     @Test("a press stays on screen long enough to be seen")
@@ -126,14 +134,15 @@ struct PressFeedbackTests {
         #expect(PressFeedback.minimumVisible > PressFeedback.pressDuration)
     }
 
-    @Test("a control's claim on a tap outlasts the row tap it has to beat")
-    func theArbitrationWindowOutlastsTheDeferral() {
-        // Not a restatement of the constant: ``TimelineRowView/scheduleRowTap()`` now waits
-        // ``PressFeedback/minimumVisible`` before opening a thread, so the press has somewhere
-        // to be seen. A suppression window shorter than that wait would lapse before the
-        // deferred tap asks about it — and a reaction chip's tap would send the reaction *and*
-        // push the thread on top of it. The two numbers have to move together.
-        #expect(RowTapArbitration.window > PressFeedback.minimumVisible)
+    @Test("a control's action lands too late to claim a tap, which is why its press claims it")
+    func theClaimCannotWaitForTheAction() {
+        // The inequality that forced ``SwiftUI/View/onControlPress(_:)`` into existence, and
+        // the reason it must not be replaced by a claim made from a control's action. A
+        // control now holds its action back until its press has been seen, so the action runs
+        // a whole `minimumVisible` after the finger left — long after the row's own tap fired
+        // and its suppression window lapsed. A reaction chip would send the reaction *and*
+        // push the thread on top of it.
+        #expect(PressFeedback.minimumVisible > RowTapArbitration.window)
     }
 
     @Test("down is the ease-out and up is the spring")
@@ -144,75 +153,181 @@ struct PressFeedbackTests {
     }
 }
 
-// MARK: - The message wash
+// MARK: - The delay in front of the press
 
-@Suite("Message press glow")
+/// The half of *"the scale-down is not happening"* that no constant could have fixed.
+///
+/// Reported three times from a device, and answered twice with a bigger number before the
+/// cause turned out to be UIKit's: a scroll view holds the touches landing on its content
+/// while it decides whether a scroll is beginning, so a control inside a list is not told it
+/// was pressed until about 150ms after it was. See ``ScrollTouchDeliveryView``.
+@Suite("Immediate press feedback")
 @MainActor
-struct MessagePressGlowTests {
-    /// The size the wash is rendered over. Wider than the bleed it takes back out, so the
-    /// comparison is looking at the part of the row a reader sees.
-    private static let size = CGSize(width: 240, height: 60)
+struct ScrollTouchDeliveryTests {
+    @Test("a control inside a scroll view is handed the finger at touch-down")
+    func theDelayComesOff() {
+        let scrollView = UIScrollView()
+        let content = UIView()
+        scrollView.addSubview(content)
+        let control = UIView()
+        content.addSubview(control)
 
-    @Test("a pressed message draws ink where a resting one draws none")
-    func pressedMessageDrawsInk() throws {
-        let resting = try #require(Self.render(pressed: false), "the resting render produced no image")
-        let pressed = try #require(Self.render(pressed: true), "the pressed render produced no image")
+        // UIKit's default, and so the defect: asserted rather than assumed, because the whole
+        // fix is that this is `true` everywhere until something says otherwise.
+        #expect(scrollView.delaysContentTouches)
 
-        // Rendered, not reasoned about. The wash is a `Color` at a tenth opacity behind a
-        // view that has no background of its own, and "an opacity was applied" is exactly
-        // the kind of claim that survives the effect being clipped away, drawn under an
-        // opaque parent, or resolved to nothing by a hierarchical style.
-        let difference = try Self.difference(between: resting, and: pressed)
-        #expect(difference > 0.01, "a pressed message differs from a resting one by only \(difference)")
+        ScrollTouchDeliveryView.deliverImmediately(above: control)
+
+        #expect(!scrollView.delaysContentTouches)
+        // And the pan must still be able to take the touch back, or a press that turns into a
+        // scroll would never be cancelled — which is the owner's other rule, in the other
+        // direction: *the highlight must disappear as soon as the finger moves.*
+        #expect(scrollView.canCancelContentTouches)
     }
 
-    @Test("the same message under no press is identical to itself")
-    func restingMessageIsStable() throws {
-        // The control for the test above: it says the difference measured there is the
-        // wash, and not the renderer being nondeterministic.
-        let first = try #require(Self.render(pressed: false))
-        let second = try #require(Self.render(pressed: false))
-        #expect(try Self.difference(between: first, and: second) == 0)
+    @Test("every scrolling ancestor loses the delay, not just the nearest")
+    func nestedScrollViewsBothComeOff() {
+        // A reaction chip sits in a horizontal scroll view inside the conversation's own, and
+        // the outer one delays the touch before the inner one ever sees it. Stopping at the
+        // first scrolling ancestor would leave that chip exactly as late as it was.
+        let outer = UIScrollView()
+        let inner = UIScrollView()
+        outer.addSubview(inner)
+        let control = UIView()
+        inner.addSubview(control)
+
+        let reached = ScrollTouchDeliveryView.deliverImmediately(above: control)
+
+        #expect(reached.count == 2)
+        #expect(!inner.delaysContentTouches)
+        #expect(!outer.delaysContentTouches)
     }
 
-    /// A message-shaped subject: text over the conversation, with nothing of its own behind
-    /// it.
-    ///
-    /// The first version of this rendered the wash behind an opaque rectangle and measured a
-    /// difference of exactly zero — a true reading of a test that had covered the thing it
-    /// was looking at. That is the mistake worth keeping written down, because it is the one
-    /// this whole suite is exposed to: the wash goes *behind* the row, so anything opaque in
-    /// front of it hides it, and a row with a background of its own would hide it on the
-    /// phone exactly as it did here. §3 says a message has no background; this is now also
-    /// the reason it must not grow one.
-    private static func render(pressed: Bool) -> UIImage? {
+    @Test("a control outside any scroll view is left alone")
+    func nothingToHurryAlong() {
+        let loose = UIView()
+        UIView().addSubview(loose)
+        #expect(ScrollTouchDeliveryView.deliverImmediately(above: loose).isEmpty)
+    }
+}
+
+// MARK: - The treatment, rendered
+
+/// What a press *looks* like, measured off a bitmap.
+///
+/// `ImageRenderer` can render a view and cannot press a button, which is why
+/// ``PressTreatment`` is a modifier over a plain `Bool` rather than something only a
+/// `ButtonStyle` can reach. Everything above this line is a rule about a number; these are the
+/// two claims that were reported wrong from a device three times running — *the scale-down is
+/// not happening* and *the highlight is still there* — held to actual ink.
+@Suite("Press treatment, rendered")
+@MainActor
+struct PressTreatmentRenderTests {
+    /// The subject's size, and the canvas around it. The canvas is wider so a shrinking
+    /// subject has somewhere to shrink *to* that is still in the picture.
+    private static let subject = CGSize(width: 240, height: 60)
+    private static let canvas = CGSize(width: 300, height: 100)
+    private static let white: [UInt8] = [255, 255, 255]
+
+    @Test("a pressed control's ink actually moves, by the scale it claims")
+    func pressedInkShrinks() throws {
+        let resting = try Self.inkBox(of: #require(Self.render(pressed: false, emphasis: .row, ink: .black)))
+        let pressed = try Self.inkBox(of: #require(Self.render(pressed: true, emphasis: .row, ink: .black)))
+
+        // The subject drew at its full size at rest — the control for everything below.
+        #expect(abs(resting.width - Self.subject.width) <= 1)
+        // And under a press it is narrower by the scale, within a pixel of antialiasing at
+        // each edge. "A `scaleEffect` was applied" is exactly the kind of claim that survives
+        // the effect being applied to the label instead of the control, or being animated
+        // from a value that never changes.
+        let expected = Self.subject.width * PressFeedback.pressedScale
+        #expect(abs(pressed.width - expected) <= 2)
+        // Stated once more as the thing a person would notice, so the rule survives someone
+        // moving the constant: the row got visibly narrower.
+        #expect(resting.width - pressed.width >= 8)
+    }
+
+    @Test("the same view under no press is identical to itself")
+    func restingIsStable() throws {
+        // The control for the test above: it says the movement measured there is the press,
+        // and not the renderer being nondeterministic.
+        let first = try #require(Self.render(pressed: false, emphasis: .row, ink: .black))
+        let second = try #require(Self.render(pressed: false, emphasis: .row, ink: .black))
+        #expect(try Self.inkBox(of: first) == Self.inkBox(of: second))
+    }
+
+    @Test("a control washes its own shape and a full-width row washes nothing")
+    func onlyAControlWashes() throws {
+        // The owner's instruction, on pixels: *remove the highlight on pressing for the
+        // sidebar at all.* Rendered with a transparent subject, so the only thing that can
+        // put colour in the middle of the canvas is the wash behind it.
+        let control = try Self.centre(of: #require(Self.render(pressed: true, emphasis: .control, ink: .clear)))
+        let row = try Self.centre(of: #require(Self.render(pressed: true, emphasis: .row, ink: .clear)))
+        #expect(control != Self.white, "a pressed control drew no wash")
+        #expect(row == Self.white, "a pressed row drew a wash the owner had removed")
+    }
+
+    private static func render(
+        pressed: Bool,
+        emphasis: PressFeedbackButtonStyle.Emphasis,
+        ink: Color
+    ) -> UIImage? {
         let renderer = ImageRenderer(
-            content: Text("Message")
-                .frame(width: size.width, height: size.height)
-                .messagePressGlow(pressed)
-                .background(Color.white)
-                .environment(\.colorScheme, .light)
+            content: ZStack {
+                Color.white
+                ink
+                    .frame(width: subject.width, height: subject.height)
+                    .pressTreatment(isShowing: pressed, emphasis: emphasis)
+            }
+            .frame(width: canvas.width, height: canvas.height)
+            .environment(\.colorScheme, .light)
         )
         renderer.scale = 1
         renderer.isOpaque = true
         return renderer.uiImage
     }
 
-    /// Mean absolute per-channel difference, 0 for identical and 1 for black against white.
-    /// Both images are redrawn into one known 8-bit context first, so the comparison is of
-    /// pixels rather than of two encoders.
-    private static func difference(between lhs: UIImage, and rhs: UIImage) throws -> Double {
-        let left = try pixels(of: lhs)
-        let right = try pixels(of: rhs)
-        guard left.count == right.count, !left.isEmpty else { return 1 }
-        var total = 0
-        for index in left.indices {
-            total += abs(Int(left[index]) - Int(right[index]))
+    /// The bounding box of everything darker than mid-grey — where the subject landed.
+    private static func inkBox(of image: UIImage) throws -> CGRect {
+        let bitmap = try pixels(of: image)
+        var minX = bitmap.width, maxX = -1, minY = bitmap.height, maxY = -1
+        for row in 0 ..< bitmap.height {
+            for column in 0 ..< bitmap.width where bitmap.isInk(row: row, column: column) {
+                minX = min(minX, column)
+                maxX = max(maxX, column)
+                minY = min(minY, row)
+                maxY = max(maxY, row)
+            }
         }
-        return Double(total) / Double(left.count) / 255
+        guard maxX >= minX, maxY >= minY else { return .zero }
+        return CGRect(x: minX, y: minY, width: maxX - minX + 1, height: maxY - minY + 1)
     }
 
-    private static func pixels(of image: UIImage) throws -> [UInt8] {
+    /// The middle pixel, as red/green/blue.
+    private static func centre(of image: UIImage) throws -> [UInt8] {
+        let bitmap = try pixels(of: image)
+        return bitmap.colour(row: bitmap.height / 2, column: bitmap.width / 2)
+    }
+
+    /// An image redrawn into one known 8-bit context, so a comparison is of pixels rather
+    /// than of two encoders.
+    private struct Bitmap {
+        let buffer: [UInt8]
+        let width: Int
+        let height: Int
+
+        func colour(row: Int, column: Int) -> [UInt8] {
+            let index = (row * width + column) * 4
+            return Array(buffer[index ..< (index + 3)])
+        }
+
+        func isInk(row: Int, column: Int) -> Bool {
+            let channels = colour(row: row, column: column).map(Int.init)
+            return channels.reduce(0, +) / channels.count < 128
+        }
+    }
+
+    private static func pixels(of image: UIImage) throws -> Bitmap {
         let cgImage = try #require(image.cgImage, "image has no bitmap")
         let width = cgImage.width
         let height = cgImage.height
@@ -230,6 +345,6 @@ struct MessagePressGlowTests {
             "could not build a comparison context"
         )
         context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
-        return buffer
+        return Bitmap(buffer: buffer, width: width, height: height)
     }
 }

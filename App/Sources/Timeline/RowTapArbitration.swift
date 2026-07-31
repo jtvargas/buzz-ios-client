@@ -19,13 +19,17 @@ struct RowTapArbitration {
     /// is the common case; the rest of this covers a control whose action lands a frame or two
     /// late, and is still far short of the interval between two deliberate taps.
     ///
-    /// Derived from ``PressFeedback/minimumVisible`` rather than written down, and that is
-    /// load-bearing: the row's own tap is now deferred by that same minimum so the press has
-    /// somewhere to be seen (``TimelineRowView/scheduleRowTap()``). A window shorter than the
-    /// deferral would have expired by the time the deferred tap asks — so a chip that
-    /// correctly claimed the tap would find its claim already lapsed, and the row would open
-    /// its thread on top of the reaction it just sent.
-    static let window: TimeInterval = PressFeedback.minimumVisible + 0.1
+    /// It is deliberately *not* derived from ``PressFeedback/minimumVisible``, which it was
+    /// for one round. That derivation went with a row tap deferred by the same minimum, so
+    /// that a pressed message's wash could be seen before the thread replaced it; with the
+    /// wash gone the row opens its thread on the next main-actor turn, and a window scaled to
+    /// a press-visibility constant would only mean a real tap on a message being swallowed
+    /// because a chip beside it was brushed a fifth of a second earlier.
+    ///
+    /// What has to reach inside this window is the *claim*, and it does: a control carrying
+    /// the app's press treatment calls ``ClaimRowTapAction`` as the finger leaves it, one turn
+    /// before the row's tap asks.
+    static let window: TimeInterval = 0.1
 
     private var suppressedUntil: Date?
 
