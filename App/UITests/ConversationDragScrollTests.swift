@@ -70,6 +70,27 @@ final class ConversationDragScrollTests: ConversationScrollHarness {
         )
     }
 
+    /// The same claim on the other surface.
+    ///
+    /// Not redundant: the reporter attaches to whichever scroll view encloses it, and the two
+    /// surfaces build that scroll view separately. The rest of this suite carries eight
+    /// shapes across both for exactly that reason — a conversation that scrolls in a channel
+    /// and not in a thread is a shape this repo has shipped before.
+    func testADragScrollsAThreadToo() throws {
+        let app = launch(["-fixtureConversation", "thread", "-messages=40"])
+
+        let anchor = try XCTUnwrap(rendered(app).dropLast().last, "no reply to drag from")
+        drag(app, fromY: anchor.frame.midY)
+
+        let after = rendered(app)
+        guard let landed = after.first(where: { $0.index == anchor.index }) else { return }
+        XCTAssertGreaterThan(
+            abs(landed.frame.minY - anchor.frame.minY),
+            Self.moved,
+            "reply \(anchor.index) did not move under a \(Int(Self.dragSpan * 100))% drag — the thread did not scroll"
+        )
+    }
+
     /// The other half of the same rule: observing the press must not eat the tap either.
     ///
     /// The gesture that killed the scroll killed this too — a message could be pressed and
