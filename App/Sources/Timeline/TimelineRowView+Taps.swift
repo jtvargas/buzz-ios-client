@@ -13,8 +13,6 @@ import SwiftUI
 /// - `pressGesture` decides between a tap and a long press, and is the one place on this row
 ///   that may observe the press *at all*.
 extension TimelineRowView {
-    // MARK: - Tap arbitration
-
     /// How long a press has to be held before it is the actions sheet rather than a tap.
     /// Shorter than `LongPressGesture`'s own half-second default, which reads as a hesitation
     /// on a message; long enough that the flick that starts a scroll is not one.
@@ -159,4 +157,5 @@ extension TimelineRowView {
     /// and the emoji it eventually reports is a separate event.
     func claimTap() {
         arbitration.controlDidAct()
-    }}
+    }
+}

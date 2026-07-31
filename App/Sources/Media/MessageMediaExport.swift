@@ -49,11 +49,18 @@ enum MessageMediaExport {
         }
     }
 
-    /// Fetches the attachment's original bytes and returns the file they were written to.
+    /// The session every export runs over.
     ///
-    /// The session is the loader's own configuration — a 15-second *idle* timeout, so a host
-    /// that is not there fails in fifteen seconds rather than sixty, while a slow download
-    /// that is still arriving is never cut off. See ``RemoteImageLoader/makeSession()``.
+    /// One for the process, not one per sheet: a `URLSession` owns an operation queue and a
+    /// delegate and is only released when it is invalidated, so building one each time a
+    /// reader double-tapped a picture would accumulate them for the life of the app.
+    ///
+    /// The configuration is the loader's own — a 15-second *idle* timeout, so a host that is
+    /// not there fails in fifteen seconds rather than sixty, while a slow download that is
+    /// still arriving is never cut off. See ``RemoteImageLoader/makeSession()``.
+    static let session = RemoteImageLoader.makeSession()
+
+    /// Fetches the attachment's original bytes and returns the file they were written to.
     static func fetch(_ media: MessageMedia, session: URLSession) async throws -> URL {
         guard let source = URL(string: media.url) else { throw Failure.download }
         let (data, response) = try await fetchData(from: source, session: session)

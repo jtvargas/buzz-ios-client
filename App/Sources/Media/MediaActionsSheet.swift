@@ -40,8 +40,8 @@ struct MediaActionsTarget: Identifiable, Equatable {
 struct MediaActionsSheet: View {
     let target: MediaActionsTarget
     /// The session the original is fetched over. Injectable so a test can answer without a
-    /// relay; defaults to the loader's own configuration.
-    var session: URLSession = RemoteImageLoader.makeSession()
+    /// relay; defaults to the one session every export shares.
+    var session: URLSession = MessageMediaExport.session
 
     @Environment(\.dismiss) private var dismiss
     /// The fetched original, on disk. Its presence is what arms both rows: neither action can

@@ -121,6 +121,59 @@ struct MessageTapArbiterTests {
         #expect(tally.double == 0)
     }
 
+    /// The picture's route, and the one that took three builds to find. A `Button` fires once
+    /// for a pair of taps fast enough to be a double, so an inline picture can only report the
+    /// gesture *as* a double — never as two taps. If this stops working, double-tapping a
+    /// picture silently opens the picture instead of its actions.
+    @Test("a system-recognised double cancels the waiting single and opens the sheet")
+    func aReportedDoubleBeatsThePendingSingle() async throws {
+        let tally = Tally()
+        let taps = arbiter()
+
+        taps.tapped(single: { tally.single += 1 }, double: { tally.double += 1 })
+        taps.doubleTapped { tally.double += 1 }
+
+        #expect(tally.double == 1)
+        try await Task.sleep(for: .seconds(Self.settle))
+        #expect(tally.single == 0)
+        #expect(tally.double == 1)
+    }
+
+    /// The other half of that route, and the half that is invisible when it breaks. One
+    /// physical double tap on a picture reaches the arbiter twice — once as the reported
+    /// double, and again as the row's own late tap gesture for the second touch. Without the
+    /// settle window that second arrival is a *fresh* single, and a thread opens behind the
+    /// sheet a quarter of a second later.
+    @Test("the tail of an answered double tap does not start a new single")
+    func theTailOfADoubleIsDropped() async throws {
+        let tally = Tally()
+        let taps = arbiter()
+
+        taps.doubleTapped { tally.double += 1 }
+        taps.tapped(single: { tally.single += 1 }, double: { tally.double += 1 })
+
+        #expect(!taps.isWaiting)
+        try await Task.sleep(for: .seconds(Self.settle))
+        #expect(tally.single == 0)
+        #expect(tally.double == 1)
+    }
+
+    /// A surface with no sheet — the Threads screen — must not have its taps eaten by a
+    /// gesture it does not offer. Reporting a double there is a no-op, and the single tap
+    /// already waiting is deliberately left to run.
+    @Test("reporting a double where there is no sheet leaves the single tap alone")
+    func aReportedDoubleWithNoSheetChangesNothing() async throws {
+        let tally = Tally()
+        let taps = arbiter()
+
+        taps.tapped(single: { tally.single += 1 }, double: { tally.double += 1 })
+        taps.doubleTapped(nil)
+
+        try await Task.sleep(for: .seconds(Self.settle))
+        #expect(tally.single == 1)
+        #expect(tally.double == 0)
+    }
+
     @Test("the shipped window is short enough to be worn on every tap")
     func theWindowIsShort() {
         // Not a restatement of the constant: a bound. Every millisecond of this is paid in
