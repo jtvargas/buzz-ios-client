@@ -40,11 +40,33 @@ enum MessageRowMetrics {
     /// glyph after it.
     static let headerGap: CGFloat = 8
 
-    /// Between two messages. Applied as the message list's `LazyVStack` spacing, so it
-    /// is one number for the channel, the thread, and anything else that renders
-    /// ``ConversationItem``s — and so it is *not* also padding on the row, which would
-    /// have made the row's own height depend on it.
+    /// Between two messages that are not part of one block — and between a message and
+    /// the furniture around it, a day separator or a relay notice.
+    ///
+    /// One number for the channel, the thread, and anything else that renders
+    /// ``ConversationItem``s. It is *not* padding on the row: a row's own height stays
+    /// its content's height, and the space around it belongs to the list.
     static let betweenMessages: CGFloat = 12
+
+    /// Between two messages by one author inside a block — the run
+    /// ``ConversationGrouping`` marks with `continuesGroup`.
+    ///
+    /// Half the gap between blocks, which is what makes a block read as one thing said in
+    /// one breath rather than as three remarks that happen to share a face. It is not
+    /// tighter than that on purpose: ``bodyLineSpacing`` puts 2pt between two lines of one
+    /// message, so a gap much under this would leave a run of one-line replies reading as
+    /// a single wrapped paragraph — the mistake in the other direction, and the harder one
+    /// to see in a screenshot.
+    static let withinGroup: CGFloat = 6
+
+    /// What an item that *starts* something — a new block, a day, a notice — adds on top
+    /// of the list's own ``withinGroup`` rhythm to make the full ``betweenMessages`` gap.
+    ///
+    /// The list is spaced at ``withinGroup`` and each such item pads its own top by this,
+    /// rather than the reverse (spacing at ``betweenMessages`` and a continuation pulling
+    /// itself up by a negative padding): the space above an item is then something an item
+    /// declares, and nothing in the layout is ever asked to occupy less room than it takes.
+    static var aboveNewGroup: CGFloat { betweenMessages - withinGroup }
 
     /// Extra leading on the message body. Two points is the reference client's value
     /// and the reason a three-line message reads as prose rather than as a block.

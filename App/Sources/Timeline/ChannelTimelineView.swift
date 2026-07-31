@@ -253,23 +253,19 @@ struct ChannelTimelineView: View {
     // MARK: - List
 
     private var list: some View {
-        // 12pt between messages, as the list's own spacing rather than as padding on
-        // each row: one number owns the rhythm, and a row's height stays its content's
-        // height. See ``MessageRowMetrics``.
-        LazyVStack(spacing: MessageRowMetrics.betweenMessages) {
+        // The spacing inside one author's block, as the list's own spacing rather than as
+        // padding on each row: a row's height stays its content's height. Everything that
+        // starts something — a new block, a day, a notice — pays the rest of the 12pt gap
+        // itself, below. See ``MessageRowMetrics``.
+        LazyVStack(spacing: MessageRowMetrics.withinGroup) {
             topSentinel
-            // Day separators are items, not row headers, so the channel, a thread, and
-            // a DM cannot each grow their own copy of the grouping rule. Grouped once
-            // per rows change in the model; this pass is a read.
+            // Day separators and the grouping of consecutive messages are both items, not
+            // row headers, so the channel, a thread, and a DM cannot each grow their own
+            // copy of either rule. Grouped once per rows change in the model; this pass is
+            // a read.
             ForEach(model.items) { item in
-                switch item {
-                case let .day(marker):
-                    DaySeparatorView(date: marker.date)
-                case let .message(row):
-                    messageRow(row)
-                case let .notice(marker):
-                    SystemNoticeRowView(notice: marker.notice)
-                }
+                itemView(item)
+                    .padding(.top, item.continuesGroup ? 0 : MessageRowMetrics.aboveNewGroup)
             }
         }
         .padding(.vertical, 8)
@@ -291,28 +287,6 @@ struct ChannelTimelineView: View {
                 .frame(height: Self.topSentinelHeight)
                 .accessibilityHidden(true)
         }
-    }
-
-    private func messageRow(_ row: TimelineRow) -> some View {
-        TimelineRowView(
-            row: row,
-            isAuthorOnline: presence.isOnline(row.pubkey),
-            reactions: model.reactions(for: row.id),
-            mentions: model.mentions(for: row.id),
-            replyParticipants: model.participants(for: row.id),
-            selfPubkey: selfPubkey,
-            allowsInteraction: access.isWritable,
-            onRetry: { model.retry($0) },
-            onReact: { model.react($0, on: row.id) },
-            onToggleReaction: { model.toggleReaction($0, on: row.id) },
-            onOpenThread: row.isDeleted ? nil : { open(thread: row) },
-            onLongPress: { messageActions = MessageActionTarget(row: row, isOwn: model.isOwn(row)) },
-            onOpenProfile: { profilePeer = ProfilePeer(pubkey: $0) },
-            conversation: conversation
-        )
-        // The shared constant, not a bare `.padding(.horizontal)`: the day separator starts
-        // on this same line, and two defaults agreeing is not the same as one number.
-        .padding(.horizontal, MessageRowMetrics.rowLeading)
     }
 
     /// What floats over the list just above the composer: the jump affordances, and the
@@ -402,10 +376,50 @@ struct ChannelTimelineView: View {
 
 }
 
-/// The four small things the body reaches for. In an extension rather than the struct
-/// itself — the house style ``ChannelListView`` already follows — so the type reads as
-/// its state and its slots, and the helpers sit under them.
+/// The list's two element builders and the four small things the body reaches for. In an
+/// extension rather than the struct itself — the house style ``ChannelListView`` already
+/// follows — so the type reads as its state and its slots, and the helpers sit under them.
 private extension ChannelTimelineView {
+    /// One rendered conversation element. The `switch` is the whole of the surface's
+    /// content policy: everything that decides *which* elements there are, and which of
+    /// them continue a block, belongs to ``ConversationGrouping``.
+    @ViewBuilder
+    func itemView(_ item: ConversationItem) -> some View {
+        switch item {
+        case let .day(marker):
+            DaySeparatorView(date: marker.date)
+        case let .message(row, continuesGroup):
+            messageRow(row, continuesGroup: continuesGroup)
+        case let .notice(marker):
+            SystemNoticeRowView(notice: marker.notice)
+        }
+    }
+
+    /// One message. `continuesGroup` is the only thing this surface does with the grouping:
+    /// a row that continues a block does not name its author again.
+    func messageRow(_ row: TimelineRow, continuesGroup: Bool) -> some View {
+        TimelineRowView(
+            row: row,
+            showsAuthorHeader: !continuesGroup,
+            isAuthorOnline: presence.isOnline(row.pubkey),
+            reactions: model.reactions(for: row.id),
+            mentions: model.mentions(for: row.id),
+            replyParticipants: model.participants(for: row.id),
+            selfPubkey: selfPubkey,
+            allowsInteraction: access.isWritable,
+            onRetry: { model.retry($0) },
+            onReact: { model.react($0, on: row.id) },
+            onToggleReaction: { model.toggleReaction($0, on: row.id) },
+            onOpenThread: row.isDeleted ? nil : { open(thread: row) },
+            onLongPress: { messageActions = MessageActionTarget(row: row, isOwn: model.isOwn(row)) },
+            onOpenProfile: { profilePeer = ProfilePeer(pubkey: $0) },
+            conversation: conversation
+        )
+        // The shared constant, not a bare `.padding(.horizontal)`: the day separator starts
+        // on this same line, and two defaults agreeing is not the same as one number.
+        .padding(.horizontal, MessageRowMetrics.rowLeading)
+    }
+
     /// The scaffold's "the top of history is near" report. It arrives as a level
     /// rather than an edge and can fire several times across one page load, which the
     /// model's own guard absorbs.

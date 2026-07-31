@@ -43,9 +43,11 @@ struct ConversationFixtureHost: View {
         var held: [NostrEvent] = []
         var problem: String?
         do {
-            let key = try PrivateKey()
+            // Two authors, so a shape holds both the row that names its writer and the
+            // rows that stack under it — see ``ConversationFixture/authorRun``.
+            let keys = [try PrivateKey(), try PrivateKey()]
             let store = try ConversationFixture.makeStore()
-            let events = try ConversationFixture.events(for: options, key: key)
+            let events = try ConversationFixture.events(for: options, keys: keys)
             let primed = min(options.primed, events.count)
             // A thread hangs off its first message; a channel has no root.
             root = options.surface == .thread ? events.first?.id : nil

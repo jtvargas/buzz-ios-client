@@ -67,8 +67,15 @@ header, and the details sheet all read that one value rather than re-deriving it
 boundaries are tested rather than eyeballed. A single `RelativeTimeTicker` ticks every
 15 s and is observed **only** by `MessageTimestampView` leaves, so a tick re-evaluates
 a handful of `Text`s instead of the message list. `ConversationGrouping.items(for:)`
-turns rows into `[ConversationItem]` — `.day` or `.message` — computed once per rows
-change in the model and rendered identically by channel, thread, and DM.
+turns rows into `[ConversationItem]` — `.day`, `.message` or `.notice` — computed once
+per rows change in the model and rendered identically by channel, thread, and DM.
+
+The same call also decides which messages *stack*: a message by the author of the one
+above it, inside five minutes, with no day boundary, notice or picture between them,
+carries `continuesGroup` and draws no second avatar, name or time. That is the header
+version of the day separator, and it is here for the same reason — a row can only see
+itself, so grouping decided in the row view would need the surface to supply what came
+before, and each surface would end up with its own copy of the rule.
 
 **4. One conversation shell.** `ConversationScaffold` owns the message list, the
 floating composer, and the keyboard/safe-area behaviour for every surface. The list
@@ -125,8 +132,8 @@ at the bottom" means.
 
 ## Consequences
 
-- A new surface gets names, avatars, DM identity, timestamps, separators, keyboard
-  handling, and scroll behaviour by construction. The cost of the next messaging
+- A new surface gets names, avatars, DM identity, timestamps, separators, message
+  grouping, keyboard handling, and scroll behaviour by construction. The cost of the next messaging
   surface is its own content, not another copy of these decisions.
 - The directory read is scoped to `channel_member ∪ agent_directory`, so a message
   author who has left every channel is not in it. Those rows already carry their own
