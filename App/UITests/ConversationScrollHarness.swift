@@ -139,6 +139,11 @@ class ConversationScrollHarness: XCTestCase {
 
     /// The band a reader can actually read: below the navigation bar, above whichever of the
     /// keyboard and the composer reaches highest.
+    ///
+    /// The composer is not one element. Its text field is the top of it while the bar carries
+    /// text alone, and an attached picture puts a strip *above* that field — so a band bounded
+    /// by the field would count the rows behind the pictures as readable, which is the whole
+    /// question ``ComposerGrowthTests`` asks. Both are measured, and the highest wins.
     func readableBand(_ app: XCUIApplication) -> CGRect {
         let window = app.windows.firstMatch.frame
         var bottom = window.maxY
@@ -148,6 +153,10 @@ class ConversationScrollHarness: XCTestCase {
         }
         for field in app.textViews.allElementsBoundByIndex where field.frame.height > 0 {
             bottom = min(bottom, field.frame.minY)
+        }
+        let tiles = app.otherElements.matching(identifier: ComposerLabel.tile)
+        for tile in tiles.allElementsBoundByIndex where tile.frame.height > 0 {
+            bottom = min(bottom, tile.frame.minY)
         }
         return CGRect(x: window.minX, y: window.minY, width: window.width, height: max(0, bottom - window.minY))
     }

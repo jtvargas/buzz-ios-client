@@ -90,6 +90,11 @@ struct ConversationScaffold<Content: View, Bar: View, Accessory: View>: View {
     ///
     /// `nil` only for an empty conversation, where there is no newest message to go to.
     var newestID: String?
+    /// Changed by the owner whenever the *bar* is about to be a different height for a reason
+    /// the author caused — today, a picture attached or taken off again. Only the change
+    /// matters, never the value; the bar's height is this surface's only bottom inset, and the
+    /// rest is on ``SwiftUI/View/onComposerHeightChange(declaredBy:measuredBy:perform:)``.
+    var composerRevision: Int = 0
     /// Fired while the top of the loaded history is near. The owner must be
     /// idempotent: this can fire repeatedly across one page load.
     var onReachedTop: () -> Void = {}
@@ -160,6 +165,10 @@ struct ConversationScaffold<Content: View, Bar: View, Accessory: View>: View {
                 if previous > 0, height != previous { roomAboveTheKeyboardDidChange(using: proxy) }
             }
             .onChange(of: jumpToken) { jump(using: proxy) }
+            // A picture on the draft is room off the same edge the keyboard takes — same decision.
+            .onComposerHeightChange(declaredBy: composerRevision, measuredBy: barHeight) {
+                apply(place.composerRoomDidChange(isAtBottom: isAtBottom), using: proxy)
+            }
         }
         // The bar's own height, so the list and the composer are one drag surface: a
         // downward drag takes the keyboard from the moment it reaches the composer,
@@ -306,13 +315,11 @@ struct ConversationScaffold<Content: View, Bar: View, Accessory: View>: View {
     /// # What is not wired to this, and why
     ///
     /// The composer growing under a long draft takes room off the same edge and wants the same
-    /// decision — the other half of the owner's report — and is **not** connected here. Measured
-    /// across all eight shapes on iPhone 17 Pro / iOS 26 against a composer that grows 61 points,
-    /// seven move the newest message 59 points unaided, for the clamping reason above; the eighth,
-    /// `thread-8-longlast-primed`, moves 0. Wiring the bar's geometry here fixed that shape and
-    /// then killed the growth suite as unresponsive — twice, at the same point, with 42% RAM free
-    /// and no crash report on either side. Two identical failures is where this stops being an
-    /// implementation detail: the diagnosis is open, and the shipped surface is what it was.
+    /// decision — the other half of the owner's report — and is **not** connected here: wiring
+    /// the bar's geometry in killed the growth suite as an unresponsive runner, twice, at the
+    /// same point, and that diagnosis is open. An *attachment* is covered without reopening it,
+    /// because it is declared rather than measured — see ``composerRevision``, which carries
+    /// both sets of measurements.
     private func roomAboveTheKeyboardDidChange(using proxy: ScrollViewProxy) {
         apply(place.keyboardRoomDidChange(isAtBottom: isAtBottom), using: proxy)
     }
@@ -327,10 +334,8 @@ struct ConversationScaffold<Content: View, Bar: View, Accessory: View>: View {
         )
     }
 
-    /// Carries out what one geometry reading implied.
-    ///
-    /// Split out from the observer that produces it only so ``scroll(using:)`` stays inside the
-    /// project's function-length rule; the two belong together.
+    /// Carries out what one geometry reading implied. Split out from the observer that produces
+    /// it only so ``scroll(using:)`` stays inside the project's function-length rule.
     private func apply(_ correction: ConversationReaderPlace.Correction, using proxy: ScrollViewProxy) {
         switch correction {
         case .none:

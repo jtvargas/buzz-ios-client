@@ -161,6 +161,7 @@ struct ChannelTimelineView: View {
             jumpTarget: model.jumpTarget,
             contentRevision: model.contentRevision,
             newestID: model.items.newestMessageID,
+            composerRevision: model.attachments.barRevision,
             onReachedTop: loadOlderPage,
             onLeavingScreen: releaseComposer
         ) {

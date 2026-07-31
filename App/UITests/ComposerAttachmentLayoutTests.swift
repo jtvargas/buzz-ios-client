@@ -23,39 +23,21 @@ import XCTest
 ///
 /// # What this does *not* prove
 ///
-/// The system photo picker is Apple's. `PHPickerViewController` runs out of process,
-/// but its remote view is hosted inside this app's own window, so it is reachable from
-/// the same query tree — its thumbnails are *images* labelled `Photo, <date>` and there
-/// are no cells at all, which is what an `app.cells` query silently finds nothing of.
-/// Those two labels are the only thing here that belongs to a surface this project does
-/// not own: if they change under a future iOS this test goes red without the app having
-/// changed. It is written to fail loudly rather than skip, so that shows up as a
-/// question rather than as a silent gap.
+/// The system photo picker is Apple's, and driving it lives in ``ComposerPhotoPicker``
+/// along with the two labels of its that this bundle knows — the only strings here
+/// belonging to a surface this project does not own.
 ///
 /// It also needs photos in the simulator's library:
 /// `xcrun simctl addmedia <udid> <file>`.
+///
+/// # What this suite does not measure
+///
+/// What the strip does to the *conversation* behind it. That is
+/// ``ComposerGrowthTests``, which drives the same pick through the scroll shapes.
 final class ComposerAttachmentLayoutTests: XCTestCase {
-    /// The accessibility labels the composer puts on what is measured here, repeated
-    /// rather than imported: a UI-testing bundle drives the app from outside its
-    /// process and links none of it.
-    private enum Label {
-        static let attach = "More options"
-        static let photos = "Photos"
-        static let camera = "Camera"
-        static let send = "Send"
-        static let removePicture = "Remove picture"
-        /// What ``ComposerAttachmentStrip`` names a tile. The string is the whole
-        /// contract between the halves — this bundle links none of the app.
-        static let tile = "composerAttachment"
-    }
-
-    /// Apple's, not ours. The photo picker labels each thumbnail `Photo, <date>` and
-    /// confirms with `Done`; those two strings are the only things this test knows
-    /// about a surface it does not own. See the note at the top of the file.
-    private enum PickerLabel {
-        static let photoPrefix = "Photo,"
-        static let confirm = "Done"
-    }
+    /// The accessibility labels the composer puts on what is measured here, shared with
+    /// the growth suite — see ``ComposerLabel``.
+    private typealias Label = ComposerLabel
 
     override func setUp() {
         super.setUp()
@@ -178,40 +160,6 @@ final class ComposerAttachmentLayoutTests: XCTestCase {
             "the X did not take the picture off"
         )
         XCTAssertFalse(app.buttons[Label.send].isEnabled, "send stayed live with nothing to send")
-    }
-
-    // MARK: - Driving Apple's picker
-
-    /// Taps the first photo in the system picker and confirms it.
-    ///
-    /// `PHPickerViewController` runs out of process, so it is reached through its own
-    /// application rather than the app under test. The two labels below are Apple's,
-    /// which is why the note at the top of this file exists.
-    private func pickFirstPhoto(in app: XCUIApplication) {
-        // `PHPickerViewController` runs out of process, but its remote view is hosted
-        // inside this app's own window, so its elements are reachable here. Its
-        // thumbnails are *images* labelled `Photo, <date>` — there are no cells, which
-        // is what a `app.cells` query silently finds nothing of.
-        let photo = app.images
-            .matching(NSPredicate(format: "label BEGINSWITH %@", PickerLabel.photoPrefix))
-            .firstMatch
-        XCTAssertTrue(
-            photo.waitForExistence(timeout: 20),
-            "the photo picker never showed a photo — is the simulator's library empty? "
-                + "Seed it with `xcrun simctl addmedia <udid> <file>`"
-        )
-        // Through its centre rather than `tap()`: the picker reports its thumbnails as
-        // not hittable — they are a remote view's images, and XCUITest will not press
-        // an element it cannot prove is on top. A coordinate tap is the touch itself,
-        // which is what a finger does anyway.
-        photo.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
-
-        // The picker is multi-select (up to `ComposerAttachmentsModel.selectionLimit`),
-        // so a tap selects rather than dismisses and the confirmation is its own control.
-        let confirm = app.buttons[PickerLabel.confirm]
-        XCTAssertTrue(confirm.waitForExistence(timeout: 5), "the picker has no confirmation")
-        XCTAssertTrue(confirm.isEnabled, "tapping a photo did not select it")
-        confirm.tap()
     }
 
     private func waitForDisappearance(of element: XCUIElement, timeout: TimeInterval = 5) -> Bool {

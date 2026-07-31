@@ -147,6 +147,7 @@ struct ThreadView: View {
             jumpTarget: model.jumpTarget,
             contentRevision: model.contentRevision,
             newestID: model.items.newestMessageID,
+            composerRevision: model.attachments.barRevision,
             onLeavingScreen: releaseComposer
         ) {
             list

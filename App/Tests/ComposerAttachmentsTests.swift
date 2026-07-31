@@ -220,4 +220,45 @@ struct ComposerAttachmentsTests {
         #expect(model.attachments.isEmpty)
         #expect(model.uploadError == "Not connected to a relay yet.")
     }
+
+    /// What the conversation is told, so its bottom inset can move with the bar —
+    /// ``ConversationScaffold/composerRevision``. The rectangles this ends up
+    /// producing on a screen are ``ComposerGrowthTests``' to assert; this pins the
+    /// declaration itself, and specifically the two ways a count would have been
+    /// wrong.
+    @Test("the bar declares a height change on the first picture and on the last, never in between")
+    func barRevisionFollowsTheBarsHeight() async throws {
+        let uploader = StubUploader()
+        let model = ComposerAttachmentsModel(uploader: uploader)
+        let resting = model.barRevision
+
+        model.add([Self.item()])
+        let withOne = model.barRevision
+        #expect(withOne != resting, "the strip appearing did not declare a height change")
+
+        // The strip scrolls sideways rather than wrapping, so it is exactly as tall
+        // with three pictures as with one — and the conversation must not be told
+        // its inset moved when it did not.
+        model.add([Self.item(), Self.item()])
+        #expect(model.barRevision == withOne, "a second picture declared a height change it did not cause")
+
+        for attachment in model.attachments { model.remove(attachment.id) }
+        #expect(model.barRevision == resting, "the strip going away did not declare a height change")
+    }
+
+    /// The other half of the same contract, and the one a count could not have
+    /// expressed: a failed upload takes the tile away *and* puts a line of text
+    /// under the strip, so the bar changes height twice over with the attachment
+    /// list empty at both ends.
+    @Test("a failed upload declares its own height change")
+    func barRevisionCoversTheErrorLine() async throws {
+        let model = ComposerAttachmentsModel(uploader: nil)
+        let resting = model.barRevision
+
+        model.add([Self.item()])
+        await Self.waitUntil { model.uploadError != nil }
+
+        #expect(model.attachments.isEmpty)
+        #expect(model.barRevision != resting, "the error line did not declare a height change")
+    }
 }

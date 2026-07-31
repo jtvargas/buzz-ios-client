@@ -247,15 +247,39 @@ final class ConversationReaderPlace {
     ///
     /// # What this deliberately does not cover
     ///
-    /// A composer that *grows* takes room off the same edge, for the same reason, and wants the
-    /// same decision — the second half of the owner's report. It is not wired to this entrance:
-    /// doing so is what turned the growth suite into a runner the harness killed as
-    /// unresponsive, twice, and the diagnosis is open. See ``ConversationScaffold`` for the
-    /// measurements and what is left standing.
+    /// A composer that grows *under typing* takes room off the same edge for the same reason,
+    /// and is still not wired to anything: doing so from the bar's own geometry is what turned
+    /// the growth suite into a runner the harness killed as unresponsive, twice, and that
+    /// diagnosis is open. An attachment is covered — by ``composerRoomDidChange(isAtBottom:)``,
+    /// which is declared rather than measured and so cannot reach a keystroke. See
+    /// ``ConversationScaffold`` for both.
     ///
     /// - Parameter isAtBottom: whether the scaffold's own hysteresis currently reads the
     ///   reader as resting on the newest message.
     func keyboardRoomDidChange(isAtBottom: Bool) -> Correction {
+        roomBelowDidChange(isAtBottom: isAtBottom)
+    }
+
+    /// The composer itself changed height — a picture was attached, or the strip holding one
+    /// went away.
+    ///
+    /// The same room, off the same edge, with the same decision behind it, so it is the same
+    /// rule; what differs is where the trigger comes from. A keyboard is a container change
+    /// this surface can see. The bar's height is a number this surface *measures*, and
+    /// measuring it is what hung the runner — so the owner declares the change instead, from
+    /// the one event that causes it. See ``ConversationScaffold/composerRevision``.
+    ///
+    /// Kept as its own entrance rather than folded into the keyboard's, because the two are
+    /// only the same by coincidence of the current rule: if an attachment ever wants a
+    /// different destination from a keyboard — the strip rather than the newest row, say —
+    /// this is where that difference goes, and a shared name would have hidden the question.
+    func composerRoomDidChange(isAtBottom: Bool) -> Correction {
+        roomBelowDidChange(isAtBottom: isAtBottom)
+    }
+
+    /// The rule both entrances share: a conversation nobody has moved belongs at its newest
+    /// message, and so does one whose reader is already there. Everyone else stays put.
+    private func roomBelowDidChange(isAtBottom: Bool) -> Correction {
         // A finger on the list outranks the keyboard: a correction mid-drag fights the
         // reader, exactly as it does on a content change. This is also the interactive
         // dismissal, where the room above the keyboard changes on every frame of a drag.

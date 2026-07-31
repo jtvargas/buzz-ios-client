@@ -70,6 +70,26 @@ final class ComposerAttachmentsModel {
     /// Whether there is anything to draw above the text field.
     var isEmpty: Bool { attachments.isEmpty }
 
+    /// Changes exactly when these attachments make the composer a different height, and is
+    /// otherwise meaningless — the conversation's declaration that its bottom inset is about
+    /// to move. See ``ConversationScaffold/composerRevision``.
+    ///
+    /// Deliberately **not** the number of attachments. Ten pictures are the same 72-point row
+    /// as one, because the strip scrolls sideways rather than wrapping, so a count would
+    /// declare a height change on every pick after the first and never on the failure that
+    /// swaps the strip for a line of red text. What actually moves the bar is those two facts:
+    /// whether there is a strip at all, and whether there is an error line under it.
+    ///
+    /// Computed rather than stored, which costs the conversation a body pass on every
+    /// attachment write — a preview decoding, an upload landing — and not only on the ones that
+    /// change the bar's height. Accepted for ``ConversationScaffold/contentRevision``' reason:
+    /// the events behind it are a picked photo, not a frame. A stored version would need a
+    /// `didSet` on both properties feeding it, and a path that forgot one would lose the
+    /// declaration silently.
+    var barRevision: Int {
+        (isEmpty ? 0 : 1) + (uploadError == nil ? 0 : 2)
+    }
+
     /// Whether these attachments alone are enough to justify a send — a picture
     /// with no words is a message.
     var hasSendableContent: Bool { !readyDescriptors.isEmpty }
