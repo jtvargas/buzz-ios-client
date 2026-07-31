@@ -96,7 +96,7 @@ struct ConversationJumpTests {
     }
 
     /// No control calls this any more. It stays because an own send does — see
-    /// ``ChannelTimelineModel/jumpToLatestIfNeeded()`` — and because it is where a press
+    /// ``ChannelTimelineModel/shouldJumpToOwnSend`` — and because it is where a press
     /// that raced the reader back to the bottom lands.
     @Test("a jump to the newest message goes to the bottom and releases the freeze")
     func latestGoesToTheBottom() async throws {

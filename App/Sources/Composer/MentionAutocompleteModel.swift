@@ -116,6 +116,55 @@ final class MentionAutocompleteModel {
         update(for: document)
     }
 
+    /// Puts `kind`'s trigger in the draft at the caret and opens the panel on it — what the
+    /// composer's `@` and `#` quick actions do.
+    ///
+    /// It lives here rather than in the view because the caret does: this model is what
+    /// ``TokenTextView`` reports selection changes to, and an insertion aimed anywhere else
+    /// would land at the end of the draft instead of where the author is writing.
+    ///
+    /// # The two rules
+    ///
+    /// **A trigger only opens a token when a word starts there.** ``MentionDraft`` refuses
+    /// a trigger whose preceding character is not whitespace, which is what keeps `mail@test`
+    /// and `C#` out of the panel — so a caret resting against a word gets a space first, or
+    /// the button would insert a character and nothing would happen. Same rule, same reason,
+    /// as the mobile client's `_insertTriggerAtCursor`.
+    ///
+    /// **A caret already inside a token of this kind gets nothing.** The panel is already
+    /// open on the query being typed; a second trigger would push a bare one in beside it and
+    /// close the panel the button exists to open. Pressing `#` inside an `@` token is a real
+    /// change of mind, though, so only the matching kind is refused.
+    ///
+    /// Focus is taken either way: the button is reachable while the keyboard is down (the bar
+    /// is on screen whether or not the field has the responder), and an author who presses it
+    /// then means to start writing.
+    func insertTrigger(_ kind: MentionKind, into document: inout MentionDraft) {
+        isComposerFocused = true
+        let text = document.text as NSString
+        let caret = min(max(cursor, 0), text.length)
+        guard document.activeMention(at: caret)?.kind != kind else { return }
+        let opensAWord = caret == 0 || Self.isWhitespace(text.character(at: caret - 1))
+        document.replaceCharacters(
+            in: NSRange(location: caret, length: 0),
+            with: opensAWord ? String(kind.trigger) : " \(kind.trigger)"
+        )
+        // The view's own `onChange` would do this a moment later, but only for the *view's*
+        // copy: this model has to know where the caret is now, or the panel it just opened is
+        // still resolving against the position the author left.
+        update(for: document)
+    }
+
+    /// Whether this UTF-16 unit is the whitespace ``MentionDraft`` requires before a trigger.
+    ///
+    /// The same test the draft's own scan makes, so the two cannot disagree about what opens
+    /// a word — a lone surrogate is not whitespace, and the space this inserts in front of one
+    /// is harmless.
+    private static func isWhitespace(_ unit: unichar) -> Bool {
+        guard let scalar = UnicodeScalar(unit) else { return false }
+        return CharacterSet.whitespacesAndNewlines.contains(scalar)
+    }
+
     /// Clears the panel — and only *writes* when something actually changes.
     ///
     /// Observation's setters publish unconditionally, so assigning an already-empty

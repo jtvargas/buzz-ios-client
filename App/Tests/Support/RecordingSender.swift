@@ -19,6 +19,12 @@ actor RecordingSender: MessageSending {
     }
 
     private(set) var sent: [Sent] = []
+    /// The signed events behind ``sent``, in the same order.
+    ///
+    /// Nothing stores them here — this double queues nothing — so a test that needs the
+    /// message to *arrive* ingests one of these into its own store, which is the path the
+    /// outbox commit takes on a device.
+    private(set) var events: [NostrEvent] = []
     private(set) var retried: [String] = []
     private(set) var discarded: [String] = []
 
@@ -38,6 +44,7 @@ actor RecordingSender: MessageSending {
     ) async throws -> OutboxEntry {
         sent.append(Sent(kind: kind, content: content, channel: channel, tags: tags))
         let event = try NostrEvent.signed(kind: kind, content: content, tags: tags, createdAt: Date(), with: key)
+        events.append(event)
         return OutboxEntry(event: event, channelID: channel, state: .pending, attempts: 0, lastError: nil)
     }
 

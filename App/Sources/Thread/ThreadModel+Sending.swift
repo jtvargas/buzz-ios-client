@@ -24,6 +24,11 @@ extension ThreadModel {
         guard !text.isEmpty || !media.isEmpty else { return }
         mentionDraft = MentionDraft()
         sendError = nil
+        // At the tap, for the reason ``ChannelTimelineModel/send()`` states at length: the
+        // enqueue waits on a publish round trip, and the freeze has to come off before the
+        // reply this is about can be rendered at all.
+        let isChasingOwnSend = shouldJumpToOwnSend
+        if isChasingOwnSend { jumpToLatest() }
 
         let channel = self.channel
         let root = self.root
@@ -32,7 +37,7 @@ extension ThreadModel {
         let selfPubkey = self.selfPubkey
         Task { [weak self] in
             do {
-                try await sender.enqueue(
+                let entry = try await sender.enqueue(
                     kind: .channelMessage,
                     content: OutboundAttachments.content(text, attaching: media),
                     in: channel,
@@ -45,10 +50,9 @@ extension ThreadModel {
                     ) + OutboundAttachments.tags(attaching: media),
                     maxContentBytes: OutboxPolicy.maxContentBytes
                 )
-                // Only once the reply is really queued: an over-ceiling reply throws
-                // before anything is enqueued, and a reader up the thread must not be
-                // yanked to the bottom for a reply that never left the device.
-                self?.jumpToLatestIfNeeded()
+                // The reply has an id now, so the trip that started at the tap can finish on
+                // the reply itself rather than on whatever was newest when it began.
+                if isChasingOwnSend { self?.landOn(ownSend: entry.event.id) }
             } catch let error as OutboxError {
                 self?.restore(document: document, media: media, error: error)
             } catch {

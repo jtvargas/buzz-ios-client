@@ -1,3 +1,4 @@
+import BuzzKit
 import Foundation
 
 /// Where a thread sends the reader, and when.
@@ -53,12 +54,35 @@ extension ThreadModel {
         jumpToken += 1
     }
 
-    /// Brings an own reply into view — but only when it would otherwise land somewhere
-    /// its author cannot see it. Already at the bottom with nothing held back, the author
-    /// is looking straight at where it will appear, and re-anchoring interrupts a scroll
-    /// in progress for no gain.
-    func jumpToLatestIfNeeded() {
-        guard !isAtBottom || jump.unreadCount > 0 else { return }
-        jumpToLatest()
+    /// Whether an own reply has to move the thread at all. Already at the bottom with
+    /// nothing held back, the author is looking straight at where it will appear, and
+    /// re-anchoring interrupts a scroll in progress for no gain. Read at the tap and
+    /// carried — see ``ChannelTimelineModel/shouldJumpToOwnSend``.
+    var shouldJumpToOwnSend: Bool {
+        !isAtBottom || jump.unreadCount > 0
+    }
+
+    /// Re-asks for the jump an own reply already started, now that it is on screen. Touches
+    /// only the jump, never ``ThreadModel/isAtBottom`` — see
+    /// ``ChannelTimelineModel/landOnOwnSend(among:)`` for why writing that from inside
+    /// `rebuild` would call `rebuild` again.
+    func landOnOwnSend(among rendered: [TimelineRow]) {
+        guard let awaiting = awaitingOwnSend,
+              rendered.contains(where: { $0.id == awaiting }) else { return }
+        awaitingOwnSend = nil
+        jumpTarget = .bottom
+        jumpToken += 1
+    }
+
+    /// Lands the author on the reply they just sent, now that it has an id — the second half
+    /// of the trip the tap started. See ``ChannelTimelineModel/landOn(ownSend:)``, including
+    /// why the freeze is the only guard here and ``isAtBottom`` is not one.
+    func landOn(ownSend eventID: String) {
+        guard rows.contains(where: { $0.id == eventID }) else {
+            awaitingOwnSend = eventID
+            return
+        }
+        jumpTarget = .bottom
+        jumpToken += 1
     }
 }

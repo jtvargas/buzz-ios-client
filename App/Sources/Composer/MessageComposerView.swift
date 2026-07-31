@@ -225,16 +225,23 @@ struct MessageComposerView: View {
         }
     }
 
-    /// Row two: `+` leading, send trailing, and the dead space between them as a focus
-    /// target — most of a two-row bar is not the field, and tapping the bar should still
-    /// start a draft.
+    /// Row two: the quiet actions leading, send trailing, and the dead space between them as
+    /// a focus target — most of a two-row bar is not the field, and tapping the bar should
+    /// still start a draft.
     ///
-    /// Neither control draws glass any more. What is left is the two treatments WWDC25 219
-    /// permits on top of the material — vibrancy for the quiet action, a fill for the loud
-    /// one — which is also exactly what comb does with the same two controls.
+    /// None of the quiet controls draws glass. What is left is the two treatments WWDC25 219
+    /// permits on top of the material — vibrancy for a quiet action, a fill for the loud one —
+    /// which is also exactly what comb does with the same controls.
+    ///
+    /// `spacing: 0` because each control already carries a full ``hitTarget`` around a
+    /// body-sized glyph: at the default text size that is 44 points of frame around about 20
+    /// of ink, so the row reads as evenly spaced without a gap of its own. The 8 this used to
+    /// carry only ever came off the `Spacer`, so the `+` and send have not moved.
     private var controls: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 0) {
             attachButton
+            ComposerTriggerButton(kind: .user, hitTarget: hitTarget, insert: insertTrigger)
+            ComposerTriggerButton(kind: .channel, hitTarget: hitTarget, insert: insertTrigger)
             Spacer(minLength: 0)
             sendButton
         }
@@ -259,6 +266,13 @@ struct MessageComposerView: View {
             isComposerFocused: { autocomplete.isComposerFocused },
             restoreFocus: { autocomplete.isComposerFocused = true }
         )
+    }
+
+    /// Hands a quick action to the model that owns the caret. The rule it applies — a space
+    /// first where one is needed, nothing at all inside a token of the same kind — is in
+    /// ``MentionAutocompleteModel/insertTrigger(_:into:)``.
+    private func insertTrigger(_ kind: MentionKind) {
+        autocomplete.insertTrigger(kind, into: &document)
     }
 
     /// A tinted disc drawn at ``controlDiameter`` inside a full ``hitTarget``.

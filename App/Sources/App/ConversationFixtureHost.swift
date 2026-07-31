@@ -11,20 +11,21 @@ import SwiftUI
 /// The defect class this exists to catch turns on *when* content arrives relative to layout: a
 /// `LazyVStack` rests at the bottom of a height it estimated from the rows it had measured at
 /// that instant. So a fixture that seeded asynchronously would be testing its own timing rather
-/// than the surface's. The store is opened and seeded synchronously in `init`, before any body
-/// runs, which is the state a returning reader opens a cached conversation in.
+/// than the surface's. ``ConversationFixture/prepare(_:)`` opens and seeds the store
+/// synchronously, from this initialiser and therefore before any body runs, which is the state
+/// a returning reader opens a cached conversation in.
 ///
 /// ``ConversationFixture/Options/primed`` deliberately breaks that when a shape asks for it:
 /// the first `n` messages are seeded up front and the rest land after the first layout, which
 /// is a thread whose replies arrive a relay round trip later.
 struct ConversationFixtureHost: View {
     private let options: ConversationFixture.Options
-    private let store: BuzzEventStore?
-    private let rootID: String?
-    private let deferred: [NostrEvent]
+    /// The conversation, built once per process — see ``ConversationFixture/prepare(_:)`` for
+    /// why "once" is a correctness requirement and not a saving. `nil` only when it threw,
+    /// which is the branch that draws the failure view instead of a conversation.
+    private let prepared: ConversationFixture.Prepared?
     private let failure: String?
 
-    private let sender = ConversationFixture.InertSender()
     private let opener = ConversationFixture.InertOpener()
     /// So the composer's `+` can be driven all the way to a thumbnail on a simulator
     /// with no relay in reach — see ``ConversationFixture/InertUploader``.
@@ -36,58 +37,24 @@ struct ConversationFixtureHost: View {
 
     init(options: ConversationFixture.Options) {
         self.options = options
-        // Everything lands in locals first: the stored properties are `let`, so a partial
-        // success followed by a throw could not reassign them.
-        var openedStore: BuzzEventStore?
-        var root: String?
-        var held: [NostrEvent] = []
+        // Both land in locals first: the stored properties are `let`, so a partial success
+        // followed by a throw could not reassign them.
+        var built: ConversationFixture.Prepared?
         var problem: String?
         do {
-            // Two authors, so a shape holds both the row that names its writer and the
-            // rows that stack under it — see ``ConversationFixture/authorRun``.
-            let keys = [try PrivateKey(), try PrivateKey()]
-            let store = try ConversationFixture.makeStore()
-            let events = try ConversationFixture.events(for: options, keys: keys)
-            let primed = min(options.primed, events.count)
-            // A thread hangs off its first message; a channel has no root.
-            root = options.surface == .thread ? events.first?.id : nil
-            held = Array(events.dropFirst(primed))
-            // Synchronous on purpose — see the note above. `ingest` is async, so this is the
-            // one place the fixture blocks, and it blocks before the first frame rather than
-            // during one.
-            try Self.seed(Array(events.prefix(primed)), into: store)
-            // Kicked off here rather than from a `.task`: a view-lifecycle hook made this
-            // silently never run (measured — a `primed` shape rendered its opener and nothing
-            // else for twelve seconds), and what the shape is *for* is content that lands after
-            // the first layout, so the landing must not depend on the view at all.
-            Self.land(held, into: store, after: .milliseconds(250))
-            openedStore = store
+            built = try ConversationFixture.prepare(options)
         } catch {
             problem = String(describing: error)
         }
-        store = openedStore
-        rootID = root
-        deferred = held
+        prepared = built
         failure = problem
-    }
-
-    /// Ingests a batch and waits for it, from a synchronous initialiser.
-    private static func seed(_ events: [NostrEvent], into store: BuzzEventStore) throws {
-        let semaphore = DispatchSemaphore(value: 0)
-        let box = ErrorBox()
-        Task.detached {
-            do { _ = try await store.ingest(batch: events, phase: .backfill) } catch { box.error = error }
-            semaphore.signal()
-        }
-        semaphore.wait()
-        if let error = box.error { throw error }
     }
 
     var body: some View {
         Group {
-            if let store {
+            if let prepared {
                 NavigationStack {
-                    surface(store: store)
+                    surface(prepared)
                 }
             } else {
                 // Surfaced rather than crashed: a fixture that traps reads in CI as a crash in
@@ -103,14 +70,14 @@ struct ConversationFixtureHost: View {
     }
 
     @ViewBuilder
-    private func surface(store: BuzzEventStore) -> some View {
+    private func surface(_ prepared: ConversationFixture.Prepared) -> some View {
         switch options.surface {
         case .thread:
             ThreadView(
-                root: rootID ?? "",
+                root: prepared.rootID ?? "",
                 channel: ConversationFixture.channelID,
-                store: store,
-                sender: sender,
+                store: prepared.store,
+                sender: prepared.sender,
                 opener: opener,
                 presence: presence,
                 uploader: uploader,
@@ -128,8 +95,8 @@ struct ConversationFixtureHost: View {
                     lastMessageSnippet: nil,
                     lastMessageAuthor: nil
                 ),
-                store: store,
-                sender: sender,
+                store: prepared.store,
+                sender: prepared.sender,
                 typing: NoopEphemeralPublisher(),
                 readStateMarking: nil,
                 opener: opener,
@@ -139,23 +106,5 @@ struct ConversationFixtureHost: View {
             )
         }
     }
-
-    /// Lands the messages a `primed` shape held back, once the first layout has happened.
-    ///
-    /// Fire-and-forget on purpose: the store's own observation is what carries them into the
-    /// view, which is exactly the path a reply arriving from the relay takes.
-    private static func land(_ events: [NostrEvent], into store: BuzzEventStore, after delay: Duration) {
-        guard !events.isEmpty else { return }
-        Task.detached {
-            try? await Task.sleep(for: delay)
-            _ = try? await store.ingest(batch: events, phase: .live)
-        }
-    }
-}
-
-/// Carries an error out of the detached seeding task. A `final class` because the closure
-/// escapes; nothing else touches it once the semaphore has been signalled.
-private final class ErrorBox: @unchecked Sendable {
-    var error: Error?
 }
 #endif
