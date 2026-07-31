@@ -136,4 +136,55 @@ struct LivePiMediaUploadTests {
         #expect(!MediaUploadClient.supportedImageTypes.contains("image/heic"))
         #expect(!ImageByteFormat.heic.isStoredByRelay)
     }
+
+    // MARK: - Metadata
+
+    /// The failing side, proven against the real relay rather than inferred from its source.
+    ///
+    /// This is the defect the owner hit on his own phone: a PNG in a format the relay stores,
+    /// carrying one text chunk, refused. Asserting it here is what stops "the relay refuses
+    /// metadata" from being a claim read out of a Rust file and never tried.
+    @Test("the relay refuses a picture carrying metadata")
+    func metadataIsRefused() async throws {
+        let signer = try InMemorySigner()
+        let dirty = Self.pngCarryingText(seed: UInt8.random(in: 1 ... 254))
+
+        await #expect(throws: MediaUploadError.rejectedByPolicy) {
+            try await Self.client(signer: signer).upload(data: dirty, mimeType: "image/png")
+        }
+    }
+
+    /// And the fixed side: the same picture, scrubbed, accepted.
+    ///
+    /// One seed for both halves, so the only difference between the refusal above and the
+    /// acceptance here is the scrub.
+    @Test("the same picture is accepted once it has been scrubbed")
+    func scrubbedIsAccepted() async throws {
+        let signer = try InMemorySigner()
+        let seed = UInt8.random(in: 1 ... 254)
+        let dirty = Self.pngCarryingText(seed: seed)
+        let clean = try ImageMetadataScrub.scrubPNG(dirty)
+        #expect(clean != dirty, "the fixture carried nothing to remove")
+
+        let descriptor = try await Self.client(signer: signer).upload(data: clean, mimeType: "image/png")
+
+        #expect(descriptor.type == "image/png")
+        #expect(descriptor.size == clean.count)
+    }
+
+    /// The same one-pixel PNG as ``uniquePNG(seed:)`` with a `tEXt` chunk added — the
+    /// smallest thing that is a picture the relay stores *and* carries provenance it does
+    /// not.
+    static func pngCarryingText(seed: UInt8) -> Data {
+        let clean = [UInt8](uniquePNG(seed: seed))
+        // Past the signature and IHDR, which is 8 + (13 + 12) bytes for this fixture.
+        let afterIHDR = 8 + 13 + 12
+        let payload = Array("Comment\0where this was taken".utf8)
+        let body = Array("tEXt".utf8) + payload
+        let chunk = be32(UInt32(payload.count)) + body + be32(crc32(body))
+        var output = Data(clean[0 ..< afterIHDR])
+        output.append(contentsOf: chunk)
+        output.append(contentsOf: clean[afterIHDR...])
+        return output
+    }
 }

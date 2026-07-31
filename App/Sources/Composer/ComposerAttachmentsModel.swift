@@ -235,6 +235,10 @@ final class ComposerAttachmentsModel {
             "That file isn't a picture."
         case ComposerImagePreparation.Failure.couldNotConvert:
             "Couldn't convert that picture for sending."
+        case ComposerImagePreparation.Failure.animationCannotBeCleaned:
+            // Deliberately says what is true rather than "couldn't send": the only way to
+            // strip this one is to decode it, and decoding an animation loses the animation.
+            "That animation carries data that can't be removed without flattening it."
         case ComposerAttachmentError.noUploader:
             "Not connected to a relay yet."
         default:

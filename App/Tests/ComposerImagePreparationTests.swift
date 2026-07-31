@@ -8,18 +8,37 @@ import UIKit
 @MainActor
 @Suite("Composer image preparation", .timeLimit(.minutes(1)))
 struct ComposerImagePreparationTests {
-    /// A format the relay stores goes up exactly as it arrived. This is what keeps
-    /// an animated GIF animated: a re-encode would flatten it to one frame and
-    /// report success.
-    @Test("a format the relay stores is not touched")
-    func storedFormatPassesThrough() async throws {
-        let original = TestPicture.png()
+    /// The rule that replaced "a format the relay stores is not touched", which is what
+    /// this file used to assert and what the owner's photo library disproved within
+    /// minutes of the build reaching his phone.
+    ///
+    /// The relay stores those formats *bare*. A PNG that arrived carrying a text chunk
+    /// is still a PNG when it leaves, and the chunk is not.
+    @Test("a stored format is still cleaned rather than passed through")
+    func storedFormatIsCleaned() async throws {
+        let original = TestPicture.pngWithMetadata()
 
         let prepared = try await ComposerImagePreparation.prepare(original)
 
         #expect(prepared.mimeType == "image/png")
-        #expect(prepared.data == original)
+        #expect(prepared.data != original, "the picture went up exactly as it arrived")
+        #expect(ImageByteFormat.detect(prepared.data) == .png)
         #expect(!prepared.preview.isEmpty)
+    }
+
+    /// A photograph, which is the case that was failing: EXIF and a colour profile, both
+    /// refused by the relay, and one of them carrying GPS.
+    @Test("a photograph loses its EXIF and its colour profile")
+    func photographIsStripped() async throws {
+        let photo = try #require(TestPicture.photoJPEG())
+
+        let prepared = try await ComposerImagePreparation.prepare(photo)
+
+        #expect(prepared.mimeType == "image/jpeg")
+        let markers = TestPicture.jpegMarkers(in: prepared.data)
+        #expect(!markers.contains(0xE1), "EXIF survived to the relay")
+        #expect(!markers.contains(0xE2), "the colour profile survived to the relay")
+        #expect(UIImage(data: prepared.data) != nil, "the result is not a decodable picture")
     }
 
     /// The HEIC branch, exercised through TIFF — the same "the relay will not store
@@ -33,6 +52,19 @@ struct ComposerImagePreparationTests {
         #expect(prepared.mimeType == "image/jpeg")
         #expect(prepared.data != original)
         #expect(ImageByteFormat.detect(prepared.data) == .jpeg)
+    }
+
+    /// An animation must survive as an animation. A decode-and-re-encode would return one
+    /// frame and report success, which is the failure this routing exists to avoid.
+    @Test("an animated GIF is scrubbed without being flattened")
+    func animatedGIFStaysAnimated() async throws {
+        let gif = TestPicture.animatedGIF()
+
+        let prepared = try await ComposerImagePreparation.prepare(gif)
+
+        #expect(prepared.mimeType == "image/gif")
+        #expect(ImageByteFormat.detect(prepared.data) == .gif)
+        #expect(TestPicture.gifFrameCount(in: prepared.data) == 2, "the animation was flattened")
     }
 
     /// The subtle one, and the reason the conversion goes through `UIImage` rather
