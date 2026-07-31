@@ -60,13 +60,14 @@ struct MessageComposerView: View {
     @Environment(\.isEnabled) private var isEnabled
     @Binding var document: MentionDraft
     @Bindable var autocomplete: MentionAutocompleteModel
+    /// The pictures this composer is carrying. Owned by the conversation model, so
+    /// a thread's attachments and its channel's are separate lists cleared by
+    /// separate sends.
+    let attachments: ComposerAttachmentsModel
     let placeholder: String
     let sendAccessibilityLabel: String
     var onTextChange: (String) -> Void = { _ in }
     let onSend: () -> Void
-
-    @State private var isShowingWorkInProgress = false
-    @State private var wasFocusedBeforeNotice = false
 
     /// Drawn diameter of the send disc.
     ///
@@ -112,8 +113,19 @@ struct MessageComposerView: View {
     /// above is the check.
     private static var onAccent: Color { .black }
 
+    /// Whether the draft will go.
+    ///
+    /// A picture on its own is a message, so text is not required once something is
+    /// attached. What *is* required is that nothing is still uploading: the
+    /// attachments are put on the relay when they are picked, so a send while one is
+    /// in flight would post a message missing a picture the author can see in the
+    /// bar. The mobile client refuses the same send for the same reason
+    /// (`hasPendingUploads`, `compose_bar.dart`), and this is the only moment in
+    /// this composer where an author is made to wait.
     private var canSend: Bool {
-        isEnabled && !document.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        guard isEnabled, !attachments.isAttaching else { return false }
+        return !document.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || attachments.hasSendableContent
     }
 
     var body: some View {
@@ -126,6 +138,23 @@ struct MessageComposerView: View {
 
         return GlassEffectContainer {
             VStack(alignment: .leading, spacing: Self.rowSpacing) {
+                // Above the text, which is where the mobile client puts it and
+                // where it has to be: below the field it would sit between the
+                // text and the send button, and it would move every time the
+                // draft gained a line.
+                if !attachments.isEmpty {
+                    ComposerAttachmentStrip(
+                        attachments: attachments.attachments,
+                        remove: attachments.remove
+                    )
+                }
+                if let uploadError = attachments.uploadError {
+                    Text(uploadError)
+                        .font(.hive(.footnote))
+                        .foregroundStyle(.red)
+                        // Aligned with the text it is about.
+                        .padding(.horizontal, TokenTextView.textInset.width)
+                }
                 field()
                 controls
             }
@@ -156,18 +185,6 @@ struct MessageComposerView: View {
             autocomplete.update(for: document)
             await autocomplete.run()
         }
-        .alert("WIP", isPresented: $isShowingWorkInProgress) {
-            Button("OK", role: .cancel) {}
-        }
-        // Restored on *dismissal*, not from the OK action: an alert dismissed any other
-        // way (a hardware Escape, a programmatic dismissal) would otherwise leave the
-        // author mid-draft with no keyboard, and restoring after the alert's own window
-        // has gone is also the moment `becomeFirstResponder` can actually succeed.
-        .onChange(of: isShowingWorkInProgress) { _, isPresented in
-            guard !isPresented, wasFocusedBeforeNotice else { return }
-            wasFocusedBeforeNotice = false
-            autocomplete.isComposerFocused = true
-        }
     }
 
     /// The editor, filling everything the two controls leave.
@@ -186,6 +203,9 @@ struct MessageComposerView: View {
         TokenTextView(
             document: $document,
             isFocused: $autocomplete.isComposerFocused,
+            // A pasted picture goes through the same door as a picked one, so it inherits the
+            // scrub, the upload and the five-picture cap without any of them being restated.
+            onPasteImages: { attachments.add($0.map(PastedPicture.init)) },
             placeholder: placeholder,
             isEditable: isEnabled,
             onSelectionChange: autocomplete.updateSelection
@@ -198,8 +218,8 @@ struct MessageComposerView: View {
                     .foregroundStyle(.tertiary)
                     // Aligned to the text container's own insets, so the placeholder
                     // sits exactly where the first glyph will.
-                    .padding(.leading, 11)
-                    .padding(.top, 9)
+                    .padding(.leading, TokenTextView.textInset.width)
+                    .padding(.top, TokenTextView.textInset.height)
                     .allowsHitTesting(false)
             }
         }
@@ -230,26 +250,15 @@ struct MessageComposerView: View {
         }
     }
 
-    /// A bare glyph on the shell's glass — not a glass button. It sits *on* glass, and a
-    /// second layer of the material there is the flat grey disc this replaced. Vibrancy is
-    /// the treatment WWDC25 219 prescribes for exactly this, and it carries its own
-    /// contrast: symbols over the regular variant flip light-to-dark with the material.
-    ///
-    /// No disc, so the glyph's box *is* the touch box.
+    /// The `+`, and the card, picker and notice it presents — all of which live in
+    /// ``ComposerAttachButton``, because none of that state is the bar's business.
     private var attachButton: some View {
-        Button(action: presentWorkInProgress) {
-            Image(systemName: "plus")
-                .font(.hiveSymbol(.body, weight: .semibold))
-                .foregroundStyle(.secondary)
-                .frame(width: hitTarget, height: hitTarget)
-        }
-        // The app's own press treatment rather than a new one — and safe under this file's
-        // no-animation rule, because the `.animation` inside it is bound to
-        // `configuration.isPressed` and scoped to the label, so it cannot reach the
-        // composer's height or catch a keyboard-driven layout pass. It also supplies the
-        // `contentShape` that makes the whole frame tappable rather than just the glyph.
-        .buttonStyle(PressFeedbackButtonStyle())
-        .accessibilityLabel("More options")
+        ComposerAttachButton(
+            attachments: attachments,
+            hitTarget: hitTarget,
+            isComposerFocused: { autocomplete.isComposerFocused },
+            restoreFocus: { autocomplete.isComposerFocused = true }
+        )
     }
 
     /// A tinted disc drawn at ``controlDiameter`` inside a full ``hitTarget``.
@@ -293,11 +302,6 @@ struct MessageComposerView: View {
     private func send() {
         onSend()
         autocomplete.dismiss()
-    }
-
-    private func presentWorkInProgress() {
-        wasFocusedBeforeNotice = autocomplete.isComposerFocused
-        isShowingWorkInProgress = true
     }
 
 }

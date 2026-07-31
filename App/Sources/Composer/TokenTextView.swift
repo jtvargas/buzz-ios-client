@@ -15,8 +15,20 @@ import UIKit
 /// a frame, and it detaches the change from SwiftUI's transaction so the keyboard
 /// animation and the layout animation run on different clocks.
 struct TokenTextView: UIViewRepresentable {
+    /// Where the first glyph sits inside the field.
+    ///
+    /// Named rather than inlined because three other things in the bar have to line up
+    /// with it: the placeholder drawn over this view, the attachment strip above it, and
+    /// the line that reports an upload failure. A tile whose left edge disagreed with
+    /// the text under it by a few points is the kind of thing that reads as sloppy
+    /// without anyone being able to say why.
+    static let textInset = CGSize(width: 11, height: 9)
+
     @Binding var document: MentionDraft
     @Binding var isFocused: Bool
+    /// Handed pictures pasted into the field, which become attachments rather than text —
+    /// see ``ComposerTextView``. `nil` where a surface has nothing to attach them to.
+    var onPasteImages: (([Data]) -> Void)?
     let placeholder: String
     var isEditable = true
     /// Where the caret went, for a move the text did not cause. Mention completion is
@@ -31,7 +43,8 @@ struct TokenTextView: UIViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
     func makeUIView(context: Context) -> UITextView {
-        let view = UITextView()
+        let view = ComposerTextView()
+        view.onPasteImages = onPasteImages
         view.delegate = context.coordinator
         view.backgroundColor = .clear
         // The app's typeface, through `UIFontMetrics` — a `UIFont` does not scale itself,
@@ -43,7 +56,10 @@ struct TokenTextView: UIViewRepresentable {
         // colour from its first frame rather than from whenever that lands.
         view.tintColor = HiveAccent.uiColor
         view.adjustsFontForContentSizeCategory = true
-        view.textContainerInset = UIEdgeInsets(top: 9, left: 11, bottom: 9, right: 11)
+        view.textContainerInset = UIEdgeInsets(
+            top: TokenTextView.textInset.height, left: TokenTextView.textInset.width,
+            bottom: TokenTextView.textInset.height, right: TokenTextView.textInset.width
+        )
         view.textContainer.lineFragmentPadding = 0
         // Permanently scrollable, with no toggle. A `UITextView` *is* a `UIScrollView`,
         // and with `isScrollEnabled == false` its `panGestureRecognizer` is inert, so a
@@ -73,6 +89,9 @@ struct TokenTextView: UIViewRepresentable {
     }
 
     func updateUIView(_ view: UITextView, context: Context) {
+        // Re-applied rather than captured once: the closure carries the surface's model, and
+        // a view struct is rebuilt on every body pass.
+        (view as? ComposerTextView)?.onPasteImages = onPasteImages
         let coordinator = context.coordinator
         coordinator.parent = self
         view.isEditable = isEditable

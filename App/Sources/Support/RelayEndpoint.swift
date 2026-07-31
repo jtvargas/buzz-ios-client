@@ -63,6 +63,22 @@ enum RelayEndpoint {
         return candidate
     }
 
+    /// The relay's HTTP root, derived from a websocket URL by swapping the scheme
+    /// `ws → http` / `wss → https` and keeping the host, port and path.
+    ///
+    /// This is what the blob store hangs off — the upload client appends its own
+    /// `upload` (and `media/upload`) path components, exactly as the mobile client
+    /// does against the same relay. ``queryURL(for:)`` is the same base with
+    /// `query` appended, and is left as its own function because a caller wanting
+    /// one of them never wants the other.
+    static func httpBaseURL(for websocketURL: URL) -> URL? {
+        guard var components = URLComponents(url: websocketURL, resolvingAgainstBaseURL: false) else {
+            return nil
+        }
+        components.scheme = (websocketURL.scheme?.lowercased() == "ws") ? "http" : "https"
+        return components.url
+    }
+
     /// The HTTP `/query` endpoint derived from a websocket URL: the scheme is
     /// swapped `ws → http` / `wss → https` and a `query` path component appended —
     /// the Phase-1 integration pattern (`RelayIntegrationTests.swift:20-22,108`).

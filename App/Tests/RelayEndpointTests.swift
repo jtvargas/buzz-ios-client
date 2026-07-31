@@ -51,4 +51,19 @@ struct RelayEndpointTests {
         let plain = try #require(RelayEndpoint.websocketURL(from: "ws://10.0.0.2:3004"))
         #expect(RelayEndpoint.queryURL(for: plain)?.absoluteString == "http://10.0.0.2:3004/query")
     }
+
+    /// The blob store hangs off the relay's HTTP root — the upload client appends
+    /// its own path components, so this must be the bare base and not `/query`'s
+    /// parent by coincidence.
+    @Test("derives the HTTP base the blob store hangs off")
+    func derivesHTTPBase() throws {
+        let secure = try #require(RelayEndpoint.websocketURL(from: "wss://homelab.tail4bc643.ts.net"))
+        #expect(RelayEndpoint.httpBaseURL(for: secure)?.absoluteString
+            == "https://homelab.tail4bc643.ts.net")
+        let plain = try #require(RelayEndpoint.websocketURL(from: "ws://10.0.0.2:3004"))
+        #expect(RelayEndpoint.httpBaseURL(for: plain)?.absoluteString == "http://10.0.0.2:3004")
+        // What the upload client actually PUTs to, once it has appended its path.
+        #expect(RelayEndpoint.httpBaseURL(for: secure)?.appendingPathComponent("upload").absoluteString
+            == "https://homelab.tail4bc643.ts.net/upload")
+    }
 }

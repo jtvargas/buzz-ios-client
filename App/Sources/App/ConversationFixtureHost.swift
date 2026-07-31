@@ -26,6 +26,9 @@ struct ConversationFixtureHost: View {
 
     private let sender = ConversationFixture.InertSender()
     private let opener = ConversationFixture.InertOpener()
+    /// So the composer's `+` can be driven all the way to a thumbnail on a simulator
+    /// with no relay in reach — see ``ConversationFixture/InertUploader``.
+    private let uploader = ConversationFixture.InertUploader()
     /// Empty and never fed. Presence dots are not what this suite measures, and a real
     /// `PresenceStore` with nothing in it is what a conversation looks like before the roster
     /// answers — a state the app has to render anyway.
@@ -108,6 +111,7 @@ struct ConversationFixtureHost: View {
                 sender: sender,
                 opener: opener,
                 presence: presence,
+                uploader: uploader,
                 selfPubkey: nil
             )
         case .channel:
@@ -128,6 +132,7 @@ struct ConversationFixtureHost: View {
                 readStateMarking: nil,
                 opener: opener,
                 presence: presence,
+                uploader: uploader,
                 selfPubkey: nil
             )
         }

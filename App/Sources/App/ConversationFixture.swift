@@ -289,6 +289,26 @@ enum ConversationFixture {
         func discard(_: String) async throws { throw FixtureSendUnavailable() }
     }
 
+    /// Stores nothing, and answers anyway.
+    ///
+    /// The composer's thumbnail is decoded from the bytes on *this* device, so a fixture
+    /// needs an answer rather than a blob store — which is what lets the attachment strip,
+    /// the X, and the send gate be driven on a simulator with no relay in reach. The URL is
+    /// deliberately unreachable: nothing in the composer fetches it, and a fixture that
+    /// pointed at a real host would be a test making a network request.
+    struct InertUploader: MediaUploading {
+        func upload(data: Data, mimeType: String, filename _: String?) async throws -> BlobDescriptor {
+            BlobDescriptor(
+                url: "https://fixture.invalid/\(UUID().uuidString).jpg",
+                sha256: String(UUID().uuidString.prefix(8)),
+                size: data.count,
+                type: mimeType,
+                uploaded: 0,
+                dim: "800x600"
+            )
+        }
+    }
+
     /// Fetches nothing: the store is already seeded, and a thread's opening fetch exists to
     /// fill it from a relay.
     struct InertOpener: ThreadOpening {

@@ -37,7 +37,7 @@ This is the living checklist for the headline milestone: feature parity with the
 | Forum | `forum` | ☐ | |
 | Pulse | `pulse` | ☐ | |
 | Custom emoji | `custom_emoji` | ☐ | Unicode emoji only |
-| Media upload | — | ☐ | Composer `+` shows a work-in-progress alert; no picker and nothing to attach. Inbound media renders fine — see *Rich content rendering* |
+| Media upload | — | ◐ | Pictures only. Composer `+` opens a card above the bar: Photos opens the library picker, Camera is still a work-in-progress alert. Up to five per message, pasted as well as picked, each a thumbnail with an X on it; the upload runs at pick time, so send is instant and a refusal arrives while the author is still looking at the composer. Every still is re-rendered in sRGB and every picture is scrubbed of metadata before it leaves the device — EXIF and GPS included — because the relay refuses anything carrying it, and an animation is scrubbed structurally rather than decoded. Not done: video, files, and the camera itself. Inbound media renders fine — see *Rich content rendering* |
 | Presence | — | ✅ | Live dots on message rows, direct-message sidebar rows, the DM heading and the member sheet; own heartbeat published. Channel rows carry none — presence is a fact about a person |
 | Typing indicators | — | ✅ | A glass pill over the conversation, just above the composer. Scoped like Desktop's: a channel and each of its threads are separate audiences, and both surfaces publish their own. An arriving message ends its author's typing rather than leaving it to lapse |
 | Message edits (kind:40003) and deletions | `channels` | ◐ | Both are projected and rendered when they arrive; the app can author neither. The menu's Delete discards an own message still in the outbox |

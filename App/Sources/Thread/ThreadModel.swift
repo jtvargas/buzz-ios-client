@@ -50,6 +50,10 @@ final class ThreadModel {
     /// Where that draft is kept between visits. `nil` in tests, which then keep nothing.
     let drafts: ComposerDrafts?
     let mentionAutocomplete: MentionAutocompleteModel
+    /// The pictures the reply composer is carrying, uploaded as they are picked and
+    /// cleared by the reply that names them. This thread's own — the channel behind
+    /// it keeps a separate list.
+    let attachments: ComposerAttachmentsModel
     /// Set when a reply is refused before it leaves the device (over the 64 KiB
     /// ceiling); the view shows it and the draft text is preserved.
     var sendError: String?
@@ -84,7 +88,11 @@ final class ThreadModel {
     var jumpTarget: ConversationJumpTarget = .bottom
 
     private let store: BuzzEventStore
-    private let sender: any MessageSending
+    /// Internal rather than `private` because the send that uses it lives beside this
+    /// file, in `ThreadModel+Sending.swift` — Swift's `private` is file-scoped. Same
+    /// reason ``ChannelTimelineModel/sender`` is internal. Immutable, so widening it
+    /// exposes no mutation.
+    let sender: any MessageSending
     private let opener: any ThreadOpening
     /// Where own typing goes. Internal for the same reason the channel timeline's is:
     /// the publish itself lives in `ThreadModel+Typing.swift`.
@@ -119,6 +127,7 @@ final class ThreadModel {
         opener: any ThreadOpening,
         typing: any EphemeralPublishing = NoopEphemeralPublisher(),
         drafts: ComposerDrafts? = nil,
+        uploader: (any MediaUploading)? = nil,
         selfPubkey: String?,
         typingThrottle: Duration = .seconds(3),
         clock: @escaping @Sendable () -> ContinuousClock.Instant = { ContinuousClock.now }
@@ -133,6 +142,7 @@ final class ThreadModel {
         self.typingThrottle = typingThrottle
         self.clock = clock
         self.selfPubkey = selfPubkey
+        attachments = ComposerAttachmentsModel(uploader: uploader)
         mentionAutocomplete = MentionAutocompleteModel(
             channel: channel,
             store: store,
@@ -257,51 +267,6 @@ final class ThreadModel {
               grouped.dropFirst().first?.message?.id == root
         else { return grouped }
         return Array(grouped.dropFirst())
-    }
-
-    // MARK: - Reply
-
-    /// Sends the reply draft, threaded to the root. Optimistic and fire-and-forget:
-    /// the pending reply appears through the observation the moment the outbox row
-    /// commits. An over-ceiling reply throws before it is queued — the text is
-    /// restored and surfaced.
-    func sendReply() {
-        let document = mentionDraft
-        let text = document.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
-        mentionDraft = MentionDraft()
-        sendError = nil
-
-        let channel = self.channel
-        let root = self.root
-        let sender = self.sender
-        let mentionPubkeys = document.mentionedPubkeys(sender: selfPubkey)
-        let selfPubkey = self.selfPubkey
-        Task { [weak self] in
-            do {
-                try await sender.enqueue(
-                    kind: .channelMessage,
-                    content: text,
-                    in: channel,
-                    tags: OutboundTags.reply(
-                        channel: channel,
-                        root: root,
-                        parent: root,
-                        mentioning: mentionPubkeys,
-                        sender: selfPubkey
-                    ),
-                    maxContentBytes: OutboxPolicy.maxContentBytes
-                )
-                // Only once the reply is really queued: an over-ceiling reply throws
-                // before anything is enqueued, and a reader up the thread must not be
-                // yanked to the bottom for a reply that never left the device.
-                self?.jumpToLatestIfNeeded()
-            } catch let error as OutboxError {
-                self?.restore(document: document, error: error)
-            } catch {
-                // A transient send failure leaves the reply queued for the next drain.
-            }
-        }
     }
 
 }

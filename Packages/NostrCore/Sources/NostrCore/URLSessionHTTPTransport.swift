@@ -21,8 +21,18 @@ public struct URLSessionHTTPTransport: HTTPTransport {
     }
 
     public func post(body: Data, to url: URL, headers: [String: String]) async throws -> (Data, Int) {
+        try await send(method: "POST", body: body, to: url, headers: headers)
+    }
+
+    /// The one request path, named by its verb.
+    func send(
+        method: String,
+        body: Data,
+        to url: URL,
+        headers: [String: String]
+    ) async throws -> (Data, Int) {
         var request = URLRequest(url: url)
-        request.httpMethod = "POST"
+        request.httpMethod = method
         request.httpBody = body
         for (name, value) in headers {
             request.setValue(value, forHTTPHeaderField: name)
@@ -45,5 +55,18 @@ public struct URLSessionHTTPTransport: HTTPTransport {
             throw TransportError.requestFailed("response was not an HTTP response")
         }
         return (data, http.statusCode)
+    }
+}
+
+public extension URLSessionHTTPTransport {
+    /// Performs a `PUT`, for the endpoints that take one.
+    ///
+    /// Same contract as ``post(body:to:headers:)`` — headers verbatim, no
+    /// default headers, the status returned rather than interpreted — and it
+    /// lives here rather than on ``HTTPTransport`` because only one caller uses
+    /// the verb and that protocol's other three conformers are test doubles.
+    /// `BuzzKit` declares the conformance that makes this satisfy its own seam.
+    func put(body: Data, to url: URL, headers: [String: String]) async throws -> (Data, Int) {
+        try await send(method: "PUT", body: body, to: url, headers: headers)
     }
 }

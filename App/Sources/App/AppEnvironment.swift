@@ -58,6 +58,11 @@ final class AppEnvironment {
     /// Built once an identity and relay URL are known; `nil` until then.
     private(set) var engine: SyncEngine?
 
+    /// Puts a composer's pictures on the relay's blob store. Built beside the engine
+    /// and dropped with it — see ``makeMediaUploader(websocketURL:)``, which is also
+    /// where its separation from the engine is explained.
+    private(set) var mediaUploader: (any MediaUploading)?
+
     /// The authenticated identity's hex pubkey, resolved once the engine starts.
     /// Used to exclude our own typing echo and to key our own presence.
     private(set) var selfPubkeyHex: String?
@@ -216,6 +221,8 @@ final class AppEnvironment {
         }
         heartbeat = nil
         engine = nil
+        // Beside the engine: it signs with the key this method has just deleted.
+        mediaUploader = nil
         // Held in memory across sessions otherwise — see ``ComposerDrafts/reset()``.
         drafts.reset()
         selfPubkeyHex = nil
@@ -299,6 +306,7 @@ final class AppEnvironment {
 
         let engine = makeEngine(websocketURL: websocketURL, queryURL: queryURL)
         self.engine = engine
+        mediaUploader = makeMediaUploader(websocketURL: websocketURL)
         heartbeat = PresenceHeartbeat(publisher: engine)
 
         observeEngineState(of: engine)
@@ -363,17 +371,6 @@ final class AppEnvironment {
                 self?.channelDirectoryStatus = status
             }
         }
-    }
-
-    // MARK: - Store location
-
-    private static func makeStore() throws -> BuzzEventStore {
-        let directory = try FileManager.default
-            .url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
-            .appendingPathComponent("Hive", isDirectory: true)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let path = directory.appendingPathComponent("store.sqlite").path
-        return try BuzzEventStore(path: path)
     }
 
     private enum CompositionError: Error {

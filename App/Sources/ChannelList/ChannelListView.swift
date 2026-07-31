@@ -144,6 +144,7 @@ struct ChannelListView: View {
                         store: store,
                         engine: engine,
                         drafts: environment.drafts,
+                        uploader: environment.mediaUploader,
                         selfPubkey: environment.selfPubkeyHex,
                         knownPeer: route.knownPeer,
                         focusingComposer: route.focusesComposer
@@ -176,6 +177,7 @@ struct ChannelListView: View {
                         store: store,
                         engine: engine,
                         drafts: environment.drafts,
+                        uploader: environment.mediaUploader,
                         selfPubkey: environment.selfPubkeyHex,
                         landingOn: route.anchor,
                         focusingComposer: route.focusesComposer

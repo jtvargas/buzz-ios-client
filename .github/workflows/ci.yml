@@ -5,7 +5,10 @@ on:
   push:
     branches: [main]
   # Weekly cold canary: a scheduled run restores no cache, so a cached green
-  # that a cold build would not reproduce shows up within a week.
+  # that a cold build would not reproduce shows up within a week. Since the app
+  # suite became request-only (see the `app` job's `if:`), this now covers the
+  # packages and the lint — the cache it was built to watch is written and read
+  # by manual runs alone.
   schedule:
     - cron: "0 7 * * 1"
   workflow_dispatch:
@@ -20,7 +23,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # Restored by every run, written only by a merge to main. See the app job.
+  # Restored by every app-suite run, written only by one on main. See the app job.
   CACHE_PATHS: |
     .dd/Build
     .dd/ModuleCache.noindex
@@ -73,6 +76,24 @@ jobs:
 
   app:
     name: App tests (iOS Simulator)
+    # Request-only, by the owner's decision (2026-07-31). This job is the one
+    # that boots a simulator, and it has gone red on main eight times without a
+    # defect under it — `SendPathTests.failedThenRetry()` and once
+    # `MentionComposerTests.ranksPeopleByRecentUsage()`, always "Time limit was
+    # exceeded: 60.000 seconds", always green on a re-run of the same commit.
+    # Twice the identical tree passed every job on the pull request minutes
+    # before failing on main. A red that is dismissed by habit is worse than no
+    # red at all: it hides the day it is real.
+    #
+    # So the simulator suites now run the way the conversation shape gate
+    # already does — on request, from the Actions tab or `gh workflow run ci.yml
+    # --ref <branch>`, before anything that touches the send path, the outbox,
+    # persistence, or the composer. What still runs on every pull request is the
+    # part that has never flaked: both package suites (release) and SwiftLint.
+    #
+    # To put it back on every push, delete this `if:` and restore the save
+    # step's condition below.
+    if: github.event_name == 'workflow_dispatch'
     runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
@@ -141,9 +162,12 @@ jobs:
             COMPILER_INDEX_STORE_ENABLE=NO \
             CODE_SIGNING_ALLOWED=NO
 
-      # Only a merge to main writes a cache, and only when the tests passed.
+      # Only a run on main writes a cache, and only when the tests passed. This
+      # used to read `github.event_name == 'push'`; with the job request-only
+      # there is no push to write one, so a manual run from main is now what
+      # refreshes what the next branch restores.
       - name: Save build cache
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main'
         uses: actions/cache/save@v4
         with:
           path: ${{ env.CACHE_PATHS }}

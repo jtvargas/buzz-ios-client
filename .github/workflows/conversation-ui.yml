@@ -71,6 +71,28 @@ jobs:
             xcrun simctl spawn "$UDID" defaults write com.apple.keyboard.preferences HardwareKeyboardLastSeen -bool false || true
             xcrun simctl shutdown "$UDID" || true
           fi
+      # `ComposerAttachmentLayoutTests` and `ComposerGrowthTests` drive Apple's own photo
+      # picker, which shows nothing at all on a runner's empty library — and the picker is
+      # where the composer's height comes from, so without this both suites fail for an
+      # environment reason rather than on anything about the app.
+      #
+      # The picture is written here rather than committed: a 64-point checkerboard is four
+      # lines of base64, and a binary in the repo for one test is a thing to keep in step
+      # with nothing. Its content does not matter — the tile is a fixed 72 points and the
+      # fixture's uploader stores nothing (`ConversationFixture.InertUploader`).
+      - name: Seed the photo library
+        run: |
+          UDID=$(xcrun simctl list devices available | sed -n 's/.*(\([0-9A-Fa-f-]\{36\}\)).*/\1/p' | head -1)
+          [ -n "$UDID" ] || exit 0
+          PICTURE="$RUNNER_TEMP/fixture-photo.png"
+          base64 --decode > "$PICTURE" <<'PNG'
+          iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAAY0lEQVR42u3XoREAIAwEwZSdEikr
+          FbyKgWHREay6+TrhdXi33RcAAAAAwArwykfTPQAAAADADqDEAAAAAPaAEgMAAADYA0oMAAAAYA8o
+          MQAAAIA9oMQAAAAA9oASAwAAAHwDGJr2AcMOzgMsAAAAAElFTkSuQmCC
+          PNG
+          xcrun simctl boot "$UDID" || true
+          xcrun simctl bootstatus "$UDID" -b || true
+          xcrun simctl addmedia "$UDID" "$PICTURE"
       # Its own job, and deliberately not part of `app`: this is minutes of real UI driving
       # against eight conversation shapes, where that one is seconds of unit tests. Keeping
       # them apart means the fast gate stays fast and a slow shape cannot mask a unit failure.

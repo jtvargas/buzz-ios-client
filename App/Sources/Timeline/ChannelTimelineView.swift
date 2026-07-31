@@ -60,6 +60,7 @@ struct ChannelTimelineView: View {
         store: BuzzEventStore,
         engine: SyncEngine,
         drafts: ComposerDrafts? = nil,
+        uploader: (any MediaUploading)? = nil,
         selfPubkey: String?,
         knownPeer: String? = nil,
         focusingComposer focusesComposer: Bool = false
@@ -74,6 +75,7 @@ struct ChannelTimelineView: View {
             prefetcher: engine,
             presence: engine.presenceStore,
             drafts: drafts,
+            uploader: uploader,
             selfPubkey: selfPubkey,
             knownPeer: knownPeer,
             lifecycleEngine: engine,
@@ -101,6 +103,7 @@ struct ChannelTimelineView: View {
         prefetcher: (any ThreadPrefetching)? = nil,
         presence: PresenceStore,
         drafts: ComposerDrafts? = nil,
+        uploader: (any MediaUploading)? = nil,
         selfPubkey: String?,
         knownPeer: String? = nil,
         lifecycleEngine: SyncEngine? = nil,
@@ -124,6 +127,7 @@ struct ChannelTimelineView: View {
             typing: typing,
             readStateMarking: readStateMarking,
             drafts: drafts,
+            uploader: uploader,
             selfPubkey: selfPubkey
         ))
         _presence = State(initialValue: PresenceModel(store: presence))
@@ -157,6 +161,7 @@ struct ChannelTimelineView: View {
             jumpTarget: model.jumpTarget,
             contentRevision: model.contentRevision,
             newestID: model.items.newestMessageID,
+            composerRevision: model.attachments.barRevision,
             onReachedTop: loadOlderPage,
             onLeavingScreen: releaseComposer
         ) {
