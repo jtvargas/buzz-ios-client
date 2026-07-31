@@ -139,6 +139,11 @@ schemes:
       config: Debug
       targets:
         - HiveTests
+    # Named rather than left to the generator's default, because this is the
+    # action Xcode Cloud performs to produce a TestFlight build and a scheme that
+    # archived Debug would upload an unoptimised app with its test hooks in it.
+    archive:
+      config: Release
   # Runs the scroll shapes alone. `Hive` deliberately does not include them.
   ConversationUITests:
     build:
