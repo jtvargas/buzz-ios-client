@@ -153,6 +153,8 @@ final class ConversationReaderPlace {
     /// Whether the reader has ever moved this conversation themselves — by dragging it, or
     /// by taking the pill to a particular message.
     var hasMoved = false
+    /// Whether a jump to the newest message is still animating — see ``scrollCameToRest()``.
+    private var isLandingOnNewest = false
 
     /// The distance last seen while the height was holding still and no settling window was
     /// open — the reader's own place, as opposed to a place a correction put them in.
@@ -196,6 +198,59 @@ final class ConversationReaderPlace {
         // first reading — before the new content has been measured at all, which is the one
         // moment it exists to cover.
         stableRun = 0
+    }
+
+    /// A jump to the newest message has just been issued.
+    ///
+    /// It makes the reader, by the definition this whole file works to, someone who is not
+    /// parked in history — so ``hasMoved`` is cleared and the invariant above applies to them
+    /// again: *a conversation nobody has moved belongs at its newest message.*
+    ///
+    /// Without that the jump is undone. ``correction(for:atBottomSlack:)`` corrects toward
+    /// ``anchoredDistance``, which is still the distance the reader had *before* the jump —
+    /// the window it was measured in has no reason to have closed — so the first content
+    /// change to arrive afterwards takes them back to it. An own send is exactly that shape:
+    /// the row the jump is aimed at commits a moment *after* the jump, and the correction
+    /// greeting it is what springs the author back up into the history they were reading.
+    ///
+    /// The reader's own drag re-arms `hasMoved` if they take hold of the list — see
+    /// ``ConversationScaffold``'s scroll-phase observer, which sets it for every phase but the
+    /// animated one this jump runs in.
+    func jumpToNewestBegan() {
+        hasMoved = false
+        isLandingOnNewest = true
+    }
+
+    /// A scroll has come to rest. Says whether the jump that started it still has work to do.
+    ///
+    /// # Why a jump has to be asserted twice
+    ///
+    /// "The newest message" is resolved against the newest row *that exists when the jump is
+    /// issued*, and the case this surface exists to serve has a newer one arriving a moment
+    /// later: an author sends, and the row is signed and committed a beat after the tap, by
+    /// which time the scroll aimed at what was newest *then* is already in flight. The owner
+    /// does ask again when the row lands (``ChannelTimelineModel/landOnOwnSend(among:)``) —
+    /// but that ask arrives *during* the animation, and neither of the two things that would
+    /// serve it can act there: a `scrollTo` issued into an in-flight animated scroll has no
+    /// visible effect, and ``correction(for:atBottomSlack:)`` refuses everything while
+    /// ``isScrolling``, spending the new row's own height change on a reading it cannot use.
+    ///
+    /// Measured on iPhone 17 Pro / iOS 26, `thread-8-longopener`, same commit, four runs:
+    /// three landed on the message that had just been sent and one landed on the row that had
+    /// been newest at the tap, leaving the message 67 points below the readable band. The
+    /// three are the runs where the commit happened to land after the animation had ended.
+    ///
+    /// So the destination is asserted once more at rest, where the newest row is whatever it
+    /// now really is and has a real frame to be scrolled to. In the ordinary case it is a
+    /// no-op: the scroll view is already there.
+    ///
+    /// ``hasMoved`` is the guard, and it is exact — ``jumpToNewestBegan()`` clears it as the
+    /// jump starts and the reader's own drag sets it again, so someone who took hold of the
+    /// list mid-flight is left where they put it.
+    func scrollCameToRest() -> Correction {
+        guard isLandingOnNewest else { return .none }
+        isLandingOnNewest = false
+        return hasMoved ? .none : .bottom
     }
 
     /// The keyboard came up or went away, taking room off the bottom of the scrollable

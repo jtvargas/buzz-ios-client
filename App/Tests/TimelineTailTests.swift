@@ -85,7 +85,7 @@ struct TimelineTailTests {
         #expect(model.jumpToken == 0)
     }
 
-    @Test("an own send releases the freeze and jumps, so it is never hidden behind it")
+    @Test("an own send releases the freeze and jumps at the tap, not at the relay's answer")
     func ownSendJumps() async throws {
         let temp = TempStore()
         defer { temp.remove() }
@@ -103,13 +103,122 @@ struct TimelineTailTests {
         model.draft = "mine"
         model.send()
 
-        // The jump lands once the message is really queued rather than at the tap: an
-        // over-ceiling send throws before anything is enqueued, and yanking a reader out
-        // of history for a message that never left the device is worse than not moving.
-        await waitUntil { await sender.sent.count == 1 }
-        await waitUntil { model.isAtBottom }
-        #expect(model.jump.unreadCount == 0)
+        // Synchronously, with no suspension in between. `SyncEngine.enqueue` commits the
+        // outbox row and then waits for the drain — a publish round trip for every queued
+        // row — so a jump behind that `await` arrives whenever the relay does. The freeze
+        // has to come off here for a second reason: the message is newer than the boundary,
+        // so while the freeze stands it is not rendered and there is nothing to land on.
+        #expect(model.isAtBottom)
         #expect(model.jumpToken == 1)
+        #expect(model.jump.unreadCount == 0)
+        await waitUntil { await sender.sent.count == 1 }
+    }
+
+    @Test("the jump is re-asked once the message the author wrote is really on screen")
+    func ownSendLandsOnItsOwnRow() async throws {
+        let temp = TempStore()
+        defer { temp.remove() }
+        let store = try temp.open()
+        let author = try Fixture()
+        _ = try await store.ingest(batch: [
+            try author.message("one", in: "room-1", at: 1_000),
+        ], phase: .backfill)
+
+        let sender = try RecordingSender()
+        let model = ChannelTimelineModel(channel: "room-1", store: store, sender: sender)
+        let run = Task { await model.run() }
+        defer { run.cancel() }
+        await waitUntil { model.hasLoaded }
+        model.isAtBottom = false
+
+        model.draft = "mine"
+        model.send()
+        await waitUntil { await sender.sent.count == 1 }
+        let sent = try #require(await sender.events.first)
+
+        // At the tap the message had not been signed, so the jump could only aim at the row
+        // that was newest *then*. Until this row exists there is nothing better to ask for.
+        await waitUntil { model.awaitingOwnSend == sent.id }
+        #expect(model.jumpToken == 1)
+
+        // It commits — the moment the outbox row lands on a device — and the jump is asked
+        // again, now that the newest row is the message the author wrote.
+        _ = try await store.ingest(batch: [sent], phase: .live)
+        await waitUntil { model.rows.contains { $0.id == sent.id } }
+        await waitUntil { model.jumpToken == 2 }
+        #expect(model.awaitingOwnSend == nil)
+        #expect(model.jumpTarget == .bottom)
+    }
+
+    @Test("the freeze holds an own send too, so an author back in history is not chased")
+    func theFreezeHoldsAnOwnSend() async throws {
+        let temp = TempStore()
+        defer { temp.remove() }
+        let store = try temp.open()
+        let author = try Fixture()
+        _ = try await store.ingest(batch: [
+            try author.message("one", in: "room-1", at: 1_000),
+        ], phase: .backfill)
+
+        let sender = try RecordingSender()
+        let model = ChannelTimelineModel(channel: "room-1", store: store, sender: sender)
+        let run = Task { await model.run() }
+        defer { run.cancel() }
+        await waitUntil { model.hasLoaded }
+        model.isAtBottom = false
+
+        model.draft = "mine"
+        model.send()
+        await waitUntil { await sender.sent.count == 1 }
+        let sent = try #require(await sender.events.first)
+        await waitUntil { model.awaitingOwnSend == sent.id }
+
+        // They go back to reading history before it arrives. The freeze re-arms, and it holds
+        // their own message like any other arrival — so nothing lands on it and nothing moves
+        // them out of what they chose to look at. That is the only guard: `isAtBottom` cannot
+        // be one here, because a jump's own animation flips it (see the case below).
+        model.isAtBottom = false
+        _ = try await store.ingest(batch: [sent], phase: .live)
+        await waitUntil { model.jump.unreadCount == 1 }
+        #expect(!model.rows.contains { $0.id == sent.id })
+        #expect(model.jumpToken == 1)
+    }
+
+    @Test("a jump's own animation cannot cancel the landing it is on the way to")
+    func theFlightDoesNotCancelTheLanding() async throws {
+        let temp = TempStore()
+        defer { temp.remove() }
+        let store = try temp.open()
+        let author = try Fixture()
+        _ = try await store.ingest(batch: [
+            try author.message("one", in: "room-1", at: 1_000),
+        ], phase: .backfill)
+
+        let sender = try RecordingSender()
+        let model = ChannelTimelineModel(channel: "room-1", store: store, sender: sender)
+        let run = Task { await model.run() }
+        defer { run.cancel() }
+        await waitUntil { model.hasLoaded }
+        model.isAtBottom = false
+
+        model.draft = "mine"
+        model.send()
+        await waitUntil { await sender.sent.count == 1 }
+        let sent = try #require(await sender.events.first)
+        await waitUntil { model.awaitingOwnSend == sent.id }
+
+        // What the scaffold reports while the jump is in flight. A reader parked in history is
+        // still hundreds of points from the bottom on the first frame of an animated scroll, so
+        // geometry writes `false` and then `true` again as it lands — and the message being
+        // waited for is not the author changing their mind. Measured on a simulator: treating
+        // it as one left the second jump unasked and the author's own message under the
+        // composer, which is the whole defect.
+        model.isAtBottom = false
+        model.isAtBottom = true
+
+        _ = try await store.ingest(batch: [sent], phase: .live)
+        await waitUntil { model.jumpToken == 2 }
+        #expect(model.awaitingOwnSend == nil)
     }
 
     @Test("an own send from the bottom does not re-anchor the author")

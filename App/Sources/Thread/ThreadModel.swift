@@ -74,6 +74,11 @@ final class ThreadModel {
         }
     }
 
+    /// An own reply that has been queued but has not appeared on screen yet — the row the
+    /// next rebuild has to land the author on. The channel timeline's own mechanism, for the
+    /// reason written on ``ChannelTimelineModel/awaitingOwnSend``.
+    @ObservationIgnored var awaitingOwnSend: String?
+
     /// What the affordances above the reply composer show: how many replies the freeze
     /// is holding back, which one to land on, and whether the newest reply is far enough
     /// below to offer a way back. The channel timeline's own, so a thread cannot grow a
@@ -252,6 +257,7 @@ final class ThreadModel {
             contentRevision += 1
         }
         jump.hold(count: split.held.count, firstID: split.held.first?.id)
+        landOnOwnSend(among: split.rendered)
     }
 
     /// The thread's rendered items, with the separator above its own opener removed.

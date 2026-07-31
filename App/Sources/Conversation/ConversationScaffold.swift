@@ -242,10 +242,10 @@ struct ConversationScaffold<Content: View, Bar: View, Accessory: View>: View {
         .onScrollPhaseChange { _, phase in
             place.isScrolling = phase != .idle
             // Every phase but the one this file causes itself. Naming the reader's phases
-            // instead would be a list to keep in step with the framework, and getting it
-            // wrong is silent: the conversation would simply pin itself to the newest
-            // message under someone reading history.
+            // instead is a list to keep in step with the framework, and getting it wrong is
+            // silent: the conversation would pin itself under someone reading history.
             if phase != .idle, phase != .animating { place.hasMoved = true }
+            if phase == .idle { apply(place.scrollCameToRest(), using: proxy) }
         }
         .scrollPosition($position)
         // Two roles, not three. `.initialOffset` opens the conversation at its newest
@@ -341,9 +341,8 @@ struct ConversationScaffold<Content: View, Bar: View, Accessory: View>: View {
         case .none:
             break
         case .bottom:
-            // The newest *row*, never the content's bottom edge. The edge is what put the
-            // reader past the end of a largely invented extent, with nothing rendered and no
-            // recovery — see ``newestID``.
+            // The newest *row*, never the content's bottom edge: the edge put the reader past
+            // the end of a largely invented extent, with nothing rendered (see ``newestID``).
             if let newestID { proxy.scrollTo(newestID, anchor: .bottom) }
         case let .offset(target):
             position.scrollTo(y: target)
@@ -372,14 +371,15 @@ struct ConversationScaffold<Content: View, Bar: View, Accessory: View>: View {
         withAnimation(.smooth(duration: 0.2)) {
             switch jumpTarget {
             case .bottom:
-                // Anchored at the bottom, which is where a conversation rests anyway. Nothing
-                // here reads the extent.
+                // Anchored at the bottom, where a conversation rests anyway; nothing reads the
+                // extent. The declaration stops the settling that follows from undoing this,
+                // and has the destination asserted again once the scroll comes to rest.
                 if let newestID { proxy.scrollTo(newestID, anchor: .bottom) }
+                place.jumpToNewestBegan()
             case let .message(id):
-                // Anchored at the top, so the first thing under the reader's eye is the
-                // first message they have not read; a target too near the end of the
-                // content simply lands as far as the scroll view can go, which is the
-                // bottom — and the bottom is where that message is anyway.
+                // Anchored at the top, so the first thing under the reader's eye is the first
+                // message they have not read; a target too near the end of the content lands as
+                // far as the scroll view can go, which is the bottom — where it is anyway.
                 proxy.scrollTo(id, anchor: .top)
                 // Landing on a message is the reader choosing a place that is not the
                 // newest one, exactly as a drag is. Without this, the next content change

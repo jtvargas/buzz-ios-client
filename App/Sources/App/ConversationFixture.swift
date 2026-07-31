@@ -283,23 +283,41 @@ enum ConversationFixture {
 
     // MARK: - Substituted sinks
 
-    /// Sends nothing. The suite drives the composer's *focus* — which is what moves the
-    /// keyboard and the scroll view — and never its send button, so a sink that refuses is
-    /// more honest than one that pretends.
-    struct InertSender: MessageSending {
+    /// Signs what the composer sends and queues it in the fixture's own store.
+    ///
+    /// It used to refuse — the suite drove the composer's *focus*, which is what moves the
+    /// keyboard, and never its send button. Where the conversation puts an author who has just
+    /// sent something is a scroll question of exactly the same kind, and it cannot be asked of a
+    /// sink that pretends: the whole behaviour under test is what happens when the row lands.
+    ///
+    /// It stops at the queue, because there is no relay here. The row stays `pending` and
+    /// renders as a pending own send — the state a real device shows for the moment between
+    /// pressing send and the relay's OK, which is precisely the moment the scroll decision is
+    /// made in.
+    struct StoringSender: MessageSending {
+        let store: BuzzEventStore
+        let signer: InMemorySigner
+
         @discardableResult
         func enqueue(
-            kind _: EventKind,
-            content _: String,
-            in _: String,
-            tags _: [[String]],
-            maxContentBytes _: Int
+            kind: EventKind,
+            content: String,
+            in channel: String,
+            tags: [[String]],
+            maxContentBytes: Int
         ) async throws -> OutboxEntry {
-            throw FixtureSendUnavailable()
+            try await store.enqueue(
+                kind: kind,
+                content: content,
+                in: channel,
+                tags: tags,
+                with: signer,
+                maxContentBytes: maxContentBytes
+            )
         }
 
-        func retry(_: String) async throws { throw FixtureSendUnavailable() }
-        func discard(_: String) async throws { throw FixtureSendUnavailable() }
+        func retry(_ eventID: String) async throws { try await store.retry(eventID) }
+        func discard(_ eventID: String) async throws { try await store.discard(eventID) }
     }
 
     /// Stores nothing, and answers anyway.
@@ -329,10 +347,6 @@ enum ConversationFixture {
         func openThread(root _: String) async throws -> [NostrEvent] { [] }
     }
 }
-
-/// Thrown by ``ConversationFixture/InertSender``: the suite drives the composer's focus, never
-/// its send button.
-private struct FixtureSendUnavailable: Error {}
 
 private extension Array {
     subscript(safe index: Int) -> Element? {

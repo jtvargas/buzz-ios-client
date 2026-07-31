@@ -356,4 +356,36 @@ struct ConversationReaderPlaceTests {
         place.isScrolling = false
         #expect(feed(place, [span(height: 60_000, offset: 25_000, distance: 26_000)]) == [.offset(45_000)])
     }
+
+    @Test("a jump to the newest message asserts its destination again when the scroll rests")
+    func aJumpIsAssertedAgainAtRest() {
+        // The newest row can change *during* the jump — an own send is signed and committed a
+        // beat after the tap — and neither a `scrollTo` into an in-flight animation nor a
+        // correction (refused while `isScrolling`) can act on that. So the destination is
+        // asked for once more at rest, where the newest row is whatever it now really is.
+        let place = ConversationReaderPlace()
+        place.hasMoved = true
+        place.jumpToNewestBegan()
+        #expect(!place.hasMoved)
+        #expect(place.scrollCameToRest() == .bottom)
+
+        // Once, not on every scroll that ever comes to rest.
+        #expect(place.scrollCameToRest() == .none)
+    }
+
+    @Test("a reader who takes hold of the list mid-jump is left where they put it")
+    func aDragDuringAJumpWins() {
+        let place = ConversationReaderPlace()
+        place.jumpToNewestBegan()
+        // What ``ConversationScaffold``'s scroll-phase observer does for any phase the reader
+        // caused. The jump is theirs to overrule from the moment they touch it.
+        place.hasMoved = true
+        #expect(place.scrollCameToRest() == .none)
+    }
+
+    @Test("a scroll that no jump started asks for nothing")
+    func anOrdinaryScrollRestsWithoutCorrecting() {
+        let place = ConversationReaderPlace()
+        #expect(place.scrollCameToRest() == .none)
+    }
 }

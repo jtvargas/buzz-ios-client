@@ -11,7 +11,7 @@ extension ChannelTimelineModel {
     /// scroll to the newest row.
     ///
     /// No control offers this any more — `↓ Latest` is gone. It stays because an own send
-    /// still needs it (``jumpToLatestIfNeeded()``), and because it is where
+    /// still needs it (``shouldJumpToOwnSend``), and because it is where
     /// ``jumpToNewMessages()`` lands a press that raced the reader back to the bottom.
     ///
     /// The freeze is exactly the inverse of ``isAtBottom``, so setting that releases
@@ -19,6 +19,47 @@ extension ChannelTimelineModel {
     /// position a frame later and re-freezes if the scroll did not land.
     func jumpToLatest() {
         isAtBottom = true
+        jumpTarget = .bottom
+        jumpToken += 1
+    }
+
+    /// Re-asks for the jump an own send already started, now that the message is on screen.
+    ///
+    /// Called from ``rebuild()``, which is why only ``jumpTarget`` and ``jumpToken`` are
+    /// touched: writing ``isAtBottom`` here would call `rebuild` again from its own `didSet`.
+    /// There is nothing left for it to do anyway — the send released the freeze at the tap,
+    /// which is the only reason this row is among `rendered` to be found.
+    func landOnOwnSend(among rendered: [TimelineRow]) {
+        guard let awaiting = awaitingOwnSend,
+              rendered.contains(where: { $0.id == awaiting }) else { return }
+        awaitingOwnSend = nil
+        jumpTarget = .bottom
+        jumpToken += 1
+    }
+
+    /// Lands the author on the message they just sent, now that it has an id.
+    ///
+    /// The second half of the trip ``send()`` started at the tap. If the row is already
+    /// rendered — the store's observation beat the enqueue's return — the jump goes now;
+    /// otherwise it is recorded and ``landOnOwnSend(among:)`` fires it the moment the row lands.
+    ///
+    /// # Why there is no "is the author still at the bottom" guard here
+    ///
+    /// Because ``isAtBottom`` cannot answer that question at this moment. The jump the tap
+    /// asked for is *animating*, and the scaffold writes this flag from scroll geometry on the
+    /// way — a reader who was parked in history is still 800 points from the bottom on the
+    /// first frame, so `isAtBottom` goes back to `false` mid-flight and returns to `true` when
+    /// the animation lands. Measured: guarding on it here left the second jump unasked and the
+    /// author's own message 67 points under the composer.
+    ///
+    /// The freeze is the guard instead, and it is the honest one. An author who really has
+    /// gone back to reading history re-arms it, their own message is held behind it like any
+    /// other arrival, and a row that is not rendered is never landed on.
+    func landOn(ownSend eventID: String) {
+        guard rows.contains(where: { $0.id == eventID }) else {
+            awaitingOwnSend = eventID
+            return
+        }
         jumpTarget = .bottom
         jumpToken += 1
     }
