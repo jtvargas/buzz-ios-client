@@ -154,6 +154,11 @@ struct ProfileSheetView: View {
         .buttonStyle(.glassProminent)
     }
 
+    /// The key row's corner. Named because two things have to agree on it — the glass the
+    /// row is drawn on, and the shape a press is washed in — and a wash in the wrong shape
+    /// is more visible than no wash at all.
+    private static let keyRowRadius: CGFloat = 12
+
     /// The key, with a copy action. Truncated in the middle so both ends — the part
     /// people actually compare — stay visible at any width.
     ///
@@ -187,8 +192,13 @@ struct ProfileSheetView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(.rect)
             }
-            .buttonStyle(.plain)
-            .glassEffect(.regular, in: .rect(cornerRadius: 12))
+            // The row emphasis on something that does have edges, for a reason particular to
+            // this control: the glass below is applied to the *button*, outside the style, so
+            // it is not carried by the style's scale. A shrink would pull the key and its
+            // glyph inward from a glass edge that stayed exactly where it was. The wash is
+            // the whole of the feedback here, and it is drawn in the glass's own rectangle.
+            .buttonStyle(.hivePress(.row, in: .rect(cornerRadius: Self.keyRowRadius)))
+            .glassEffect(.regular, in: .rect(cornerRadius: Self.keyRowRadius))
             .accessibilityLabel(didCopyKey ? "Key copied" : "Copy key")
             .animation(.snappy(duration: 0.2), value: didCopyKey)
             // The checkmark is an acknowledgement, not a state: it says "that went to the

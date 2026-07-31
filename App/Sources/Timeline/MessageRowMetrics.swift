@@ -91,27 +91,12 @@ enum MessageRowMetrics {
         let diameter = max(9, size * 0.32)
         return (diameter, max(1.5, diameter * 0.18))
     }
-}
 
-/// The pressed state for the small controls on a message — the avatar, the sender's
-/// name, and the conversation header pill.
-///
-/// A dim rather than a fill or a scale: these sit directly on the conversation with no
-/// background of their own, so anything that draws a shape on press would turn part of
-/// a message into a button, which is the thing §3 rules out. Deliberately no
-/// `sensoryFeedback`: the brief asks for visual feedback *without* haptics, and a tap
-/// that buzzes on the way to a profile sheet competes with the sheet's own presentation.
-///
-/// `contentShape` is applied here so every adopter gets a hit area covering its whole
-/// frame — a `Text` otherwise only accepts taps on its glyphs.
-struct PressFeedbackButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .contentShape(.rect)
-            .opacity(configuration.isPressed ? 0.55 : 1)
-            // Scoped to this control's own press, never ambient: an animation reaching
-            // the enclosing list would animate row insertion in a bottom-anchored
-            // scroll view.
-            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
-    }
+    /// How far a pressed message's highlight bleeds past the row, vertically. The
+    /// horizontal bleed is ``rowLeading`` — the inset the surface applies — so the
+    /// highlight reaches both screen edges the way a list row's does.
+    ///
+    /// Half ``withinGroup``, so a pressed message inside a block lights up without its
+    /// highlight touching the message stacked under it.
+    static let pressBleed: CGFloat = 3
 }

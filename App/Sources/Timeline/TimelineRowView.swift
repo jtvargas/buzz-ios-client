@@ -9,13 +9,19 @@ import SwiftUI
 ///
 /// # What the row deliberately is not
 ///
-/// It has no background, no border, and no inset panel (§3: *do not make every message
-/// look like a card*). The only thing between two messages is ``MessageRowMetrics``'
-/// space — 12pt between blocks, 6pt inside one — applied by the enclosing list rather
-/// than as padding here, so the row's height is its content's height and nothing else
-/// whether or not it names its author (``showsAuthorHeader``). The two controls it does
-/// carry — the avatar and the name — show a pressed dim and no haptic, because a tap
-/// there is on its way to a sheet that will announce itself.
+/// It has no resting background, no border, and no inset panel (§3: *do not make every
+/// message look like a card*). The only thing between two messages is
+/// ``MessageRowMetrics``' space — 12pt between blocks, 6pt inside one — applied by the
+/// enclosing list rather than as padding here, so the row's height is its content's height
+/// and nothing else whether or not it names its author (``showsAuthorHeader``). The one
+/// thing it does draw behind itself is the wash under a finger
+/// (``SwiftUI/View/messagePressGlow(_:)``), which lasts exactly as long as the press: a
+/// message that lights up while it is being held is not a card, and it is the only way to
+/// see which message the sheet about to cover the screen belongs to.
+///
+/// The two controls it carries — the avatar and the name — take the `inline` press
+/// treatment and no haptic, because a tap there is on its way to a sheet that will
+/// announce itself.
 ///
 /// # Where the name and the time come from
 ///
@@ -44,9 +50,15 @@ struct TimelineRowView: View {
     /// The stack's own navigation, for a pressed `#`-channel or internal message link.
     @Environment(\.openConversation) private var openConversation
     @State private var arbitration = RowTapArbitration()
-    /// Bumped by each recognised long press, purely so the haptic below has a trigger. A
-    /// context menu played one of these for free; a sheet does not.
-    @State private var longPresses = 0
+    /// Whether a finger is currently down on this message.
+    ///
+    /// Driven by the long press the row already recognises — see ``pressGesture`` — and
+    /// nothing else. `@GestureState` and not `@State` because it has to answer *cancel* as
+    /// well as lift: the framework resets it when the gesture ends however it ended, which
+    /// is what takes the highlight off the moment the press turns into a scroll. A `@State`
+    /// flag would need every one of those endings written out, and would keep a message lit
+    /// on the one that got missed.
+    @GestureState private var isPressed = false
 
     /// The avatar's point size, and so the width the content column is indented by, at
     /// this reader's text size. Scaled against `.subheadline` — the name beside it — so
@@ -171,6 +183,10 @@ struct TimelineRowView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        // Applied to the whole row, and only ever true where ``pressGesture`` armed the
+        // long press: a surface that presents no sheet lights nothing up, because there is
+        // nothing for the light to be announcing.
+        .messagePressGlow(isPressed)
         .opacity(row.delivery == .pending ? 0.5 : 1)
         // Both animations are scoped to a value on *this* row, never ambient: a
         // pending→sent handover fades, and nothing here can catch the enclosing list
@@ -179,9 +195,6 @@ struct TimelineRowView: View {
         .animation(.default, value: isAuthorOnline)
         .contentShape(.rect)
         .gesture(pressGesture)
-        // What the context menu this replaced played on recognition, and what tells a reader
-        // the sheet is coming before it has drawn a pixel.
-        .sensoryFeedback(.impact(weight: .medium), trigger: longPresses)
         // Every interactive range of a message — mention, channel, link, email,
         // internal link — is a link run, because that is the only run of a `Text` a
         // reader can press (see ``RichTextTarget``). They all arrive here. Marking the
@@ -255,13 +268,26 @@ struct TimelineRowView: View {
     /// The `guard` is not a nicety: without a sheet to open, an armed long press would win
     /// the press and swallow the tap, which is the Threads screen's rows losing their only
     /// way into a thread.
+    ///
+    /// ``isPressed`` is taken from the same recogniser rather than from one added beside it,
+    /// and that is not a tidiness point either: a zero-distance drag over a row, which is the
+    /// usual way to observe a touch going down, competes with the message list's own
+    /// scrolling — the reason the round that first asked for pressed feedback on a message
+    /// settled for a flash on release. `updating` costs the gesture nothing; it reports the
+    /// press the row is already tracking, and the framework clears it on lift *and* on the
+    /// cancel that a scroll turns the press into.
     private var pressGesture: AnyGesture<Void> {
         let tap = TapGesture().onEnded { scheduleRowTap() }
         guard let onLongPress, !row.isDeleted else { return AnyGesture(tap) }
         return AnyGesture(
             LongPressGesture(minimumDuration: Self.longPressDuration)
+                .updating($isPressed) { pressing, isPressed, _ in
+                    isPressed = pressing
+                }
                 .onEnded { _ in
-                    longPresses += 1
+                    // What the context menu this replaced played on recognition, and what
+                    // tells a reader the sheet is coming before it has drawn a pixel.
+                    HiveHaptics.play(.longPress)
                     onLongPress()
                 }
                 .exclusively(before: tap)
@@ -360,37 +386,5 @@ struct TimelineRowView: View {
             channels: channelNameMap,
             selfPubkey: selfPubkey
         )
-    }
-}
-
-// MARK: - Tap arbitration
-
-/// Whether a tap that has already landed on one of a message row's own controls should
-/// also be allowed to open the row's thread.
-///
-/// A deadline rather than a flag with a timer behind it. Both express "for a moment after a
-/// control acts", but a flag needs a second scheduled block to clear it, and two controls
-/// acting inside the same window then leave one block clearing a suppression the other had
-/// just set. A deadline has nothing to keep in step — and it makes the rule a value, so the
-/// ordering it exists to enforce is unit-tested instead of eyeballed on a device.
-struct RowTapArbitration {
-    /// How long a control's action keeps the row's own tap from firing.
-    ///
-    /// One main-actor turn would be enough for the gestures that complete together, which
-    /// is the common case; a tenth of a second also covers a control whose action lands a
-    /// frame or two late, and is far short of the interval between two deliberate taps.
-    static let window: TimeInterval = 0.1
-
-    private var suppressedUntil: Date?
-
-    /// Records that a control on the row has just handled this tap.
-    mutating func controlDidAct(now: Date = .now) {
-        suppressedUntil = now.addingTimeInterval(Self.window)
-    }
-
-    /// Whether the row's deferred tap should be dropped.
-    func suppressesRowTap(now: Date = .now) -> Bool {
-        guard let suppressedUntil else { return false }
-        return suppressedUntil > now
     }
 }

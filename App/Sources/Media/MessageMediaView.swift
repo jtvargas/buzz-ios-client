@@ -157,13 +157,21 @@ private extension MessageMediaView {
                         .aspectRatio(contentMode: MessageMediaLayout.contentMode(for: media))
                 }
             }
-            .buttonStyle(.plain)
+            // A picture that fills its box covers the wash, so what a finger reads here is
+            // the shrink: the tile pulls in and the frame's own fill shows around it. The
+            // shape is named anyway, because the box a picture was fitted into rather than
+            // filled is the case where the wash is the visible half — it lands in the
+            // letterbox bands, and in the frame's corner rather than a squarer one.
+            .buttonStyle(.hivePress(.control, in: MessageMediaFrame.shape))
         } else if hasFailed {
             if isRetryable {
                 Button { retry() } label: {
                     MessageMediaFailureView(media: media)
                 }
-                .buttonStyle(.plain)
+                // The same treatment as the picture it stands in for. A notice that answered
+                // a press differently from the tile it replaced would be two vocabularies in
+                // one box, and this one is a control for the same reason that one is.
+                .buttonStyle(.hivePress(.control, in: MessageMediaFrame.shape))
             } else {
                 // A URL this app cannot parse has nothing to try again, so the notice is
                 // drawn without a control rather than with one that visibly does nothing.

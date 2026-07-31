@@ -115,7 +115,7 @@ struct ComposerAttachmentStrip: View {
                 .frame(width: removeTarget, height: removeTarget, alignment: .topTrailing)
                 .contentShape(.rect)
         }
-        .buttonStyle(PressFeedbackButtonStyle())
+        .buttonStyle(.hivePress)
         .accessibilityLabel("Remove picture")
     }
 }

@@ -102,7 +102,10 @@ struct SidebarSectionHeader: View {
             .frame(minHeight: 44)
             .contentShape(.rect)
         }
-        .buttonStyle(.plain)
+        // The row emphasis, the same one the conversations underneath take: this target runs
+        // the width of the list, and a heading that shrank under a finger would pull away
+        // from both screen edges while the rows it introduces stayed where they were.
+        .buttonStyle(.hivePress(.row))
         .accessibilityAddTraits(.isHeader)
         .accessibilityLabel("\(section.title), \(count)")
         .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
@@ -119,7 +122,10 @@ struct SidebarSectionHeader: View {
                 .frame(width: 32, height: 44)
                 .contentShape(.rect)
         }
-        .buttonStyle(.plain)
+        // A control and not the heading's row treatment, which is what keeps three targets on
+        // one row legible under a finger: the `+` washes inside its own box, so a press here
+        // says *this* was hit rather than lighting the whole heading it sits on.
+        .buttonStyle(.hivePress)
         .accessibilityLabel(section.createLabel)
     }
 
@@ -138,7 +144,10 @@ struct SidebarSectionHeader: View {
                 .frame(width: 14, height: 44)
                 .contentShape(.rect)
         }
-        .buttonStyle(.plain)
+        // Named as a capsule rather than left on the shared corner radius: this target is
+        // 14pt wide against 44 tall, and a 10pt radius on a sliver that narrow draws a wash
+        // whose corners nearly meet in the middle — which reads as a shape that missed.
+        .buttonStyle(.hivePress(.control, in: .capsule))
         .accessibilityHidden(true)
     }
 

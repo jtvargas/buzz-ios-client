@@ -49,6 +49,7 @@ struct DraftsView: View {
             titleVisibility: .visible
         ) {
             Button("Delete All", role: .destructive) {
+                HiveHaptics.play(.delete)
                 model.deleteAll()
                 endSelecting()
             }
@@ -82,13 +83,19 @@ struct DraftsView: View {
                 .listRowSeparator(.hidden)
         } else {
             Button { open(summary) } label: { content }
-                // The sidebar's press treatment, and the reason it is a `Button` at all: a
-                // `NavigationLink` inside a `List` draws a disclosure chevron no modifier
-                // declines, and these rows do not push from here — the sidebar's stack does.
-                .buttonStyle(PressFeedbackButtonStyle())
+                // The sidebar's press treatment in the sidebar's own emphasis, and the reason
+                // it is a `Button` at all: a `NavigationLink` inside a `List` draws a
+                // disclosure chevron no modifier declines, and these rows do not push from
+                // here — the sidebar's stack does. A row washes and does not shrink; these
+                // sit in a list beside a swipe action, and a row that pulled in from both
+                // edges under a finger would read as the swipe starting.
+                .buttonStyle(.hivePress(.row))
                 .listRowSeparator(.hidden)
                 .swipeActions(edge: .trailing) {
                     Button(role: .destructive) {
+                        // A swipe action gets no feedback from the system, and this one
+                        // destroys something with no confirmation in front of it.
+                        HiveHaptics.play(.delete)
                         model.delete([summary.id])
                     } label: {
                         Label("Delete", systemImage: "trash")
@@ -118,6 +125,7 @@ struct DraftsView: View {
             }
             ToolbarItem(placement: .topBarTrailing) {
                 Button("Delete", role: .destructive) {
+                    HiveHaptics.play(.delete)
                     model.delete(selection)
                     endSelecting()
                 }

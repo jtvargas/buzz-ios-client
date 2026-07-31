@@ -294,7 +294,10 @@ struct MessageComposerView: View {
                 // sizes.
                 .frame(width: hitTarget, height: hitTarget)
         }
-        .buttonStyle(PressFeedbackButtonStyle())
+        // In a circle, because the thing being pressed is one: a rounded square washing in
+        // behind a round disc is exactly the wrong-shape case the treatment warns about. It
+        // is drawn at the `hitTarget`, so it comes in as a ring just clear of the disc.
+        .buttonStyle(.hivePress(.control, in: .circle))
         .disabled(!canSend)
         .accessibilityLabel(sendAccessibilityLabel)
     }
@@ -314,6 +317,10 @@ struct MessageComposerView: View {
     /// behind with the composer floating above it. Slack keeps the keyboard up after
     /// a send, and so does this.
     private func send() {
+        // Ahead of the handoff, so the tick lands with the touch rather than after whatever
+        // the surface's own send does synchronously on the way out. The button is disabled
+        // unless ``canSend``, so this is only ever reached on a draft that is going.
+        HiveHaptics.play(.send)
         onSend()
         autocomplete.dismiss()
     }

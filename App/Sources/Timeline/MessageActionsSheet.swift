@@ -186,6 +186,10 @@ private struct MessageActionsSheet: View {
     private func quickReaction(_ emoji: String) -> some View {
         let isMine = ownReaction(emoji)
         return Button {
+            // At the target rather than inside ``send(_:)``: the picker's cells reach that
+            // same applier and play their own, so a play there would arrive twice for one
+            // emoji chosen from the picker.
+            HiveHaptics.play(.reaction)
             send(emoji)
         } label: {
             // See ``EmojiPickerView``'s cell for why an emoji is asked for in Inter.
@@ -199,7 +203,10 @@ private struct MessageActionsSheet: View {
                 )
                 .contentShape(.rect)
         }
-        .buttonStyle(PressFeedbackButtonStyle())
+        // In the target's own corner rather than the vocabulary's default: the own-reaction
+        // tint above is drawn at 12, and a wash a couple of points off it would show at the
+        // corners of precisely the reactions a reader presses again.
+        .buttonStyle(.hivePress(.control, in: .rect(cornerRadius: 12)))
         .accessibilityLabel(EmojiCatalog.unicodeName(of: emoji))
         .accessibilityAddTraits(isMine ? [.isSelected] : [])
     }
@@ -221,7 +228,7 @@ private struct MessageActionsSheet: View {
             .frame(height: Self.paletteHeight)
             .contentShape(.rect)
         }
-        .buttonStyle(PressFeedbackButtonStyle())
+        .buttonStyle(.hivePress)
         .accessibilityLabel("More reactions")
     }
 
@@ -284,6 +291,7 @@ private struct MessageActionsSheet: View {
                 }
             }
             actionRow("Delete", symbol: "trash", role: .destructive) {
+                HiveHaptics.play(.delete)
                 actions.delete(target.row.id)
                 dismiss()
             }
@@ -312,17 +320,9 @@ private struct MessageActionsSheet: View {
             .frame(minHeight: Self.rowHeight)
             .contentShape(.rect)
         }
-        .buttonStyle(MessageActionRowStyle())
-    }
-}
-
-/// A full-width row that lights on press. A fill rather than the dim
-/// ``PressFeedbackButtonStyle`` gives the small controls on a message: this is a list row,
-/// and a row's feedback is the row highlighting.
-private struct MessageActionRowStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .background(Color.secondary.opacity(configuration.isPressed ? 0.16 : 0))
-            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
+        // A row rather than the emphasis the small controls above take: this is a list row,
+        // and a row's feedback is the row lighting up. One that shrank as well would pull
+        // away from both screen edges and read as a card lifting off the list.
+        .buttonStyle(.hivePress(.row))
     }
 }

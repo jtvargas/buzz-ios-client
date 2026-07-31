@@ -93,7 +93,12 @@ struct ChannelDetailsView: View {
             isPresented: $confirmsDelete,
             titleVisibility: .visible
         ) {
-            Button("Delete Channel", role: .destructive) { delete() }
+            Button("Delete Channel", role: .destructive) {
+                // Archive, beside this, plays nothing: it is reversible, and the one
+                // two-beat feedback in the app is reserved for what is not.
+                HiveHaptics.play(.delete)
+                delete()
+            }
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("This cannot be undone. Cached history will remain read-only on this device.")

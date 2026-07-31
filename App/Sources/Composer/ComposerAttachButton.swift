@@ -56,7 +56,7 @@ struct ComposerAttachButton: View {
         // the bar's height or catch a keyboard-driven layout pass. It also supplies
         // the `contentShape` that makes the whole frame tappable rather than just
         // the glyph.
-        .buttonStyle(PressFeedbackButtonStyle())
+        .buttonStyle(.hivePress)
         .accessibilityLabel("More options")
         // Anchored to this control with the arrow beneath the card, so it opens
         // upward over the conversation. `presentationCompactAdaptation(.popover)`

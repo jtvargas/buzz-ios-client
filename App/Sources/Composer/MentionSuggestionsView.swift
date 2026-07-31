@@ -27,8 +27,8 @@ struct MentionSuggestionsView: View {
         if autocomplete.isComposerFocused, !autocomplete.suggestions.isEmpty {
             panel
                 .transition(.opacity.combined(with: .offset(y: 8)))
-                // Scoped to the panel on purpose. This is the *only* animation in the
-                // composer subtree: an ambient `.animation` anywhere near the bar can
+                // Scoped to the panel on purpose. This is the *only* ambient animation in
+                // the composer subtree: an ambient `.animation` anywhere near the bar can
                 // catch keyboard-driven layout and run the composer's height on a
                 // different clock from the keyboard's, which is the reported flicker.
                 .animation(.smooth(duration: 0.16), value: autocomplete.suggestions.count)
@@ -44,7 +44,12 @@ struct MentionSuggestionsView: View {
                     } label: {
                         MentionSuggestionRow(suggestion: suggestion)
                     }
-                    .buttonStyle(.plain)
+                    // Pressing a suggestion used to answer with nothing at all. A row and
+                    // not a control, because a full-width row shrinking away from the
+                    // panel's edges reads as a card lifting out of it — and the animation
+                    // the style carries is bound to `configuration.isPressed` and scoped to
+                    // the label, so it cannot catch a layout pass the way an ambient one can.
+                    .buttonStyle(.hivePress(.row))
                 }
             }
         }

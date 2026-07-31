@@ -410,7 +410,11 @@ private extension ChannelListView {
     /// A `Button` and not a `NavigationLink`, which is the only way the trailing `>` goes: a
     /// link inside a `List` draws a disclosure indicator no modifier can decline. The push is
     /// the link's own — same route, same explicit path — and the press feedback it gave for
-    /// free is ``PressFeedbackButtonStyle``.
+    /// free is ``PressFeedbackButtonStyle``, in its `row` emphasis: a full-width row that
+    /// shrank would pull away from both screen edges and read as a card lifting off the list.
+    /// The wash is the *button's* own press state and nothing else — UIKit cancels it when the
+    /// forward swipe begins (``SidebarForwardSwipeView``), where a gesture reading press-down
+    /// directly would leave every row it crossed dimmed behind the drag.
     func rows(of section: SidebarSectionContent, resumable: String?) -> some View {
         ForEach(section.rows) { row in
             // No peer hint from here: a conversation reached from the sidebar is one the
@@ -421,7 +425,7 @@ private extension ChannelListView {
             } label: {
                 ChannelRowView(row: row, presence: presence)
             }
-            .buttonStyle(PressFeedbackButtonStyle())
+            .buttonStyle(.hivePress(.row))
             .listRowInsets(Self.rowInsets)
             // No per-row rule: sections of ruled rows read as a form, not as one
             // navigation surface. The section headings do the separating.
