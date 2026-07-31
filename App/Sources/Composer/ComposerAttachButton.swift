@@ -67,10 +67,16 @@ struct ComposerAttachButton: View {
             ComposerAttachmentMenu(choose: choose)
                 .presentationCompactAdaptation(.popover)
         }
+        // Bounded by what is left rather than by the cap, so the picker itself stops the
+        // author at five instead of letting them choose pictures that are then dropped.
+        //
+        // `max(1, …)` guards a real trap: a `maxSelectionCount` of **0 means unlimited**, so a
+        // full composer would open an unbounded picker. The zero case never reaches here —
+        // ``present(_:)`` refuses it — and this is the belt to that bracing.
         .photosPicker(
             isPresented: $isShowingPhotosPicker,
             selection: $pickedPhotos,
-            maxSelectionCount: ComposerAttachmentsModel.selectionLimit,
+            maxSelectionCount: max(1, attachments.remainingCapacity),
             matching: .images
         )
         .onChange(of: pickedPhotos) { _, items in attach(items) }
@@ -126,7 +132,15 @@ struct ComposerAttachButton: View {
             return
         }
         switch source {
-        case .photos: isShowingPhotosPicker = true
+        case .photos:
+            // Full already: say so rather than opening a picker whose every choice would be
+            // refused on the way back.
+            guard attachments.remainingCapacity > 0 else {
+                attachments.reportAtCapacity()
+                restoreFocusIfSettled()
+                return
+            }
+            isShowingPhotosPicker = true
         case .camera: isShowingWorkInProgress = true
         }
     }

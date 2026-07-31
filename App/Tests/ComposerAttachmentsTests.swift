@@ -151,28 +151,29 @@ struct ComposerAttachmentsTests {
         #expect(requests.isEmpty)
     }
 
-    /// Ten pictures picked at once must not become ten simultaneous conversions —
-    /// each one holds a full-size bitmap while it runs.
+    /// A full composer's worth picked at once must not become five simultaneous
+    /// conversions — each one holds a full-size bitmap while it runs.
     @Test("no more than three uploads run at once")
     func concurrencyIsCapped() async throws {
         let uploader = StubUploader()
         let model = ComposerAttachmentsModel(uploader: uploader)
+        let picked = ComposerAttachmentsModel.selectionLimit
 
-        model.add((0 ..< 8).map { _ in Self.item() })
-        #expect(model.attachments.count == 8)
+        model.add((0 ..< picked).map { _ in Self.item() })
+        #expect(model.attachments.count == picked)
 
         await Self.waitUntil { await uploader.parkedCount == ComposerAttachmentsModel.maxConcurrentUploads }
         let parked = await uploader.parkedCount
         #expect(parked == ComposerAttachmentsModel.maxConcurrentUploads)
 
-        // Drain the rest, releasing whatever is parked until all eight have landed.
+        // Drain the rest, releasing whatever is parked until every one has landed.
         while model.isAttaching {
             await uploader.releaseAll()
             await Task.yield()
             try? await Task.sleep(for: .milliseconds(5))
         }
 
-        #expect(model.readyDescriptors.count == 8)
+        #expect(model.readyDescriptors.count == picked)
         let peak = await uploader.peakConcurrent
         #expect(peak <= ComposerAttachmentsModel.maxConcurrentUploads)
     }
@@ -219,6 +220,118 @@ struct ComposerAttachmentsTests {
 
         #expect(model.attachments.isEmpty)
         #expect(model.uploadError == "Not connected to a relay yet.")
+    }
+
+    // MARK: - The cap
+
+    @Test("more pictures than the cap keeps the first five and says so")
+    func capIsEnforcedOnAdd() async throws {
+        let model = ComposerAttachmentsModel(uploader: StubUploader())
+
+        model.add((0 ..< 8).map { _ in Self.item() })
+
+        #expect(model.attachments.count == ComposerAttachmentsModel.selectionLimit)
+        #expect(model.uploadError == "You can attach 5 pictures at a time.")
+        #expect(model.remainingCapacity == 0)
+    }
+
+    /// The case the picker's own limit cannot see: it counts one visit, not what is already
+    /// on the bar. A paste comes through the same door and would otherwise walk past five.
+    @Test("the cap counts what is already attached, not one visit to the picker")
+    func capSpansSeparateAdds() async throws {
+        let model = ComposerAttachmentsModel(uploader: StubUploader())
+
+        model.add((0 ..< 3).map { _ in Self.item() })
+        model.add((0 ..< 3).map { _ in Self.item() })
+
+        #expect(model.attachments.count == 5)
+        #expect(model.uploadError == "You can attach 5 pictures at a time.")
+    }
+
+    @Test("a composer with room takes everything offered and says nothing")
+    func underTheCapIsSilent() async throws {
+        let model = ComposerAttachmentsModel(uploader: StubUploader())
+
+        model.add((0 ..< 4).map { _ in Self.item() })
+
+        #expect(model.attachments.count == 4)
+        #expect(model.uploadError == nil)
+        #expect(model.remainingCapacity == 1)
+    }
+
+    // MARK: - The deadlines
+
+    /// The owner's report: attach several and one spins for ever.
+    ///
+    /// The cause was that nothing bounded `loadTransferable`, which on an iCloud-backed photo
+    /// waits for a download. A tile that never resolves also holds ``isAttaching`` true, so
+    /// the whole composer is stuck behind it — which is why this asserts the send gate
+    /// reopens, not merely that the tile went.
+    @Test("a source that never answers gives up instead of spinning for ever")
+    func sourceDeadlineFires() async throws {
+        let model = ComposerAttachmentsModel(
+            uploader: StubUploader(),
+            sourceDeadline: .milliseconds(40)
+        )
+
+        model.add([StubPickedItem(data: Data(), neverReturns: true)])
+        #expect(model.isAttaching)
+
+        await Self.waitUntil { model.uploadError != nil }
+
+        #expect(model.attachments.isEmpty)
+        #expect(!model.isAttaching, "the send gate is still held shut by a picture that gave up")
+        #expect(model.uploadError == "That picture took too long to load — it may still be in iCloud.")
+    }
+
+    /// The other half: the relay accepts the connection and stops answering. `URLSession`'s
+    /// own resource timeout is seven days by default, so without this the tile spins there too.
+    @Test("a relay that never answers gives up instead of spinning for ever")
+    func uploadDeadlineFires() async throws {
+        let uploader = StubUploader()
+        let model = ComposerAttachmentsModel(
+            uploader: uploader,
+            uploadDeadline: .milliseconds(40)
+        )
+
+        // Parked and never released — the stub's whole purpose.
+        model.add([Self.item()])
+        await Self.waitUntil { model.uploadError != nil }
+
+        #expect(model.attachments.isEmpty)
+        #expect(!model.isAttaching)
+        #expect(model.uploadError == "That picture took too long to upload.")
+    }
+
+    /// The race's own contract, which every deadline above rests on: the loser answers too —
+    /// a cancelled fetch throws `CancellationError` a moment after the deadline has already
+    /// spoken — and a second answer must be dropped rather than resume the waiter twice.
+    /// Resuming a continuation twice does not fail a test, it kills the bundle.
+    @Test("only the first answer of a race is heard")
+    func laterAnswersAreDropped() async throws {
+        let race = FirstAnswer<Int>()
+
+        await race.settle(.success(1))
+        await race.settle(.success(2))
+        await race.settle(.failure(ComposerAttachmentError.uploadTimedOut))
+
+        #expect(try await race.value().get() == 1)
+    }
+
+    /// A deadline that fires on a picture that would have succeeded is worse than no deadline,
+    /// so this pins the other direction.
+    @Test("an upload that lands inside the deadline is unaffected")
+    func deadlineDoesNotFireOnASuccess() async throws {
+        let uploader = StubUploader()
+        let model = ComposerAttachmentsModel(uploader: uploader, uploadDeadline: .seconds(30))
+
+        model.add([Self.item()])
+        await Self.waitUntil { await uploader.parkedCount == 1 }
+        await uploader.releaseAll()
+        await Self.waitUntil { !model.isAttaching }
+
+        #expect(model.hasSendableContent)
+        #expect(model.uploadError == nil)
     }
 
     /// What the conversation is told, so its bottom inset can move with the bar —

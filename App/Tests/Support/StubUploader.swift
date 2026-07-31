@@ -86,9 +86,19 @@ struct StubPickedItem: ComposerPickedItem {
     /// Fails the *load*, before anything reaches the uploader — what a picker
     /// returning an item it cannot produce bytes for looks like.
     var failsToLoad = false
+    /// Never answers at all — an iCloud-backed photo whose download does not arrive.
+    ///
+    /// This is the shape of the owner's report, and it is the one a stub that merely *fails*
+    /// cannot express: the defect was never an error, it was the absence of one.
+    var neverReturns = false
 
     func loadData() async throws -> Data {
         if failsToLoad { throw ComposerAttachmentError.emptyPick }
+        if neverReturns {
+            // Long enough to be indistinguishable from for ever at test speed, and
+            // cancellable so the deadline's own cleanup is exercised.
+            try await Task.sleep(for: .seconds(600))
+        }
         return data
     }
 }

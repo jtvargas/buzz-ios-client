@@ -43,8 +43,39 @@ final class ComposerAttachmentsModel {
     /// while it does it, and ten of those at once is not a thing to do on a phone.
     static let maxConcurrentUploads = 3
 
-    /// The most pictures one visit to the picker may add.
-    static let selectionLimit = 10
+    /// The most pictures one message may carry.
+    ///
+    /// Five, the owner's number. Enforced in ``add(_:)`` rather than only on the picker,
+    /// because the picker is no longer the only way in — a paste arrives through the same
+    /// door and would otherwise walk past the limit.
+    static let selectionLimit = 5
+
+    /// How long a source has to produce its bytes.
+    ///
+    /// This is the one that was missing. `loadTransferable` on a photo kept in iCloud has to
+    /// fetch it first, and on a weak connection that wait has no end — the tile spins for
+    /// ever and, because ``isAttaching`` gates send, the whole composer is stuck behind it.
+    /// Generous, because a large photo coming down from iCloud legitimately takes a while;
+    /// finite, because "for ever" is not a state an author can do anything about.
+    static let sourceDeadline: Duration = .seconds(60)
+
+    /// How long the relay has to accept the bytes.
+    ///
+    /// `URLSession`'s own resource timeout defaults to **seven days**, and its request
+    /// timeout only fires when a connection goes completely silent — so a trickling upload is
+    /// unbounded in practice. The uploader is handed a session with real ceilings
+    /// (``AppEnvironment/makeMediaUploader(websocketURL:)``); this is the belt to that
+    /// bracing, so a transport that somehow outlives its own timeout still ends here.
+    ///
+    /// Just outside the transport's own ceiling on purpose, so the error an author reads is
+    /// the network naming its own failure rather than this giving up first. Long, for the
+    /// reason set out there: killing a picture that was going to arrive is worse than the
+    /// spinner, and the spinner has an X on it.
+    ///
+    /// It covers the upload and nothing else. The conversion between the two deadlines is
+    /// deliberately left unbounded: it is CPU work that finishes, and a ceiling on it would
+    /// mean an old phone re-encoding a large HEIC losing a picture that was going to arrive.
+    static let uploadDeadline: Duration = .seconds(270)
 
     /// `nil` before a relay is configured, and in tests that do not exercise
     /// uploading. A pick with no uploader fails with a reason rather than
@@ -55,8 +86,23 @@ final class ComposerAttachmentsModel {
     /// observable: nothing renders them.
     @ObservationIgnored private var batches: [Task<Void, Never>] = []
 
-    init(uploader: (any MediaUploading)? = nil) {
+    /// The deadlines this model actually uses.
+    ///
+    /// Instance rather than static so a test can prove the timeout *fires* — the shipped
+    /// values are a minute and a half, and a suite that waited them out would be a suite
+    /// nobody runs. The defaults are the shipped ones, so production reads exactly the
+    /// constants documented above.
+    private let sourceDeadline: Duration
+    private let uploadDeadline: Duration
+
+    init(
+        uploader: (any MediaUploading)? = nil,
+        sourceDeadline: Duration = ComposerAttachmentsModel.sourceDeadline,
+        uploadDeadline: Duration = ComposerAttachmentsModel.uploadDeadline
+    ) {
         self.uploader = uploader
+        self.sourceDeadline = sourceDeadline
+        self.uploadDeadline = uploadDeadline
     }
 
     // MARK: - What the composer asks
@@ -96,6 +142,14 @@ final class ComposerAttachmentsModel {
 
     // MARK: - Picking
 
+    /// How many more this composer will take.
+    var remainingCapacity: Int { max(0, Self.selectionLimit - attachments.count) }
+
+    /// Says the composer is full, for a caller that declined to offer a picker at all.
+    func reportAtCapacity() {
+        uploadError = Self.describe(ComposerAttachmentError.tooMany)
+    }
+
     /// Takes a pick and starts uploading it.
     ///
     /// Returns immediately: every tile appears at once and fills in as its upload
@@ -105,13 +159,21 @@ final class ComposerAttachmentsModel {
         guard !items.isEmpty else { return }
         uploadError = nil
 
-        let ids = items.map { _ in UUID() }
+        // The cap is enforced here rather than at the picker alone: a paste comes in through
+        // this same call, and the picker's own limit cannot see attachments already held.
+        let accepted = Array(items.prefix(remainingCapacity))
+        if accepted.count < items.count {
+            uploadError = Self.describe(ComposerAttachmentError.tooMany)
+        }
+        guard !accepted.isEmpty else { return }
+
+        let ids = accepted.map { _ in UUID() }
         attachments.append(contentsOf: ids.map {
             ComposerAttachment(id: $0, preview: nil, state: .uploading)
         })
 
         let batch = Task { [weak self] in
-            await self?.upload(items, as: ids)
+            await self?.upload(accepted, as: ids)
             return ()
         }
         batches.append(batch)
@@ -186,25 +248,84 @@ final class ComposerAttachmentsModel {
     }
 
     /// One picture: bytes, conversion, thumbnail, upload.
+    ///
+    /// Both halves are bounded, and they are bounded *separately* so the reason a picture did
+    /// not make it is the reason the author is told. Waiting on iCloud and waiting on the
+    /// relay are different problems with different answers, and before this neither was
+    /// bounded at all.
     private func upload(_ item: any ComposerPickedItem, as id: UUID) async {
         do {
             guard let uploader else { throw ComposerAttachmentError.noUploader }
-            let data = try await item.loadData()
+            let data = try await Self.within(
+                sourceDeadline, or: .sourceTimedOut, item.loadData
+            )
             let prepared = try await ComposerImagePreparation.prepare(data)
             // Before the upload rather than after it, so the strip shows the
             // picture while it is going up rather than a placeholder.
             applyPreview(UIImage(data: prepared.preview), to: id)
-            let descriptor = try await uploader.upload(
-                data: prepared.data,
-                mimeType: prepared.mimeType,
-                filename: item.suggestedFilename
-            )
+            let descriptor = try await Self.within(uploadDeadline, or: .uploadTimedOut) {
+                try await uploader.upload(
+                    data: prepared.data,
+                    mimeType: prepared.mimeType,
+                    filename: item.suggestedFilename
+                )
+            }
             applyState(.uploaded(descriptor), to: id)
         } catch is CancellationError {
             attachments.removeAll { $0.id == id }
         } catch {
             attachments.removeAll { $0.id == id }
             uploadError = Self.describe(error)
+        }
+    }
+
+    /// Runs `work`, or gives up on it.
+    ///
+    /// The loser is cancelled on the way out, so work nothing is waiting for any more stops
+    /// costing the device something. Whether it *honours* that cancellation is its business —
+    /// what matters here is that this call returns, the tile stops spinning, and the composer
+    /// stops being held shut by it.
+    ///
+    /// # Why this is unstructured, which it would rather not be
+    ///
+    /// The obvious way to write a race is `withThrowingTaskGroup`: add the work, add a sleep
+    /// that throws, take the first result. That version was written, and it does not work —
+    /// **a task group cannot return until every child has finished**, which is the guarantee
+    /// structured concurrency is built on. So the group waits for the loser, and the loser is
+    /// exactly the work that may never end: a transport parked on a
+    /// `withCheckedContinuation` is not cancellable, and cancelling a task suspended on one
+    /// changes nothing. The deadline fired, threw, and then the group sat there holding it —
+    /// a timeout defeated by the one thing it exists to defend against.
+    ///
+    /// ``ComposerAttachmentsTests/uploadDeadlineFires()`` is that case, and it failed against
+    /// the group version.
+    private static func within<T: Sendable>(
+        _ deadline: Duration,
+        or failure: ComposerAttachmentError,
+        _ work: @escaping @Sendable () async throws -> T
+    ) async throws -> T {
+        let answer = FirstAnswer<T>()
+        let working = Task {
+            do { await answer.settle(.success(try await work())) } catch {
+                await answer.settle(.failure(error))
+            }
+        }
+        let timing = Task {
+            // A cancelled sleep is this call having already been answered, not a deadline.
+            guard (try? await Task.sleep(for: deadline)) != nil else { return }
+            await answer.settle(.failure(failure))
+        }
+        defer {
+            working.cancel()
+            timing.cancel()
+        }
+        // Unstructured tasks do not inherit cancellation, so the composer being reset out
+        // from under this has to be forwarded by hand — otherwise a reset would wait out the
+        // full deadline before the tile went.
+        return try await withTaskCancellationHandler {
+            try await answer.value().get()
+        } onCancel: {
+            Task { await answer.settle(.failure(CancellationError())) }
         }
     }
 
@@ -241,6 +362,14 @@ final class ComposerAttachmentsModel {
             "That animation carries data that can't be removed without flattening it."
         case ComposerAttachmentError.noUploader:
             "Not connected to a relay yet."
+        case ComposerAttachmentError.sourceTimedOut:
+            // Names iCloud because that is what it almost always is, and because it is the
+            // one the author can actually do something about.
+            "That picture took too long to load — it may still be in iCloud."
+        case ComposerAttachmentError.uploadTimedOut:
+            "That picture took too long to upload."
+        case ComposerAttachmentError.tooMany:
+            "You can attach \(selectionLimit) pictures at a time."
         default:
             "Couldn't upload that picture."
         }

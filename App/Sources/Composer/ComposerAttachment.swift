@@ -70,4 +70,15 @@ enum ComposerAttachmentError: Error, Equatable {
     case emptyPick
     /// There is nowhere to upload to — no relay is configured yet.
     case noUploader
+    /// The bytes never arrived from the source.
+    ///
+    /// Overwhelmingly this is iCloud: a photo kept in the cloud under *Optimise
+    /// iPhone Storage* has to be fetched before `loadTransferable` can answer, and
+    /// on a weak connection that fetch has no natural end. Without this the tile
+    /// simply span for ever — the owner's report.
+    case sourceTimedOut
+    /// The relay accepted the connection and then stopped answering.
+    case uploadTimedOut
+    /// More pictures were offered than one message may carry.
+    case tooMany
 }
