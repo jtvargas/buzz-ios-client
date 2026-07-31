@@ -75,6 +75,13 @@ targets:
         NSCameraUsageDescription: >-
           Hive uses the camera to scan the pairing QR code shown on your desktop so
           it can move your identity to this device.
+        # Add-only, deliberately: Hive never reads the photo library, and the prompt a
+        # reader is shown should promise no more than the app will do. The read-side
+        # `NSPhotoLibraryUsageDescription` is absent for that reason — the composer's
+        # picker runs out of process and needs no access at all.
+        NSPhotoLibraryAddUsageDescription: >-
+          Hive saves a picture from a conversation to your photo library when you
+          ask it to.
     settings:
       base:
         CURRENT_PROJECT_VERSION: 1

@@ -58,6 +58,16 @@ struct MessageMediaView: View {
     /// also pushes the thread behind it.
     var onTap: (() -> Void)?
 
+    /// The row's tap arbitration, when this picture is inside a message row. It decides
+    /// whether this tap was a single one — open the picture — or the first half of a double
+    /// tap, which opens ``MediaActionsSheet`` instead and never opens the picture at all.
+    /// `nil` on every other surface, where the picture opens at once.
+    ///
+    /// Read from the environment rather than passed down beside ``onTap`` because it travels
+    /// through ``RichTextView``, which is shared with surfaces that inject neither. See
+    /// ``MessageTapAction``.
+    @Environment(\.messageTap) private var messageTap
+
     /// Who posted this picture and where, for the full-screen viewer's header. `nil` on a
     /// surface with no message behind the picture. See ``MessageMediaAttribution``.
     var attribution: MessageMediaAttribution?
@@ -75,6 +85,8 @@ struct MessageMediaView: View {
     /// identity, so a retry restarts the task that a plain state change would not.
     @State private var attempt = 0
     @State private var viewing: MessageMediaViewerSubject?
+    /// The picture two quick taps asked what to do with. See ``MediaActionsSheet``.
+    @State private var acting: MediaActionsTarget?
 
     @Environment(\.displayScale) private var displayScale
     @Namespace private var zoom
@@ -111,6 +123,7 @@ struct MessageMediaView: View {
                 // attached to a child of the presented content does not take.
                 .navigationTransition(.zoom(sourceID: subject.id, in: zoom))
         }
+        .sheet(item: $acting) { MediaActionsSheet(target: $0) }
     }
 
     /// Whether `source` is a subject that has already failed to load.
@@ -163,6 +176,13 @@ private extension MessageMediaView {
             // filled is the case where the wash is the visible half — it lands in the
             // letterbox bands, and in the frame's corner rather than a squarer one.
             .buttonStyle(.hivePress(.control, in: MessageMediaFrame.shape))
+            // A `Button` fires once for a pair of taps fast enough to be a double tap, so
+            // the row can never count two of them here. This is the same gesture told to the
+            // row directly. Simultaneous, so the button's own single tap is not made to wait
+            // on it failing — the single is already deferred by the row, and once is enough.
+            .simultaneousGesture(
+                TapGesture(count: 2).onEnded { messageTap.reportDouble { act(on: image) } }
+            )
         } else if hasFailed {
             if isRetryable {
                 Button { retry() } label: {
@@ -189,6 +209,11 @@ private extension MessageMediaView {
         case (.image, .loaded):
             if let image = displayedImage {
                 Button("View image") { open(image) }
+                // The one route to the picture's actions that is not a double tap. A gesture
+                // measured in the interval between two touches is not one VoiceOver offers,
+                // so without this the sheet would exist and be unreachable — the actions
+                // rotor is where a reader using it looks for exactly this.
+                Button("Save or share image") { act(on: image) }
             }
         case (.image, .failed):
             if isRetryable {
@@ -294,19 +319,49 @@ private extension MessageMediaView {
         }
     }
 
+    /// Opens the viewer — through the row's arbitration, so a *second* tap arriving inside
+    /// ``MessageTapArbiter/doubleTapWindow`` opens ``MediaActionsSheet`` instead and this
+    /// never runs. The picture opens, or its actions open; never both.
+    ///
+    /// The claim above it is unchanged and still has to happen *now*, not with the opening:
+    /// it is what stops the row's own tap counting this same touch a second time, and it is
+    /// read one main-actor turn from now.
     func open(_ image: UIImage) {
         onTap?()
-        viewing = MessageMediaViewerSubject(
-            media: [media],
-            startIndex: 0,
-            preview: image,
-            attribution: attribution
+        messageTap.run(
+            single: {
+                viewing = MessageMediaViewerSubject(
+                    media: [media],
+                    startIndex: 0,
+                    preview: image,
+                    attribution: attribution
+                )
+            },
+            double: { act(on: image) }
         )
     }
 
+    /// Opens what a reader can do with this picture: keep it, or pass it on.
+    ///
+    /// The bitmap is handed over only as the share sheet's thumbnail — what is saved and what
+    /// is shared is the *original*, fetched again. See ``MessageMediaExport``.
+    func act(on image: UIImage) {
+        acting = MediaActionsTarget(media: media, preview: image)
+    }
+
+    /// A retry is arbitrated too, so a tap on an attachment is counted in one place whatever
+    /// state it is in — but with no second meaning: a picture that never arrived has no bytes
+    /// to save or to share, so two taps on the failure notice are two attempts at loading it,
+    /// which is what a reader out of tailnet range is actually doing. With no `double` the
+    /// arbiter does not defer at all, so the retry is immediate.
     func retry() {
         onTap?()
-        failedURL = nil
-        attempt += 1
+        messageTap.run(
+            single: {
+                failedURL = nil
+                attempt += 1
+            },
+            double: nil
+        )
     }
 }

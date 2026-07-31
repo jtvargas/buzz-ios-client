@@ -85,9 +85,77 @@ struct ClaimRowTapAction {
     }
 }
 
+/// Hands a picture's own tap to the message row, which decides whether it was a single tap —
+/// open the picture — or the first half of a double tap, which opens a sheet instead.
+///
+/// # Why the picture cannot decide this itself
+///
+/// A double tap is resolved by *waiting*, and what has to be waited for is the second tap on
+/// **the message**, wherever it lands: the first on the picture and the second an inch below
+/// it on the text is the same gesture to the reader. Only the row sees both. So an attachment
+/// does not open itself and then hope; it hands over what it would have done, and the row
+/// runs it once no second tap has come. See ``MessageTapArbiter``.
+///
+/// *What* a second tap then means is the caller's, not the row's: two taps on the message's
+/// text open the message's actions, and two on a picture inside it open the picture's own —
+/// see ``MediaActionsSheet`` for why those are different sheets. The last tap decides, which
+/// is the only rule that can be stated at all for a pair that landed on two different things.
+///
+/// Beside ``ClaimRowTapAction`` because they are two halves of one arrangement — the claim
+/// stops the row *also* acting on a tap a control handled, and this decides *when* that
+/// control's own action runs — and injected by the same row, through the same renderer.
+struct MessageTapAction {
+    private let handler: (@escaping () -> Void, (() -> Void)?) -> Void
+    private let doubleHandler: (@escaping () -> Void) -> Void
+
+    init(
+        single handler: @escaping (@escaping () -> Void, (() -> Void)?) -> Void,
+        double doubleHandler: @escaping (@escaping () -> Void) -> Void
+    ) {
+        self.handler = handler
+        self.doubleHandler = doubleHandler
+    }
+
+    func callAsFunction(single: @escaping () -> Void, double: (() -> Void)?) {
+        handler(single, double)
+    }
+
+    /// Reports a double tap the system recognised as one, which is the only way it can be
+    /// reported by a `Button` — see ``MessageTapArbiter/doubleTapped(_:)`` for why a control
+    /// cannot simply be tapped twice.
+    func reportDouble(_ double: @escaping () -> Void) {
+        doubleHandler(double)
+    }
+}
+
+extension Optional where Wrapped == MessageTapAction {
+    /// Runs `single` through the row's arbitration when there is a row arbitrating, and at
+    /// once when there is not.
+    ///
+    /// The `nil` case is not a degradation to be avoided — it is every surface that draws a
+    /// message without a row behind it, and a tap there must not be made to wait for a
+    /// gesture nothing is listening for.
+    func run(single: @escaping () -> Void, double: (() -> Void)?) {
+        guard let tap = self else {
+            single()
+            return
+        }
+        tap(single: single, double: double)
+    }
+
+    /// Reports a system-recognised double tap to the row, and does nothing where no row is
+    /// arbitrating — there, the single tap already ran.
+    func reportDouble(_ double: @escaping () -> Void) {
+        self?.reportDouble(double)
+    }
+}
+
 extension EnvironmentValues {
     /// Injected beside the navigation stack that owns the path. `nil` by default.
     @Entry var openConversation: OpenConversationAction?
     /// Injected by a row that arbitrates its own tap. `nil` on a surface that does not.
     @Entry var claimRowTap: ClaimRowTapAction?
+    /// Injected by a row that resolves single taps against double ones. `nil` on a surface
+    /// with no message row behind the content, where a tap is answered immediately.
+    @Entry var messageTap: MessageTapAction?
 }

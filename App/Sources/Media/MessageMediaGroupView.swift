@@ -57,7 +57,16 @@ private struct MessageMediaMosaicView: View {
     var loader: RemoteImageLoader
 
     @State private var viewing: MessageMediaViewerSubject?
+    /// The tile two quick taps asked what to do with. Held here rather than in the cell for
+    /// the same reason ``viewing`` is: one presentation for the group, so a second tile
+    /// double-tapped while the first sheet is leaving re-presents rather than reopening.
+    @State private var acting: MediaActionsTarget?
     @Namespace private var zoom
+    /// The enclosing message row's tap arbitration — see ``MessageMediaView/messageTap``. Read
+    /// here rather than in the cell because opening the gallery is the mosaic's own action:
+    /// the cell reports which picture was activated, and this decides whether that activation
+    /// was a single tap at all.
+    @Environment(\.messageTap) private var messageTap
 
     var body: some View {
         MessageMediaMosaicReservation(count: media.count) {
@@ -72,12 +81,19 @@ private struct MessageMediaMosaicView: View {
             ForEach(Array(media.enumerated()), id: \.offset) { index, item in
                 MessageMediaMosaicCellView(media: item, position: index, onOpen: { image in
                     onTap?()
-                    viewing = MessageMediaViewerSubject(
-                        media: media,
-                        startIndex: index,
-                        preview: image,
-                        attribution: attribution
+                    messageTap.run(
+                        single: {
+                            viewing = MessageMediaViewerSubject(
+                                media: media,
+                                startIndex: index,
+                                preview: image,
+                                attribution: attribution
+                            )
+                        },
+                        double: { acting = MediaActionsTarget(media: item, preview: image) }
                     )
+                }, onActions: { image in
+                    acting = MediaActionsTarget(media: item, preview: image)
                 }, loader: loader)
                 .matchedTransitionSource(id: item.url, in: zoom)
             }
@@ -94,6 +110,7 @@ private struct MessageMediaMosaicView: View {
             MessageMediaViewer(subject: subject, loader: loader)
                 .navigationTransition(.zoom(sourceID: subject.id, in: zoom))
         }
+        .sheet(item: $acting) { MediaActionsSheet(target: $0) }
     }
 }
 
@@ -119,12 +136,20 @@ private struct MessageMediaMosaicCellView: View {
     /// with a preview already in hand, exactly as ``MessageMediaView/open(_:)`` does for
     /// one picture.
     let onOpen: (UIImage?) -> Void
+    /// Called when the *system* recognised two quick taps on this cell — the one route a
+    /// `Button` has for reporting a double, which is why it does not travel through `onOpen`.
+    /// See ``MessageTapArbiter/doubleTapped(_:)``.
+    let onActions: (UIImage?) -> Void
     var loader: RemoteImageLoader = .messageMedia
 
     @State private var resolved: RemoteImageResolved?
     @State private var failedURL: URL?
     @State private var attempt = 0
     @Environment(\.displayScale) private var displayScale
+    /// The row's arbitration, for the two taps a cell answers itself: its own retry, and the
+    /// system-recognised double it has to report from here because the `Button` above cannot.
+    /// See ``MessageMediaView/retry()`` and ``MessageTapArbiter/doubleTapped(_:)``.
+    @Environment(\.messageTap) private var messageTap
 
     var body: some View {
         ZStack {
@@ -178,6 +203,11 @@ private extension MessageMediaMosaicCellView {
             // clip rather than to the cell. A rounded wash inside a square tile is the
             // mismatch that is more visible than no wash at all.
             .buttonStyle(.hivePress(.control, in: .rect))
+            // The mosaic's tiles are the same case as a lone picture: a `Button` cannot
+            // report the second tap of a fast pair. See ``MessageMediaView/imageContent``.
+            .simultaneousGesture(
+                TapGesture(count: 2).onEnded { messageTap.reportDouble { onActions(image) } }
+            )
         } else if hasFailed {
             if isRetryable {
                 Button { retry() } label: {
@@ -199,6 +229,10 @@ private extension MessageMediaMosaicCellView {
         case (.image, .loaded):
             if let image = displayedImage {
                 Button("View image \(position + 1)") { onOpen(image) }
+                // See ``MessageMediaView/accessibilityActivation`` — a double tap is not a
+                // gesture VoiceOver offers, so the sheet needs a rotor action or it cannot be
+                // reached at all.
+                Button("Save or share image \(position + 1)") { onActions(image) }
             }
         case (.image, .failed):
             if isRetryable {
@@ -279,7 +313,12 @@ private extension MessageMediaMosaicCellView {
     }
 
     func retry() {
-        failedURL = nil
-        attempt += 1
+        messageTap.run(
+            single: {
+                failedURL = nil
+                attempt += 1
+            },
+            double: nil
+        )
     }
 }

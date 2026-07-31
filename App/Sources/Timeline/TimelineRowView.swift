@@ -41,9 +41,11 @@ import SwiftUI
 /// `Text` instead of the message.
 ///
 /// A long press asks the surface to open ``MessageActionsSheet`` — the quick reactions, the
-/// emoji picker, and the actions. The same row renders in the channel timeline and inside a
-/// thread; `onOpenThread` is supplied only in the channel, where a threaded message can be
-/// opened, and omitted inside the thread it already shows.
+/// emoji picker, and the actions — and so does a **double tap**, anywhere on the message
+/// including on a picture inside it. That second way in is what defers the row's own tap: see
+/// ``MessageTapArbiter``. The same row renders in the channel timeline and inside a thread;
+/// `onOpenThread` is supplied only in the channel, where a threaded message can be opened, and
+/// omitted inside the thread it already shows.
 struct TimelineRowView: View {
     @Environment(\.channelNameMap) private var channelNameMap
     /// The app's one identity resolver. Internal rather than private because the row's
@@ -53,7 +55,13 @@ struct TimelineRowView: View {
     @Environment(\.openURL) private var openURL
     /// The stack's own navigation, for a pressed `#`-channel or internal message link.
     @Environment(\.openConversation) private var openConversation
-    @State private var arbitration = RowTapArbitration()
+    /// Whether a control inside the row already answered the touch the row's own tap is
+    /// about to act on. Internal for the same reason ``names`` is: the rules that read it
+    /// live in `TimelineRowView+Taps.swift`.
+    @State var arbitration = RowTapArbitration()
+    /// Resolves this row's taps against each other: one opens what was tapped, two open a
+    /// sheet. See ``MessageTapArbiter`` for what that costs the single tap.
+    @State var taps = MessageTapArbiter()
 
     /// The avatar's point size, and so the width the content column is indented by, at
     /// this reader's text size. Scaled against `.subheadline` — the name beside it — so
@@ -210,6 +218,18 @@ struct TimelineRowView: View {
         // reaction chips — each of which claims as the finger lands and again as it leaves.
         // See ``scheduleRowTap()`` for why the press and not the action.
         .environment(\.claimRowTap, ClaimRowTapAction { claimTap() })
+        // What a picture inside the message hands its own tap to, so that opening it and
+        // opening a sheet are decided by one arbiter rather than two racing ones. A tap on a
+        // picture is a tap on the message: it must be able to be the first half of a double,
+        // and the second half must be able to land anywhere on the row. What that double then
+        // *means* is the picture's — see ``MediaActionsSheet``.
+        .environment(
+            \.messageTap,
+            MessageTapAction(
+                single: { single, double in taps.tapped(single: single, double: double) },
+                double: { double in taps.doubleTapped(double) }
+            )
+        )
         .accessibilityAction(named: "Open thread") {
             onOpenThread?()
         }
@@ -238,111 +258,6 @@ struct TimelineRowView: View {
                 Button("View profile") { onOpenProfile(row.pubkey) }
             }
         }
-    }
-
-    // MARK: - Tap arbitration
-
-    /// How long a press has to be held before it is the actions sheet rather than a tap.
-    /// Shorter than `LongPressGesture`'s own half-second default, which reads as a hesitation
-    /// on a message; long enough that the flick that starts a scroll is not one.
-    private static let longPressDuration: TimeInterval = 0.35
-
-    /// A tap and a long press over the same row, resolved by the system rather than by the
-    /// arbitration below.
-    ///
-    /// `exclusively(before:)` and not two separately attached gestures, and that is the whole
-    /// reason this is a computed gesture instead of an `onTapGesture` beside an
-    /// `onLongPressGesture`: SwiftUI's `TapGesture` has **no maximum duration**. A press held
-    /// for a second and then lifted satisfies it, so with both attached the sheet would open
-    /// on recognition and the thread would be pushed behind it on release. Exclusive
-    /// composition gives the long press first refusal and only evaluates the tap when the
-    /// press ended too early to be recognised.
-    ///
-    /// The `guard` is not a nicety: without a sheet to open, an armed long press would win
-    /// the press and swallow the tap, which is the Threads screen's rows losing their only
-    /// way into a thread.
-    ///
-    /// This gesture deliberately reports **nothing** about the press going down, and nothing
-    /// in this file may be added that does.
-    ///
-    /// It did once, through `@GestureState` hung off the long press, and that shipped a
-    /// conversation that could not be scrolled at all: a gesture that tracks from touch-down
-    /// has taken the touch, and a 45% drag beginning on a message then moves the list 0.0pt.
-    /// The replacement — a UIKit recogniser that never left `.possible` — worked, and is gone
-    /// too, because the owner then had the highlight it fed removed from the message
-    /// altogether. There is now nothing on this row that observes a touch going down, which
-    /// is the safest state this surface has been in. `ConversationDragScrollTests` is what
-    /// holds the line if that changes.
-    private var pressGesture: AnyGesture<Void> {
-        let tap = TapGesture().onEnded { scheduleRowTap() }
-        guard let onLongPress, !row.isDeleted else { return AnyGesture(tap) }
-        return AnyGesture(
-            LongPressGesture(minimumDuration: Self.longPressDuration)
-                .onEnded { _ in
-                    // What the context menu this replaced played on recognition, and what
-                    // tells a reader the sheet is coming before it has drawn a pixel.
-                    HiveHaptics.play(.longPress)
-                    onLongPress()
-                }
-                .exclusively(before: tap)
-                .map { _ in () }
-        )
-    }
-
-    /// Opens the thread on the next main-actor turn, and never before a control the same tap
-    /// also landed on has claimed it.
-    ///
-    /// One turn, and no longer. It was briefly ``PressFeedback/minimumVisible``, so that a
-    /// pressed message's wash had somewhere to be seen before the thread replaced the screen
-    /// it was drawn on — and then the owner had that wash removed. A delay in front of a
-    /// navigation with nothing drawn during it is not a considered pause, it is lag: the row
-    /// would answer the finger with nothing at all for a fifth of a second and then jump.
-    ///
-    /// The turn is still needed, because the tap and the control actions that beat it are
-    /// dispatched from the same event in no guaranteed order. One turn is all it needs, and
-    /// the claim comes from a control's *action*: nothing on this row delays an action any
-    /// more, so every claim lands in the same event the tap did. It was briefly claimed from
-    /// the *press* instead, while actions were being held back behind the press animation —
-    /// and a cancelled press claims identically to a completed one, so brushing a chip and
-    /// scrolling away suppressed the next real tap on the row.
-    ///
-    /// The controls that claim a tap, and how each one does it:
-    ///
-    /// - the avatar and the sender's name, the reaction chips, and the reply preview are
-    ///   `Button`s whose actions run through ``performControlAction(_:)``;
-    /// - a link inside the message body claims it in the `OpenURLAction` below, which is
-    ///   the only hook a tappable run of `AttributedString` offers;
-    /// - the failed-send strip's Retry claims it the same way the chips do — its closure
-    ///   used to be passed straight through, so retrying a send that is not in the store
-    ///   also pushed a thread for it;
-    /// - the add-reaction pill is a `Menu`, which has *no* about-to-open hook at all, so
-    ///   ``AddReactionButton`` carries a `simultaneousGesture` tap instead. That composes
-    ///   with the menu's own recogniser rather than replacing it, so the palette still
-    ///   opens; and it is effective exactly where the problem is, because the tap it
-    ///   observes is the same touch-up the row's own tap gesture completes on.
-    ///
-    /// Anything added to the row that is a control has to join that list. There is no
-    /// mechanism here that notices one by itself.
-    private func scheduleRowTap() {
-        guard !row.isDeleted, let onOpenThread else { return }
-        DispatchQueue.main.async {
-            guard !arbitration.suppressesRowTap() else { return }
-            onOpenThread()
-        }
-    }
-
-    /// Internal for the same reason ``avatarSize`` is: the avatar and the name are
-    /// controls, and they live in the identity file.
-    func performControlAction(_ action: () -> Void) {
-        claimTap()
-        action()
-    }
-
-    /// Claims the current tap without running anything, for a control whose action is not
-    /// this row's to run — the add-reaction pill, where the thing being opened is a menu
-    /// and the emoji it eventually reports is a separate event.
-    func claimTap() {
-        arbitration.controlDidAct()
     }
 
     // MARK: - Content
