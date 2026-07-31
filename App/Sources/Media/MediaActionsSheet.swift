@@ -47,6 +47,10 @@ struct MediaActionsSheet: View {
     /// The fetched original, on disk. Its presence is what arms both rows: neither action can
     /// run on a picture that has not arrived, and neither is offered as though it could.
     @State private var file: URL?
+    /// Whether the fetch the sheet starts for itself is still running. Both rows wait it out
+    /// rather than racing it: a Save pressed mid-download would start a *second* fetch of the
+    /// same picture, and the two would write the same file.
+    @State private var isPreparing = true
     @State private var isSaving = false
     @State private var failure: MessageMediaExport.Failure?
 
@@ -82,12 +86,18 @@ struct MediaActionsSheet: View {
 
     // MARK: - Rows
 
+    /// Armed as soon as the sheet's own fetch has finished, whether or not it *worked*.
+    ///
+    /// A picture that would not download leaves this pressable on purpose. The alternative is
+    /// a sheet of two dead rows and no reason given — and off the tailnet, which is where the
+    /// media host lives, that is the common failure rather than an exotic one. Pressing it
+    /// fetches again and says what went wrong.
     private var saveRow: some View {
         Button(action: save) {
-            label("Save Image", symbol: "square.and.arrow.down", isBusy: isSaving)
+            label("Save Image", symbol: "square.and.arrow.down", isBusy: isPreparing || isSaving)
         }
         .buttonStyle(.hivePress(.row))
-        .disabled(file == nil || isSaving)
+        .disabled(isPreparing || isSaving)
     }
 
     /// The system share sheet, over the file rather than over the picture's URL.
@@ -144,19 +154,21 @@ struct MediaActionsSheet: View {
     /// Fetches the original as the sheet arrives, so both rows are armed by the time a thumb
     /// has travelled to one.
     ///
-    /// A failure here leaves the rows disabled and says nothing: the reader has not asked for
-    /// anything yet, and an alert over a sheet they only just opened would be answering a
-    /// question nobody put. Pressing Save then reports it, which is the moment it matters.
+    /// A failure here says nothing at the time: the reader has not asked for anything yet, and
+    /// an alert over a sheet they only just opened would be answering a question nobody put.
+    /// Save reports it when pressed, which is the moment it matters.
     private func prepare() async {
+        defer { isPreparing = false }
         guard file == nil else { return }
         file = try? await MessageMediaExport.fetch(target.media, session: session)
     }
 
     private func save() {
-        guard let file, !isSaving else { return }
+        guard !isSaving, !isPreparing else { return }
         isSaving = true
         Task {
             do {
+                let file = try await fetchedFile()
                 try await MessageMediaExport.addToPhotoLibrary(file)
                 // The app's confirmation tick, not a new one: a light impact is what ``send``
                 // already means — *the thing you asked for has happened* — and the haptic
@@ -171,5 +183,16 @@ struct MediaActionsSheet: View {
                 isSaving = false
             }
         }
+    }
+
+    /// The original, fetched if the sheet's own attempt did not get it.
+    ///
+    /// Only ever reached with ``isPreparing`` false, so this can never run alongside
+    /// ``prepare()`` — two fetches of one picture would be two writers of one file.
+    private func fetchedFile() async throws -> URL {
+        if let file { return file }
+        let fetched = try await MessageMediaExport.fetch(target.media, session: session)
+        file = fetched
+        return fetched
     }
 }

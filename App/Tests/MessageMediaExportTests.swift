@@ -82,6 +82,20 @@ struct MessageMediaExportTests {
         #expect(name == "abc123.jpg")
     }
 
+    /// A `data:` URI is a source this app really loads, and its whole payload is its last path
+    /// component. Unguarded, the name is thousands of characters and the write fails — which
+    /// the reader would be told was a download problem.
+    @Test("A data URI does not become a filename the filesystem will refuse")
+    func aDataURIIsNotUsedAsAName() {
+        let payload = String(repeating: "A", count: 4000)
+        let name = MessageMediaExport.filename(
+            for: media(url: "data:image/png;base64,\(payload)", mimeType: "image/png"),
+            responseMIMEType: nil
+        )
+        #expect(name == "image.png")
+        #expect(name.utf8.count < 255)
+    }
+
     @Test("A URL with no path at all still produces a name")
     func emptyPathStillProducesAName() {
         let name = MessageMediaExport.filename(

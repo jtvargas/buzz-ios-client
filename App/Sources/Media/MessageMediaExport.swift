@@ -68,6 +68,7 @@ enum MessageMediaExport {
         do {
             let file = try destination(for: media, named: name)
             try data.write(to: file, options: .atomic)
+            pruneSiblings(of: file)
             return file
         } catch {
             throw Failure.download
@@ -103,9 +104,17 @@ enum MessageMediaExport {
     /// serves `image/jpeg` for everything would otherwise turn every GIF into a `.jpeg` that
     /// does not move. A URL that already carries a plausible extension is trusted last, and a
     /// picture that declares nothing at all is a `.jpg`, which is what it will be.
+    ///
+    /// The stem is capped, and that is not tidiness. A `data:` URI is a supported source here
+    /// — ``RemoteImageLoader`` decodes them — and its "last path component" is the entire
+    /// base64 payload. A filename over 255 bytes cannot be written on any filesystem this app
+    /// runs on, so an unguarded stem turns a picture pasted as a data URI into a save that
+    /// fails with a message about the download.
+    static let maximumStemLength = 64
+
     static func filename(for media: MessageMedia, responseMIMEType: String?) -> String {
         let stem = URL(string: media.url)?.deletingPathExtension().lastPathComponent
-        let name = (stem?.isEmpty == false ? stem! : "image")
+        let name = stem.flatMap { $0.isEmpty || $0.count > maximumStemLength ? nil : $0 } ?? "image"
         let declared = media.mimeType.flatMap { UTType(mimeType: $0) }
         let served = responseMIMEType.flatMap { UTType(mimeType: $0) }
         let carried = (URL(string: media.url)?.pathExtension).flatMap {
@@ -124,11 +133,18 @@ private extension MessageMediaExport {
     static func fetchData(from source: URL, session: URLSession) async throws -> (Data, URLResponse) {
         do {
             let (data, response) = try await session.data(from: source)
-            // A media host that is reachable but has lost the object answers with a page, not
-            // with a transport error — so an unchecked `data` is how an HTML 404 ends up in
-            // someone's camera roll.
-            if let http = response as? HTTPURLResponse, !(200 ..< 300).contains(http.statusCode) {
-                throw Failure.download
+            // A media host that is reachable but has lost the object answers with a *page*,
+            // not with a transport error — so an unchecked body is how an HTML 404 ends up
+            // named `.jpg` in front of the share sheet. Both halves are needed: some relays
+            // serve the error at 200, and some serve a real picture as
+            // `application/octet-stream`, which is why an unrecognised type passes and only a
+            // type that is positively *not* an image is refused.
+            if let http = response as? HTTPURLResponse {
+                guard (200 ..< 300).contains(http.statusCode) else { throw Failure.download }
+                if let served = http.mimeType.flatMap({ UTType(mimeType: $0) }),
+                   !served.conforms(to: .image) {
+                    throw Failure.download
+                }
             }
             guard !data.isEmpty else { throw Failure.download }
             return (data, response)
@@ -143,9 +159,7 @@ private extension MessageMediaExport {
     ///
     /// One directory per attachment, named by a digest of its URL, so two pictures that were
     /// posted with the same filename cannot overwrite each other and re-opening the same one
-    /// twice cannot append. The directory is emptied first rather than the file overwritten:
-    /// a second fetch may resolve to a *different* extension than the first, and the stale
-    /// sibling would be the one the share sheet happened to pick up.
+    /// twice cannot append.
     ///
     /// The system's temporary directory is the right home for it — it is purged for us, and
     /// nothing here is worth surviving a launch.
@@ -157,9 +171,30 @@ private extension MessageMediaExport {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("SharedMedia", isDirectory: true)
             .appendingPathComponent(digest, isDirectory: true)
-        try? FileManager.default.removeItem(at: directory)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         return directory.appendingPathComponent(name)
+    }
+
+    /// Removes anything left in the directory that is not the file just written.
+    ///
+    /// A second fetch of the same picture can resolve to a *different* extension than the
+    /// first — the author's tag is preferred over the served type, and a relay that changes
+    /// what it serves changes the answer — and the stale sibling is then a second candidate in
+    /// a directory the share sheet is pointed at. Cleared *after* the write rather than by
+    /// emptying the directory before it, so there is never a moment when the picture the
+    /// reader asked for is absent.
+    ///
+    /// Best-effort throughout: a file that will not delete is a stale sibling, not a failed
+    /// export, and refusing the save over it would be the wrong trade.
+    static func pruneSiblings(of file: URL) {
+        let directory = file.deletingLastPathComponent()
+        let contents = try? FileManager.default.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: nil
+        )
+        for stale in contents ?? [] where stale.lastPathComponent != file.lastPathComponent {
+            try? FileManager.default.removeItem(at: stale)
+        }
     }
 
     static func isPhotoLibraryAdditionAllowed() async -> Bool {
