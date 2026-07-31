@@ -19,11 +19,15 @@ struct PressFeedbackBody: View {
     /// whose tap opens the thread and fires even when the touch landed on a control inside
     /// it (``RowTapArbitration``).
     ///
-    /// The row used to be told by the control's *action*, and that stopped being early enough
-    /// the moment a press began holding its action back until the shrink had been seen: the
-    /// action now runs up to ``PressFeedback/minimumVisible`` after the finger left, which is
-    /// long after the row's own tap has come and gone. A press is the earlier signal, and it
-    /// does not move when that minimum does.
+    /// Claimed from ``fire()``, which is to say from the *activation* — never from the press.
+    /// It was claimed on both edges of the press for one round, while the action was being
+    /// held back behind the animation and so was no longer early enough to claim for itself.
+    /// That was wrong in a way worth writing down: a press that ends in a *cancel* — a finger
+    /// that lands on a reaction chip and then scrolls away — reports exactly the same
+    /// `isPressed` edge as a lift, so the row's tap was being suppressed by a control that
+    /// never ran, and a genuine tap arriving within ``RowTapArbitration/window`` silently did
+    /// not open the thread. With the action immediate again the activation is the earliest
+    /// *and* the only correct signal.
     @Environment(\.claimRowTap) private var claimRowTap
 
     /// Whether the press is being *shown*, which is not the same as whether a finger is down.
@@ -50,10 +54,6 @@ struct PressFeedbackBody: View {
             configuration.label.contentShape(.rect)
         }
         .buttonStyle(PressStateReporter { pressed in
-            // Both edges, and the second is the one that matters: a press ending is the last
-            // moment before an enclosing row's own tap fires, and it happens whether this
-            // press lasted a frame or a second.
-            claimRowTap?()
             if pressed { show() } else { scheduleRelease() }
         })
         // Outside the button, so the scale takes the whole interactive view — its padding,
@@ -68,20 +68,25 @@ struct PressFeedbackBody: View {
         .onDisappear { release?.cancel() }
     }
 
-    /// Runs the button's action, once the press has been on screen long enough to have been
-    /// seen. Immediately when it already has been, which is every press held longer than
-    /// ``PressFeedback/minimumVisible`` and every activation that never showed a press at all
-    /// (a keyboard, VoiceOver).
+    /// Runs the button's action, immediately, and records that this press ended in one.
+    ///
+    /// Nothing here waits. The release spring plays *over* whatever the action starts, which
+    /// is the whole point: a push, a sheet or a send happens at the speed of the finger, and
+    /// the control settles back behind it. This method held the action back by up to
+    /// ``PressFeedback/minimumVisible`` for one round so the shrink could be seen before the
+    /// screen it was drawn on was replaced, and the owner's report on that build was that the
+    /// entire app now felt delayed. He was right, and the honest reading is that the earlier
+    /// complaint it was answering had a different cause — ``ScrollTouchDeliveryView`` — which
+    /// this was standing in for.
+    ///
+    /// ``claimRowTap`` is called from here rather than from the press for the same reason it
+    /// is called at all: it must fire when a control *acts*, and a cancelled press is not an
+    /// act. It runs before the action so an enclosing row's deferred tap, one main-actor turn
+    /// behind, always sees the claim.
     private func fire() {
         didTrigger = true
-        guard let remaining = remainingVisible() else {
-            configuration.trigger()
-            return
-        }
-        Task { @MainActor in
-            try? await Task.sleep(for: .seconds(remaining))
-            configuration.trigger()
-        }
+        claimRowTap?()
+        configuration.trigger()
     }
 
     private func show() {
@@ -94,6 +99,9 @@ struct PressFeedbackBody: View {
     }
 
     /// Takes the press off — after the minimum if the button fired, and at once if it did not.
+    ///
+    /// The action has already run by the time this is reached; what is being scheduled is only
+    /// how the control gets back to rest.
     ///
     /// The distinction is the owner's: a highlight that survives the finger leaving is a
     /// highlight that trails a scrolling list. A press interrupted by a scroll, by a drag off

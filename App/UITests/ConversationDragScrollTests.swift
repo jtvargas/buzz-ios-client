@@ -25,10 +25,11 @@ final class ConversationDragScrollTests: ConversationScrollHarness {
 
     /// How long to let a tap's own consequences finish before reading the screen.
     ///
-    /// `PressFeedback.minimumVisible` (the deferral the row's tap now waits out so its
-    /// highlight is seen) plus the navigation push. Written here rather than imported because
-    /// a UI test target drives the app as a black box and shares no symbols with it — so if
-    /// that constant is ever raised, this is the line that has to move with it.
+    /// The row's tap is deferred by one main-actor turn — long enough for a control the same
+    /// touch also landed on to claim it — and then the navigation push runs. Nothing here is
+    /// waiting on a press animation any more: a press never stands in front of an action. The
+    /// margin is generous because a UI test target drives the app as a black box and this is
+    /// a push, not a constant.
     private static let settle: TimeInterval = 0.9
 
     func testADragBeginningOnAMessageScrollsTheConversation() throws {

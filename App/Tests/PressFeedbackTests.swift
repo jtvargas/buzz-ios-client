@@ -16,7 +16,8 @@ import UIKit
 /// - only a control with edges of its own washes: the owner had the amber taken off the
 ///   sidebar and off a message entirely;
 /// - Reduce Motion takes the movement off and keeps the feedback;
-/// - a press outlives the curve that draws it, and the action waits behind it;
+/// - a press outlives the curve that draws it by nothing at all — it may never stand in front
+///   of the action it is feedback for;
 /// - an abandoned press comes off faster than a released one, with no minimum in front of it;
 /// - a control inside a scroll view is handed the finger at touch-down rather than 150ms
 ///   later, which is the half of "the shrink doesn't happen" that no constant could fix;
@@ -24,31 +25,34 @@ import UIKit
 ///   no amount of reading the code can establish.
 @Suite("Press feedback")
 struct PressFeedbackTests {
-    @Test("the shrink is deep enough to be seen on the widest thing it is applied to")
-    func pressedScaleIsVisible() {
+    @Test("the shrink moves ink on the widest thing it is applied to, and stays subtle")
+    func pressedScaleIsVisibleAndSubtle() {
         // Not the constant restating itself: the rule is that the movement has to be legible
-        // on a full-width row, which is the thing the owner presses most and the thing he
-        // reported three times as not moving at all. Half the difference is what each edge
-        // travels on a 390pt phone.
+        // on a full-width row — the thing the owner presses most, and the thing he reported
+        // three times as not moving at all — without becoming the lurch that four per cent was.
+        // Half the difference is what each edge travels on a 390pt phone.
         let edgeTravel = 390 * (1 - PressFeedback.pressedScale) / 2
-        #expect(edgeTravel >= 9)
-        // And the floor underneath it: below 0.94 the label visibly re-lays out at the
-        // accessibility text sizes, which is a different defect wearing the same clothes.
-        #expect(PressFeedback.pressedScale >= 0.94)
+        #expect(edgeTravel >= 4)
+        #expect(edgeTravel <= 8)
+        // The owner's range, once the 150ms delay in front of the press had been found and
+        // removed: the depth was never what made the shrink invisible, so it went back to
+        // subtle. Below 0.94 the label also visibly re-lays out at the accessibility text
+        // sizes, which is a different defect wearing the same clothes.
+        #expect(PressFeedback.pressedScale >= 0.97)
+        #expect(PressFeedback.pressedScale <= 0.98)
     }
 
-    @Test("the press finishes and is held before anything else happens")
-    func theShrinkHasRoomToArrive() {
-        // The whole of the owner's third and fourth reports, as one inequality. The shrink
-        // must *finish* — not merely be under way — and then be held, before the action that
-        // replaces the screen is allowed to run. A press curve as long as the minimum is the
-        // defect this exists to prevent: the control reaches full scale exactly as it is
-        // taken away, which is what "the scale-down animation doesn't happen" looks like.
-        #expect(PressFeedback.pressDuration < PressFeedback.minimumVisible)
-        #expect(PressFeedback.minimumVisible - PressFeedback.pressDuration >= 0.08)
-        // And the whole thing still lands inside the brief's "snappy".
-        #expect(PressFeedback.pressDuration <= 0.2)
-        #expect(PressFeedback.releaseDuration <= 0.2)
+    @Test("the whole gesture is snappy, and nothing in it is a dwell")
+    func theCurvesAreSnappy() {
+        // 80–100ms down, the owner's range, and the range is the point rather than the
+        // midpoint: below it a press is a jump with no animation to see, above it the control
+        // is still moving when a quick finger has already gone.
+        #expect(PressFeedback.pressDuration >= 0.08)
+        #expect(PressFeedback.pressDuration <= 0.1)
+        // And the release settles in about the same breath. It was once followed by a hold
+        // that the button's action waited behind, and the owner's report on that build was
+        // that the entire app felt delayed.
+        #expect(PressFeedback.releaseDuration <= 0.25)
     }
 
     @Test("an abandoned press comes off faster than a released one")
@@ -126,23 +130,21 @@ struct PressFeedbackTests {
         #expect(PressFeedback.pressedFill == 0.14)
     }
 
-    @Test("a press stays on screen long enough to be seen")
-    func aPressPlaysThrough() {
-        // The defect this exists to prevent, reported from a device: a tap shorter than the
-        // shrink means the shrink never arrives, so the control appears not to animate at
-        // all. Whatever the minimum is, it has to outlast the ease-out that draws it.
-        #expect(PressFeedback.minimumVisible > PressFeedback.pressDuration)
-    }
-
-    @Test("a control's action lands too late to claim a tap, which is why its press claims it")
-    func theClaimCannotWaitForTheAction() {
-        // The inequality that forced ``SwiftUI/View/onControlPress(_:)`` into existence, and
-        // the reason it must not be replaced by a claim made from a control's action. A
-        // control now holds its action back until its press has been seen, so the action runs
-        // a whole `minimumVisible` after the finger left — long after the row's own tap fired
-        // and its suppression window lapsed. A reaction chip would send the reaction *and*
-        // push the thread on top of it.
-        #expect(PressFeedback.minimumVisible > RowTapArbitration.window)
+    @Test("the press latch is the down-curve and not one millisecond of dwell more")
+    func aPressPlaysThroughAndNoLonger() {
+        // Two defects at once, and they pull in opposite directions.
+        //
+        // Shorter than the curve and the shrink never arrives: `isPressed` follows the finger
+        // exactly, a quick tap ends mid-animation, and the control reads as not animating at
+        // all. That was reported from a device three times.
+        //
+        // *Longer* than the curve and the latch becomes a dwell — which is what it was when
+        // it also held the button's action back, and the owner's report on that build was
+        // that the whole app felt delayed. Equality is the only value that is neither, so it
+        // is asserted as equality rather than as a range: if this line has to be relaxed,
+        // the question being answered is "how long should a control stall for?", and the
+        // answer to that question is that it should not.
+        #expect(PressFeedback.minimumVisible == PressFeedback.pressDuration)
     }
 
     @Test("down is the ease-out and up is the spring")
@@ -243,8 +245,10 @@ struct PressTreatmentRenderTests {
         let expected = Self.subject.width * PressFeedback.pressedScale
         #expect(abs(pressed.width - expected) <= 2)
         // Stated once more as the thing a person would notice, so the rule survives someone
-        // moving the constant: the row got visibly narrower.
-        #expect(resting.width - pressed.width >= 8)
+        // moving the constant: the row got visibly narrower. Six points across a 240pt subject
+        // is the floor a three-per-cent shrink leaves — it is deliberately not tightened to
+        // the current number, because the number is the owner's dial and this is the rule.
+        #expect(resting.width - pressed.width >= 6)
     }
 
     @Test("the same view under no press is identical to itself")

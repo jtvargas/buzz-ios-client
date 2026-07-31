@@ -24,22 +24,27 @@ import SwiftUI
 /// in a sixth of the time either of those take, with no latch in front of it: a highlight
 /// that trails a scrolling finger is the most common way this treatment reads as broken, and
 /// it is not a release, so it must not animate like one.
+///
+/// # None of it stands in front of the action
+///
+/// The action fires the moment the finger leaves, and the release spring plays *over* whatever
+/// the action started — a push, a sheet, a send. For one round it did not: the action waited
+/// for the shrink to have been seen, which is a defensible way to make a press perceptible and
+/// an indefensible way to make an app feel, and the owner reported the whole app as laggy
+/// within the hour. Feedback is drawn *beside* what it is feedback for, never in front of it.
 enum PressFeedback {
     /// What a pressed control shrinks to.
     ///
-    /// Six per cent, which is past the brief's original 0.96–0.97 on the owner's instruction
-    /// — he reported the shrink as invisible three times running, the last time with the
-    /// amber taken off, which leaves the movement carrying the whole answer by itself. On the
-    /// widest thing this is applied to, a full-width sidebar row on a 390pt screen, it moves
-    /// each edge about 12pt; on the narrowest, a composer disc, about 1pt. Below 0.94 the
-    /// label re-lays out at the accessibility text sizes, which is the floor this sits on.
+    /// Three per cent. The two rounds either side of this number are the argument for it: at
+    /// 0.965 the shrink was reported invisible three times, at 0.94 it was visible and the
+    /// owner asked for it back in the 0.97–0.98 range, because by then the *real* fault had
+    /// been found and it was never the depth.
     ///
-    /// The number is only half of that report, and it was the smaller half. The other half is
-    /// ``ScrollTouchDeliveryView``: a scroll view holds a touch for about 150ms before the
-    /// control inside it is told there was one, so on the shortest taps the shrink was
-    /// starting after the finger had already left. A deeper scale cannot be seen through a
-    /// delay in front of it.
-    static let pressedScale: CGFloat = 0.94
+    /// That fault is ``ScrollTouchDeliveryView``: a scroll view holds a touch for about 150ms
+    /// before the control inside it is told there was one, so on the shortest taps the shrink
+    /// was starting after the finger had already left. No depth can be seen through a delay in
+    /// front of it — and once the delay is gone, a subtle depth is enough.
+    static let pressedScale: CGFloat = 0.97
 
     /// The wash a pressed **control** draws behind itself, inside its own shape.
     ///
@@ -55,17 +60,19 @@ enum PressFeedback {
     /// cannot drift apart without this line changing.
     static let fillColor = Color.hiveAccent
 
-    /// How long a press stays on screen at the very least, **and** how long the control's own
-    /// action waits behind it.
+    /// How long a press stays on screen at the very least.
     ///
-    /// Two rules with one number, deliberately. The first cut of this treatment "didn't
-    /// animate" because `isPressed` follows the finger exactly and a tap is shorter than the
-    /// curve that draws it. The second cut fixed that and was still reported as
-    /// imperceptible, for the other half of the same reason: the *action* fired on lift, so
-    /// the screen the press was drawn on was already being replaced while the shrink was
-    /// arriving. A press is worth seeing only if there is something left to see it on — so the
-    /// press plays through, and the action runs when it has.
-    static let minimumVisible: TimeInterval = 0.22
+    /// `isPressed` follows the finger exactly, and a quick tap is shorter than the curve that
+    /// draws it — so without this the shrink starts, the finger lifts, and it springs back
+    /// from somewhere around 0.99. The latch lets the down-curve land before the release
+    /// begins, and it is set to ``pressDuration`` for exactly that reason: it is the shortest
+    /// hold that can show the whole animation and not a millisecond of dwell beyond it.
+    ///
+    /// It holds the *drawing* and nothing else. It briefly held the action too — see this
+    /// type's own documentation — and that is the one thing it must never be made to do again.
+    /// A press interrupted by a new one drops it: a control tapped twice in a row answers the
+    /// second tap immediately rather than finishing its account of the first.
+    static let minimumVisible: TimeInterval = pressDuration
 
     /// What a pressed control's content fades to.
     ///
@@ -84,10 +91,10 @@ enum PressFeedback {
     /// How long the press takes to land, how long the release takes to settle, and how long
     /// an abandoned press takes to disappear.
     ///
-    /// `pressDuration` is well inside ``minimumVisible`` on purpose: the shrink has to *finish*
-    /// and be held for a moment, not merely be under way, before the action runs.
-    static let pressDuration: TimeInterval = 0.12
-    static let releaseDuration: TimeInterval = 0.2
+    /// 90ms down, which is the owner's 80–100ms and is about five frames: fast enough to read
+    /// as *the moment I touched it*, slow enough to be an animation rather than a jump.
+    static let pressDuration: TimeInterval = 0.09
+    static let releaseDuration: TimeInterval = 0.22
     /// Near enough to instant to be gone within two frames of the finger moving.
     static let cancelDuration: TimeInterval = 0.06
 
@@ -95,7 +102,11 @@ enum PressFeedback {
     static let press = Animation.easeOut(duration: pressDuration)
 
     /// Up: snappy, with the small overshoot that reads as physical.
-    static let release = Animation.spring(response: releaseDuration, dampingFraction: 0.7)
+    ///
+    /// A spring rather than a curve because it is interruptible in the way a curve is not:
+    /// SwiftUI re-targets a running spring from wherever it has got to, so a control tapped
+    /// again mid-release goes back down from where it is instead of restarting from 1.
+    static let release = Animation.spring(response: releaseDuration, dampingFraction: 0.75)
 
     /// Abandoned: off the screen before the finger has travelled a centimetre.
     static let cancel = Animation.easeOut(duration: cancelDuration)
@@ -141,12 +152,14 @@ enum PressFeedback {
 ///
 /// # Why this is a `PrimitiveButtonStyle`
 ///
-/// Because a `ButtonStyle` is handed the label and the press state and **not** the action, so
-/// it can draw a press but cannot decide when the press has been seen. That is one half of
-/// the treatment. The other half is the owner's report that *"the action fires too quickly —
-/// there needs to be enough time for the scale-down to be clearly visible before the action
-/// executes."* A `PrimitiveButtonStyle` is given
-/// ``PrimitiveButtonStyleConfiguration/trigger()``, which is exactly the missing handle.
+/// Not to delay anything — it did that for one round and the owner reported the app as laggy.
+/// It stays primitive for the one fact only ``PrimitiveButtonStyleConfiguration/trigger()``
+/// can tell it: **whether this press ended in an activation or in a cancel.**
+/// `configuration.isPressed` goes false identically either way, so a plain `ButtonStyle`
+/// cannot tell a lift from a scroll view taking the touch away — and those two have to animate
+/// differently, or every flick down a list leaves a highlight trailing the finger. `trigger()`
+/// is called on touch-up-inside and never on a cancel, so it is the signal, and it is passed
+/// straight through the moment it arrives.
 ///
 /// The press itself is still SwiftUI's own: the body wraps the label in an ordinary `Button`
 /// carrying a `ButtonStyle` that reports `isPressed` and nothing else. That indirection is

@@ -299,11 +299,12 @@ struct TimelineRowView: View {
     /// would answer the finger with nothing at all for a fifth of a second and then jump.
     ///
     /// The turn is still needed, because the tap and the control actions that beat it are
-    /// dispatched from the same event in no guaranteed order. What changed with the delay is
-    /// where the claim comes from: a control's *action* can now be held back until its own
-    /// press has been seen, so it is the *press* that claims the tap — every control carrying
-    /// the app's treatment calls ``ClaimRowTapAction`` on both edges of its press — and
-    /// ``RowTapArbitration``'s window only has to outlast this turn rather than that minimum.
+    /// dispatched from the same event in no guaranteed order. One turn is all it needs, and
+    /// the claim comes from a control's *action*: nothing on this row delays an action any
+    /// more, so every claim lands in the same event the tap did. It was briefly claimed from
+    /// the *press* instead, while actions were being held back behind the press animation —
+    /// and a cancelled press claims identically to a completed one, so brushing a chip and
+    /// scrolling away suppressed the next real tap on the row.
     ///
     /// The controls that claim a tap, and how each one does it:
     ///
