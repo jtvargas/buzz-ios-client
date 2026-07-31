@@ -14,7 +14,6 @@ struct PressFeedbackBody: View {
     let emphasis: PressFeedbackButtonStyle.Emphasis
     let shape: AnyShape
 
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// Injected by an enclosing row that has a tap of its own to arbitrate — a message row,
     /// whose tap opens the thread and fires even when the touch landed on a control inside
     /// it (``RowTapArbitration``).
@@ -56,8 +55,8 @@ struct PressFeedbackBody: View {
         .buttonStyle(PressStateReporter { pressed in
             if pressed { show() } else { scheduleRelease() }
         })
-        // Outside the button, so the scale takes the whole interactive view — its padding,
-        // its hit area and its wash — and not just the glyphs of its label.
+        // Outside the button, so the treatment covers the whole interactive view — its
+        // padding and its hit area — and not just the glyphs of its label.
         .modifier(PressTreatment(isShowing: isShowing, emphasis: emphasis, shape: shape))
         .animation(curve, value: isShowing)
         // The other half of "immediate": SwiftUI reports this press honestly, but a scroll
@@ -70,10 +69,10 @@ struct PressFeedbackBody: View {
 
     /// Runs the button's action, immediately, and records that this press ended in one.
     ///
-    /// Nothing here waits. The release spring plays *over* whatever the action starts, which
-    /// is the whole point: a push, a sheet or a send happens at the speed of the finger, and
-    /// the control settles back behind it. This method held the action back by up to
-    /// ``PressFeedback/minimumVisible`` for one round so the shrink could be seen before the
+    /// Nothing here waits. The release plays *over* whatever the action starts, which is the
+    /// whole point: a push, a sheet or a send happens at the speed of the finger, and the
+    /// control settles back behind it. This method held the action back by up to
+    /// ``PressFeedback/minimumVisible`` for one round so the press could be seen before the
     /// screen it was drawn on was replaced, and the owner's report on that build was that the
     /// entire app now felt delayed. He was right, and the honest reading is that the earlier
     /// complaint it was answering had a different cause — ``ScrollTouchDeliveryView`` — which
@@ -94,7 +93,7 @@ struct PressFeedbackBody: View {
         release = nil
         didTrigger = false
         shownAt = .now
-        curve = PressFeedback.animation(pressed: true, reduceMotion: reduceMotion)
+        curve = PressFeedback.animation(pressed: true)
         isShowing = true
     }
 
@@ -121,7 +120,7 @@ struct PressFeedbackBody: View {
                     try? await Task.sleep(for: .seconds(remaining))
                     guard !Task.isCancelled else { return }
                 }
-                curve = PressFeedback.animation(pressed: false, reduceMotion: reduceMotion)
+                curve = PressFeedback.animation(pressed: false)
             } else {
                 curve = PressFeedback.cancel
             }
