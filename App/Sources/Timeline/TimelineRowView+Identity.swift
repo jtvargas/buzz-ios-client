@@ -25,10 +25,32 @@ extension TimelineRowView {
         authorHumanName ?? names.shortIdentifier(for: row.pubkey)
     }
 
-    /// The status VoiceOver announces after the message: presence, whether it was
-    /// edited, and its delivery state. Pure and testable via ``MessageAccessibility``.
+    /// The status VoiceOver announces after the message: who wrote it when the row does
+    /// not say so on screen, presence, whether it was edited, and its delivery state.
+    /// Pure and testable via ``MessageAccessibility``.
+    ///
+    /// The author is named here exactly when ``TimelineRowView/showsAuthorHeader`` is
+    /// `false`. A reader with eyes takes the author of a continuation from the message
+    /// above it; a reader by ear has no "above" to look at, and an unattributed run of
+    /// messages is the one thing grouping must not cost them.
     var accessibilityStatus: String {
-        MessageAccessibility.status(isOnline: isAuthorOnline, isEdited: row.isEdited, delivery: row.delivery)
+        MessageAccessibility.status(
+            author: showsAuthorHeader ? nil : authorName,
+            isOnline: isAuthorOnline,
+            isEdited: row.isEdited,
+            delivery: row.delivery
+        )
+    }
+
+    /// The empty column a continuation row keeps where the avatar would be.
+    ///
+    /// Zero height, so it can never be the thing that decides a row's height, and the same
+    /// width as the avatar so every message in a block starts on one left edge — the
+    /// alignment is the whole reason a block reads as a block.
+    var gutter: some View {
+        Color.clear
+            .frame(width: avatarSize, height: 0)
+            .accessibilityHidden(true)
     }
 
     /// The author's avatar with a presence badge — Slack's rounded square (the shape

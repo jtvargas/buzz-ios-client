@@ -29,10 +29,11 @@ import UIKit
 ///
 /// # Determinism
 ///
-/// Every event is signed by one ephemeral key with fixed timestamps, so a shape renders
-/// identically on every run and on every machine. Heights come out of the text, not out of a
-/// hardcoded frame: the point of the shapes is what a `LazyVStack` does when it has to
-/// *estimate* a row it has not measured, and a fixed frame would remove the thing under test.
+/// Every event is signed by one of two ephemeral keys — taking turns, see ``authorRun`` —
+/// with fixed timestamps, so a shape renders identically on every run and on every machine.
+/// Heights come out of the text, not out of a hardcoded frame: the point of the shapes is
+/// what a `LazyVStack` does when it has to *estimate* a row it has not measured, and a fixed
+/// frame would remove the thing under test.
 enum ConversationFixture {
     /// Which conversation screen a shape opens.
     enum Surface: String {
@@ -123,18 +124,28 @@ enum ConversationFixture {
 
     // MARK: - Content
 
+    /// How many messages in a row one author writes before the fixture hands the
+    /// conversation to the next one.
+    ///
+    /// A conversation is people taking turns, and the surface now renders that literally:
+    /// a run by one author is one block with one avatar, and the rows inside it are shorter
+    /// and sit closer together than the row that opens it. A fixture signed throughout by a
+    /// single key would be one unbroken block, so the shapes would never measure a row that
+    /// names its author — and the suite exists to measure real rows.
+    private static let authorRun = 3
+
     /// The messages a shape is made of, oldest first, already signed.
     ///
-    /// - Parameter root: when non-nil, every message after the first carries an `e` tag
-    ///   marking it a reply to `root` — which is what makes the set a thread.
-    static func events(for options: Options, key: PrivateKey) throws -> [NostrEvent] {
+    /// - Parameter keys: the authors, taken in turn every ``authorRun`` messages. The
+    ///   first of them opens a thread and signs the picture sampler.
+    static func events(for options: Options, keys: [PrivateKey]) throws -> [NostrEvent] {
         if options.markdownSampler {
             return [try NostrEvent.signed(
                 kind: .channelMessage,
                 content: markdownSampler,
                 tags: [["h", channelID]],
                 createdAt: Date(timeIntervalSince1970: 1_700_000_000),
-                with: key
+                with: keys[0]
             )]
         }
         var events: [NostrEvent] = []
@@ -158,9 +169,11 @@ enum ConversationFixture {
                 kind: .channelMessage,
                 content: body(index: index, lines: lines, links: options.links && fromEnd == 1),
                 tags: tags,
-                // Fixed and one minute apart, so day separators and ordering are stable.
+                // Fixed and one minute apart, so day separators and ordering are stable —
+                // and, being inside the five-minute grouping window, so a run by one
+                // author really does group.
                 createdAt: Date(timeIntervalSince1970: TimeInterval(1_700_000_000 + index * 60)),
-                with: key
+                with: keys[(index / authorRun) % keys.count]
             )
             events.append(event)
             if rootID == nil, options.surface == .thread { rootID = event.id }
@@ -179,7 +192,7 @@ enum ConversationFixture {
                     createdAt: Date(
                         timeIntervalSince1970: TimeInterval(1_700_000_000 + (options.messages + offset) * 60)
                     ),
-                    with: key
+                    with: keys[0]
                 ))
             }
         }

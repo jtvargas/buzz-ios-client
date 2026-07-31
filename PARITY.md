@@ -23,7 +23,7 @@ This is the living checklist for the headline milestone: feature parity with the
 | Feature | Upstream module | Status | Notes |
 |---------|-----------------|--------|-------|
 | Home (channel list, unreads) | `home` | ✅ | Sidebar: Channels / Direct Messages / Agents, collapsible and persisted; last message, time, unread indicator |
-| Channels (timeline, composer) | `channels` | ✅ | One shared shell for channel, thread and DM |
+| Channels (timeline, composer) | `channels` | ✅ | One shared shell for channel, thread and DM. Consecutive messages by one author stack under a single avatar, name and time — upstream's rule (same author, ≤ 5 minutes, no day boundary or system notice between them, a message carrying a picture always names its author), decided once for every surface rather than per screen |
 | Threads | `channels` | ✅ | Replies row with participant faces; heading pops back to the conversation |
 | Reactions | `channels` | ✅ | A long press opens a sheet: five quick reactions with the full emoji picker beside them, then Reply in thread, Copy Message and Remind Me. Chips with counts under the message, own reaction withdrawable |
 | Direct messages | `channels` | ✅ | A DM is a channel whose roster is exactly two members including you; opened or created from the profile sheet. A DM hidden elsewhere stays off the sidebar here, read from the relay's per-viewer NIP-DV snapshot (kind 30622) — hiding is presentation, so the roster still names you and nothing else on the wire carries it. A long press on a DM row also *makes* a hide (kind 41012), which Desktop reads back and upstream does not offer at all; messaging the person again brings it back |

@@ -11,8 +11,9 @@ import SwiftUI
 ///
 /// It has no background, no border, and no inset panel (§3: *do not make every message
 /// look like a card*). The only thing between two messages is ``MessageRowMetrics``'
-/// 12pt of space, applied by the enclosing list rather than as padding here, so the
-/// row's height is its content's height and nothing else. The two controls it does
+/// space — 12pt between blocks, 6pt inside one — applied by the enclosing list rather
+/// than as padding here, so the row's height is its content's height and nothing else
+/// whether or not it names its author (``showsAuthorHeader``). The two controls it does
 /// carry — the avatar and the name — show a pressed dim and no haptic, because a tap
 /// there is on its way to a sheet that will announce itself.
 ///
@@ -57,6 +58,20 @@ struct TimelineRowView: View {
     var avatarSize: CGFloat = MessageRowMetrics.avatarSize
 
     let row: TimelineRow
+    /// Whether this row names its author: the avatar, the bold name, and the time.
+    ///
+    /// `false` for a message that continues the block above it — the same author, inside
+    /// ``ConversationGrouping/groupWindow``, with nothing drawn in between. The row then
+    /// stacks under the one that did name them: no face, no name, no time, and the avatar
+    /// gutter kept empty so the text still starts on the block's own left edge.
+    ///
+    /// Decided by ``ConversationGrouping`` and handed down, never worked out here. A row
+    /// can only see itself, so a row that grouped itself would need the surface to tell it
+    /// what came before anyway — and each surface would end up with its own copy of the
+    /// rule, which is exactly what day separators being items rather than row headers
+    /// avoids. Defaults to `true` for the surfaces that draw a message on its own (the
+    /// Threads screen's summaries), where there is no block to continue.
+    var showsAuthorHeader = true
     /// Whether this message's author is present in the workspace (S-5 presence).
     var isAuthorOnline: Bool = false
     /// The surviving reaction groups for this row (S-2), own reaction highlighted.
@@ -111,7 +126,11 @@ struct TimelineRowView: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: MessageRowMetrics.avatarGap) {
-            avatar
+            if showsAuthorHeader {
+                avatar
+            } else {
+                gutter
+            }
             VStack(alignment: .leading, spacing: 4) {
                 message
 
@@ -203,7 +222,7 @@ struct TimelineRowView: View {
     /// is offered back as a rotor action, which is the only way in by ear.
     private var message: some View {
         VStack(alignment: .leading, spacing: 2) {
-            header
+            if showsAuthorHeader { header }
             content
         }
         .accessibilityElement(children: .combine)

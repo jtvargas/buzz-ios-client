@@ -207,35 +207,43 @@ struct ThreadView: View {
     private var list: some View {
         // The channel's rhythm, from the same constant, so a message does not change
         // size or spacing when a reader follows it into its thread.
-        LazyVStack(spacing: MessageRowMetrics.betweenMessages) {
+        LazyVStack(spacing: MessageRowMetrics.withinGroup) {
             // The same grouped items the channel renders, so a thread that spans days
-            // separates them the same way; the model suppresses the separator that
-            // would otherwise sit above the thread's own opener.
+            // separates them the same way and stacks one person's consecutive replies the
+            // same way; the model suppresses the separator that would otherwise sit above
+            // the thread's own opener.
             ForEach(model.items) { item in
-                switch item {
-                case let .day(marker):
-                    DaySeparatorView(date: marker.date)
-                case let .message(row):
-                    messageRow(row)
-                case let .notice(marker):
-                    // A thread's rows are all kind-9 replies, so this is unreachable
-                    // today. Rendered rather than skipped so that a notice which ever
-                    // does reach a thread appears instead of silently vanishing.
-                    SystemNoticeRowView(notice: marker.notice)
-                }
+                itemView(item)
+                    .padding(.top, item.continuesGroup ? 0 : MessageRowMetrics.aboveNewGroup)
             }
         }
         .padding(.vertical, 8)
         .dismissesSuggestionsOnScroll(model.mentionAutocomplete)
     }
 
-    private func messageRow(_ row: TimelineRow) -> some View {
+    @ViewBuilder
+    private func itemView(_ item: ConversationItem) -> some View {
+        switch item {
+        case let .day(marker):
+            DaySeparatorView(date: marker.date)
+        case let .message(row, continuesGroup):
+            messageRow(row, continuesGroup: continuesGroup)
+        case let .notice(marker):
+            // A thread's rows are all kind-9 replies, so this is unreachable today.
+            // Rendered rather than skipped so that a notice which ever does reach a
+            // thread appears instead of silently vanishing.
+            SystemNoticeRowView(notice: marker.notice)
+        }
+    }
+
+    private func messageRow(_ row: TimelineRow, continuesGroup: Bool) -> some View {
         // One view per element: the lazy stack's per-element subview count stays
         // constant as replies stream in, so the bottom anchor never fights a row that
         // is sometimes one child and sometimes two.
         VStack(spacing: 0) {
             TimelineRowView(
                 row: row,
+                showsAuthorHeader: !continuesGroup,
                 isAuthorOnline: presence.isOnline(row.pubkey),
                 reactions: model.reactions(for: row.id),
                 mentions: model.mentions(for: row.id),
