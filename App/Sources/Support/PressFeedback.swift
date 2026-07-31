@@ -25,16 +25,39 @@ enum PressFeedback {
 
     /// The wash a pressed control draws behind itself, over whatever it is sitting on.
     ///
-    /// `.secondary` rather than the accent: this says *pressed*, and the accent in this app
-    /// says *yours* — an own reaction, an unread count, the send disc. A press that tinted
-    /// itself amber would collide with the one meaning the colour already carries.
+    /// The accent at 0.14, which is not a taste call — it is
+    /// ``ChannelListView/resumeMark(isResumable:)``, the mark on the conversation you were
+    /// last in, to the number. The owner asked for the two to be the same thing, and they
+    /// now share a colour, an opacity, a corner and an inset: one highlight in the app,
+    /// saying *this one*, whether it is marking a place or answering a finger.
     static let pressedFill: Double = 0.14
+
+    /// The colour of that wash. Named here so the sidebar's mark and every press in the app
+    /// cannot drift apart without this line changing.
+    static let fillColor = Color.hiveAccent
+
+    /// How long a press stays on screen at the very least.
+    ///
+    /// The reason the first cut of this "didn't animate": `isPressed` follows the finger
+    /// exactly, and a tap is often shorter than the 0.16s the shrink takes to arrive. The
+    /// scale would start, reach about 0.99, and spring back — a flicker, not a press. Slack's
+    /// deliberate feel is this: once a press is shown it plays through, however fast the tap
+    /// was. Past the ease-out, and short enough that a double tap still reads as two.
+    static let minimumVisible: TimeInterval = 0.18
+
+    /// How far a full-width row's wash is inset, horizontally and vertically.
+    ///
+    /// ``ChannelListView/resumeMark(isResumable:)``'s own padding. A row's highlight stopping
+    /// short of both screen edges is what makes it read as *this row* rather than as a band
+    /// laid across the list.
+    static let rowInset = (horizontal: CGFloat(8), vertical: CGFloat(1))
 
     /// What a pressed control with no shape of its own fades to — the sender's name and
     /// avatar on a message, which sit directly on the conversation.
     static let pressedDim: Double = 0.55
 
     /// The corner radius the wash is drawn with when a control does not name its own shape.
+    /// The sidebar mark's, and `.continuous` like it.
     static let cornerRadius: CGFloat = 10
 
     /// How long the press takes to land, and how long the release takes to settle.
@@ -128,30 +151,83 @@ struct PressFeedbackButtonStyle: ButtonStyle {
         self.shape = AnyShape(shape)
     }
 
-    /// A full-width row washes as a plain rectangle, and everything else in a rounded one.
+    /// Every emphasis washes in the sidebar mark's own rounded rectangle.
     ///
-    /// Not a detail: a row spans the screen, so a rounded wash puts two curves against the
-    /// screen's own edges — which reads as a card that has not quite arrived rather than as
-    /// a row that is lit. The corners are wrong precisely where nobody thinks to look for
-    /// them, so the emphasis carries the answer instead of each call site remembering it.
-    private static func defaultShape(for emphasis: Emphasis) -> AnyShape {
-        emphasis == .row ? AnyShape(.rect) : AnyShape(.rect(cornerRadius: PressFeedback.cornerRadius))
+    /// A row used to wash square, on the reasoning that a rounded shape against the screen's
+    /// edges reads as a card. The owner settled it the other way and gave the reason: the
+    /// mark on the conversation you were last in is a rounded rectangle inset from both
+    /// edges, and a press that lit a row differently would be a second highlight in a list
+    /// that already has one. It is inset rather than full-bleed for exactly the reason the
+    /// square was chosen — see ``PressFeedback/rowInset``.
+    private static func defaultShape(for _: Emphasis) -> AnyShape {
+        AnyShape(.rect(cornerRadius: PressFeedback.cornerRadius, style: .continuous))
     }
 
     func makeBody(configuration: Configuration) -> some View {
-        let pressed = configuration.isPressed
-        return configuration.label
+        PressFeedbackBody(configuration: configuration, emphasis: emphasis, shape: shape)
+    }
+}
+
+/// The body of ``PressFeedbackButtonStyle``, as a `View` so it can hold state.
+///
+/// A `ButtonStyle` cannot: `makeBody` is called to produce a view, and `@State` on the style
+/// itself belongs to no view. The state it needs is the latch — the thing that makes a press
+/// visible on a tap too fast to see, which is the whole difference between this and the first
+/// cut that the owner reported as "the shrink animation doesn't happen".
+private struct PressFeedbackBody: View {
+    let configuration: PressFeedbackButtonStyle.Configuration
+    let emphasis: PressFeedbackButtonStyle.Emphasis
+    let shape: AnyShape
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    /// Whether the press is being *shown*, which is not the same as whether a finger is down.
+    @State private var isShowing = false
+    @State private var shownAt: Date?
+    @State private var release: Task<Void, Never>?
+
+    var body: some View {
+        configuration.label
             // Every adopter gets a hit area covering its whole frame; a `Text` otherwise
             // only accepts taps on its glyphs.
             .contentShape(.rect)
-            .opacity(pressed ? PressFeedback.dim(for: emphasis) : 1)
+            .opacity(isShowing ? PressFeedback.dim(for: emphasis) : 1)
             .background {
-                shape.fill(Color.secondary.opacity(pressed ? PressFeedback.fill(for: emphasis) : 0))
+                shape
+                    .fill(PressFeedback.fillColor.opacity(isShowing ? PressFeedback.fill(for: emphasis) : 0))
+                    .padding(.horizontal, emphasis == .row ? PressFeedback.rowInset.horizontal : 0)
+                    .padding(.vertical, emphasis == .row ? PressFeedback.rowInset.vertical : 0)
             }
-            .scaleEffect(pressed ? PressFeedback.scale(for: emphasis, reduceMotion: reduceMotion) : 1)
+            .scaleEffect(isShowing ? PressFeedback.scale(for: emphasis, reduceMotion: reduceMotion) : 1)
             // Scoped to this control's own press, never ambient: an animation reaching the
             // enclosing list would animate row insertion in a bottom-anchored scroll view.
-            .animation(PressFeedback.animation(pressed: pressed, reduceMotion: reduceMotion), value: pressed)
+            .animation(PressFeedback.animation(pressed: isShowing, reduceMotion: reduceMotion), value: isShowing)
+            .onChange(of: configuration.isPressed) { _, pressed in
+                if pressed { show() } else { hide() }
+            }
+            .onDisappear { release?.cancel() }
+    }
+
+    private func show() {
+        release?.cancel()
+        release = nil
+        shownAt = .now
+        isShowing = true
+    }
+
+    /// Takes the press off, but never before it has been on screen long enough to be seen.
+    private func hide() {
+        let shownFor = shownAt.map { Date.now.timeIntervalSince($0) } ?? PressFeedback.minimumVisible
+        let remaining = PressFeedback.minimumVisible - shownFor
+        guard remaining > 0 else {
+            isShowing = false
+            return
+        }
+        release = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(remaining))
+            guard !Task.isCancelled else { return }
+            isShowing = false
+        }
     }
 }
 

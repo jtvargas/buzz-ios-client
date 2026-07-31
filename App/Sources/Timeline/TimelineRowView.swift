@@ -52,13 +52,11 @@ struct TimelineRowView: View {
     @State private var arbitration = RowTapArbitration()
     /// Whether a finger is currently down on this message.
     ///
-    /// Driven by the long press the row already recognises — see ``pressGesture`` — and
-    /// nothing else. `@GestureState` and not `@State` because it has to answer *cancel* as
-    /// well as lift: the framework resets it when the gesture ends however it ended, which
-    /// is what takes the highlight off the moment the press turns into a scroll. A `@State`
-    /// flag would need every one of those endings written out, and would keep a message lit
-    /// on the one that got missed.
-    @GestureState private var isPressed = false
+    /// Driven by ``SwiftUI/View/messagePressReporter(isEnabled:onChange:)`` — a UIKit
+    /// listener that watches the touch without claiming it — and never by a gesture. Cancel
+    /// is answered for free: the scroll view's pan cancels the touches in its subviews the
+    /// instant it takes over, and the reporter reads that cancel as the press ending.
+    @State private var isPressed = false
 
     /// The avatar's point size, and so the width the content column is indented by, at
     /// this reader's text size. Scaled against `.subheadline` — the name beside it — so
@@ -195,6 +193,7 @@ struct TimelineRowView: View {
         .animation(.default, value: isAuthorOnline)
         .contentShape(.rect)
         .gesture(pressGesture)
+        .messagePressReporter(isEnabled: onLongPress != nil && !row.isDeleted) { isPressed = $0 }
         // Every interactive range of a message — mention, channel, link, email,
         // internal link — is a link run, because that is the only run of a `Text` a
         // reader can press (see ``RichTextTarget``). They all arrive here. Marking the
@@ -269,21 +268,19 @@ struct TimelineRowView: View {
     /// the press and swallow the tap, which is the Threads screen's rows losing their only
     /// way into a thread.
     ///
-    /// ``isPressed`` is taken from the same recogniser rather than from one added beside it,
-    /// and that is not a tidiness point either: a zero-distance drag over a row, which is the
-    /// usual way to observe a touch going down, competes with the message list's own
-    /// scrolling — the reason the round that first asked for pressed feedback on a message
-    /// settled for a flash on release. `updating` costs the gesture nothing; it reports the
-    /// press the row is already tracking, and the framework clears it on lift *and* on the
-    /// cancel that a scroll turns the press into.
+    /// This gesture deliberately reports **nothing** about the press going down.
+    ///
+    /// It did once, through `@GestureState` hung off the long press, and that shipped a
+    /// conversation that could not be scrolled at all: a gesture that tracks from touch-down
+    /// has taken the touch, and a 45% drag beginning on a message then moves the list 0.0pt.
+    /// Whatever a row learns about a finger it learns from
+    /// ``SwiftUI/View/messagePressReporter(isEnabled:onChange:)``, which is a listener and
+    /// not a gesture. `ConversationDragScrollTests` is what holds this line.
     private var pressGesture: AnyGesture<Void> {
         let tap = TapGesture().onEnded { scheduleRowTap() }
         guard let onLongPress, !row.isDeleted else { return AnyGesture(tap) }
         return AnyGesture(
             LongPressGesture(minimumDuration: Self.longPressDuration)
-                .updating($isPressed) { pressing, isPressed, _ in
-                    isPressed = pressing
-                }
                 .onEnded { _ in
                     // What the context menu this replaced played on recognition, and what
                     // tells a reader the sheet is coming before it has drawn a pixel.

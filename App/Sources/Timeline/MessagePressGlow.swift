@@ -20,12 +20,14 @@ import SwiftUI
 /// by that inset makes it a row highlight instead: full width, and gone the moment the
 /// finger lifts.
 enum MessagePressGlow {
-    /// How strongly a pressed message lights up.
+    /// How far the wash reaches past the row, horizontally.
     ///
-    /// Lighter than ``PressFeedback/pressedFill``. A control's wash has to be legible inside
-    /// a 28pt chip; this one covers a whole message, and the same opacity over that much
-    /// area reads as the conversation changing colour rather than as one message answering.
-    static let fill: Double = 0.1
+    /// The row is drawn inside the surface's own ``MessageRowMetrics/rowLeading`` inset, so
+    /// this bleeds back out to the screen and then in again by
+    /// ``PressFeedback/rowInset``'s horizontal — landing a pressed message on exactly the
+    /// same margins as the sidebar's mark on the conversation you were last in, which is
+    /// what the owner asked the whole highlight to look like.
+    static let bleed = MessageRowMetrics.rowLeading - PressFeedback.rowInset.horizontal
 }
 
 extension View {
@@ -47,9 +49,9 @@ private struct MessagePressGlowModifier: ViewModifier {
 
     func body(content: Content) -> some View {
         content.background {
-            Color.secondary
-                .opacity(isPressed ? MessagePressGlow.fill : 0)
-                .padding(.horizontal, -MessageRowMetrics.rowLeading)
+            RoundedRectangle(cornerRadius: PressFeedback.cornerRadius, style: .continuous)
+                .fill(PressFeedback.fillColor.opacity(isPressed ? PressFeedback.pressedFill : 0))
+                .padding(.horizontal, -MessagePressGlow.bleed)
                 .padding(.vertical, -MessageRowMetrics.pressBleed)
                 // Scoped to the wash itself, so nothing here can reach the enclosing list
                 // and animate a row arriving in a bottom-anchored scroll view.

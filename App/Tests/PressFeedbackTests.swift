@@ -71,18 +71,38 @@ struct PressFeedbackTests {
         #expect(PressFeedback.animation(pressed: false, reduceMotion: true) == PressFeedback.press)
     }
 
-    @Test("a row washes square and everything else washes rounded")
-    func rowWashesSquare() {
-        // Compared as drawn paths, because that is the only thing a shape can be asked. A
-        // rounded wash on a full-width row puts two curves against the screen's own edges,
-        // and the emphasis carries the answer so that no call site has to remember it.
+    @Test("every wash is drawn in the sidebar mark's own shape")
+    func washMatchesTheSidebarMark() {
+        // Compared as drawn paths, because that is the only thing a shape can be asked.
+        // The owner's rule: the press highlight and ``ChannelListView/resumeMark`` are the
+        // same highlight — same colour, same opacity, same corner, same inset — so a row and
+        // a control both wash in a 10pt continuous rounded rectangle rather than the row
+        // washing square as it first shipped.
         let box = CGRect(x: 0, y: 0, width: 100, height: 44)
-        let row = PressFeedbackButtonStyle(.row).shape.path(in: box)
-        let control = PressFeedbackButtonStyle(.control).shape.path(in: box)
-        #expect(row == Rectangle().path(in: box))
-        #expect(control != row)
+        let mark = RoundedRectangle(cornerRadius: PressFeedback.cornerRadius, style: .continuous).path(in: box)
+        #expect(PressFeedbackButtonStyle(.row).shape.path(in: box) == mark)
+        #expect(PressFeedbackButtonStyle(.control).shape.path(in: box) == mark)
         // And a control that names its own shape keeps it.
         #expect(PressFeedbackButtonStyle(.control, in: .capsule).shape.path(in: box) == Capsule().path(in: box))
+    }
+
+    @Test("the highlight is the sidebar mark's colour and opacity, to the number")
+    func washIsTheAccentAtTheMarksOpacity() {
+        // The one that would silently drift: `resumeMark` fills `Color.hiveAccent` at 0.14,
+        // and a press that used `.secondary` — as this did when it first shipped — is a
+        // second highlight vocabulary in a list that already has one.
+        #expect(PressFeedback.fillColor == Color.hiveAccent)
+        #expect(PressFeedback.pressedFill == 0.14)
+        #expect(PressFeedback.rowInset.horizontal == 8)
+        #expect(PressFeedback.rowInset.vertical == 1)
+    }
+
+    @Test("a press stays on screen long enough to be seen")
+    func aPressPlaysThrough() {
+        // The defect this exists to prevent, reported from a device: a tap shorter than the
+        // shrink means the shrink never arrives, so the control appears not to animate at
+        // all. Whatever the minimum is, it has to outlast the ease-out that draws it.
+        #expect(PressFeedback.minimumVisible > PressFeedback.pressDuration)
     }
 
     @Test("down is the ease-out and up is the spring")
