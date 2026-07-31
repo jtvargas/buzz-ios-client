@@ -17,7 +17,13 @@ extension ChannelTimelineModel {
     func send() {
         let document = mentionDraft
         let text = document.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
+        // A picture with no words is a message; an upload still in flight is not
+        // ready to be one. The composer disables send in both cases — this is the
+        // same rule stated where it is enforced, so a send reaching here another
+        // way cannot post a message missing an attachment.
+        guard !attachments.isAttaching else { return }
+        let media = attachments.takeForSend()
+        guard !text.isEmpty || !media.isEmpty else { return }
         mentionDraft = MentionDraft()
         sendError = nil
 
@@ -29,13 +35,13 @@ extension ChannelTimelineModel {
             do {
                 try await sender.enqueue(
                     kind: .channelMessage,
-                    content: text,
+                    content: OutboundAttachments.content(text, attaching: media),
                     in: channel,
                     tags: OutboundTags.message(
                         channel: channel,
                         mentioning: mentionPubkeys,
                         sender: selfPubkey
-                    ),
+                    ) + OutboundAttachments.tags(attaching: media),
                     maxContentBytes: OutboxPolicy.maxContentBytes
                 )
                 // Only once the message is really queued. An over-ceiling send throws
@@ -43,7 +49,7 @@ extension ChannelTimelineModel {
                 // be yanked to the bottom for a message that never left the device.
                 self?.jumpToLatestIfNeeded()
             } catch let error as OutboxError {
-                self?.restore(document: document, error: error)
+                self?.restore(document: document, media: media, error: error)
             } catch {
                 // A transient send failure leaves the row queued in the outbox for
                 // the next drain; nothing to surface and nothing to restore.
@@ -89,9 +95,13 @@ extension ChannelTimelineModel {
         Task { await typing.publishEphemeral(kind: .typing, content: "", tags: tags) }
     }
 
-    private func restore(document: MentionDraft, error: OutboxError) {
+    private func restore(document: MentionDraft, media: [BlobDescriptor], error: OutboxError) {
         // Preserve whatever the user has since typed, only restoring if untouched.
         if mentionDraft.text.isEmpty { mentionDraft = document }
+        // The blobs are still on the relay, so their descriptors are still good:
+        // a refusal that took the text back must take the pictures back with it,
+        // or a send over the ceiling silently loses them.
+        attachments.restore(media)
         sendError = Self.describe(error)
     }
 

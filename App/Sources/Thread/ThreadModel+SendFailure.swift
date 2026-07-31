@@ -15,8 +15,13 @@ extension ThreadModel {
     /// The draft is only restored into an *empty* composer: an author who has already
     /// started typing again owns what is in front of them, and overwriting it to hand back
     /// a copy of what they sent is the worse of the two losses.
-    func restore(document: MentionDraft, error: OutboxError) {
+    /// - Parameter media: the attachments the refused reply was carrying. Their
+    ///   blobs are still on the relay, so the descriptors are still good — handing
+    ///   them back is what keeps a refusal recoverable instead of quietly losing
+    ///   the pictures along with the text.
+    func restore(document: MentionDraft, media: [BlobDescriptor], error: OutboxError) {
         if mentionDraft.text.isEmpty { mentionDraft = document }
+        attachments.restore(media)
         sendError = Self.describe(error)
     }
 

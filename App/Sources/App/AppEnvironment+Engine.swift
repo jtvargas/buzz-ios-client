@@ -30,4 +30,43 @@ extension AppEnvironment {
             signer: signer
         )
     }
+
+    /// The blob-store client for the same relay, or `nil` if that URL has no HTTP
+    /// form — in which case the composer's `+` reports having nowhere to upload to
+    /// rather than failing on the request.
+    ///
+    /// **Not part of the engine, deliberately.** This is an HTTP `PUT` to the relay's
+    /// blob store; the engine is the socket and the store. Handed to a conversation
+    /// alongside `drafts` instead, which keeps that boundary and keeps a conversation
+    /// testable without either. It is built beside the engine and dropped with it
+    /// because both are bound to one relay URL and one key — an uploader outliving a
+    /// sign-out would sign an upload for an identity that no longer exists.
+    ///
+    /// Its own `URLSessionHTTPTransport` rather than the engine's: this one does
+    /// `PUT`s of whole photographs, and sharing a session with the signed query
+    /// clients would put a multi-megabyte body in the same connection pool as the
+    /// history windows.
+    func makeMediaUploader(websocketURL: URL) -> (any MediaUploading)? {
+        guard let baseURL = RelayEndpoint.httpBaseURL(for: websocketURL) else { return nil }
+        return MediaUploadClient(
+            transport: URLSessionHTTPTransport(),
+            baseURL: baseURL,
+            signer: signer
+        )
+    }
+
+    // MARK: - Store location
+
+    /// Where the database lives: `Application Support/Hive/store.sqlite`, created on
+    /// first launch. Here rather than in the class body because it is composition —
+    /// it is what ``AppEnvironment/init()`` opens before there is an identity to open
+    /// it for — and because it touches nothing private, so it costs no widening.
+    static func makeStore() throws -> BuzzEventStore {
+        let directory = try FileManager.default
+            .url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+            .appendingPathComponent("Hive", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let path = directory.appendingPathComponent("store.sqlite").path
+        return try BuzzEventStore(path: path)
+    }
 }

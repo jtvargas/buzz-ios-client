@@ -98,6 +98,19 @@ public struct BlobDescriptor: Sendable, Equatable, Codable {
     }
 }
 
+/// Putting bytes on the blob store, as a composer needs it.
+///
+/// A seam in front of ``MediaUploadClient`` for the same reason `MessageSending`
+/// sits in front of the engine: the interesting half of attaching a picture is
+/// what the composer does either side of the upload — hold the pick, survive a
+/// refusal, refuse to send a message whose picture is still in flight — and none
+/// of that should need a relay to test.
+public protocol MediaUploading: Sendable {
+    /// Uploads `data` and returns what the relay stored, throwing
+    /// ``MediaUploadError`` when it will not.
+    func upload(data: Data, mimeType: String, filename: String?) async throws -> BlobDescriptor
+}
+
 /// Uploading a blob is a `PUT`, which ``HTTPTransport`` does not do.
 ///
 /// A separate, one-method seam rather than a fifth method on `HTTPTransport`:
@@ -303,6 +316,8 @@ extension BlobDescriptor {
         )
     }
 }
+
+extension MediaUploadClient: MediaUploading {}
 
 /// The production transport speaks both verbs; this is where the second one is
 /// declared, because the seam it satisfies lives in this module.

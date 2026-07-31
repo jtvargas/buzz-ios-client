@@ -58,6 +58,7 @@ struct ThreadView: View {
         store: BuzzEventStore,
         engine: SyncEngine,
         drafts: ComposerDrafts? = nil,
+        uploader: (any MediaUploading)? = nil,
         selfPubkey: String?,
         landingOn landing: ThreadLanding = .latestReply,
         focusingComposer focusesComposer: Bool = false
@@ -71,6 +72,7 @@ struct ThreadView: View {
             presence: engine.presenceStore,
             typing: engine,
             drafts: drafts,
+            uploader: uploader,
             selfPubkey: selfPubkey,
             landingOn: landing,
             focusingComposer: focusesComposer
@@ -97,6 +99,7 @@ struct ThreadView: View {
         presence: PresenceStore,
         typing: any EphemeralPublishing = NoopEphemeralPublisher(),
         drafts: ComposerDrafts? = nil,
+        uploader: (any MediaUploading)? = nil,
         selfPubkey: String?,
         landingOn landing: ThreadLanding = .latestReply,
         focusingComposer focusesComposer: Bool = false
@@ -112,6 +115,7 @@ struct ThreadView: View {
             opener: opener,
             typing: typing,
             drafts: drafts,
+            uploader: uploader,
             selfPubkey: selfPubkey
         ))
         _presence = State(initialValue: PresenceModel(store: presence))
@@ -341,6 +345,7 @@ private struct ThreadComposerView: View {
         MessageComposerView(
             document: $model.mentionDraft,
             autocomplete: model.mentionAutocomplete,
+            attachments: model.attachments,
             placeholder: "Reply",
             sendAccessibilityLabel: "Send reply",
             onTextChange: model.handleTyping,

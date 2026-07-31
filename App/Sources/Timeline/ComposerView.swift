@@ -8,6 +8,7 @@ struct ComposerView: View {
         MessageComposerView(
             document: $model.mentionDraft,
             autocomplete: model.mentionAutocomplete,
+            attachments: model.attachments,
             placeholder: "Message",
             sendAccessibilityLabel: "Send",
             onTextChange: model.handleTyping,
