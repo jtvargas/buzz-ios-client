@@ -217,6 +217,66 @@ enum TestPicture {
         return found
     }
 
+    /// The bytes one colour comes out as when written in `space` — the reference the colour
+    /// conversion is asserted against.
+    static func pixel(_ components: [CGFloat], in space: CFString) -> [UInt8]? {
+        guard let colourSpace = CGColorSpace(name: space),
+              let context = CGContext(
+                  data: nil, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
+                  space: colourSpace, bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
+              )
+        else { return nil }
+        context.setFillColor(red: components[0], green: components[1], blue: components[2], alpha: 1)
+        context.fill(CGRect(x: 0, y: 0, width: 1, height: 1))
+        guard let data = context.data else { return nil }
+        let bytes = data.bindMemory(to: UInt8.self, capacity: 4)
+        return [bytes[0], bytes[1], bytes[2]]
+    }
+
+    /// A picture filled with one colour, written in `space`.
+    static func flooded(_ components: [CGFloat], in space: CFString, size: Int = 32) -> Data? {
+        guard let colourSpace = CGColorSpace(name: space),
+              let context = CGContext(
+                  data: nil, width: size, height: size, bitsPerComponent: 8, bytesPerRow: 0,
+                  space: colourSpace, bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
+              )
+        else { return nil }
+        context.setFillColor(red: components[0], green: components[1], blue: components[2], alpha: 1)
+        context.fill(CGRect(x: 0, y: 0, width: size, height: size))
+        guard let image = context.makeImage() else { return nil }
+        let output = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(
+            output, UTType.jpeg.identifier as CFString, 1, nil
+        ) else { return nil }
+        CGImageDestinationAddImage(destination, image, nil)
+        guard CGImageDestinationFinalize(destination) else { return nil }
+        return output as Data
+    }
+
+    /// One pixel from the middle of an encoded picture, read back through sRGB — which is how
+    /// a viewer with no profile to go on will read it.
+    static func centrePixel(of data: Data) -> [UInt8]? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let image = CGImageSourceCreateImageAtIndex(source, 0, nil),
+              let space = CGColorSpace(name: CGColorSpace.sRGB),
+              let context = CGContext(
+                  data: nil, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
+                  space: space, bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
+              )
+        else { return nil }
+        // Drawing the whole picture into one pixel averages it, which for a flat fill is that
+        // fill and for anything else is not a claim this helper makes.
+        context.draw(image, in: CGRect(x: 0, y: 0, width: 1, height: 1))
+        guard let raw = context.data else { return nil }
+        let bytes = raw.bindMemory(to: UInt8.self, capacity: 4)
+        return [bytes[0], bytes[1], bytes[2]]
+    }
+
+    /// How far apart two colours are, as the largest difference in any channel.
+    static func distance(_ lhs: [UInt8], _ rhs: [UInt8]) -> Int {
+        zip(lhs, rhs).map { abs(Int($0) - Int($1)) }.max() ?? 0
+    }
+
     /// A PNG chunk with a correct CRC — an incorrect one would be refused by the decoder
     /// rather than by the code under test.
     private static func pngChunk(type: String, payload: [UInt8]) -> Data {

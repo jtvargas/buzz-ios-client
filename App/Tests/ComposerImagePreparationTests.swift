@@ -41,6 +41,43 @@ struct ComposerImagePreparationTests {
         #expect(UIImage(data: prepared.data) != nil, "the result is not a decodable picture")
     }
 
+    /// The half the scrub cannot speak for.
+    ///
+    /// Stripping the colour profile and leaving wide-gamut pixels behind it is *worse* than
+    /// leaving both: the picture uploads, the relay accepts it, and it displays oversaturated
+    /// because sRGB is now being read off P3 numbers. Every other test here would still pass.
+    ///
+    /// So this asserts the conversion rather than the removal. The reference is the system's
+    /// own P3 → sRGB conversion of the same colour, and the premise check is that the two
+    /// encodings of it really do differ — without that, a conversion that never happened would
+    /// pass by coincidence.
+    @Test("a wide-gamut picture is converted to sRGB, not merely stripped of its profile")
+    func wideGamutIsConvertedNotStripped() async throws {
+        // A colour inside both gamuts, so neither encoding clips it and the two really are
+        // different numbers rather than the same number twice.
+        let components: [CGFloat] = [0.9, 0.35, 0.2]
+        let raw = try #require(TestPicture.pixel(components, in: CGColorSpace.displayP3))
+        let converted = try #require(TestPicture.pixel(components, in: CGColorSpace.sRGB))
+        try #require(
+            TestPicture.distance(raw, converted) > 12,
+            "P3 and sRGB encode this colour identically, so this test could not fail"
+        )
+
+        let photo = try #require(TestPicture.flooded(components, in: CGColorSpace.displayP3))
+        let prepared = try await ComposerImagePreparation.prepare(photo)
+        let pixel = try #require(TestPicture.centrePixel(of: prepared.data))
+
+        // JPEG is lossy and a flat fill is the kindest case for it, so a few levels of slack.
+        #expect(
+            TestPicture.distance(pixel, converted) < 8,
+            "prepared pixel \(pixel) is not the sRGB colour \(converted)"
+        )
+        #expect(
+            TestPicture.distance(pixel, raw) > 8,
+            "prepared pixel \(pixel) is still the raw P3 colour — the profile came off untranslated"
+        )
+    }
+
     /// The HEIC branch, exercised through TIFF — the same "the relay will not store
     /// this" path, without needing a HEIC encoder on the machine running the tests.
     @Test("a format the relay will not store is converted to JPEG")
