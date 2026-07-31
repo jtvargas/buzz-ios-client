@@ -12,7 +12,9 @@ import SwiftUI
 /// The headings pin, because scrolling several hundred glyphs with nothing anchored leaves
 /// no way to tell where you are.
 struct EmojiPickerView: View {
-    /// The chosen emoji. The caller decides what that means — here it is always a reaction.
+    /// The chosen emoji. The caller decides what that means — the one caller is the actions
+    /// sheet, so it is always a reaction, and the cell plays the reaction haptic on that
+    /// basis rather than leaving it to a closure two hops from the finger.
     let onSelect: (String) -> Void
 
     @State private var query = ""
@@ -50,6 +52,10 @@ struct EmojiPickerView: View {
 
     private func cell(_ emoji: String) -> some View {
         Button {
+            // Here and not in the applier `onSelect` hands the emoji to: that applier is
+            // shared with the sheet's quick-reaction row, which plays its own, so a play
+            // there would arrive twice for one choice.
+            HiveHaptics.play(.reaction)
             onSelect(emoji)
         } label: {
             // Sized against `.title` rather than fixed, so the grid grows with Dynamic Type
@@ -62,7 +68,7 @@ struct EmojiPickerView: View {
                 .frame(width: Self.cell, height: Self.cell)
                 .contentShape(.rect)
         }
-        .buttonStyle(PressFeedbackButtonStyle())
+        .buttonStyle(.hivePress)
         // The glyph is unpronounceable, so the name behind it is the label.
         .accessibilityLabel(EmojiCatalog.unicodeName(of: emoji))
     }

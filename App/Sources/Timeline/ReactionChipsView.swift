@@ -74,7 +74,13 @@ private struct ReactionChip: View {
     let action: () -> Void
 
     var body: some View {
-        Button(action: action) {
+        Button {
+            // At the chip, which is where the finger is. What the tap turns into — a fresh
+            // reaction or an own one withdrawn — is decided several hops away, and both are
+            // the same event to a reader: the reaction under this message changed.
+            HiveHaptics.play(.reaction)
+            action()
+        } label: {
             HStack(spacing: 4) {
                 Text(group.emoji)
                 Text("\(group.count)")
@@ -97,7 +103,10 @@ private struct ReactionChip: View {
             )
             .contentShape(.capsule)
         }
-        .buttonStyle(.plain)
+        // A chip is the one control here a reader presses repeatedly, and until now a press
+        // answered with nothing at all. In a capsule, because that is the outline it draws:
+        // a rounded-rectangle wash under a pill shows at both of its ends.
+        .buttonStyle(.hivePress(.control, in: .capsule))
         .accessibilityLabel(accessibilityLabel)
         .accessibilityAddTraits(group.reactedBySelf ? [.isSelected] : [])
         .accessibilityHint("Double tap to toggle your reaction")
@@ -135,7 +144,10 @@ private struct AddReactionButton: View {
         Menu {
             ControlGroup {
                 ForEach(ReactionPalette.common, id: \.self) { emoji in
-                    Button(emoji) { onReact(emoji) }
+                    Button(emoji) {
+                        HiveHaptics.play(.reaction)
+                        onReact(emoji)
+                    }
                 }
             }
         } label: {

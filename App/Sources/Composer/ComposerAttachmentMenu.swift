@@ -61,8 +61,12 @@ struct ComposerAttachmentMenu: View {
     var body: some View {
         VStack(spacing: 2) {
             ForEach(ComposerAttachmentSource.allCases) { source in
+                // A row rather than a control: these are the rows of a list, and the card
+                // is narrow enough that one shrinking away from both its edges would read
+                // as lifting off the card rather than as being pressed. The wash is the
+                // whole feedback here, which is what a system menu does with this gesture.
                 Button { choose(source) } label: { row(for: source) }
-                    .buttonStyle(PressFeedbackButtonStyle())
+                    .buttonStyle(.hivePress(.row))
             }
         }
         .padding(4)

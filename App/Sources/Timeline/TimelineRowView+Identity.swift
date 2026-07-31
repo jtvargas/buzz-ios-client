@@ -82,7 +82,7 @@ extension TimelineRowView {
             } label: {
                 artwork
             }
-            .buttonStyle(PressFeedbackButtonStyle())
+            .buttonStyle(.hivePress(.inline))
             // `AvatarView` hides itself from VoiceOver, so the button needs its own
             // label or it reads as an unnamed control. The presence signal is not
             // repeated here — the message's accessibility value already carries it.
@@ -176,7 +176,7 @@ extension TimelineRowView {
             } label: {
                 label
             }
-            .buttonStyle(PressFeedbackButtonStyle())
+            .buttonStyle(.hivePress(.inline))
         } else {
             label
         }

@@ -64,7 +64,14 @@ struct LinkPreviewCardView: View {
                 MessageMediaFrame.shape.strokeBorder(MessageMediaFrame.border, lineWidth: 1)
             }
         }
-        .buttonStyle(LinkPreviewCardButtonStyle())
+        // A `ButtonStyle` and not a `DragGesture(minimumDistance: 0)` on the card, which is
+        // the construction that reads press-down state directly and is exactly what this app
+        // has already measured as unaffordable inside a message list — a zero-distance drag
+        // on a row stops the list scrolling. A button cancels itself on a drag, so the same
+        // list still scrolls off a card. The card's own frame is named as the wash's shape
+        // rather than left on the shared corner radius, because ``MessageMediaFrame/fill`` is
+        // translucent: a wash in a shape this card does not have would show through it.
+        .buttonStyle(.hivePress(.control, in: MessageMediaFrame.shape))
         .frame(maxWidth: MessageMediaLayout.maximumWidth, alignment: .leading)
         // A message row folds its children into one utterance with
         // `.accessibilityElement(children: .combine)`, which keeps this label and drops
@@ -86,20 +93,5 @@ struct LinkPreviewCardView: View {
         [preview.typeLabel.map { "\($0.prefix(1).uppercased())\($0.dropFirst())" }, preview.title, preview.caption]
             .compactMap { $0 }
             .joined(separator: ", ")
-    }
-}
-
-/// The card's press feedback: a dim, and nothing that costs a gesture.
-///
-/// A `ButtonStyle` rather than a `DragGesture(minimumDistance: 0)` on the card, which is
-/// the construction that reads press-down state directly and is exactly what this app has
-/// already measured as unaffordable inside a message list — a zero-distance drag on a row
-/// stops the list scrolling. A button cancels itself on a drag, so the same list still
-/// scrolls off a card.
-private struct LinkPreviewCardButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .opacity(configuration.isPressed ? 0.65 : 1)
-            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
     }
 }

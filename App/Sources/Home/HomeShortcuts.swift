@@ -28,10 +28,12 @@ struct HomeShortcutCards: View {
                 Button { press(shortcut) } label: {
                     HomeShortcutCard(shortcut: shortcut, count: count(shortcut))
                 }
-                // `.plain`, so the card's own border is the whole button: any bordered
-                // style would draw a second, system background inside a card that is
-                // already drawing its own edge.
-                .buttonStyle(.plain)
+                // The card's own border is still the whole button — any bordered *system*
+                // style would draw a second background inside a card already drawing its
+                // edge — so the press treatment is the app's, in the card's own shape. The
+                // shared radius would put the wash a couple of points inside the drawn
+                // corner, which is the one place a mismatch is visible.
+                .buttonStyle(.hivePress(.control, in: .rect(cornerRadius: HomeShortcutCard.cornerRadius)))
             }
         }
     }
@@ -175,7 +177,10 @@ struct HomeShortcutCard: View {
     /// about 78 at default type — so this leaves a little air above the title and no more.
     /// The width is the row's own, divided.
     private static let height: CGFloat = 86
-    private static let cornerRadius: CGFloat = 12
+    /// The card's edge, and so the shape a press is washed in — see ``HomeShortcutCards``.
+    /// Reachable from there for that reason alone: a wash drawn on a shape the card does not
+    /// have is more visible than no wash at all.
+    static let cornerRadius: CGFloat = 12
     /// One weight for both states, so a card does not change shape when its count does —
     /// only its colour. Thinner than the 2pt a text field draws, which would make a card
     /// read as something to fill in rather than somewhere to go.

@@ -173,13 +173,18 @@ private extension MessageMediaMosaicCellView {
                         .aspectRatio(contentMode: .fill)
                 }
             }
-            .buttonStyle(.plain)
+            // A plain rectangle, not the shared corner radius: a cell's own edges are
+            // straight, and the one rounded corner four of them have belongs to the mosaic's
+            // clip rather than to the cell. A rounded wash inside a square tile is the
+            // mismatch that is more visible than no wash at all.
+            .buttonStyle(.hivePress(.control, in: .rect))
         } else if hasFailed {
             if isRetryable {
                 Button { retry() } label: {
                     MessageMediaFailureView(media: media)
                 }
-                .buttonStyle(.plain)
+                // The cell's own treatment, in the cell's own square shape — see above.
+                .buttonStyle(.hivePress(.control, in: .rect))
             } else {
                 MessageMediaFailureView(media: media)
             }

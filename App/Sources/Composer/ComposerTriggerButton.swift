@@ -40,7 +40,7 @@ struct ComposerTriggerButton: View {
         }
         // The app's own press treatment, and the `contentShape` that comes with it — without
         // one only the glyph is tappable rather than the whole 44pt frame.
-        .buttonStyle(PressFeedbackButtonStyle())
+        .buttonStyle(.hivePress)
         .accessibilityLabel(kind.quickActionLabel)
     }
 }

@@ -56,8 +56,14 @@ struct RepliesButton: View {
             .font(.hive(.caption))
             .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
             .contentShape(.rect)
+            // Inside the label, where the private style this replaces applied it. Outside
+            // the button it would inset the *wash* rather than the text, and the strip's
+            // two ends would stay unlit while it is held.
+            .padding(.horizontal, 8)
         }
-        .buttonStyle(ThreadSummaryButtonStyle())
+        // The 8pt corner is the one this affordance has always washed in, kept rather than
+        // taken up to the vocabulary's default so the strip does not change shape.
+        .buttonStyle(.hivePress(.control, in: .rect(cornerRadius: 8)))
         .accessibilityHint("Double tap to open the thread")
     }
 
@@ -110,18 +116,6 @@ enum ThreadSummaryDateFormatter {
         timeFormatter.timeStyle = .short
         let time = timeFormatter.string(from: date)
         return "\(prefix) at \(time)"
-    }
-}
-
-private struct ThreadSummaryButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .padding(.horizontal, 8)
-            .background(
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(Color.secondary.opacity(configuration.isPressed ? 0.12 : 0))
-            )
-            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
     }
 }
 

@@ -102,7 +102,12 @@ struct SidebarSectionHeader: View {
             .frame(minHeight: 44)
             .contentShape(.rect)
         }
-        .buttonStyle(.plain)
+        // No press treatment at all — the owner's call, and the reason is worth keeping: the
+        // wash is the app's *this one* mark, and a heading is not a one of anything. It is a
+        // label with a hit area over a list; lighting it up in the same amber the conversation
+        // you were last in carries would put that mark on the group rather than on a row in it.
+        // The `+` beside it keeps its own, because that is a control doing a thing.
+        .buttonStyle(.hiveNoPress)
         .accessibilityAddTraits(.isHeader)
         .accessibilityLabel("\(section.title), \(count)")
         .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
@@ -119,7 +124,10 @@ struct SidebarSectionHeader: View {
                 .frame(width: 32, height: 44)
                 .contentShape(.rect)
         }
-        .buttonStyle(.plain)
+        // A control and not the heading's row treatment, which is what keeps three targets on
+        // one row legible under a finger: the `+` washes inside its own box, so a press here
+        // says *this* was hit rather than lighting the whole heading it sits on.
+        .buttonStyle(.hivePress)
         .accessibilityLabel(section.createLabel)
     }
 
@@ -138,7 +146,10 @@ struct SidebarSectionHeader: View {
                 .frame(width: 14, height: 44)
                 .contentShape(.rect)
         }
-        .buttonStyle(.plain)
+        // Nothing, for the reason the heading beside it draws nothing: the two are one
+        // control in two places, so a chevron that answered a finger while the title it
+        // belongs to did not would read as two different things on one row.
+        .buttonStyle(.hiveNoPress)
         .accessibilityHidden(true)
     }
 
