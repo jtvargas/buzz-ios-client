@@ -12,12 +12,13 @@ import UIKit
 /// the *rules* the constants exist to express, each of which is invisible on a resting
 /// screen and each of which a later hand can undo without noticing:
 ///
-/// - a full-width row washes and does **not** shrink;
+/// - every emphasis shrinks, a full-width row included;
 /// - a control drawn straight onto a message draws no shape;
 /// - Reduce Motion takes the movement off and keeps the feedback;
-/// - down and up are different curves, both inside the brief's fifth of a second;
-/// - a pressed message actually puts ink on the screen, which is the only one of the five
-///   that no amount of reading the code can establish.
+/// - a press outlives the curve that draws it, and the action waits behind it;
+/// - an abandoned press comes off faster than a released one, with no minimum in front of it;
+/// - a pressed message actually puts ink on the screen, which is the only one of these that
+///   no amount of reading the code can establish.
 @Suite("Press feedback")
 struct PressFeedbackTests {
     @Test("a pressed control shrinks by an amount a finger reads and a layout does not")
@@ -28,19 +29,39 @@ struct PressFeedbackTests {
         #expect(PressFeedback.pressedScale <= 0.97)
     }
 
-    @Test("both halves of the gesture land inside the brief's fifth of a second")
-    func durationsAreSnappy() {
-        #expect(PressFeedback.pressDuration >= 0.15)
+    @Test("the press finishes and is held before anything else happens")
+    func theShrinkHasRoomToArrive() {
+        // The whole of the owner's third and fourth reports, as one inequality. The shrink
+        // must *finish* — not merely be under way — and then be held, before the action that
+        // replaces the screen is allowed to run. A press curve as long as the minimum is the
+        // defect this exists to prevent: the control reaches full scale exactly as it is
+        // taken away, which is what "the scale-down animation doesn't happen" looks like.
+        #expect(PressFeedback.pressDuration < PressFeedback.minimumVisible)
+        #expect(PressFeedback.minimumVisible - PressFeedback.pressDuration >= 0.08)
+        // And the whole thing still lands inside the brief's "snappy".
         #expect(PressFeedback.pressDuration <= 0.2)
-        #expect(PressFeedback.releaseDuration >= 0.15)
         #expect(PressFeedback.releaseDuration <= 0.2)
     }
 
-    @Test("a full-width row washes but never shrinks")
-    func rowWashesWithoutShrinking() {
-        #expect(PressFeedback.scale(for: .row, reduceMotion: false) == 1)
+    @Test("an abandoned press comes off faster than a released one")
+    func cancelIsFasterThanRelease() {
+        // The owner's first report: a highlight that survives the finger leaving is a
+        // highlight that trails a scrolling list. It is not a release and must not look like
+        // one — no spring, no overshoot, and short enough to be gone within a frame or two.
+        #expect(PressFeedback.cancelDuration < PressFeedback.pressDuration)
+        #expect(PressFeedback.cancelDuration < PressFeedback.releaseDuration)
+        #expect(PressFeedback.cancel != PressFeedback.release)
+    }
+
+    @Test("a full-width row shrinks and washes like everything else")
+    func rowShrinksAndWashes() {
+        // It did not, once, on the reasoning that a row pulling in from both screen edges
+        // reads as a card lifting off the list. The owner overruled that from a device: a row
+        // is the thing he presses most, so an emphasis that opted out of the movement was an
+        // app where the movement could not be seen.
+        #expect(PressFeedback.scale(for: .row, reduceMotion: false) == PressFeedback.pressedScale)
         #expect(PressFeedback.fill(for: .row) > 0)
-        // And it does not dim either: a row that fades is a row that looks disabled.
+        // And it does not dim: a row that fades is a row that looks disabled.
         #expect(PressFeedback.dim(for: .row) == 1)
     }
 
@@ -103,6 +124,16 @@ struct PressFeedbackTests {
         // shrink means the shrink never arrives, so the control appears not to animate at
         // all. Whatever the minimum is, it has to outlast the ease-out that draws it.
         #expect(PressFeedback.minimumVisible > PressFeedback.pressDuration)
+    }
+
+    @Test("a control's claim on a tap outlasts the row tap it has to beat")
+    func theArbitrationWindowOutlastsTheDeferral() {
+        // Not a restatement of the constant: ``TimelineRowView/scheduleRowTap()`` now waits
+        // ``PressFeedback/minimumVisible`` before opening a thread, so the press has somewhere
+        // to be seen. A suppression window shorter than that wait would lapse before the
+        // deferred tap asks about it — and a reaction chip's tap would send the reaction *and*
+        // push the thread on top of it. The two numbers have to move together.
+        #expect(RowTapArbitration.window > PressFeedback.minimumVisible)
     }
 
     @Test("down is the ease-out and up is the spring")

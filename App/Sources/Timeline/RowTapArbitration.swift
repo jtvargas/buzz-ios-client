@@ -16,9 +16,16 @@ struct RowTapArbitration {
     /// How long a control's action keeps the row's own tap from firing.
     ///
     /// One main-actor turn would be enough for the gestures that complete together, which
-    /// is the common case; a tenth of a second also covers a control whose action lands a
-    /// frame or two late, and is far short of the interval between two deliberate taps.
-    static let window: TimeInterval = 0.1
+    /// is the common case; the rest of this covers a control whose action lands a frame or two
+    /// late, and is still far short of the interval between two deliberate taps.
+    ///
+    /// Derived from ``PressFeedback/minimumVisible`` rather than written down, and that is
+    /// load-bearing: the row's own tap is now deferred by that same minimum so the press has
+    /// somewhere to be seen (``TimelineRowView/scheduleRowTap()``). A window shorter than the
+    /// deferral would have expired by the time the deferred tap asks — so a chip that
+    /// correctly claimed the tap would find its claim already lapsed, and the row would open
+    /// its thread on top of the reaction it just sent.
+    static let window: TimeInterval = PressFeedback.minimumVisible + 0.1
 
     private var suppressedUntil: Date?
 

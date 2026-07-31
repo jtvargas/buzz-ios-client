@@ -23,6 +23,14 @@ final class ConversationDragScrollTests: ConversationScrollHarness {
     /// settled, or the list bounced.
     private static let moved: CGFloat = 50
 
+    /// How long to let a tap's own consequences finish before reading the screen.
+    ///
+    /// `PressFeedback.minimumVisible` (the deferral the row's tap now waits out so its
+    /// highlight is seen) plus the navigation push. Written here rather than imported because
+    /// a UI test target drives the app as a black box and shares no symbols with it — so if
+    /// that constant is ever raised, this is the line that has to move with it.
+    private static let settle: TimeInterval = 0.9
+
     func testADragBeginningOnAMessageScrollsTheConversation() throws {
         let app = launch(["-fixtureConversation", "channel", "-messages=40"])
 
@@ -106,6 +114,14 @@ final class ConversationDragScrollTests: ConversationScrollHarness {
             .withOffset(CGVector(dx: window.midX, dy: target.frame.midY))
             .tap()
 
+        // The row's tap is *deliberately* deferred — the press has to be visible before the
+        // screen it is drawn on is replaced — and the push then animates. Reading the
+        // hierarchy during that is not a slower answer, it is a wrong question: ``rendered``
+        // enumerates every static text by index, and a row leaving between the count and the
+        // fetch fails the enumeration itself ("No matches found for Element at index 6").
+        // So: let the transition happen, then poll at an interval rather than in a spin.
+        Thread.sleep(forTimeInterval: Self.settle)
+
         // The fixture's messages carry no replies, so the thread this opens holds exactly one
         // message: the opener that was tapped. That makes the push observable in the same
         // reading the rest of this suite uses, with nothing added to the app to see it.
@@ -114,6 +130,7 @@ final class ConversationDragScrollTests: ConversationScrollHarness {
         while Date() < deadline {
             shown = rendered(app).map(\.index)
             if shown == [target.index] { return }
+            Thread.sleep(forTimeInterval: 0.25)
         }
         XCTFail(
             "tapped message \(target.index) and the screen still shows \(shown) — the thread did not open"

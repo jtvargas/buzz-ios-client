@@ -102,10 +102,12 @@ struct SidebarSectionHeader: View {
             .frame(minHeight: 44)
             .contentShape(.rect)
         }
-        // The row emphasis, the same one the conversations underneath take: this target runs
-        // the width of the list, and a heading that shrank under a finger would pull away
-        // from both screen edges while the rows it introduces stayed where they were.
-        .buttonStyle(.hivePress(.row))
+        // No press treatment at all — the owner's call, and the reason is worth keeping: the
+        // wash is the app's *this one* mark, and a heading is not a one of anything. It is a
+        // label with a hit area over a list; lighting it up in the same amber the conversation
+        // you were last in carries would put that mark on the group rather than on a row in it.
+        // The `+` beside it keeps its own, because that is a control doing a thing.
+        .buttonStyle(.hiveNoPress)
         .accessibilityAddTraits(.isHeader)
         .accessibilityLabel("\(section.title), \(count)")
         .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
@@ -144,10 +146,10 @@ struct SidebarSectionHeader: View {
                 .frame(width: 14, height: 44)
                 .contentShape(.rect)
         }
-        // Named as a capsule rather than left on the shared corner radius: this target is
-        // 14pt wide against 44 tall, and a 10pt radius on a sliver that narrow draws a wash
-        // whose corners nearly meet in the middle — which reads as a shape that missed.
-        .buttonStyle(.hivePress(.control, in: .capsule))
+        // Nothing, for the reason the heading beside it draws nothing: the two are one
+        // control in two places, so a chevron that answered a finger while the title it
+        // belongs to did not would read as two different things on one row.
+        .buttonStyle(.hiveNoPress)
         .accessibilityHidden(true)
     }
 

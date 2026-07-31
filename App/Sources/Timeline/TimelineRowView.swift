@@ -292,8 +292,14 @@ struct TimelineRowView: View {
         )
     }
 
-    /// Opens the thread on the *next* main-actor turn, so any control the same tap also
-    /// landed on has already claimed it by the time this runs.
+    /// Opens the thread once the row's own highlight has been seen, and never before any
+    /// control the same tap also landed on has claimed it.
+    ///
+    /// Two reasons for the delay, and they happen to want the same number. The first is the
+    /// arbitration below, which needs at least a main-actor turn. The second is the owner's:
+    /// a thread that pushes on lift replaces the screen the press was drawn on while the wash
+    /// is still arriving, so the message never visibly lit up at all. ``RowTapArbitration``'s
+    /// window is derived from this same constant so the two cannot drift apart.
     ///
     /// The controls that claim a tap, and how each one does it:
     ///
@@ -314,7 +320,7 @@ struct TimelineRowView: View {
     /// mechanism here that notices one by itself.
     private func scheduleRowTap() {
         guard !row.isDeleted, let onOpenThread else { return }
-        DispatchQueue.main.async {
+        DispatchQueue.main.asyncAfter(deadline: .now() + PressFeedback.minimumVisible) {
             guard !arbitration.suppressesRowTap() else { return }
             onOpenThread()
         }

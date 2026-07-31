@@ -43,8 +43,6 @@ extension View {
 }
 
 private struct MessagePressGlowModifier: ViewModifier {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
     let isPressed: Bool
 
     func body(content: Content) -> some View {
@@ -53,9 +51,13 @@ private struct MessagePressGlowModifier: ViewModifier {
                 .fill(PressFeedback.fillColor.opacity(isPressed ? PressFeedback.pressedFill : 0))
                 .padding(.horizontal, -MessagePressGlow.bleed)
                 .padding(.vertical, -MessageRowMetrics.pressBleed)
-                // Scoped to the wash itself, so nothing here can reach the enclosing list
-                // and animate a row arriving in a bottom-anchored scroll view.
-                .animation(PressFeedback.animation(pressed: isPressed, reduceMotion: reduceMotion), value: isPressed)
+                // On with the press curve; off with the *cancel* curve, always. A control
+                // springs back because it moved, and a spring is worth watching. This one only
+                // ever changed opacity, so the release curve buys nothing — while the case it
+                // costs in is the one that matters most here: a wash still fading behind a
+                // finger that has started scrolling. Reduce Motion has nothing to decline for
+                // the same reason: an opacity is not movement.
+                .animation(isPressed ? PressFeedback.press : PressFeedback.cancel, value: isPressed)
                 .allowsHitTesting(false)
         }
     }

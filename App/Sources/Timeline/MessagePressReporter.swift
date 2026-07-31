@@ -63,20 +63,40 @@ private struct MessagePressReporter: UIViewRepresentable {
 final class MessagePressReporterView: UIView {
     /// How far a finger may travel and still be pressing *this* row.
     ///
-    /// The scroll view's own takeover cancels the touch and puts the highlight out on its
-    /// own, so this only covers the case that never becomes a scroll — a small movement, or a
-    /// drag along an axis the list does not take. Without it a finger could wander the screen
-    /// leaving one row lit behind it.
-    private static let slop: CGFloat = 12
+    /// UIKit's own allowance for a long press, and small enough to answer the owner's rule:
+    /// *the highlight must disappear as soon as the finger moves.*
+    private static let slop: CGFloat = 10
+
+    /// How long a finger must rest before the message it is on lights up.
+    ///
+    /// `UIScrollView.delaysContentTouches` in miniature, and for its reason: a flick that
+    /// starts a scroll begins as a touch on a row, so a row that lights at touch-down flashes
+    /// under every scroll the reader makes. A tenth of a second is longer than a flick spends
+    /// standing still and shorter than a deliberate press — and a tap that ends *inside* the
+    /// delay still lights up, on release, exactly as a table cell does. So nothing is lost:
+    /// the only press this refuses to draw is the one that was already becoming a scroll.
+    private static let armDelay: TimeInterval = 0.1
+
+    /// Where a touch is in its life on this row.
+    private enum Stage {
+        /// No touch, or one this row has given up on.
+        case idle
+        /// A finger is down and has not moved; the highlight is waiting out ``armDelay``.
+        case arming
+        /// The highlight is on screen.
+        case showing
+    }
 
     var onChange: ((Bool) -> Void)?
 
     private weak var host: UIView?
     private var recognizer: MessagePressRecognizer?
     private var origin: CGPoint?
+    private var stage: Stage = .idle
     private var isPressed = false
     private var shownAt: CFTimeInterval?
     private var pending: DispatchWorkItem?
+    private var arming: DispatchWorkItem?
 
     override func didMoveToWindow() {
         super.didMoveToWindow()
@@ -107,8 +127,11 @@ final class MessagePressReporterView: UIView {
         recognizer = nil
         host = nil
         origin = nil
+        stage = .idle
         pending?.cancel()
         pending = nil
+        arming?.cancel()
+        arming = nil
         // Straight off, past the latch: the row is going away, and a delayed callback into a
         // view that has left the hierarchy would light whatever is recycled into its place.
         if isPressed {
@@ -131,37 +154,68 @@ final class MessagePressReporterView: UIView {
         let local = convert(windowPoint, from: nil)
         switch phase {
         case .began:
+            guard bounds.contains(local) else { return }
             origin = local
-            setPressed(bounds.contains(local))
+            arm()
         case .moved:
-            guard isPressed, let origin else { return }
+            guard stage != .idle, let origin else { return }
+            // The owner's rule, and the one this file exists to keep: *as soon as the finger
+            // moves*. Before the delay it means the press is never drawn; after it, it means
+            // the press comes off without waiting out its minimum, because a press that turns
+            // into a drag was never a press.
             if hypot(local.x - origin.x, local.y - origin.y) > Self.slop {
-                setPressed(false)
+                abandon()
             }
         case .ended:
+            // A lift. If the delay has not run out yet the touch was a quick tap, which is a
+            // press worth drawing — so it is drawn now, on release, and held for its minimum
+            // the way a table cell flashes for a tap too fast to have highlighted.
+            if stage == .arming { light() }
             origin = nil
-            setPressed(false)
+            stage = .idle
+            fade()
+        case .cancelled:
+            // The scroll view taking the touch arrives here, and so does a call, a
+            // notification, and the sidebar's forward swipe. None of them is a release.
+            abandon()
         }
     }
 
-    /// Turns the press on at once and off no sooner than ``PressFeedback/minimumVisible``.
-    ///
-    /// The same latch every control in the app got, for the same reason: a tap can be over
-    /// before a 0.16s animation has arrived anywhere, and a highlight that starts and is
-    /// taken away mid-flight reads as a flicker rather than as an answer. Held here rather
-    /// than in the row so the row keeps one plain `Bool` and this file owns everything about
-    /// the timing of a press.
-    private func setPressed(_ pressed: Bool) {
-        guard pressed != isPressed else { return }
+    /// Starts the clock on a press without drawing one. See ``armDelay``.
+    private func arm() {
         pending?.cancel()
         pending = nil
-
-        if pressed {
-            shownAt = CACurrentMediaTime()
-            isPressed = true
-            onChange?(true)
-            return
+        arming?.cancel()
+        stage = .arming
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, stage == .arming else { return }
+            light()
         }
+        arming = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.armDelay, execute: work)
+    }
+
+    /// Puts the highlight on and records when, so ``fade()`` knows what it still owes.
+    private func light() {
+        arming?.cancel()
+        arming = nil
+        stage = .showing
+        guard !isPressed else { return }
+        shownAt = CACurrentMediaTime()
+        isPressed = true
+        onChange?(true)
+    }
+
+    /// Takes the highlight off no sooner than ``PressFeedback/minimumVisible``.
+    ///
+    /// The same latch every control in the app got, for the same reason: a tap can be over
+    /// before the curve that draws the press has arrived anywhere, and a highlight that starts
+    /// and is taken away mid-flight reads as a flicker rather than as an answer. Only a lift
+    /// is paid it — see ``abandon()``.
+    private func fade() {
+        pending?.cancel()
+        pending = nil
+        guard isPressed else { return }
 
         let remaining = PressFeedback.minimumVisible - (CACurrentMediaTime() - (shownAt ?? 0))
         guard remaining > 0 else {
@@ -177,6 +231,20 @@ final class MessagePressReporterView: UIView {
         pending = work
         DispatchQueue.main.asyncAfter(deadline: .now() + remaining, execute: work)
     }
+
+    /// Gives up on this touch: no highlight if one was still coming, and no minimum if one is
+    /// already on screen.
+    private func abandon() {
+        arming?.cancel()
+        arming = nil
+        pending?.cancel()
+        pending = nil
+        origin = nil
+        stage = .idle
+        guard isPressed else { return }
+        isPressed = false
+        onChange?(false)
+    }
 }
 
 /// A recogniser that recognises nothing.
@@ -186,7 +254,9 @@ final class MessagePressReporterView: UIView {
 /// *recognises*, and this one never does. `cancelsTouchesInView` and the two `delays` flags
 /// are set anyway, so that nothing here depends on that argument being right.
 final class MessagePressRecognizer: UIGestureRecognizer {
-    enum Phase { case began, moved, ended }
+    /// A lift and a cancel are separate phases because they mean opposite things to a
+    /// highlight: one finished the press it was drawing and the other took it away.
+    enum Phase { case began, moved, ended, cancelled }
 
     var onTouch: ((Phase, CGPoint) -> Void)?
 
@@ -215,7 +285,7 @@ final class MessagePressRecognizer: UIGestureRecognizer {
     }
 
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) {
-        report(.ended, touches)
+        report(.cancelled, touches)
         state = .failed
     }
 
