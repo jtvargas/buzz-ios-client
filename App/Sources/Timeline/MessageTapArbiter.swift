@@ -33,16 +33,16 @@ import Foundation
 final class MessageTapArbiter {
     /// How long the message's own action waits to find out that no second tap is coming.
     ///
-    /// 250ms. The interval between the two taps of a deliberate double tap is around
+    /// 180ms. The interval between the two taps of a deliberate double tap is around
     /// 120–200ms; UIKit's own recognisers accept a longer gap than that, and every
-    /// millisecond of it would be added to opening a thread. So this is deliberately at the
-    /// short end: a double tap slower than a quarter of a second opens the thread instead,
-    /// which is recoverable, where a quarter-second wait in front of every tap is felt on
-    /// every message.
+    /// millisecond of it would be added to opening a thread. So this sits at the bottom of
+    /// that range rather than above it — the owner's choice after feeling 250ms and 200ms on
+    /// a device. A double tap slower than this opens the thread instead, which is recoverable
+    /// in one more tap, where the wait in front of every *single* tap is worn on every message.
     ///
     /// It is the dial to turn if either half reads wrong — longer for a double tap that is
     /// missed, shorter for a tap that feels slow — and it is the only number here.
-    static let doubleTapWindow: TimeInterval = 0.25
+    static let doubleTapWindow: TimeInterval = 0.18
 
     /// How long after a gesture has been answered further taps belonging to *the same gesture*
     /// are dropped.
@@ -51,7 +51,7 @@ final class MessageTapArbiter {
     /// one `TapGesture(count: 2)` reported by a control that fires only once for a fast pair
     /// (see ``doubleTapped(_:)``) — and on a real finger both can fire for one gesture. Without
     /// this, the tail of an answered double starts a *fresh* single: the sheet would open and
-    /// the picture would open behind it a quarter of a second later.
+    /// the picture would open behind it a fraction of a second later.
     ///
     /// Longer than ``doubleTapWindow`` because what it has to outlast is the second tap's own
     /// arrival, not another wait.
@@ -99,12 +99,12 @@ final class MessageTapArbiter {
     /// gesture that already got its answer.
     ///
     /// This is the gap between two numbers that are not ours to reconcile. ``doubleTapWindow``
-    /// is 250ms and deliberately short, because every millisecond of it is worn by the most
+    /// is 180ms and deliberately short, because every millisecond of it is worn by the most
     /// common tap in the app. The *system's* double-tap interval — the one a
     /// `TapGesture(count: 2)` is recognised against, which is the only route a `Button` has for
     /// reporting a double at all — is longer than that and is not settable. So an unhurried
     /// double tap, the two touches say 300ms apart, is a single tap by our clock and a double
-    /// by the system's: the single fires at 250ms and the double is reported at 300ms, both
+    /// by the system's: the single fires at 180ms and the double is reported at 300ms, both
     /// for one gesture. On a picture that is the viewer opening and a sheet being presented
     /// over it, which is not a state SwiftUI has an answer for.
     ///

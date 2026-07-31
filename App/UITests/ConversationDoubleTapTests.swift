@@ -88,7 +88,7 @@ final class ConversationDoubleTapTests: ConversationScrollHarness {
     }
 
     /// The other half, and the one that would break silently: a single tap on a picture still
-    /// opens it, a quarter of a second later than it used to.
+    /// opens it, ``MessageTapArbiter/doubleTapWindow`` later than it used to.
     ///
     /// `MediaViewerLayoutTests` asserts this for every shape, and this is not a duplicate of
     /// it: that suite is about what the viewer *looks like* once open. This one is here so
