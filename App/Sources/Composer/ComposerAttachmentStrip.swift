@@ -16,11 +16,16 @@ import SwiftUI
 /// a badge rather than a button, which is right — it is a correction, not an
 /// action. But 24pt is well under the 44pt floor, so the drawn badge and the
 /// touchable area are separated: the glyph stays 24, and a transparent frame
-/// around it takes the touch. The tile's own corner is where a thumb goes, so the
-/// target is allowed to hang off the tile's edge.
+/// around it takes the touch. That frame grows *into* the tile rather than off its
+/// edge — outward it would cross the 6pt gap onto the next picture and remove the
+/// wrong one, and a tile has no touch of its own to compete with.
 struct ComposerAttachmentStrip: View {
     let attachments: [ComposerAttachment]
     let remove: (UUID) -> Void
+
+    /// What ``ComposerAttachmentLayoutTests`` finds a tile by. A UI-testing bundle
+    /// links none of this, so the string is the whole contract between the halves.
+    static let tileIdentifier = "composerAttachment"
 
     /// The drawn tile.
     private static let tile: CGFloat = 72
@@ -38,9 +43,9 @@ struct ComposerAttachmentStrip: View {
                     tile(for: attachment)
                 }
             }
-            // The tiles sit inside the shell's own padding; the extra leading inset
-            // lines them up with the first glyph of the text field below.
-            .padding(.horizontal, 4)
+            // Lined up with the first glyph of the text field below, not with the
+            // shell's edge — see ``TokenTextView/textInset``.
+            .padding(.horizontal, TokenTextView.textInset.width)
         }
         .scrollIndicators(.hidden)
         // A picture wider than the bar is scrolled to, not squeezed: the row is as
@@ -61,6 +66,10 @@ struct ComposerAttachmentStrip: View {
             .overlay(alignment: .topTrailing) { removeButton(for: attachment) }
             .accessibilityElement(children: .contain)
             .accessibilityLabel(attachment.isUploading ? "Picture, uploading" : "Picture")
+            // Named so a UI test can measure the tile itself rather than infer it from
+            // the X inside it — where the strip sits relative to the text field is the
+            // whole assertion, and it is a rectangle, not a label.
+            .accessibilityIdentifier(Self.tileIdentifier)
     }
 
     @ViewBuilder

@@ -152,7 +152,8 @@ struct MessageComposerView: View {
                     Text(uploadError)
                         .font(.hive(.footnote))
                         .foregroundStyle(.red)
-                        .padding(.horizontal, 8)
+                        // Aligned with the text it is about.
+                        .padding(.horizontal, TokenTextView.textInset.width)
                 }
                 field()
                 controls
@@ -214,8 +215,8 @@ struct MessageComposerView: View {
                     .foregroundStyle(.tertiary)
                     // Aligned to the text container's own insets, so the placeholder
                     // sits exactly where the first glyph will.
-                    .padding(.leading, 11)
-                    .padding(.top, 9)
+                    .padding(.leading, TokenTextView.textInset.width)
+                    .padding(.top, TokenTextView.textInset.height)
                     .allowsHitTesting(false)
             }
         }

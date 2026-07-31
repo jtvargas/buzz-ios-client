@@ -71,13 +71,13 @@ struct LivePiMediaUploadTests {
     }
 
     static func adler32(_ bytes: [UInt8]) -> UInt32 {
-        var a: UInt32 = 1
-        var b: UInt32 = 0
+        var low: UInt32 = 1
+        var high: UInt32 = 0
         for byte in bytes {
-            a = (a + UInt32(byte)) % 65521
-            b = (b + a) % 65521
+            low = (low + UInt32(byte)) % 65521
+            high = (high + low) % 65521
         }
-        return b << 16 | a
+        return high << 16 | low
     }
 
     /// The whole contract in one request: the Blossom authorisation is accepted, the
