@@ -70,7 +70,7 @@ struct MessageTapArbiterTests {
         #expect(tally.single == 0)
 
         // And the first tap's action is not merely late. It is cancelled: a thread pushed
-        // behind the sheet a quarter of a second after it opened is the defect this whole
+        // behind the sheet a fraction of a second after it opened is the defect this whole
         // arrangement exists to avoid.
         try await Task.sleep(for: .seconds(Self.settle))
         #expect(tally.single == 0)
@@ -143,7 +143,7 @@ struct MessageTapArbiterTests {
     /// physical double tap on a picture reaches the arbiter twice — once as the reported
     /// double, and again as the row's own late tap gesture for the second touch. Without the
     /// settle window that second arrival is a *fresh* single, and a thread opens behind the
-    /// sheet a quarter of a second later.
+    /// sheet a fraction of a second later.
     @Test("the tail of an answered double tap does not start a new single")
     func theTailOfADoubleIsDropped() async throws {
         let tally = Tally()
@@ -161,9 +161,9 @@ struct MessageTapArbiterTests {
     /// The defect an independent review found by reading, and the one no other test here
     /// could see: every other case reports the double *before* the window elapses.
     ///
-    /// Our window is 250ms and the system's own double-tap interval is longer and not
+    /// Our window is 180ms and the system's own double-tap interval is longer and not
     /// settable, so an unhurried double tap — say 300ms between touches — is a single by our
-    /// clock and a double by the system's. Without this rule the picture opens at 250ms and
+    /// clock and a double by the system's. Without this rule the picture opens at 180ms and
     /// the actions sheet is then presented over the open picture, from the same view, which
     /// SwiftUI has no defined answer for. One gesture gets one answer, and the answer is the
     /// one that already happened.
@@ -224,8 +224,10 @@ struct MessageTapArbiterTests {
         // most, and the owner has rejected this app for feeling delayed three times in one
         // evening. A quarter of a second is the ceiling that survived that.
         #expect(MessageTapArbiter.doubleTapWindow <= 0.25)
-        // And long enough that a deliberate double tap fits inside it — 120–200ms between
-        // taps is the ordinary range, so anything under that would make the gesture a knack.
-        #expect(MessageTapArbiter.doubleTapWindow >= 0.2)
+        // And long enough that a deliberate double tap still fits inside it. 120–200ms between
+        // taps is the ordinary range, and the owner moved the window to its floor after feeling
+        // 250ms and 200ms on a device: a double tap at the slow end of that range now misses,
+        // which costs one more tap. Under this the gesture becomes a knack, which does not.
+        #expect(MessageTapArbiter.doubleTapWindow >= 0.18)
     }
 }
