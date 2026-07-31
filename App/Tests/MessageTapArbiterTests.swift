@@ -158,6 +158,49 @@ struct MessageTapArbiterTests {
         #expect(tally.double == 1)
     }
 
+    /// The defect an independent review found by reading, and the one no other test here
+    /// could see: every other case reports the double *before* the window elapses.
+    ///
+    /// Our window is 250ms and the system's own double-tap interval is longer and not
+    /// settable, so an unhurried double tap — say 300ms between touches — is a single by our
+    /// clock and a double by the system's. Without this rule the picture opens at 250ms and
+    /// the actions sheet is then presented over the open picture, from the same view, which
+    /// SwiftUI has no defined answer for. One gesture gets one answer, and the answer is the
+    /// one that already happened.
+    @Test("a double reported after the single already ran is the tail of that gesture")
+    func aLateReportedDoubleIsDropped() async throws {
+        let tally = Tally()
+        // A generous settle rather than ``settleWindow``, so the assertion is about the rule
+        // and not about how loaded the machine is: the report has to land inside the
+        // suppression, and with both numbers in the tens of milliseconds a slow sleep would
+        // step over it and fail for a reason that is not the rule.
+        let taps = MessageTapArbiter(window: Self.window, settle: 5)
+
+        taps.tapped(single: { tally.single += 1 }, double: { tally.double += 1 })
+        // Past the window: the single has been answered and the picture is open.
+        try await Task.sleep(for: .seconds(Self.settle))
+        #expect(tally.single == 1)
+
+        taps.doubleTapped { tally.double += 1 }
+        #expect(tally.double == 0)
+    }
+
+    /// And it does not latch: the suppression above is a window, not a mode. A reader whose
+    /// first tap opened the picture, who closes it and then double-taps properly, gets the
+    /// sheet.
+    @Test("a double reported well after a single is a double again")
+    func theLateDoubleSuppressionDoesNotLatch() async throws {
+        let tally = Tally()
+        let taps = arbiter()
+
+        taps.tapped(single: { tally.single += 1 }, double: { tally.double += 1 })
+        try await Task.sleep(for: .seconds(Self.settle))
+        #expect(tally.single == 1)
+
+        taps.doubleTapped { tally.double += 1 }
+        #expect(tally.double == 1)
+    }
+
     /// A surface with no sheet — the Threads screen — must not have its taps eaten by a
     /// gesture it does not offer. Reporting a double there is a no-op, and the single tap
     /// already waiting is deliberately left to run.

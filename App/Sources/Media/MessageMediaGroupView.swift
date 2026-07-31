@@ -90,10 +90,10 @@ private struct MessageMediaMosaicView: View {
                                 attribution: attribution
                             )
                         },
-                        double: { acting = MediaActionsTarget(media: item, preview: image) }
+                        double: { act(on: item, preview: image) }
                     )
                 }, onActions: { image in
-                    acting = MediaActionsTarget(media: item, preview: image)
+                    act(on: item, preview: image)
                 }, loader: loader)
                 .matchedTransitionSource(id: item.url, in: zoom)
             }
@@ -111,6 +111,13 @@ private struct MessageMediaMosaicView: View {
                 .navigationTransition(.zoom(sourceID: subject.id, in: zoom))
         }
         .sheet(item: $acting) { MediaActionsSheet(target: $0) }
+    }
+
+    /// Opens one tile's actions, and refuses while the gallery is up — see
+    /// ``MessageMediaView/act(on:)`` for why that guard is here as well as in the arbiter.
+    private func act(on item: MessageMedia, preview: UIImage?) {
+        guard viewing == nil else { return }
+        acting = MediaActionsTarget(media: item, preview: preview)
     }
 }
 

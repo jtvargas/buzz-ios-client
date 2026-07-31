@@ -345,7 +345,14 @@ private extension MessageMediaView {
     ///
     /// The bitmap is handed over only as the share sheet's thumbnail — what is saved and what
     /// is shared is the *original*, fetched again. See ``MessageMediaExport``.
+    ///
+    /// Refused while the viewer is up, which is belt to ``MessageTapArbiter``'s braces. The
+    /// arbiter is what should make this unreachable — a gesture answered as a single tap does
+    /// not get to be answered again as a double — but a sheet presented over a
+    /// `fullScreenCover` from the same view is a state SwiftUI has no defined answer for, and
+    /// one line here is cheaper than trusting a timing argument with it.
     func act(on image: UIImage) {
+        guard viewing == nil else { return }
         acting = MediaActionsTarget(media: media, preview: image)
     }
 
