@@ -52,7 +52,7 @@ struct JoinCommunityView: View {
     private func form(_ model: JoinCommunityModel) -> some View {
         @Bindable var model = model
         Form {
-            linkSection(text: $model.linkText)
+            linkSection(text: $model.linkText, note: model.linkNote)
             if let link = model.link {
                 destinationSection(link: link, isReadingPolicy: model.isReadingPolicy)
                 if let community = model.alreadyJoined {
@@ -94,7 +94,7 @@ struct JoinCommunityView: View {
         .disabled(model.step == .joining)
     }
 
-    private func linkSection(text: Binding<String>) -> some View {
+    private func linkSection(text: Binding<String>, note: String) -> some View {
         Section {
             TextField("https://relay.example/invite/…", text: text, axis: .vertical)
                 .textContentType(.URL)
@@ -110,7 +110,10 @@ struct JoinCommunityView: View {
         } header: {
             Text("INVITE LINK")
         } footer: {
-            Text(JoinCommunityModel.blurb)
+            // The footer carries the diagnosis rather than the error section: text that has
+            // not resolved into an invitation is not a failure, and the sentence belongs
+            // under the field it is about.
+            Text(note)
         }
     }
 

@@ -36,6 +36,50 @@ struct JoinCommunityModelTests {
         #expect(model.error == nil)
     }
 
+    /// The near miss this screen is actually pasted: a relay address. It is a URL, it names
+    /// the right host, and it is what somebody told "the community is at X" reaches for —
+    /// and before this it produced nothing at all: no destination, no error, a Join button
+    /// that stayed grey. The note is the only thing on screen that can explain that.
+    @Test func aRelayAddressIsNamedRatherThanIgnored() {
+        let (environment, suite) = JoinHarness.harness()
+        defer { JoinHarness.forget(suite, environment) }
+        let model = JoinHarness.model(environment, transport: ScriptedTransport())
+
+        model.linkText = "https://tech.communities.buzz.xyz"
+
+        #expect(model.link == nil)
+        #expect(!model.canJoin)
+        #expect(model.linkNote == JoinCommunityModel.relayNotInviteNote)
+        // Still not an error: nothing has failed, and this text field is where a mistake
+        // is meant to be made.
+        #expect(model.error == nil)
+    }
+
+    @Test func anEmptyFieldSaysWhatTheScreenIsFor() {
+        let (environment, suite) = JoinHarness.harness()
+        defer { JoinHarness.forget(suite, environment) }
+        let model = JoinHarness.model(environment, transport: ScriptedTransport())
+
+        #expect(model.linkNote == JoinCommunityModel.blurb)
+
+        model.linkText = "https://relay.example/channels/abc"
+        #expect(model.linkNote == JoinCommunityModel.notAnInviteNote)
+
+        model.linkText = "   "
+        #expect(model.linkNote == JoinCommunityModel.blurb)
+    }
+
+    @Test func aResolvedInviteStopsExplainingItself() async throws {
+        let (environment, suite) = JoinHarness.harness()
+        defer { JoinHarness.forget(suite, environment) }
+        let model = JoinHarness.model(environment, transport: ScriptedTransport(answers: JoinHarness.openRelay))
+
+        model.linkText = "https://relay.example/invite/v2.abc"
+        try await JoinHarness.settle(model)
+
+        #expect(model.linkNote == JoinCommunityModel.blurb)
+    }
+
     @Test func anInviteLinkNamesTheRelayItWillJoin() async throws {
         let (environment, suite) = JoinHarness.harness()
         defer { JoinHarness.forget(suite, environment) }

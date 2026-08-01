@@ -87,28 +87,35 @@ extension AppEnvironment {
     /// key, commits it to the community that relay belongs to, and opens it. The secret
     /// never leaves the Keychain — the decoded key is handed straight to the signer and not
     /// retained here.
+    /// The relay is taken in either of the two forms people actually have one written down
+    /// in — the socket URL a relay operator quotes (`wss://…`) and the web address the same
+    /// relay serves its own pages on (`https://…`) — and reduced to the socket form the
+    /// engine connects on. A community is identified by that reduced string
+    /// (``Community/relayIdentity(of:)`` accepts only `ws`/`wss`), so normalising here rather
+    /// than at the field is what stops the same relay pasted in its two forms from becoming
+    /// two communities.
     func submitIdentity(relayURLString: String, nsec: String) async -> IdentityGateError? {
-        guard RelayEndpoint.websocketURL(from: relayURLString) != nil else {
+        guard let relay = RelayEndpoint.websocketURLString(fromAnyRelay: relayURLString) else {
             return .invalidRelayURL
         }
         let trimmedSecret = nsec.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let key = try? PrivateKey(nsec: trimmedSecret) else {
             return .invalidSecretKey
         }
-        return await joinCommunity(relayURLString: relayURLString, key: key)
+        return await joinCommunity(relayURLString: relay, key: key)
     }
 
     /// Creates a brand-new identity in-app: a fresh secp256k1 key, committed to the
     /// community for the given relay. The generated key is handed straight to the signer
     /// and never retained here — the same custody discipline as the paste path.
     func createIdentity(relayURLString: String) async -> IdentityGateError? {
-        guard RelayEndpoint.websocketURL(from: relayURLString) != nil else {
+        guard let relay = RelayEndpoint.websocketURLString(fromAnyRelay: relayURLString) else {
             return .invalidRelayURL
         }
         guard let key = try? PrivateKey() else {
             return .couldNotStoreKey
         }
-        return await joinCommunity(relayURLString: relayURLString, key: key)
+        return await joinCommunity(relayURLString: relay, key: key)
     }
 
     /// The application-specific sink a ``TargetPairingSession`` hands its decrypted
