@@ -29,9 +29,15 @@ extension SyncEngine: EventSink {
         // a duplicate every reconnect would be wasted work for an idempotent apply.
         if let result, !result.inserted.isEmpty {
             let insertedIDs = Set(result.inserted)
-            let readStateEvents = batch.filter { $0.kind == .readState && insertedIDs.contains($0.id) }
-            if !readStateEvents.isEmpty {
-                await applyIncomingReadState(readStateEvents)
+            let appDataEvents = batch.filter { $0.kind == .readState && insertedIDs.contains($0.id) }
+            if !appDataEvents.isEmpty {
+                // Two different addressable events share `kind:30078`, told apart by
+                // their `d`/`t` tags: this identity's per-installation read frontier,
+                // and its one cross-device mute list. Each applier gates on its own
+                // tags, so handing the same batch to both is not a leak — it is how
+                // one filter's spillover reaches the feature it belongs to.
+                await applyIncomingReadState(appDataEvents)
+                await applyIncomingChannelMutes(appDataEvents)
             }
 
             // A message is the end of its author's typing where it landed. Only the

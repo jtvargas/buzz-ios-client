@@ -50,7 +50,13 @@ enum Schema {
     /// direct message can be told from a private channel by what the relay says it is
     /// rather than by counting its roster. The rebuild reads it back out of every
     /// kind:39000 already in the log, so an existing store gains it without a resync.
-    static let projectionVersion = 7
+    ///
+    /// Version 8 keeps the relay's `topic` and `purpose` off channel metadata. They
+    /// have always been on the wire — `crates/buzz-relay/src/handlers/side_effects.rs`
+    /// writes both as tags on every kind:39000 — and this projection kept only
+    /// `about`, which is the *description*. The rebuild reads them out of the metadata
+    /// already in the log, so an existing store gains both without a resync.
+    static let projectionVersion = 8
 
     /// The `meta` key under which the applied projection version is recorded.
     static let projectionVersionKey = "projection_version"
@@ -265,6 +271,34 @@ enum Schema {
             try db.execute(sql: "CREATE INDEX composer_draft_recency ON composer_draft(updated_at DESC)")
         }
 
+        // Cross-device channel mutes. Local and precious for the same reason read state
+        // is: the rows are the decrypted plaintext of `kind:30078` blobs, and decryption
+        // needs the identity a pure projector does not hold. A projection rebuild would
+        // only ever reproduce this empty.
+        //
+        // A row per channel *including the unmuted ones* — `muted = 0` with a newer
+        // `updated_at` is how an unmute travels, so deleting the row instead would let
+        // another device's older mute win the next time the two blobs meet.
+        migrator.registerMigration("v9.channel-mutes") { db in
+            try db.execute(sql: """
+            CREATE TABLE channel_mute (
+                channel_id TEXT PRIMARY KEY NOT NULL,
+                muted      INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            )
+            """)
+            // The cursor of the newest blob adopted, so a relay resending an older
+            // addressable after a reconnect cannot clobber a newer merge, and so the
+            // next publish can be stamped strictly newer than it. One row, id 0.
+            try db.execute(sql: """
+            CREATE TABLE channel_mute_source (
+                id                INTEGER PRIMARY KEY NOT NULL,
+                source_created_at INTEGER NOT NULL,
+                source_event_id   TEXT NOT NULL
+            )
+            """)
+        }
+
         return migrator
     }
 
@@ -380,7 +414,14 @@ enum Schema {
         CREATE TABLE channel (
             id              TEXT PRIMARY KEY NOT NULL,
             name            TEXT,
+            -- The relay's three separate strings, and they are three different things:
+            -- `about` is the description (what the channel is), `topic` is what it is
+            -- about right now, `purpose` is why it exists. The relay ships all three as
+            -- tags on kind:39000; conflating any two of them into one column is how a
+            -- client ends up showing a description under a heading that says Topic.
             about           TEXT,
+            topic           TEXT,
+            purpose         TEXT,
             picture         TEXT,
             is_private      INTEGER NOT NULL DEFAULT 0,
             is_archived     INTEGER NOT NULL DEFAULT 0,

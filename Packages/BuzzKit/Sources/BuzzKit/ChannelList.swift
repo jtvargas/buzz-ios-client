@@ -65,6 +65,14 @@ public struct ChannelListRow: Sendable, Hashable, Identifiable {
     /// is what is carried: collapsing it here would mean the projection remembers only the
     /// answer to today's question.
     public let channelType: String?
+    /// Whether this identity has muted the channel on any of its devices.
+    ///
+    /// Carried beside ``unreadCount`` rather than folded into it, deliberately: a muted
+    /// channel still *has* unread messages and the row still has to sort by them. Mute
+    /// is a statement about what should be shouted at you, not about what you have read,
+    /// and a query that answered zero here would have destroyed the difference for every
+    /// caller instead of only the one drawing a badge.
+    public let isMuted: Bool
 
     public init(
         id: String,
@@ -79,7 +87,8 @@ public struct ChannelListRow: Sendable, Hashable, Identifiable {
         lastMessageAuthorPubkey: String? = nil,
         unreadCount: Int = 0,
         unreadMentionCount: Int = 0,
-        channelType: String? = nil
+        channelType: String? = nil,
+        isMuted: Bool = false
     ) {
         self.id = id
         self.name = name
@@ -94,6 +103,7 @@ public struct ChannelListRow: Sendable, Hashable, Identifiable {
         self.unreadCount = unreadCount
         self.unreadMentionCount = unreadMentionCount
         self.channelType = channelType
+        self.isMuted = isMuted
     }
 
     /// Whether the relay calls this room a direct message — one person or several.
@@ -248,6 +258,11 @@ extension BuzzEventStore {
                c.picture       AS picture,
                c.is_private    AS is_private,
                c.channel_type  AS channel_type,
+               -- `muted = 1` only: an unmute is stored as a row saying so, not as the
+               -- absence of one, so `EXISTS` on the channel id alone would read every
+               -- channel ever unmuted as muted for ever.
+               EXISTS (SELECT 1 FROM channel_mute cm
+                        WHERE cm.channel_id = c.id AND cm.muted = 1) AS is_muted,
                n.msg_id        AS last_message_id,
                -- The winner is a log row or a queued row, never both — the queue branch
                -- excludes anything the log already holds — so the pair of joins below
@@ -346,7 +361,8 @@ extension BuzzEventStore {
             lastMessageAuthorPubkey: authorPubkey,
             unreadCount: row["unread_count"] ?? 0,
             unreadMentionCount: row["mention_count"] ?? 0,
-            channelType: row["channel_type"]
+            channelType: row["channel_type"],
+            isMuted: row["is_muted"] ?? false
         )
     }
 }

@@ -98,12 +98,14 @@ struct BuzzProjector: EventProjecting {
         try db.execute(
             sql: """
             INSERT INTO channel
-                (id, name, about, picture, is_private, is_archived, channel_type,
-                 source_event_id, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (id, name, about, topic, purpose, picture, is_private, is_archived,
+                 channel_type, source_event_id, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 name = excluded.name,
                 about = excluded.about,
+                topic = excluded.topic,
+                purpose = excluded.purpose,
                 picture = excluded.picture,
                 is_private = excluded.is_private,
                 is_archived = excluded.is_archived,
@@ -118,6 +120,10 @@ struct BuzzProjector: EventProjecting {
                 id,
                 meta?.name?.nilIfEmpty ?? event.firstValue(forTag: "name"),
                 meta?.about?.nilIfEmpty ?? event.firstValue(forTag: "about"),
+                // Tag-only: the relay writes `topic`/`purpose` as tags and never into
+                // the JSON content, so there is no `meta?` half to prefer here.
+                event.firstValue(forTag: "topic")?.nilIfEmpty,
+                event.firstValue(forTag: "purpose")?.nilIfEmpty,
                 meta?.picture?.nilIfEmpty ?? event.firstValue(forTag: "picture"),
                 // NIP-29 marks a closed group with a bare `private` tag.
                 event.tags.contains { $0.first == "private" },
