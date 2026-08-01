@@ -26,23 +26,29 @@ actor FakePairingSession: PairingDriving {
     }
 }
 
-/// A ``PairedKeyStoring`` double that records stored keys and can be armed to fail,
-/// so the importer's success and storage-failure paths are testable off-Keychain.
+/// A ``PairedKeyStoring`` double that records what was stored and against which relay, and
+/// can be armed to fail — so the importer's success and storage-failure paths are testable
+/// off-Keychain and without a community list.
 final class RecordingKeyStore: PairedKeyStoring, @unchecked Sendable {
     private let lock = NSLock()
-    private var _stored: [PrivateKey] = []
+    private var _stored: [(key: PrivateKey, relay: String)] = []
     private let shouldFail: Bool
 
     init(shouldFail: Bool = false) { self.shouldFail = shouldFail }
 
     var stored: [PrivateKey] {
-        lock.withLock { _stored }
+        lock.withLock { _stored.map(\.key) }
     }
 
-    func store(_ key: PrivateKey) throws {
-        if shouldFail { throw StoreError.failed }
-        lock.withLock { _stored.append(key) }
+    /// The relays the importer asked for, in order. The relay is half of what the importer
+    /// now hands over — a credential names the community it belongs to.
+    var storedRelays: [String] {
+        lock.withLock { _stored.map(\.relay) }
     }
 
-    enum StoreError: Error { case failed }
+    func storePairedKey(_ key: PrivateKey, forRelay relayURLString: String) async -> Bool {
+        if shouldFail { return false }
+        lock.withLock { _stored.append((key, relayURLString)) }
+        return true
+    }
 }

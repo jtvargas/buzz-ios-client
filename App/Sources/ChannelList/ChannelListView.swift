@@ -118,17 +118,20 @@ struct ChannelListView: View {
                         .padding(.top, 8)
                     }
                 }
-                // The heading every other screen carries, naming the workspace this app is
-                // signed in to (§ ``CommunityIdentity``). It leads to the same account sheet
-                // the face at the trailing edge does, and is the larger target.
+                // The heading every other screen carries, naming the community this app is
+                // signed in to (§ ``CommunityIdentity``). It opens the community list: this
+                // is the one heading that names something you can be somewhere *else* than,
+                // and the switcher is what that heading is for. Your account is still one
+                // tap away at the trailing edge, where your own face is.
                 .conversationTitle(
                     mark: Self.communityMark,
-                    // Derived from the stored relay URL where it is used rather than held
-                    // in a model: it is the same string on every pass and every launch.
-                    title: CommunityIdentity.name(),
-                    actionHint: "Double tap to show your account"
+                    // The active community's own label, which a rename changes and a switch
+                    // replaces. It falls back to the relay-derived name for the frame before
+                    // a community exists at all.
+                    title: environment.communities.active?.name ?? CommunityIdentity.name(),
+                    actionHint: "Double tap to switch community"
                 ) {
-                    showAccount = true
+                    environment.communitySheet = .switcher
                 }
                 // Drag left anywhere here to reopen the conversation just left — the
                 // system's back swipe, mirrored. Declared inside the stack because the

@@ -64,10 +64,7 @@ import Testing
 
     // MARK: - Success (atomic commit + relay conversion)
 
-    @Test func importsValidCredentialAndPersistsRelay() async throws {
-        let previousRelay = RelayEndpoint.storedURLString
-        defer { RelayEndpoint.storedURLString = previousRelay }
-
+    @Test func importsValidCredentialAndHandsOverItsRelay() async throws {
         let store = RecordingKeyStore()
         let importer = PairingCredentialImporter(keyStore: store)
         let key = try key()
@@ -75,8 +72,10 @@ import Testing
 
         #expect(await importer.importPayload(payloadType: "custom", payload: json) == true)
         #expect(store.stored.map { $0.publicKey.hex } == [key.publicKey.hex])
-        // The desktop's HTTP base was converted to the socket URL the engine uses.
-        #expect(RelayEndpoint.storedURLString == "ws://100.111.202.55:3004")
+        // The desktop's HTTP base was converted to the socket URL the engine uses, and the
+        // key was committed *against that relay*: which community a credential joins is the
+        // store's decision now, so the importer's job is to hand over both halves.
+        #expect(store.storedRelays == ["ws://100.111.202.55:3004"])
     }
 }
 

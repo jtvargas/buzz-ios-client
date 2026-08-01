@@ -63,28 +63,19 @@ import Testing
     }
 }
 
-/// The store-ownership decision that drives wipe-on-identity-change at login.
-/// Serialized because it mutates a shared `UserDefaults` key.
-@Suite(.serialized)
-struct StoreOwnershipTests {
-    @Test func freshInstallKeepsTheStore() {
-        let previous = StoreOwnership.ownerPubkeyHex
-        defer { StoreOwnership.ownerPubkeyHex = previous }
-        StoreOwnership.ownerPubkeyHex = nil
-        #expect(!StoreOwnership.shouldWipe(forIncoming: "abc"))
+/// The store-ownership decision that drives wipe-on-identity-change when a community is
+/// opened. A pure function since the owner moved onto the community record that names the
+/// database file, so these no longer touch `UserDefaults` and no longer need serializing.
+@Suite struct StoreOwnershipTests {
+    @Test func aCommunityWithNothingStoredKeepsWhatIsThere() {
+        #expect(!StoreOwnership.shouldWipe(recordedOwner: nil, incoming: "abc"))
     }
 
-    @Test func sameKeyReloginKeepsTheStore() {
-        let previous = StoreOwnership.ownerPubkeyHex
-        defer { StoreOwnership.ownerPubkeyHex = previous }
-        StoreOwnership.ownerPubkeyHex = "abc"
-        #expect(!StoreOwnership.shouldWipe(forIncoming: "abc"))
+    @Test func sameKeyReturningKeepsTheStore() {
+        #expect(!StoreOwnership.shouldWipe(recordedOwner: "abc", incoming: "abc"))
     }
 
     @Test func differentKeyWipesTheStore() {
-        let previous = StoreOwnership.ownerPubkeyHex
-        defer { StoreOwnership.ownerPubkeyHex = previous }
-        StoreOwnership.ownerPubkeyHex = "abc"
-        #expect(StoreOwnership.shouldWipe(forIncoming: "xyz"))
+        #expect(StoreOwnership.shouldWipe(recordedOwner: "abc", incoming: "xyz"))
     }
 }
