@@ -58,13 +58,27 @@ public struct SyncEngineConfig: Sendable {
     /// ``ThreadActivity/newReplyCountIsExact``.
     public var threadPrefetchReplyLimit: Int
 
+    /// How many of a channel's relay notices one reconcile reaches for.
+    ///
+    /// These have to be asked for separately from everything else, and the reason is
+    /// worth knowing: the relay stores a kind-40099 notice with `insert_event` rather
+    /// than `insert_event_with_thread_metadata`, so it never gets a `thread_metadata`
+    /// row — and a channel window page is computed *from* that table. No `kinds` on a
+    /// window request can produce one. See ``SyncEngine/assembleNotices(_:generation:)``.
+    ///
+    /// Two hundred, well above ``windowPageLimit``: a notice is far rarer than a
+    /// message but it is also far older on average, since it is the only kind of row
+    /// that can predate every message still in a channel.
+    public var noticeBackfillLimit: Int
+
     public init(
         liveSinceWindow: TimeInterval = 5,
         presenceSweepInterval: Duration = .seconds(1),
         windowPageLimit: Int = 50,
         threadFetchLimit: Int = 1000,
         threadPrefetchRootLimit: Int = 20,
-        threadPrefetchReplyLimit: Int = 20
+        threadPrefetchReplyLimit: Int = 20,
+        noticeBackfillLimit: Int = 200
     ) {
         self.liveSinceWindow = liveSinceWindow
         self.presenceSweepInterval = presenceSweepInterval
@@ -72,6 +86,7 @@ public struct SyncEngineConfig: Sendable {
         self.threadFetchLimit = threadFetchLimit
         self.threadPrefetchRootLimit = threadPrefetchRootLimit
         self.threadPrefetchReplyLimit = threadPrefetchReplyLimit
+        self.noticeBackfillLimit = noticeBackfillLimit
     }
 
     public static let `default` = SyncEngineConfig()

@@ -392,7 +392,7 @@ private extension ChannelTimelineView {
         case let .message(row, continuesGroup):
             messageRow(row, continuesGroup: continuesGroup)
         case let .notice(marker):
-            SystemNoticeRowView(notice: marker.notice)
+            SystemNoticeRowView(notice: marker.notice, alsoJoined: marker.alsoJoined, date: marker.date)
         }
     }
 

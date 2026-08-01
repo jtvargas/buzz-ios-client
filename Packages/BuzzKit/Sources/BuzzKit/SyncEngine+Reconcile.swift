@@ -176,6 +176,14 @@ extension SyncEngine {
         guard isCurrent(generation) else { return }
         setChannelState(channel, .reconciling)
 
+        // Notices come from neither path below, so they are fetched for both — but
+        // *detached*, never awaited. Sequencing them ahead of the window would put a
+        // relay round-trip for furniture in front of the messages, so a slow or
+        // unanswered notice query would stall the whole channel's reconcile behind it.
+        // The existing engine suite caught exactly that. Same shape as the presence
+        // snapshot above, and for the same reason.
+        Task { [weak self] in await self?.assembleNotices(channel, generation: generation) }
+
         if windowDegraded {
             await fallbackAssemble(channel, generation: generation)
             return
@@ -304,6 +312,7 @@ extension SyncEngine {
     /// live flush never advances the watermark over an unclosed gap (rule 2's
     /// contiguity contract). The watermark stays where it was until a later `.ready`
     /// reconciles this channel through the window path and closes the gap honestly.
+
     func fallbackAssemble(_ channel: String, generation: Int) async {
         let filter = WindowFilter(channelID: channel, kinds: [.channelMessage], limit: config.windowPageLimit)
             .baseFilter
@@ -315,6 +324,54 @@ extension SyncEngine {
         setChannelState(channel, .fallbackSynced)
     }
 
+    // MARK: - Relay notices
+
+    /// Fetches a channel's relay notices — *somebody joined, was added, left, the topic
+    /// changed* — which no other path in this engine can reach.
+    ///
+    /// # Why they need their own fetch
+    ///
+    /// A kind-40099 notice is stored by the relay through `insert_event`, **not**
+    /// `insert_event_with_thread_metadata` (`side_effects.rs`, `emit_system_message`).
+    /// It therefore has no `thread_metadata` row — and a channel window page is computed
+    /// *from* that table. No value of `kinds` on a window request can return one, so
+    /// widening ``reconcileStep``'s filter would look like the fix and do nothing.
+    ///
+    /// The only other route is the live subscription, whose `since` reaches back
+    /// ``SyncEngineConfig/liveSinceWindow`` — five seconds. So without this, a notice is
+    /// visible only to a client subscribed to that channel in the moment it happened, and
+    /// invisible for ever afterwards. Reported by the owner 2026-08-01: a member added
+    /// days earlier rendered on the Flutter client and was absent here, because this
+    /// device had never held the event at all.
+    ///
+    /// # Shape
+    ///
+    /// An ordinary NIP-01 one-shot — ``fallbackAssemble``'s mechanism, so this is a
+    /// known-good path — ingested as `.backfill`, which keeps it off the live watermark.
+    /// No `since`: the point is the notices this device never saw; the limit bounds it.
+    ///
+    /// Best-effort and deliberately not a gate on sync state: a channel whose notices
+    /// could not be fetched is still a channel whose *messages* reconciled, and failing
+    /// the whole reconcile over the furniture would be the wrong trade.
+    ///
+    /// Which is also why the caller runs this **detached rather than awaiting it**. An
+    /// earlier draft sequenced it ahead of the window pass, and a relay that never
+    /// answered the notice query then held the channel out of `.synced` indefinitely —
+    /// not a hypothetical, it timed out a dozen existing engine tests. "Best effort" has
+    /// to mean the caller cannot be blocked by it, not merely that its errors are
+    /// swallowed.
+    func assembleNotices(_ channel: String, generation: Int) async {
+        let filter = Filter(
+            kinds: [.systemMessage],
+            limit: config.noticeBackfillLimit,
+            tagQueries: ["h": [channel]]
+        )
+        let events = (try? await subscriptions.query([filter])) ?? []
+        // Superseded during the query: abandon, writing nothing — the new generation
+        // owns this channel now.
+        guard isCurrent(generation) else { return }
+        _ = try? await store.ingest(batch: events, phase: .backfill)
+    }
     // MARK: - Thread open
 
     /// Fetches a thread's replies one-shot by root id and ingests them, so opening a
