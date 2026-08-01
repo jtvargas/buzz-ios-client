@@ -11,17 +11,37 @@ import SwiftUI
 /// `PresenceStore`, `WindowClient`, `SyncEngine` — and owns the launch identity
 /// gate and the live engine-state pill's source. Nothing here reaches the socket
 /// directly; the engine does (the BuzzKit boundary rule).
+///
+/// # One graph at a time, and it belongs to a community
+///
+/// Everything from ``store`` down is built *for the active community* and dropped when
+/// another one is opened (§ ``switchCommunity(to:)``). That is why those properties are
+/// `var` and optional where they used to be `let`: a community is a relay, an identity and
+/// a database, and none of the three can be swapped while a graph built on the previous
+/// three is still running.
+///
+/// Desktop reaches the same conclusion from the other end. It remounts its whole
+/// community-scoped subtree on a key and then explicitly resets fourteen module-level
+/// caches, because a remount clears component state and not module state
+/// (`buzz/AGENTS.md` § Community Switching). Hive's equivalent of that list is short by
+/// construction — the per-community state *is* this object graph, and ``RootView`` keys the
+/// tree on the community id so no view or model outlives the switch — but the rule is the
+/// same one: anything holding community-scoped data must be named in ``teardownSession()``
+/// or it leaks into the next community.
 @MainActor
 @Observable
 final class AppEnvironment {
     /// What the root view should present.
     enum Phase: Equatable {
-        /// The store is open but no identity is stored yet — show the gate.
+        /// No identity is stored for the active community (or there is no community at
+        /// all) — show the gate.
         case needsIdentity
-        /// A returning identity is known and the engine is being composed around it. Ends
-        /// when the engine *exists*, not when it has connected — deliberately not a network
-        /// wait. Draws the sidebar's own waiting state, so the launch reads as one surface
-        /// filling in rather than a spinner handing over to a screen.
+        /// A known identity is being composed into an engine. Ends when the engine
+        /// *exists*, not when it has connected — deliberately not a network wait. Draws the
+        /// sidebar's own waiting state, so the launch reads as one surface filling in
+        /// rather than a spinner handing over to a screen. A community switch passes
+        /// through here too, which is what keeps the outgoing community's rows off screen
+        /// under the incoming community's name.
         case bootstrapping
         /// An identity is loaded and the engine started — show the app.
         case running
@@ -40,281 +60,237 @@ final class AppEnvironment {
     /// state cannot carry on its own — both are ``SyncEngine/State/starting``. Held
     /// here rather than in the surface that draws the word, because a conversation
     /// opened mid-reconnect has itself never seen a live engine and would otherwise
-    /// call a dropped connection a cold start. Reset with the engine on sign-out.
+    /// call a dropped connection a cold start. Reset with the engine on sign-out, and on a
+    /// community switch: the community being opened has not connected before either.
     private(set) var hasConnectedBefore = false
     /// The authority behind the currently mounted channel list. On retry this
     /// moves through `.checking` without unmounting the workspace.
     private(set) var channelDirectoryStatus: ChannelDirectoryStatus = .checking
 
-    /// The store, opened at launch regardless of identity so a returning user's
-    /// history is on screen the instant the engine reconnects.
-    let store: BuzzEventStore
-    let signer: KeychainSigner
-    /// Every composer's unsent text. Owned here because a draft outlives the screen it
-    /// was typed on, and because the two moments that decide its fate — leaving the
-    /// foreground, and signing out — are both handled here.
-    let drafts: ComposerDrafts
+    /// Every community on this device, and which one is being read.
+    private(set) var communities: CommunityDirectory
+    let communityStorage: CommunityStorage
+    /// Which community sheet is up, or `nil` for none.
+    ///
+    /// Held here, and presented by ``RootView``, because both sheets outlive the surface
+    /// that opens them: the workspace below is remounted the moment a switch begins
+    /// (``RootView`` keys it on the active community), so a sheet owned by the sidebar would
+    /// be torn off mid-flow — taking a half-finished pairing, or the error explaining why a
+    /// community could not be opened, with it.
+    var communitySheet: CommunitySheet?
+    /// Something the app has to say that no surface is left standing to say itself.
+    ///
+    /// A join that fails, or a key that would not delete, both end with the workspace
+    /// remounted or replaced — so the sheet or the screen that would have reported it is
+    /// gone by the time there is anything to report. ``RootView`` draws this, above the
+    /// remount boundary, which is the one place that survives both.
+    var notice: AppNotice?
 
+    /// One thing the app needs to tell the reader, with a title it can be recognised by.
+    struct AppNotice: Identifiable, Equatable {
+        let id = UUID()
+        let title: String
+        let message: String
+    }
+
+    /// The two doors onto the community list.
+    enum CommunitySheet: String, Identifiable {
+        /// The list, from the home heading: switch, rename, remove.
+        case switcher
+        /// Joining another one — the same three paths as onboarding.
+        case add
+
+        var id: String { rawValue }
+    }
+
+    /// The community a pairing session has just committed a key into, held between the
+    /// import and ``completePairing()``.
+    ///
+    /// The two halves of a pairing are separated by the transport: the importer runs inside
+    /// the session and can only answer yes or no, and the move to that community can only
+    /// happen after the session has acknowledged. Without this the second half would have
+    /// to guess — and a pairing started from inside a running community would open the one
+    /// already on screen.
+    var pairedCommunityID: Community.ID?
+
+    // MARK: - The active community's graph
+
+    /// This community's database, or `nil` before one is open — a fresh install at the
+    /// gate, and the moment between two communities.
+    ///
+    /// One file per community (§ ``Community/storeFilename``). Dropping the reference is
+    /// what closes it: GRDB's pool closes when the last handle to it goes, so a switch has
+    /// to release the store *and* everything built on it, which is what
+    /// ``teardownSession()`` is for.
+    private(set) var store: BuzzEventStore?
+    /// The signer for the active community's Keychain account.
+    private(set) var signer: KeychainSigner?
+    /// Every composer's unsent text, for this community. Owned here because a draft
+    /// outlives the screen it was typed on, and because the three moments that decide its
+    /// fate — leaving the foreground, leaving the community, and signing out — are all
+    /// handled here.
+    private(set) var drafts: ComposerDrafts?
     /// Built once an identity and relay URL are known; `nil` until then.
     private(set) var engine: SyncEngine?
-
     /// Puts a composer's pictures on the relay's blob store. Built beside the engine
     /// and dropped with it — see ``makeMediaUploader(websocketURL:)``, which is also
     /// where its separation from the engine is explained.
     private(set) var mediaUploader: (any MediaUploading)?
-
     /// The authenticated identity's hex pubkey, resolved once the engine starts.
     /// Used to exclude our own typing echo and to key our own presence.
     private(set) var selfPubkeyHex: String?
+    /// The community the mounted graph was built for, or `nil` when no session is running.
+    /// Set with the graph and cleared with it, so it says *which community is on screen*
+    /// rather than which one has been chosen — see ``workspaceMatchesActiveCommunity``.
+    private(set) var sessionCommunityID: Community.ID?
 
-    private var engineStateTask: Task<Void, Never>?
-    private var directoryStatusTask: Task<Void, Never>?
+    var engineStateTask: Task<Void, Never>?
+    var directoryStatusTask: Task<Void, Never>?
+    /// The last community transition handed to ``serialisingTransitions(_:)``, which the
+    /// next one waits on. `nil` until the first one runs.
+    ///
+    /// Stored here because an extension cannot hold one, and touched by nothing but that
+    /// method — which lives beside the transitions it serialises, in
+    /// `AppEnvironment+Communities.swift`.
+    var lastTransition: Task<Void, Never>?
     /// A returning user's engine start, which runs *underneath* the mounted workspace
-    /// rather than in front of it. Held so sign-out can wait it out.
-    private var engineStartTask: Task<Void, Never>?
+    /// rather than in front of it. Held so sign-out and a switch can wait it out.
+    var engineStartTask: Task<Void, Never>?
     /// Whether that start is still in flight. Read by the account sheet, which keeps Sign
     /// Out disabled while it is: signing out mid-start is a teardown racing a setup that
     /// cannot be cancelled (see ``signOut()``), and there is no session to leave yet anyway.
     private(set) var isStartingEngine = false
     /// Publishes our own presence: `"online"` every 60 s while foregrounded, and
     /// `"offline"` on background. Built alongside the engine.
-    private var heartbeat: PresenceHeartbeat?
+    var heartbeat: PresenceHeartbeat?
 
-    /// Opens the store and prepares the signer. The engine is not built yet — that
-    /// waits until an identity is present (a returning user) or entered (the gate).
-    init() throws {
-        signer = KeychainSigner(account: "primary")
-        let store = try Self.makeStore()
-        self.store = store
-        drafts = ComposerDrafts(persistence: StoredComposerDrafts(store: store))
-        // Resolve this synchronously so a returning user never gets one frame of
-        // onboarding while the launch task is being scheduled.
-        phase = try signer.loadPrivateKey() != nil ? .bootstrapping : .needsIdentity
+    /// Reads the community list, adopting a single-community install as community #1 if
+    /// that is what this device is (§ ``CommunityStorage``). No database is opened here:
+    /// which one to open is a question about the active community, and a device may have
+    /// none yet.
+    init(communityStorage: CommunityStorage = CommunityStorage()) {
+        self.communityStorage = communityStorage
+        let directory = communityStorage.loadAdoptingLegacyInstall(
+            hasLegacyIdentity: Self.hasStoredKey(account: Community.legacyKeychainAccount)
+        )
+        communities = directory
+        // Resolved synchronously so a returning user never gets one frame of onboarding
+        // while the launch task is being scheduled.
+        let hasKey = directory.active.map { Self.hasStoredKey(account: $0.keychainAccount) } ?? false
+        phase = hasKey ? .bootstrapping : .needsIdentity
+        // The heading draws this before any engine exists, so it is mirrored from the
+        // active community rather than left on whatever the last install wrote.
+        if let active = directory.active {
+            RelayEndpoint.storedURLString = active.relayURLString
+        }
     }
 
-    /// Resolves launch state: if a key is already stored, start the engine against
-    /// the persisted relay URL; otherwise rest on the identity gate.
+    /// Resolves launch state: if the active community has a key, start its engine;
+    /// otherwise rest on the identity gate.
     func bootstrap() async {
+        guard let active = communities.active, Self.hasStoredKey(account: active.keychainAccount) else {
+            phase = .needsIdentity
+            return
+        }
+        await startActiveCommunity(mountsBeforeConnect: true)
+    }
+
+    // MARK: - Writing the two things a switch changes
+
+    /// Moves the app to another phase.
+    ///
+    /// Here rather than at each call site because ``phase`` stays `private(set)`: the
+    /// community actions live in their own file (`AppEnvironment+Communities.swift`) and
+    /// Swift's `private(set)` is file-scoped, so the choice is between opening the setter to
+    /// the whole module and giving its two callers a named door. This is the door — nothing
+    /// outside this object can still put the app into a phase of its choosing.
+    func setPhase(_ next: Phase) {
+        phase = next
+    }
+
+    /// Changes the community list and writes it down, in that order and always together.
+    ///
+    /// The pairing is the invariant: a directory mutated but not persisted is a switch that
+    /// a relaunch would undo, silently, and only for the reader who quit at the wrong
+    /// moment. Nothing outside this object mutates the list, and nothing inside it mutates
+    /// the list without saving.
+    func updateCommunities(_ body: (inout CommunityDirectory) -> Void) {
+        body(&communities)
+        communityStorage.save(communities)
+    }
+
+    // MARK: - Session lifecycle
+
+    /// Whether a key is stored under `account`. A Keychain that cannot be read at all — CI
+    /// has no usable one — answers no, which lands on the gate rather than on a crash.
+    static func hasStoredKey(account: String) -> Bool {
+        (try? KeychainSigner(account: account).loadPrivateKey()) != nil
+    }
+
+    /// Opens the active community: its database, its signer, its engine.
+    ///
+    /// - Parameter mountsBeforeConnect: whether the workspace may appear before the engine
+    ///   has started. True for a launch and for a switch, where a blocking wait on the
+    ///   network is the bug; false for the identity gate, where the caller is waiting on a
+    ///   verdict about what they just typed.
+    func startActiveCommunity(mountsBeforeConnect: Bool) async {
+        guard let community = communities.active else {
+            phase = .needsIdentity
+            return
+        }
         do {
-            if try signer.loadPrivateKey() != nil {
-                try await startEngine(
-                    relayURLString: RelayEndpoint.storedURLString,
-                    mountsBeforeConnect: true
-                )
-            } else {
-                phase = .needsIdentity
-            }
+            try await startSession(for: community, mountsBeforeConnect: mountsBeforeConnect)
         } catch {
             phase = .failed(String(describing: error))
         }
     }
 
-    /// Completes the identity gate: validates the relay URL, decodes the pasted
-    /// `nsec` into a key, commits it to the Keychain, and starts the engine. The
-    /// secret never leaves the Keychain — the decoded key is handed straight to
-    /// `signer.store` and not retained here.
-    func submitIdentity(relayURLString: String, nsec: String) async -> IdentityGateError? {
-        guard RelayEndpoint.websocketURL(from: relayURLString) != nil else {
-            return .invalidRelayURL
-        }
-        let trimmedSecret = nsec.trimmingCharacters(in: .whitespacesAndNewlines)
-        let key: PrivateKey
-        do {
-            key = try PrivateKey(nsec: trimmedSecret)
-        } catch {
-            return .invalidSecretKey
-        }
-        do {
-            try signer.store(key)
-            RelayEndpoint.storedURLString = relayURLString
-            phase = .bootstrapping
-            try await startEngine(relayURLString: relayURLString)
-            return nil
-        } catch {
-            phase = .needsIdentity
-            return .couldNotStart(String(describing: error))
-        }
-    }
-
-    /// Creates a brand-new identity in-app: generates a fresh secp256k1 key,
-    /// commits it to the Keychain, and starts the engine against the given relay.
-    /// The generated key is handed straight to `signer.store` and never retained
-    /// here — the same custody discipline as the paste path.
-    func createIdentity(relayURLString: String) async -> IdentityGateError? {
-        guard RelayEndpoint.websocketURL(from: relayURLString) != nil else {
-            return .invalidRelayURL
-        }
-        let key: PrivateKey
-        do {
-            key = try PrivateKey()
-        } catch {
-            return .couldNotStart(String(describing: error))
-        }
-        do {
-            try signer.store(key)
-            RelayEndpoint.storedURLString = relayURLString
-            phase = .bootstrapping
-            try await startEngine(relayURLString: relayURLString)
-            return nil
-        } catch {
-            phase = .needsIdentity
-            return .couldNotStart(String(describing: error))
-        }
-    }
-
-    /// The application-specific sink a ``TargetPairingSession`` hands its decrypted
-    /// credential to. It commits the imported key to the Keychain and persists the
-    /// paired relay; the session sends `complete(true)` only if it succeeds.
-    func pairingImporter() -> PairingCredentialImporter {
-        PairingCredentialImporter(keyStore: signer)
-    }
-
-    /// Finishes a completed pairing by starting the engine against the relay the
-    /// importer just persisted. The key is already durably stored (that is what let
-    /// the session acknowledge), so this only brings the connection up.
-    func completePairing() async -> IdentityGateError? {
-        do {
-            phase = .bootstrapping
-            try await startEngine(relayURLString: RelayEndpoint.storedURLString)
-            return nil
-        } catch {
-            phase = .needsIdentity
-            return .couldNotStart(String(describing: error))
-        }
-    }
-
-    /// Signs the current identity out: removes the key from the Keychain, stops the
-    /// engine, and returns to onboarding.
-    ///
-    /// The key deletion is verified *before* anything is torn down. If the key could
-    /// not be removed (a Keychain failure), the running session is left intact and
-    /// ``SignOutResult/keyNotCleared`` is returned — a sign-out never reports success
-    /// while the `nsec` is still recoverable on this device. Deleting the key while
-    /// the engine is briefly still live is safe: the signer loads fresh per operation,
-    /// and the engine is stopped immediately after.
-    ///
-    /// The store is intentionally **not** wiped here. The recorded store owner is
-    /// left in place so the next login decides: a same-key re-login keeps the
-    /// history, and a different key logging in wipes it in ``startEngine(relayURLString:)``.
-    @discardableResult
-    func signOut() async -> SignOutResult {
-        guard deleteAndVerifyKey(signer) == .signedOut else {
-            return .keyNotCleared // still signed in; nothing torn down
-        }
-        engineStateTask?.cancel()
-        engineStateTask = nil
-        directoryStatusTask?.cancel()
-        directoryStatusTask = nil
-        // Let a launch in flight finish rather than interleaving with it. `SyncEngine.start`
-        // suspends on work that cannot be cancelled, so a `stop()` landing mid-start returns
-        // first and then start *resumes*, re-arming the observers, the presence sweep and
-        // the socket the stop just closed — an authenticated connection for the key this
-        // method has already deleted. ``isStartingEngine`` keeps the affordance off screen
-        // while this is pending, so there is normally nothing to wait for; this is the
-        // guarantee behind that.
-        if let engineStartTask {
-            await engineStartTask.value
-        }
-        engineStartTask = nil
-        if let engine {
-            await engine.stop()
-        }
-        heartbeat = nil
-        engine = nil
-        // Beside the engine: it signs with the key this method has just deleted.
-        mediaUploader = nil
-        // Held in memory across sessions otherwise — see ``ComposerDrafts/reset()``.
-        drafts.reset()
-        selfPubkeyHex = nil
-        engineState = .stopped
-        hasConnectedBefore = false
-        channelDirectoryStatus = .checking
-        phase = .needsIdentity
-        return .signedOut
-    }
-
-    /// Recovery action shared by the fallback banner and empty state.
-    func retryConnectionAndDirectory() async {
-        await engine?.retryConnectionAndDirectory()
-    }
-
-    /// Loads the stored secret key for a gated backup/reveal, or `nil` if none is
-    /// stored. The caller must gate this behind device authentication and never
-    /// persist or log the result — it is the one deliberate read-out boundary for
-    /// the secret.
-    func revealSecretKey() -> PrivateKey? {
-        try? signer.loadPrivateKey()
-    }
-
-    /// Forwards a scene-phase change to the engine and drives the presence
-    /// heartbeat, if an engine exists. A no-op before the engine is built (i.e. while
-    /// the gate is up).
-    ///
-    /// On background the heartbeat publishes `"offline"` *before* the engine arms its
-    /// grace window, so the departure goes out while the socket is still live; on
-    /// foreground it forwards first, then resumes beating.
-    func handleScenePhase(_ phase: ScenePhase) {
-        // Unsent text first, and outside the engine guard: leaving the foreground is the
-        // last moment this process is guaranteed to still be here. Usually there is
-        // nothing outstanding — the write-through has normally already landed.
-        if phase != .active {
-            Task { await drafts.flush() }
-        }
-        guard let engine else { return }
-        let heartbeat = self.heartbeat
-        Task {
-            switch phase {
-            case .active:
-                await forwardScenePhase(phase, to: engine)
-                heartbeat?.startForeground()
-            case .background:
-                await heartbeat?.stopBackground()
-                await forwardScenePhase(phase, to: engine)
-            case .inactive:
-                await forwardScenePhase(phase, to: engine)
-            @unknown default:
-                break
-            }
-        }
-    }
-
-    // MARK: - Engine composition
-
-    /// - Parameter mountsBeforeConnect: whether the workspace may appear before the engine
-    ///   has started. True for a returning user's launch, where a blocking wait is the bug;
-    ///   false for the identity gate, where the caller is waiting on a verdict.
-    private func startEngine(relayURLString: String, mountsBeforeConnect: Bool = false) async throws {
-        guard let websocketURL = RelayEndpoint.websocketURL(from: relayURLString),
+    /// Builds and starts the graph for one community. Throws rather than reporting, so the
+    /// identity gate can turn a failure into an answer about the form and a launch can turn
+    /// it into ``Phase/failed(_:)``.
+    func startSession(for community: Community, mountsBeforeConnect: Bool) async throws {
+        guard let websocketURL = RelayEndpoint.websocketURL(from: community.relayURLString),
               let queryURL = RelayEndpoint.queryURL(for: websocketURL)
         else {
             throw CompositionError.invalidRelayURL
         }
 
-        // Resolve the identity before the engine writes anything, so a store left by
-        // a *different* key (a sign-out then a new login) is wiped first; a same-key
-        // re-login keeps its history. A fresh install has no recorded owner.
+        // Before anything else this builds: from here on there is a graph on the way up,
+        // and it belongs to exactly one community.
+        sessionCommunityID = community.id
+        let signer = KeychainSigner(account: community.keychainAccount)
+        self.signer = signer
+        let store = try Self.makeStore(filename: community.storeFilename)
+        self.store = store
+        let drafts = ComposerDrafts(persistence: StoredComposerDrafts(store: store))
+        self.drafts = drafts
+
+        // Resolve the identity before the engine writes anything, so a database left by a
+        // *different* key (this community re-paired to another identity) is wiped first; a
+        // same-key return keeps its history. A community with nothing stored yet has no
+        // recorded owner and keeps whatever is there, which is nothing.
         let intendedPubkey = try? await signer.publicKey().hex
         if let intendedPubkey {
-            if StoreOwnership.shouldWipe(forIncoming: intendedPubkey) {
+            if StoreOwnership.shouldWipe(recordedOwner: community.ownerPubkeyHex, incoming: intendedPubkey) {
                 try await store.wipe()
                 // Beside the wipe, so "a different key never sees the last one's drafts"
                 // holds in memory wherever the handover happens, not only on sign-out.
                 drafts.reset()
             }
-            StoreOwnership.ownerPubkeyHex = intendedPubkey
+            recordOwner(intendedPubkey, of: community)
         }
 
-        let engine = makeEngine(websocketURL: websocketURL, queryURL: queryURL)
+        let engine = makeEngine(store: store, signer: signer, websocketURL: websocketURL, queryURL: queryURL)
         self.engine = engine
-        mediaUploader = makeMediaUploader(websocketURL: websocketURL)
+        mediaUploader = makeMediaUploader(signer: signer, websocketURL: websocketURL)
         heartbeat = PresenceHeartbeat(publisher: engine)
 
         observeEngineState(of: engine)
         observeDirectoryStatus(of: engine)
         selfPubkeyHex = intendedPubkey
-        // Opening the database succeeded in `init`; this final identity-scoped read keeps
-        // a later store failure fatal rather than presenting a workspace that cannot
-        // answer for itself.
+        // Opening the database succeeded above; this final identity-scoped read keeps a
+        // later store failure fatal rather than presenting a workspace that cannot answer
+        // for itself.
         _ = try store.channelList(selfPubkey: intendedPubkey)
 
         guard mountsBeforeConnect else {
@@ -327,7 +303,7 @@ final class AppEnvironment {
             return
         }
 
-        // A returning user's launch is not gated on the network. The workspace mounts now —
+        // A launch, or a switch, is not gated on the network. The workspace mounts now —
         // into the sidebar's connecting state, which draws no conversation the relay has not
         // confirmed — and the engine comes up underneath it. There is no longer a window in
         // which a cached list is the best thing on hand, because it is never drawn.
@@ -342,14 +318,61 @@ final class AppEnvironment {
                 // because presence is published through it.
                 self?.heartbeat?.startForeground()
             } catch {
-                // Both guards matter: a sign-out while this was in flight has already moved
-                // to `.needsIdentity` and dropped the engine, and this throw is likely
-                // *because* of it — the key it needed is gone. A terminal failure written
-                // over the onboarding gate strands the user on a screen with nothing on it.
+                // All three guards matter: a sign-out or a switch while this was in flight
+                // has already dropped this engine, and this throw is likely *because* of it
+                // — the key it needed is gone, or the community is. A terminal failure
+                // written over the onboarding gate, or over another community's workspace,
+                // strands the reader on a screen with nothing on it.
                 guard let self, self.engine === engine, self.phase == .running else { return }
                 self.phase = .failed(String(describing: error))
             }
         }
+    }
+
+    /// Stops and drops the active community's whole graph, leaving the app with no session.
+    ///
+    /// Shared by sign-out and by a community switch, because they need exactly the same
+    /// thing: nothing built on the outgoing identity, relay or database may still be
+    /// running when the next one starts. Named in the type comment as the one list a new
+    /// piece of community-scoped state has to be added to.
+    func teardownSession() async {
+        engineStateTask?.cancel()
+        engineStateTask = nil
+        directoryStatusTask?.cancel()
+        directoryStatusTask = nil
+        // Let a start in flight finish rather than interleaving with it. `SyncEngine.start`
+        // suspends on work that cannot be cancelled, so a `stop()` landing mid-start returns
+        // first and then start *resumes*, re-arming the observers, the presence sweep and
+        // the socket the stop just closed — an authenticated connection for a key that has
+        // been deleted, or for the community the reader has just left. ``isStartingEngine``
+        // keeps the affordances off screen while this is pending, so there is normally
+        // nothing to wait for; this is the guarantee behind that.
+        if let engineStartTask {
+            await engineStartTask.value
+        }
+        engineStartTask = nil
+        // Before the store goes: unsent text is written through as it is typed, but a
+        // keystroke landing in the same moment as a switch would otherwise be dropped with
+        // the database it was on its way into.
+        await drafts?.flush()
+        if let engine {
+            await engine.stop()
+        }
+        heartbeat = nil
+        engine = nil
+        // Beside the engine: it signs with a key this session no longer owns.
+        mediaUploader = nil
+        // Held in memory otherwise — see ``ComposerDrafts/reset()``.
+        drafts?.reset()
+        drafts = nil
+        store = nil
+        signer = nil
+        selfPubkeyHex = nil
+        // With the graph, not with the choice: nothing is mounted, so nothing is anyone's.
+        sessionCommunityID = nil
+        engineState = .stopped
+        hasConnectedBefore = false
+        channelDirectoryStatus = .checking
     }
 
     private func observeEngineState(of engine: SyncEngine) {
@@ -373,25 +396,7 @@ final class AppEnvironment {
         }
     }
 
-    private enum CompositionError: Error {
+    enum CompositionError: Error {
         case invalidRelayURL
-    }
-}
-
-/// A reason the identity gate could not proceed, phrased for display.
-enum IdentityGateError: Equatable {
-    case invalidRelayURL
-    case invalidSecretKey
-    case couldNotStart(String)
-
-    var message: String {
-        switch self {
-        case .invalidRelayURL:
-            "Enter a valid relay URL, e.g. ws://100.111.202.55:3004"
-        case .invalidSecretKey:
-            "That doesn't look like a valid nsec key."
-        case let .couldNotStart(detail):
-            "Couldn't connect: \(detail)"
-        }
     }
 }

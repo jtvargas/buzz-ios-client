@@ -4,7 +4,7 @@ import SwiftUI
 struct HiveApp: App {
     /// The composition root, created exactly once and owned by the app. `@State`
     /// (never `@StateObject`) is the iOS 17+ home for an `@Observable`.
-    @State private var environment = AppEnvironmentBox()
+    @State private var environment = AppEnvironment()
 
     @Environment(\.scenePhase) private var scenePhase
 
@@ -40,7 +40,7 @@ struct HiveApp: App {
                 .hiveWindowTint()
         }
         .onChange(of: scenePhase) { _, phase in
-            environment.value?.handleScenePhase(phase)
+            environment.handleScenePhase(phase)
         }
     }
 
@@ -61,48 +61,17 @@ struct HiveApp: App {
         #endif
     }
 
-    /// The normal launch: the composition root, or the one failure a user cannot resolve.
-    @ViewBuilder
+    /// The normal launch: the composition root.
+    ///
+    /// Building it no longer opens anything that can fail. It used to open the one database
+    /// this app had, which is why it was wrapped in a box that could hold a failure
+    /// instead; with a database per community (§ ``Community``) the question "which one"
+    /// belongs to the active community, so the open moved into the session start and its
+    /// failure is drawn by ``RootView`` as ``AppEnvironment/Phase/failed(_:)`` — the same
+    /// screen, one step later, and reachable for a switch as well as a launch.
     private var launch: some View {
-        if let environment = environment.value {
-            RootView()
-                .environment(environment)
-                .task { await environment.bootstrap() }
-        } else {
-            LaunchFailureView(message: environment.failure ?? "The app could not start.")
-        }
-    }
-}
-
-/// Wraps the throwing construction of ``AppEnvironment`` so the `@State` initialiser
-/// stays non-failing. Opening the store can throw (a corrupt or unwritable app
-/// container); that is surfaced in-app rather than crashing at launch.
-@MainActor
-private struct AppEnvironmentBox {
-    let value: AppEnvironment?
-    let failure: String?
-
-    init() {
-        do {
-            value = try AppEnvironment()
-            failure = nil
-        } catch {
-            value = nil
-            failure = String(describing: error)
-        }
-    }
-}
-
-/// The last-resort launch screen: shown only when the store itself could not be
-/// opened, which no user action inside the app can fix.
-private struct LaunchFailureView: View {
-    let message: String
-
-    var body: some View {
-        ContentUnavailableView {
-            Label("Hive couldn't start", systemImage: "exclamationmark.triangle")
-        } description: {
-            Text(message)
-        }
+        RootView()
+            .environment(environment)
+            .task { await environment.bootstrap() }
     }
 }

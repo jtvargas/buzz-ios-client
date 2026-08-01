@@ -6,7 +6,17 @@ extension AppEnvironment {
     /// The engine and its collaborators. One HTTP transport is shared by the two signed
     /// query clients — the history windows and the channel directory — because they speak to
     /// the same endpoint with the same credentials.
-    func makeEngine(websocketURL: URL, queryURL: URL) -> SyncEngine {
+    ///
+    /// The store and signer are passed in rather than read off `self`, because this is
+    /// called while the active community's graph is being *built*: taking them as arguments
+    /// is what makes it impossible to compose an engine from one community's database and
+    /// another's identity.
+    func makeEngine(
+        store: BuzzEventStore,
+        signer: KeychainSigner,
+        websocketURL: URL,
+        queryURL: URL
+    ) -> SyncEngine {
         let connection = RelayConnection(url: websocketURL, signer: signer)
         let subscriptions = SubscriptionManager(connection: connection, signer: signer)
         let httpTransport = URLSessionHTTPTransport()
@@ -76,7 +86,7 @@ extension AppEnvironment {
     /// ``ComposerAttachmentsModel/uploadDeadline`` sits just outside this, so a well-behaved
     /// failure comes back as a network error naming itself rather than as the composer giving
     /// up on it.
-    func makeMediaUploader(websocketURL: URL) -> (any MediaUploading)? {
+    func makeMediaUploader(signer: KeychainSigner, websocketURL: URL) -> (any MediaUploading)? {
         guard let baseURL = RelayEndpoint.httpBaseURL(for: websocketURL) else { return nil }
         let configuration = URLSessionConfiguration.default
         configuration.timeoutIntervalForRequest = 60
@@ -90,16 +100,39 @@ extension AppEnvironment {
 
     // MARK: - Store location
 
-    /// Where the database lives: `Application Support/Hive/store.sqlite`, created on
-    /// first launch. Here rather than in the class body because it is composition —
-    /// it is what ``AppEnvironment/init()`` opens before there is an identity to open
-    /// it for — and because it touches nothing private, so it costs no widening.
-    static func makeStore() throws -> BuzzEventStore {
+    /// The directory every community's database sits in: `Application Support/Hive`,
+    /// created on first use.
+    static func storeDirectory() throws -> URL {
         let directory = try FileManager.default
             .url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
             .appendingPathComponent("Hive", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let path = directory.appendingPathComponent("store.sqlite").path
+        return directory
+    }
+
+    /// Opens one community's database by the filename its record carries
+    /// (§ ``Community/storeFilename``) — `store.sqlite` for the install that predates the
+    /// community list, `store-<uuid>.sqlite` for every one added since.
+    ///
+    /// Here rather than in the class body because it is composition, and because it
+    /// touches nothing private, so it costs no widening.
+    static func makeStore(filename: String) throws -> BuzzEventStore {
+        let path = try storeDirectory().appendingPathComponent(filename).path
         return try BuzzEventStore(path: path)
+    }
+
+    /// Deletes a community's database and the two files SQLite keeps beside it.
+    ///
+    /// The WAL and the shared-memory file are not incidental: a WAL holds committed pages
+    /// that have not been checkpointed into the main file yet, so deleting `store.sqlite`
+    /// alone can leave a `-wal` on disk that a later database of the same name would be
+    /// asked to recover from. Best effort — a file that is already gone is the outcome this
+    /// wants, and there is nothing a reader could do about a refusal.
+    static func deleteStore(filename: String) {
+        guard let directory = try? storeDirectory() else { return }
+        for suffix in ["", "-wal", "-shm"] {
+            let url = directory.appendingPathComponent(filename + suffix)
+            try? FileManager.default.removeItem(at: url)
+        }
     }
 }

@@ -10,7 +10,6 @@ struct AccountView: View {
 
     @State private var model: ProfileModel?
     @State private var showSignOutConfirm = false
-    @State private var signOutFailed = false
     @State private var copiedNpub = false
 
     private let store: BuzzEventStore
@@ -105,6 +104,23 @@ struct AccountView: View {
 
     // MARK: - Sign out
 
+    /// Named for what it actually does. Signing out removes the key for *every* community
+    /// on this phone — each one signs with its own (§ ``Community/keychainAccount``) — and a
+    /// dialog saying "Hive" while a reader is standing in one of three communities reads as
+    /// an offer to leave only that one.
+    private var signOutTitle: String {
+        environment.communities.communities.count > 1
+            ? "Sign out of all \(environment.communities.communities.count) communities?"
+            : "Sign out of Hive?"
+    }
+
+    private var signOutMessage: String {
+        let base = "You'll need your key or a fresh pairing to sign back in. Your messages stay on this "
+            + "device unless a different identity signs in."
+        guard environment.communities.communities.count > 1 else { return base }
+        return "This signs out of every community on this phone. " + base
+    }
+
     private var signOutSection: some View {
         Section {
             Button("Sign Out", role: .destructive) {
@@ -118,33 +134,20 @@ struct AccountView: View {
             // ``AppEnvironment/signOut()``. There is also nothing to leave yet.
             .disabled(environment.isStartingEngine)
             .confirmationDialog(
-                "Sign out of Hive?",
+                signOutTitle,
                 isPresented: $showSignOutConfirm,
                 titleVisibility: .visible
             ) {
                 Button("Sign Out", role: .destructive) {
-                    Task {
-                        // Only leave once the key is confirmed removed; a failed
-                        // delete keeps us here and surfaces the error.
-                        if await environment.signOut() == .signedOut {
-                            dismiss()
-                        } else {
-                            signOutFailed = true
-                        }
-                    }
+                    // A refusal is reported by the app rather than here: signing out
+                    // replaces the workspace this sheet is attached to, so by the time
+                    // there is anything to say, this view is gone. See
+                    // ``AppEnvironment/signOut()``.
+                    Task { await environment.signOut() }
                 }
                 Button("Cancel", role: .cancel) {}
             } message: {
-                Text(
-                    "You'll need your key or a fresh pairing to sign back in. Your messages stay on this "
-                        + "device unless a different identity signs in."
-                )
-            }
-
-            if signOutFailed {
-                Text("Couldn't remove your key from this device. You're still signed in — please try again.")
-                    .font(.hive(.footnote))
-                    .foregroundStyle(.red)
+                Text(signOutMessage)
             }
         }
     }

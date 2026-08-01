@@ -3,12 +3,19 @@ import NostrCore
 
 /// The narrow durable-storage capability the importer needs, behind a seam so its
 /// success path can be tested without the device Keychain (which is unavailable on
-/// headless CI). ``KeychainSigner`` is the production conformer.
+/// headless CI). ``PairedCommunityKeyStore`` is the production conformer.
+///
+/// The relay travels with the key because the destination is not known before the payload
+/// is parsed: a credential names its own relay, and the community it belongs to may be one
+/// this device does not have yet. This used to be `store(_:)` against the app's single
+/// signer, which is exactly the assumption multi-community had to remove — a pairing for
+/// another relay would otherwise overwrite the identity of the community on screen.
 protocol PairedKeyStoring: Sendable {
-    func store(_ key: PrivateKey) throws
+    /// Commits `key` as the identity for the community at `relayURLString`, creating that
+    /// community if the device does not have it. `false` if it could not be committed,
+    /// which is the one thing that must stop a pairing acknowledging.
+    func storePairedKey(_ key: PrivateKey, forRelay relayURLString: String) async -> Bool
 }
-
-extension KeychainSigner: PairedKeyStoring {}
 
 /// Parses and durably imports the Buzz credential a desktop pairing session
 /// delivers as a NIP-AB `custom` payload — `{relayUrl, pubkey, nsec}` JSON.
@@ -42,14 +49,9 @@ struct PairingCredentialImporter: PairingPayloadHandler {
         }
 
         // Durable, atomic Keychain commit — the point at which the transfer is
-        // considered complete (NIP-AB Step 5).
-        do {
-            try keyStore.store(key)
-        } catch {
-            return false
-        }
-        RelayEndpoint.storedURLString = websocketURLString
-        return true
+        // considered complete (NIP-AB Step 5). The relay goes with it: which community
+        // this key belongs to is the store's decision, not this type's.
+        return await keyStore.storePairedKey(key, forRelay: websocketURLString)
     }
 }
 

@@ -6,11 +6,34 @@ import SwiftUI
 /// the QR instead.
 struct OnboardingView: View {
     @Environment(AppEnvironment.self) private var environment
+    @Environment(\.dismiss) private var dismiss
 
-    @State private var relayURLString = RelayEndpoint.storedURLString
+    /// Whether this is a reader joining *another* community rather than arriving on Hive.
+    ///
+    /// The same three paths either way, which is the point — a community is a relay and an
+    /// identity, and there is no third way to come by one. Flutter reuses its pairing page
+    /// the same way (`PairingPage(addingCommunity: true)`). What changes is the framing: the
+    /// welcome becomes a title that says what will happen, and there is a way out.
+    let isAddingCommunity: Bool
+
+    @State private var relayURLString: String
     @State private var error: IdentityGateError?
     @State private var isBusy = false
     @FocusState private var relayFocused: Bool
+
+    /// - Parameter isAddingCommunity: see the property. The relay field starts empty in that
+    ///   mode: the stored URL is the community already open, and prefilling it would offer
+    ///   to "add" the one the reader is standing in.
+    init(isAddingCommunity: Bool = false) {
+        self.isAddingCommunity = isAddingCommunity
+        _relayURLString = State(initialValue: isAddingCommunity ? "" : RelayEndpoint.storedURLString)
+    }
+
+    /// Whether this gate is standing in front of a phone that has other communities on it.
+    /// One community and no way back is not a dead end — it is a fresh install.
+    private var hasSomewhereElseToBe: Bool {
+        environment.communities.communities.count > 1
+    }
 
     private var relayIsValid: Bool {
         RelayEndpoint.websocketURL(from: relayURLString) != nil
@@ -34,7 +57,24 @@ struct OnboardingView: View {
                 .padding()
             }
             .scrollBounceBehavior(.basedOnSize)
-            .navigationTitle("Welcome to Hive")
+            .navigationTitle(isAddingCommunity ? "Add community" : "Welcome to Hive")
+            .navigationBarTitleDisplayMode(isAddingCommunity ? .inline : .large)
+            .toolbar {
+                if isAddingCommunity {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button("Cancel") { dismiss() }
+                    }
+                } else if hasSomewhereElseToBe {
+                    // The way out of a dead end. Switching to a community this phone has
+                    // been signed out of lands here — the gate is how you sign back into it
+                    // — and without this the only other community on the device would be
+                    // unreachable, because the switcher lives on a home screen that is not
+                    // being drawn.
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button("Communities") { environment.communitySheet = .switcher }
+                    }
+                }
+            }
             .navigationDestination(for: OnboardingRoute.self, destination: destination)
             .overlay {
                 if isBusy { ProgressView().controlSize(.large) }
@@ -52,7 +92,7 @@ struct OnboardingView: View {
                 .font(.hiveSymbol(fixedSize: 56))
                 .foregroundStyle(.tint)
                 .accessibilityHidden(true)
-            Text("Connect your identity to start messaging on the Buzz relay.")
+            Text(isAddingCommunity ? Self.addingBlurb : Self.welcomeBlurb)
                 .font(.hive(.subheadline))
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -130,6 +170,15 @@ struct OnboardingView: View {
             error = result
         }
     }
+}
+
+extension OnboardingView {
+    static let welcomeBlurb = "Connect your identity to start messaging on the Buzz relay."
+    /// Says the one thing a reader adding their second community needs to know, which is
+    /// that it does not cost them the first.
+    static let addingBlurb =
+        "A community is a relay. Point Hive at another one to join it — the communities "
+            + "you're already in stay where they are."
 }
 
 /// The pushable onboarding sub-flows.

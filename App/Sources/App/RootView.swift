@@ -11,16 +11,61 @@ struct RootView: View {
     @State private var tab: HomeTab = .home
 
     var body: some View {
+        @Bindable var environment = environment
+        phased
+            // Both community sheets are presented here, above the remount boundary, so a
+            // switch begun inside one does not tear the sheet off while it is still working
+            // — see ``AppEnvironment/communitySheet``.
+            .sheet(item: $environment.communitySheet) { sheet in
+                switch sheet {
+                case .switcher: CommunitySwitcherView()
+                case .add: OnboardingView(isAddingCommunity: true)
+                }
+            }
+            .alert(
+                environment.notice?.title ?? "",
+                isPresented: Binding(
+                    get: { environment.notice != nil },
+                    set: { if !$0 { environment.notice = nil } }
+                ),
+                presenting: environment.notice
+            ) { _ in
+                Button("OK", role: .cancel) { environment.notice = nil }
+            } message: { notice in
+                Text(notice.message)
+            }
+    }
+
+    @ViewBuilder
+    private var phased: some View {
         switch environment.phase {
         case .needsIdentity:
             OnboardingView()
         case .bootstrapping:
-            ChannelBootstrapView()
+            ChannelBootstrapView(community: environment.communities.active?.name)
         case .running:
-            if let engine = environment.engine {
-                tabs(engine: engine)
+            if let engine = environment.engine, let store = environment.store,
+               environment.workspaceMatchesActiveCommunity {
+                tabs(engine: engine, store: store)
+                    // The remount boundary. Every model below this — the channel list, the
+                    // pushed conversations, the presence and directory observers, the
+                    // navigation path — is built from one community's store and engine, and
+                    // an `.id` change is what discards the lot rather than re-pointing it.
+                    //
+                    // Desktop reaches the same place with `<AppReady key={communityKey} />`
+                    // and then has to reset fourteen module-level caches by hand, because a
+                    // remount clears component state and not module state (`buzz/AGENTS.md`
+                    // § Community Switching). Hive's equivalent list is
+                    // ``AppEnvironment/teardownSession()``, and it is short because the
+                    // per-community state here is the object graph rather than a set of
+                    // singletons.
+                    .id(environment.communities.activeID)
             } else {
-                ProgressView()
+                // `.running` with no graph, or with one belonging to the community being
+                // left. Both are the same thing to look at — a community coming up — so this
+                // is the screen a switch already passes through, under the incoming
+                // community's name rather than the outgoing one's rows.
+                ChannelBootstrapView(community: environment.communities.active?.name)
             }
         case let .failed(message):
             ContentUnavailableView {
@@ -46,11 +91,11 @@ struct RootView: View {
     /// ``ChannelListView/hidesTabBar`` — and not by the pushed screens themselves. Doing it
     /// per pushed view is what produced the jump the owner reported on the way back; the
     /// traces are in that property's documentation.
-    private func tabs(engine: SyncEngine) -> some View {
+    private func tabs(engine: SyncEngine, store: BuzzEventStore) -> some View {
         TabView(selection: $tab) {
             Tab(value: HomeTab.home) {
                 ChannelListView(
-                    store: environment.store,
+                    store: store,
                     engine: engine,
                     drafts: environment.drafts,
                     selfPubkey: environment.selfPubkeyHex
@@ -82,6 +127,13 @@ struct ChannelBootstrapView: View {
     /// exists — so the word is fixed rather than read off an engine state.
     static let message = "Connecting…"
 
+    /// The community being opened, named over the empty sidebar.
+    ///
+    /// It is passed in rather than derived, because this screen is also the whole of what a
+    /// community *switch* looks like: the name has to be the incoming community's from the
+    /// first frame, or the transition reads as the old workspace losing its rows.
+    var community: String?
+
     var body: some View {
         NavigationStack {
             ChannelDirectoryPlaceholderList(label: Self.message)
@@ -92,7 +144,7 @@ struct ChannelBootstrapView: View {
                 // the engine holding the identity exists.
                 .conversationTitle(
                     mark: ChannelListView.communityMark,
-                    title: CommunityIdentity.name()
+                    title: community ?? CommunityIdentity.name()
                 )
         }
     }
