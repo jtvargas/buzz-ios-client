@@ -272,9 +272,29 @@ private extension MessageMediaViewer {
                     MessageMediaViewerHeader(attribution: attribution)
                 }
                 Spacer(minLength: 0)
+                // Share sits before Close, so the destructive-of-context one — the button
+                // that takes the picture off the screen — stays where a reader's thumb has
+                // already learned to find it, hard against the trailing edge.
+                if let current = currentMedia {
+                    MessageMediaShareButton(media: current.media, preview: current.preview)
+                }
                 closeButton
             }
         }
+    }
+
+    /// The picture the chrome is currently about.
+    ///
+    /// The pager's `page` binding is `nil` until it has resolved its first position, which is
+    /// the moment the viewer opens — so it falls back to the index the gallery was opened at
+    /// rather than leaving the row a control short for a frame.
+    var currentMedia: (media: MessageMedia, preview: UIImage?)? {
+        let index = page ?? subject.startIndex
+        guard subject.media.indices.contains(index) else { return nil }
+        // The preview belongs to the page the gallery was *opened* at and to no other — the
+        // same rule the pages themselves follow. Handing it to a different picture would put
+        // one attachment's thumbnail on another's share sheet.
+        return (subject.media[index], index == subject.startIndex ? subject.preview : nil)
     }
 
     /// The system's own close button: a glass circle carrying the standard `xmark`.
