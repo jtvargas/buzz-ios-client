@@ -16,10 +16,11 @@ struct SystemNoticeDecodingTests {
     private let jt = String(repeating: "a", count: 64)
     private let sentry = String(repeating: "b", count: 64)
 
-    private func body(_ type: String, actor: String?, target: String?) -> String {
+    private func body(_ type: String, actor: String?, target: String?, extra: String? = nil) -> String {
         var fields = ["\"type\":\"\(type)\""]
         if let actor { fields.append("\"actor\":\"\(actor)\"") }
         if let target { fields.append("\"target\":\"\(target)\"") }
+        if let extra { fields.append(extra) }
         return "{\(fields.joined(separator: ","))}"
     }
 
@@ -50,10 +51,51 @@ struct SystemNoticeDecodingTests {
         #expect(SystemNotice.parse(padded) == .memberLeft(actor: sentry))
     }
 
+    @Test("what happened to the channel itself, not to its roster")
+    func channelEvents() {
+        #expect(
+            SystemNotice.parse(body("topic_changed", actor: jt, target: nil, extra: "\"topic\":\"Ship it\""))
+                == .topicChanged(actor: jt, topic: "Ship it")
+        )
+        #expect(
+            SystemNotice.parse(body("purpose_changed", actor: jt, target: nil, extra: "\"purpose\":\"Releases\""))
+                == .purposeChanged(actor: jt, purpose: "Releases")
+        )
+        #expect(SystemNotice.parse(body("channel_created", actor: jt, target: nil)) == .channelCreated(actor: jt))
+        #expect(SystemNotice.parse(body("channel_archived", actor: jt, target: nil)) == .channelArchived(actor: jt))
+        #expect(
+            SystemNotice.parse(body("channel_unarchived", actor: jt, target: nil)) == .channelUnarchived(actor: jt)
+        )
+    }
+
+    @Test("a change that clears the value has no sentence, so it is absent rather than empty")
+    func clearedValueIsNil() {
+        #expect(SystemNotice.parse(body("topic_changed", actor: jt, target: nil, extra: "\"topic\":\"\"")) == nil)
+        #expect(SystemNotice.parse(body("topic_changed", actor: jt, target: nil)) == nil)
+        #expect(SystemNotice.parse(body("purpose_changed", actor: jt, target: nil, extra: "\"purpose\":\"\"")) == nil)
+    }
+
     @Test("a type this build does not know decodes to nothing rather than to a blank row")
     func unknownTypeIsNil() {
-        // One the relay really emits and this deliberately does not render yet.
-        #expect(SystemNotice.parse(body("topic_changed", actor: jt, target: nil)) == nil)
+        // Two the relay really emits and neither reference client renders, plus the
+        // moderation tombstone, which is a separate decision: a deleted message already
+        // leaves the timeline here, so whether it should also leave a mark is its own
+        // question.
+        #expect(SystemNotice.parse(body("ttl_changed", actor: jt, target: nil)) == nil)
+        #expect(SystemNotice.parse(body("visibility_changed", actor: jt, target: nil)) == nil)
+        #expect(SystemNotice.parse(body("message_deleted", actor: jt, target: nil)) == nil)
+    }
+
+    @Test("the subject is who the row is about: the arrival, or otherwise the actor")
+    func subject() {
+        // The asymmetry the reference clients have, pinned: an add is a row about the
+        // person added, an eviction a row about the person who did it.
+        #expect(SystemNotice.memberJoined(actor: jt, target: sentry).subject == sentry)
+        #expect(SystemNotice.memberJoined(actor: sentry, target: sentry).subject == sentry)
+        #expect(SystemNotice.memberRemoved(actor: jt, target: sentry).subject == jt)
+        #expect(SystemNotice.memberLeft(actor: sentry).subject == sentry)
+        #expect(SystemNotice.topicChanged(actor: jt, topic: "x").subject == jt)
+        #expect(SystemNotice.channelCreated(actor: jt).subject == jt)
     }
 
     @Test("a notice that cannot name who it is about is absent, not blank")
@@ -146,13 +188,58 @@ struct SystemNoticeSentenceTests {
 
     @Test("the names are marked so the view can weight them, and nothing else is")
     func namesAreMarked() {
-        let runs = SystemNoticeSentence(
+        let action = SystemNoticeSentence(
             .memberRemoved(actor: jt, target: sentry),
             name: name,
             selfPubkey: nil
-        ).runs
-        #expect(runs.filter(\.isName).map(\.text) == ["JT", "Sentry"])
-        #expect(runs.filter { !$0.isName }.map(\.text) == [" removed ", " from the channel"])
+        ).action
+        #expect(action.filter(\.isName).map(\.text) == ["Sentry"])
+        #expect(action.filter { !$0.isName }.map(\.text) == ["removed ", " from the channel"])
+    }
+
+    @Test("the subject goes in the header and the predicate never repeats it")
+    func titleAndActionAreSeparate() {
+        // The row draws the title beside a face and the action under it, so an action
+        // that still carried the name would print it twice.
+        let added = SystemNoticeSentence(.memberJoined(actor: jt, target: sentry), name: name, selfPubkey: nil)
+        #expect(added.title == "Sentry")
+        #expect(added.action.map(\.text).joined() == "was added by JT")
+        #expect(added.plain == "Sentry was added by JT")
+
+        // And on the case whose subject is the actor rather than the target.
+        let removed = SystemNoticeSentence(.memberRemoved(actor: jt, target: sentry), name: name, selfPubkey: nil)
+        #expect(removed.title == "JT")
+        #expect(removed.action.map(\.text).joined() == "removed Sentry from the channel")
+    }
+
+    @Test("the reader's own name reaches the header too, so a row about them says so")
+    func titleTakesTheSecondPerson() {
+        let sentence = SystemNoticeSentence(
+            .memberJoined(actor: jt, target: sentry),
+            name: name,
+            selfPubkey: sentry
+        )
+        #expect(sentence.title == "You")
+    }
+
+    @Test("what happened to the channel itself reads as a sentence about who did it")
+    func channelSentences() {
+        let quoted = "JT changed the topic to \u{201C}Ship it\u{201D}"
+        #expect(sentence(.topicChanged(actor: jt, topic: "Ship it")) == quoted)
+        #expect(
+            sentence(.purposeChanged(actor: jt, purpose: "Releases"))
+                == "JT changed the purpose to \u{201C}Releases\u{201D}"
+        )
+        #expect(sentence(.channelCreated(actor: jt)) == "JT created this channel")
+        #expect(sentence(.channelArchived(actor: jt)) == "JT archived this channel")
+        #expect(sentence(.channelUnarchived(actor: jt)) == "JT unarchived this channel")
+        #expect(sentence(.channelCreated(actor: jt), reader: jt) == "You created this channel")
+    }
+
+    @Test("a topic is quoted, not weighted: it is the thing said, not somebody who said it")
+    func topicIsNotAName() {
+        let changed = SystemNoticeSentence(.topicChanged(actor: jt, topic: "Ship it"), name: name, selfPubkey: nil)
+        #expect(changed.action.contains(where: \.isName) == false)
     }
 }
 

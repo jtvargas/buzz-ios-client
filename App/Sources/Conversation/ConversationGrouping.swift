@@ -110,6 +110,11 @@ struct NoticeMarker: Identifiable, Hashable {
     let id: String
     let date: Date
     let notice: SystemNotice
+    /// The other people who arrived in the same breath, oldest first, when a run of
+    /// arrivals collapsed into this row — see
+    /// ``ConversationGrouping/collapsingArrivals(_:)``. Never anybody `notice` already
+    /// names, and empty for every notice that is not an arrival.
+    var alsoJoined: [String] = []
 }
 
 /// Turns a conversation's messages into the items a list renders: one day separator
@@ -168,7 +173,89 @@ enum ConversationGrouping {
                 previous = row
             }
         }
-        return items
+        return collapsingArrivals(items)
+    }
+
+    /// Folds a run of adjacent arrivals into one row: *Echo was added by JT, along with
+    /// Atlas, Fizz and 2 others*.
+    ///
+    /// Adding four people emits four separate notices, and four identical rows one under
+    /// the other is the shape both reference clients specifically avoid
+    /// (`SystemMessageRow.tsx`'s `buildGroupedMembershipPayload`, `system_rows.dart`'s
+    /// `_membershipDisplayEvent`). The rule is theirs: same kind of arrival throughout,
+    /// and for an *add*, the same person doing the adding.
+    ///
+    /// A run of **self-joins** groups on nobody — each person is their own actor, so the
+    /// actors differ and only the shape has to match. A run of **adds** must share one
+    /// actor, because "was added by" names them and two names cannot go in one slot.
+    ///
+    /// # And within five minutes
+    ///
+    /// The whole group spans at most ``groupWindow``, measured from its head rather than
+    /// between neighbours, so a long afternoon of arrivals cannot chain into one endless
+    /// row dated at breakfast. Both reference clients bound it the same way and at the
+    /// same five minutes (`MEMBERSHIP_GROUP_WINDOW_SECONDS`,
+    /// `_membershipGroupWindowSeconds`) — which is also the window a run of messages by
+    /// one author already uses here, so the conversation has one idea of "in the same
+    /// breath" rather than two.
+    ///
+    /// Run over the built items rather than over the rows, so a day separator between
+    /// two arrivals breaks the run for free: they are no longer adjacent.
+    ///
+    /// # What this means for the scroll engine, and where it departs from Desktop
+    ///
+    /// The row keeps the **first** arrival's id, so a fifth person joining a group that
+    /// is already on screen leaves the list of ids unchanged — which is exactly
+    /// ``[ConversationItem]/isStructuralChange(to:)``'s question, and puts it on the
+    /// "a row grew where it stands" path rather than the "content arrived above you"
+    /// one. That is the right answer: nothing moved above the reader.
+    ///
+    /// Desktop anchors its groups from the **newest** entry and keys them by it, so that
+    /// prepending older history cannot repartition rows already loaded. That is the
+    /// better trade for a virtual list and the worse one here. Ours is recomputed whole
+    /// on every change, so the pagination case is a changed id list either way — a page
+    /// of history really did arrive above the reader — while the *live* case, an arrival
+    /// landing on a group at the bottom, is the common one, and only head-anchoring
+    /// leaves that row's identity alone.
+    private static func collapsingArrivals(_ items: [ConversationItem]) -> [ConversationItem] {
+        var merged: [ConversationItem] = []
+        merged.reserveCapacity(items.count)
+        for item in items {
+            guard case let .notice(marker) = item,
+                  case let .memberJoined(actor, target) = marker.notice,
+                  case let .notice(head) = merged.last,
+                  case let .memberJoined(headActor, headTarget) = head.notice
+            else {
+                merged.append(item)
+                continue
+            }
+            let isSelfJoin = actor.caseInsensitiveCompare(target) == .orderedSame
+            let headIsSelfJoin = headActor.caseInsensitiveCompare(headTarget) == .orderedSame
+            // From the head, so the group's whole span is bounded rather than each gap
+            // in it. A non-negative gap is the normal case — items arrive sorted — and
+            // the guard is for the one that is not: a relay clock running backwards must
+            // not be able to fold an arrival into a row that appears to come after it.
+            let span = marker.date.timeIntervalSince(head.date)
+            // Same sentence, and — for an add — the same person in the "by" slot.
+            guard isSelfJoin == headIsSelfJoin,
+                  isSelfJoin || headActor.caseInsensitiveCompare(actor) == .orderedSame,
+                  span >= 0, span <= groupWindow
+            else {
+                merged.append(item)
+                continue
+            }
+            merged[merged.index(before: merged.endIndex)] = .notice(
+                NoticeMarker(
+                    id: head.id,
+                    // The head's time, not the newest arrival's: the row is dated from
+                    // where it starts, which is where a reader's eye lands on it.
+                    date: head.date,
+                    notice: head.notice,
+                    alsoJoined: head.alsoJoined + [target]
+                )
+            )
+        }
+        return merged
     }
 
     /// Whether `row` stacks under `previous` as part of one block, rather than opening a

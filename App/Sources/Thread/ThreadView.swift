@@ -233,7 +233,7 @@ struct ThreadView: View {
             // A thread's rows are all kind-9 replies, so this is unreachable today.
             // Rendered rather than skipped so that a notice which ever does reach a
             // thread appears instead of silently vanishing.
-            SystemNoticeRowView(notice: marker.notice)
+            SystemNoticeRowView(notice: marker.notice, alsoJoined: marker.alsoJoined, date: marker.date)
         }
     }
 
