@@ -28,7 +28,7 @@ struct MessageActionsSheet: View {
     @Environment(\.dismiss) private var dismiss
     /// Rests at medium, as asked. The picker is the only thing that takes the other one:
     /// several hundred glyphs behind a search field do not fit in half a screen.
-    @State private var detent: PresentationDetent = .height(260)
+    @State private var detent: PresentationDetent = .height(Self.restingHeight)
     @State private var isPickingEmoji = false
     @State private var isShowingWorkInProgress = false
     @State private var isConfirmingDelete = false
@@ -36,6 +36,11 @@ struct MessageActionsSheet: View {
     /// modal presented from inside a modal races the first one's dismissal.
     @State private var isEditing = false
     @State private var draft = ""
+
+    /// Where the sheet rests before anything is pushed onto it. The owner's number
+    /// (2026-08-01). Named rather than written twice: the initial detent and the detent
+    /// *set* must agree, and two literals are two places to change one of them.
+    private static let restingHeight: CGFloat = 320
 
     /// The height of a quick-reaction target, and of the emoji picker's button beside it.
     private static let paletteHeight: CGFloat = 48
@@ -64,7 +69,7 @@ struct MessageActionsSheet: View {
             }
             .navigationDestination(isPresented: $isEditing) { editor }
         }
-        .presentationDetents([.height(260), .large], selection: $detent)
+        .presentationDetents([.height(Self.restingHeight), .large], selection: $detent)
         .presentationDragIndicator(.visible)
         .alert("WIP", isPresented: $isShowingWorkInProgress) {
             Button("OK", role: .cancel) {}
@@ -81,10 +86,10 @@ struct MessageActionsSheet: View {
             Text("This removes it for everyone in the channel.")
         }
         .onChange(of: isPickingEmoji) { _, isPicking in
-            detent = isPicking ? .large : .medium
+            detent = isPicking ? .large : .height(Self.restingHeight)
         }
         .onChange(of: isEditing) { _, editing in
-            detent = editing ? .large : .medium
+            detent = editing ? .large : .height(Self.restingHeight)
         }
     }
 
