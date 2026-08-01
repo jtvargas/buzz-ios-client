@@ -51,8 +51,9 @@ struct ConversationScaffold<Content: View, Bar: View, Accessory: View>: View {
     /// Where that jump lands. Read when ``jumpToken`` changes, so the owner sets both
     /// before bumping.
     var jumpTarget: ConversationJumpTarget = .bottom
-    /// Bumped by the owner whenever the content it renders changes — rows arriving, an
-    /// older page inserted, a row pruned, a reaction chip appearing.
+    /// Bumped by the owner whenever the *set* of rows it renders changes — rows arriving, an
+    /// older page inserted, a row pruned. A row that changed height where it stands is
+    /// ``rowRevision``, a different question for a reader in history.
     ///
     /// This is what tells the reader's place apart from the stack re-measuring it. A
     /// `LazyVStack`'s reported height moves whenever the container does, so "the height
@@ -67,6 +68,13 @@ struct ConversationScaffold<Content: View, Bar: View, Accessory: View>: View {
     /// reading an observable `let` inside the smallest view that needs it — are for the
     /// things that fire on every scrolled frame. This is not one of them.
     var contentRevision: Int = 0
+    /// Bumped by the owner when a row already in the list changed height *where it stands* —
+    /// a chip, a resolved mention, a reply summary. Separate from ``contentRevision`` because
+    /// a reader in history wants the opposite treatment for the two: an insertion above them
+    /// has to be corrected for, a row growing in front of them must not be. Sending both down
+    /// one channel is the reported jump on a reaction — see
+    /// ``ConversationReaderPlace/rowDidChangeInPlace()``.
+    var rowRevision: Int = 0
     /// The id of the newest row the owner is rendering — the same id its `ForEach` gives that
     /// row.
     ///
@@ -201,9 +209,18 @@ struct ConversationScaffold<Content: View, Bar: View, Accessory: View>: View {
             // Hysteresis, not a threshold: between the two bands the current state
             // stands. Release only where the newest row genuinely is, re-freeze only
             // once the reader is clearly reading something else.
+            //
+            // "Clearly reading something else" is what the third condition adds, and an own
+            // send from deep in history is why: that send releases the frozen tail at the tap
+            // and asks for a jump to the newest row, and the jump *starts* several viewports
+            // away — so its first reading says `awayFromBottom` and re-freezes the tail under
+            // it. The author's own message then arrives newer than a boundary armed a frame
+            // ago, is held back like any other arrival, and is never rendered for
+            // ``ChannelTimelineModel/landOnOwnSend(among:)`` to find. A jump this file issued
+            // is not the reader choosing to read history.
             if edges.atBottom {
                 if !isAtBottom { isAtBottom = true }
-            } else if edges.awayFromBottom, isAtBottom {
+            } else if edges.awayFromBottom, isAtBottom, !place.isLandingOnNewest {
                 isAtBottom = false
             }
             if edges.nearTop { onReachedTop() }
@@ -212,6 +229,9 @@ struct ConversationScaffold<Content: View, Bar: View, Accessory: View>: View {
         // update pass and a scroll geometry callback runs after layout, so the window is
         // open by the time the new content has been measured.
         .onChange(of: contentRevision) { place.contentDidChange() }
+        // The same window, opened for the other kind of change; the difference between them
+        // is decided where the window is read, not here.
+        .onChange(of: rowRevision) { place.rowDidChangeInPlace() }
         // A change of *width* is the one content change the owner cannot declare, because it
         // did not make it: every row re-wraps, so every row's height is genuinely new. A
         // rotation, an iPad split, a Slide Over.
@@ -244,7 +264,7 @@ struct ConversationScaffold<Content: View, Bar: View, Accessory: View>: View {
             // Every phase but the one this file causes itself. Naming the reader's phases
             // instead is a list to keep in step with the framework, and getting it wrong is
             // silent: the conversation would pin itself under someone reading history.
-            if phase != .idle, phase != .animating { place.hasMoved = true }
+            if phase != .idle, phase != .animating { place.readerTookHold() }
             if phase == .idle { apply(place.scrollCameToRest(), using: proxy) }
         }
         .scrollPosition($position)

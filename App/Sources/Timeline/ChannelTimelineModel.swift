@@ -33,12 +33,16 @@ final class ChannelTimelineModel {
     /// rather than per render pass, since a list touches its items several times in
     /// one layout.
     private(set) var items: [ConversationItem] = []
-    /// Bumped whenever the rendered content changes: the item set, or anything drawn
-    /// inside a row that can change its height. ``ConversationScaffold`` restores the
-    /// reader's place across the settling that follows one of these, and across nothing
-    /// else — a `LazyVStack` re-measures unchanged content whenever the container moves,
-    /// so its reported height cannot stand in for this (see ``ConversationReaderPlace``).
+    /// Bumped whenever the *item set* changes — rows arriving, an older page inserted, a row
+    /// pruned. ``ConversationScaffold`` restores the reader's place across the settling that
+    /// follows one of these and across nothing else: a `LazyVStack` re-measures unchanged
+    /// content whenever the container moves, so its height cannot stand in for this.
     private(set) var contentRevision = 0
+    /// Bumped when something drawn *inside* a row changes its height without changing the item
+    /// set — a reaction chip, a resolved mention, a reply summary. These used to bump
+    /// ``contentRevision``, which is the reported jump on reacting to an older message: one
+    /// channel could not say which of the two had happened.
+    private(set) var rowRevision = 0
 
     /// Surviving reaction groups for each loaded row, keyed by message id. Re-read
     /// on the same observation as the rows, so a react, a withdrawal, or a peer's
@@ -356,8 +360,10 @@ final class ChannelTimelineModel {
         if rows != split.rendered { rows = split.rendered }
         let grouped = ConversationGrouping.items(for: split.rendered)
         if items != grouped {
+            // Which of the two revisions this is: ``[ConversationItem]/isStructuralChange(to:)``.
+            let isStructural = items.isStructuralChange(to: grouped)
             items = grouped
-            contentRevision += 1
+            if isStructural { contentRevision += 1 } else { rowRevision += 1 }
         }
         jump.hold(count: split.held.count, firstID: split.held.first?.id)
         landOnOwnSend(among: split.rendered)
@@ -374,21 +380,21 @@ final class ChannelTimelineModel {
     func applyReactions(_ groups: [String: [ReactionGroup]]) {
         if reactionGroups != groups {
             reactionGroups = groups
-            contentRevision += 1
+            rowRevision += 1
         }
     }
 
     func applyMentions(_ mentions: [String: MentionRefList]) {
         if mentionRefs != mentions {
             mentionRefs = mentions
-            contentRevision += 1
+            rowRevision += 1
         }
     }
 
     func applyThreadParticipants(_ participants: [String: ThreadParticipants]) {
         if replyParticipants != participants {
             replyParticipants = participants
-            contentRevision += 1
+            rowRevision += 1
         }
     }
 }

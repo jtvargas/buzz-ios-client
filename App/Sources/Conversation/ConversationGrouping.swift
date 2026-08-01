@@ -75,6 +75,22 @@ extension [ConversationItem] {
     var newestMessageID: String? {
         last(where: \.isContent)?.id
     }
+
+    /// Whether replacing this list with `other` moved content *above* the reader.
+    ///
+    /// The two revisions a surface declares to ``ConversationScaffold`` differ over exactly
+    /// this. A different list of ids is rows arriving, pruned or reordered: everything the
+    /// reader is looking at may have moved down, so the distance to the newest message is
+    /// what their place has to survive. The same list with different contents is a row
+    /// changing height *where it stands* — an edit landing, a delivery state, a run of
+    /// messages regrouping — and nothing above it moved, so the offset they are already on
+    /// is their place and correcting it is the reported jump on a reaction.
+    ///
+    /// Here rather than in each model so a channel, a thread and a DM cannot each grow their
+    /// own answer, which is the rule the rest of this file exists to keep.
+    func isStructuralChange(to other: [ConversationItem]) -> Bool {
+        map(\.id) != other.map(\.id)
+    }
 }
 
 /// The day a separator marks: its stable key and a date inside it to format.

@@ -173,10 +173,17 @@ struct TimelineTailTests {
         let sent = try #require(await sender.events.first)
         await waitUntil { model.awaitingOwnSend == sent.id }
 
-        // They go back to reading history before it arrives. The freeze re-arms, and it holds
-        // their own message like any other arrival — so nothing lands on it and nothing moves
-        // them out of what they chose to look at. That is the only guard: `isAtBottom` cannot
-        // be one here, because a jump's own animation flips it (see the case below).
+        // They go back to reading history before it arrives — by taking hold of the list, which
+        // is the only thing that produces this now. The freeze re-arms, and it holds their own
+        // message like any other arrival, so nothing lands on it and nothing moves them out of
+        // what they chose to look at.
+        //
+        // The scaffold used to report this from the flight itself as well, and could not tell
+        // the two apart: a jump to the newest row begins several viewports away, so its first
+        // reading says `awayFromBottom` and re-froze the tail under a trip whose whole purpose
+        // was to reach it. It declines that while a jump is in flight now — see
+        // ``ConversationReaderPlace/isLandingOnNewest`` — so what remains here is the reader's
+        // own doing, which is what this case is about.
         model.isAtBottom = false
         _ = try await store.ingest(batch: [sent], phase: .live)
         await waitUntil { model.jump.unreadCount == 1 }
@@ -207,12 +214,17 @@ struct TimelineTailTests {
         let sent = try #require(await sender.events.first)
         await waitUntil { model.awaitingOwnSend == sent.id }
 
-        // What the scaffold reports while the jump is in flight. A reader parked in history is
-        // still hundreds of points from the bottom on the first frame of an animated scroll, so
-        // geometry writes `false` and then `true` again as it lands — and the message being
-        // waited for is not the author changing their mind. Measured on a simulator: treating
-        // it as one left the second jump unasked and the author's own message under the
-        // composer, which is the whole defect.
+        // What the scaffold used to report while the jump was in flight. A reader parked in
+        // history is still hundreds of points from the bottom on the first frame of an animated
+        // scroll, so geometry wrote `false` and then `true` again as it landed — and the message
+        // being waited for is not the author changing their mind. Measured on a simulator:
+        // treating it as one left the second jump unasked and the author's own message under
+        // the composer.
+        //
+        // The scaffold no longer produces this sequence — it declines to re-freeze while a jump
+        // to the newest row is in flight — and this case stays anyway, because the model must
+        // not depend on that. `isAtBottom` is written from geometry, and geometry is estimated:
+        // the guard for landing on an own send is the freeze, never this flag.
         model.isAtBottom = false
         model.isAtBottom = true
 

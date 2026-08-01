@@ -260,13 +260,18 @@ struct ChannelTimelineModelTests {
         #expect(shape(model.items) == ["day", "monday", "day", "wednesday"])
     }
 
-    @Test("every change to what a row renders is declared to the scaffold")
+    @Test("every change to what a row renders is declared, and the two kinds are told apart")
     func contentRevisionCoversWhatIsRendered() async throws {
         // The scaffold restores the reader's place across the settling that follows one of
         // these bumps, and across nothing else — so a change that forgets to bump is a real
         // insertion that moves the reader, and this is the only place that would catch it.
         // Both halves matter: the item set, and the chips drawn inside a row, which change
         // its height without changing the set at all.
+        //
+        // *Which* of the two it bumps is load-bearing on its own. An insertion above a reader
+        // has to be corrected for and a row growing in front of them must not be, so a chip
+        // sent down `contentRevision` is the reported jump on reacting to an older message.
+        // See ``ConversationReaderPlace/rowDidChangeInPlace()``.
         let temp = TempStore()
         defer { temp.remove() }
         let store = try temp.open()
@@ -288,12 +293,16 @@ struct ChannelTimelineModelTests {
         await waitUntil { model.rows.count == 2 }
         let afterSecondRow = model.contentRevision
         #expect(afterSecondRow > afterFirstRow)
+        let rowsBeforeTheChip = model.rowRevision
 
         _ = try await store.ingest(
             batch: [try author.event(.reaction, "👍", tags: [["e", first.id]], at: 1_002)], phase: .live
         )
         await waitUntil { !model.reactions(for: first.id).isEmpty }
-        #expect(model.contentRevision > afterSecondRow)
+        // Declared — and declared as the other kind. The chip lands on a row that was already
+        // in the list, so nothing above it moved and the reader's offset is still their place.
+        #expect(model.rowRevision > rowsBeforeTheChip)
+        #expect(model.contentRevision == afterSecondRow)
     }
 
     @Test("a message in another channel does not appear")

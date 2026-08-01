@@ -31,12 +31,17 @@ final class ThreadModel {
     /// ``rows`` with day separators interleaved, computed once per rows change. The
     /// separator above the thread's own opener is suppressed — see ``items(for:root:)``.
     private(set) var items: [ConversationItem] = []
-    /// Bumped whenever the rendered content changes: the item set, or anything drawn
-    /// inside a row that can change its height. ``ConversationScaffold`` restores the
-    /// reader's place across the settling that follows one of these, and across nothing
-    /// else — a `LazyVStack` re-measures unchanged content whenever the container moves,
-    /// so its reported height cannot stand in for this (see ``ConversationReaderPlace``).
+    /// Bumped whenever the *item set* changes — replies arriving, a row pruned.
+    /// ``ConversationScaffold`` restores the reader's place across the settling that follows
+    /// one of these, and across nothing else: a `LazyVStack` re-measures unchanged content
+    /// whenever the container moves, so its reported height cannot stand in for this (see
+    /// ``ConversationReaderPlace``).
     private(set) var contentRevision = 0
+    /// Bumped when something drawn *inside* a row changes its height without changing the item
+    /// set — a reaction chip, a resolved mention. Separate from ``contentRevision`` because a
+    /// reader parked in history wants the opposite treatment for the two; see
+    /// ``ChannelTimelineModel/rowRevision``.
+    private(set) var rowRevision = 0
 
     /// Surviving reaction groups per row, re-read on the same observation as `rows`.
     private(set) var reactionGroups: [String: [ReactionGroup]] = [:]
@@ -253,8 +258,10 @@ final class ThreadModel {
         if rows != split.rendered { rows = split.rendered }
         let grouped = Self.items(for: split.rendered, root: root)
         if items != grouped {
+            // The same split ``ChannelTimelineModel/rebuild()`` makes, through the same rule.
+            let isStructural = items.isStructuralChange(to: grouped)
             items = grouped
-            contentRevision += 1
+            if isStructural { contentRevision += 1 } else { rowRevision += 1 }
         }
         jump.hold(count: split.held.count, firstID: split.held.first?.id)
         landOnOwnSend(among: split.rendered)
@@ -296,7 +303,7 @@ extension ThreadModel {
     func applyReactions(_ groups: [String: [ReactionGroup]]) {
         if reactionGroups != groups {
             reactionGroups = groups
-            contentRevision += 1
+            rowRevision += 1
         }
     }
 
@@ -313,7 +320,7 @@ extension ThreadModel {
     func applyMentions(_ mentions: [String: MentionRefList]) {
         if mentionRefs != mentions {
             mentionRefs = mentions
-            contentRevision += 1
+            rowRevision += 1
         }
     }
 

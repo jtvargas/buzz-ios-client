@@ -373,16 +373,6 @@ struct ConversationReaderPlaceTests {
         #expect(place.scrollCameToRest() == .none)
     }
 
-    @Test("a reader who takes hold of the list mid-jump is left where they put it")
-    func aDragDuringAJumpWins() {
-        let place = ConversationReaderPlace()
-        place.jumpToNewestBegan()
-        // What ``ConversationScaffold``'s scroll-phase observer does for any phase the reader
-        // caused. The jump is theirs to overrule from the moment they touch it.
-        place.hasMoved = true
-        #expect(place.scrollCameToRest() == .none)
-    }
-
     @Test("a scroll that no jump started asks for nothing")
     func anOrdinaryScrollRestsWithoutCorrecting() {
         let place = ConversationReaderPlace()
