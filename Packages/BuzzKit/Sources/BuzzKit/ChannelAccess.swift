@@ -275,6 +275,89 @@ public extension BuzzEventStore {
         }
     }
 
+    /// What `identity` may do to one message — see ``MessageAuthority`` for why edit and
+    /// delete are two answers rather than one.
+    ///
+    /// Three reads, each answering exactly one of the facts the rule needs. The channel
+    /// role reuses ``channelLifecyclePermissions(identity:channel:)``'s query verbatim,
+    /// including its agent indirection: a human whose *agent* is the channel admin holds
+    /// the admin's power, which is how the relay reads it too.
+    ///
+    /// Advisory, like every other permission read here. The relay decides.
+    nonisolated func messageAuthority(
+        identity: String,
+        channel: String,
+        message: String,
+        author: String
+    ) throws -> MessageAuthority {
+        // The reader's own message. Case-insensitive because a pubkey reaches this app
+        // from the relay, from a signer and from a tag, and only some of those normalise.
+        let isAuthor = identity.caseInsensitiveCompare(author) == .orderedSame
+        if isAuthor {
+            // Short circuit: an author can always do both, so neither remaining read can
+            // change the answer and a message surface asks this once per opened sheet.
+            return MessageAuthority(canEdit: true, canDelete: true)
+        }
+        return try reader.read { db in
+            // Does this identity own the agent that wrote *this* message? Keyed on the
+            // message rather than on the author, because NIP-OA attestation is per event —
+            // an agent's ownership is asserted by the events it signs, not by a directory
+            // entry that might not exist here yet.
+            let ownsAuthor = try Bool.fetchOne(
+                db,
+                sql: """
+                SELECT EXISTS (
+                    SELECT 1 FROM event_owner
+                     WHERE event_id = ? AND owner_pubkey = ?
+                )
+                """,
+                arguments: [message, identity]
+            ) ?? false
+
+            let roles = try Self.channelRoles(db, identity: identity, channel: channel)
+            return MessageAuthority.resolve(
+                isAuthor: false,
+                ownsAuthor: ownsAuthor,
+                isChannelAdmin: roles.contains("owner") || roles.contains("admin")
+            )
+        }
+    }
+
+    /// Every role `identity` holds in `channel`, directly or through an agent it owns.
+    ///
+    /// Extracted so the message-authority read and the lifecycle read cannot drift: they
+    /// ask the same question of the same two rosters, and a second copy of this SQL would
+    /// be a second place for "admin" to mean something slightly different.
+    private static func channelRoles(
+        _ db: Database,
+        identity: String,
+        channel: String
+    ) throws -> [String] {
+        try String.fetchAll(
+            db,
+            sql: """
+            SELECT LOWER(COALESCE(subject.role, ''))
+              FROM (
+                    SELECT pubkey, role, channel_id FROM channel_admin
+                    UNION ALL
+                    SELECT pubkey, role, channel_id FROM channel_member
+              ) subject
+             WHERE subject.channel_id = ?
+               AND (
+                   subject.pubkey = ?
+                   OR EXISTS (
+                       SELECT 1
+                         FROM event e
+                         JOIN event_owner eo ON eo.event_id = e.id
+                        WHERE e.pubkey = subject.pubkey
+                          AND eo.owner_pubkey = ?
+                   )
+               )
+            """,
+            arguments: [channel, identity, identity]
+        )
+    }
+
     /// Local affordances are advisory. The relay still makes the final permission
     /// decision when it accepts or rejects the signed lifecycle command.
     nonisolated func channelLifecyclePermissions(
@@ -282,29 +365,7 @@ public extension BuzzEventStore {
         channel: String
     ) throws -> ChannelLifecyclePermissions {
         try reader.read { db in
-            let roles = try String.fetchAll(
-                db,
-                sql: """
-                SELECT LOWER(COALESCE(subject.role, ''))
-                  FROM (
-                        SELECT pubkey, role, channel_id FROM channel_admin
-                        UNION ALL
-                        SELECT pubkey, role, channel_id FROM channel_member
-                  ) subject
-                 WHERE subject.channel_id = ?
-                   AND (
-                       subject.pubkey = ?
-                       OR EXISTS (
-                           SELECT 1
-                             FROM event e
-                             JOIN event_owner eo ON eo.event_id = e.id
-                            WHERE e.pubkey = subject.pubkey
-                              AND eo.owner_pubkey = ?
-                       )
-                   )
-                """,
-                arguments: [channel, identity, identity]
-            )
+            let roles = try Self.channelRoles(db, identity: identity, channel: channel)
             let isOwner = roles.contains("owner")
             let isAdmin = isOwner || roles.contains("admin")
             return ChannelLifecyclePermissions(canArchive: isAdmin, canDelete: isOwner)

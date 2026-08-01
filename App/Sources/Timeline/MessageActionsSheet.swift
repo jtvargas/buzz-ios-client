@@ -2,106 +2,6 @@ import BuzzKit
 import SwiftUI
 import UIKit
 
-/// The message a long press opened the actions sheet for.
-///
-/// A wrapper rather than a bare `TimelineRow?` for the reason ``ProfilePeer`` is one:
-/// `sheet(item:)` keys the presentation off it, so long-pressing a second message while the
-/// first sheet is still animating away re-presents for the new row instead of showing the
-/// old one's actions.
-struct MessageActionTarget: Identifiable, Equatable {
-    let row: TimelineRow
-    /// Whether this is the local identity's own send — what gates Retry and Delete.
-    let isOwn: Bool
-
-    var id: String { row.id }
-}
-
-/// What a message surface can do to one of its rows.
-///
-/// Both conversation models already had all five, with these signatures, because the row's
-/// own closures were wired straight to them. Naming them as a protocol is what lets one
-/// sheet serve the channel and the thread without either surface passing five closures
-/// through a modifier — and what keeps the sheet's *reads* live: the models are
-/// `@Observable`, so a reaction landing while the sheet is open re-draws the palette
-/// underneath it.
-@MainActor
-protocol MessageActing: AnyObject {
-    /// The surviving reaction groups on a message, own reaction marked.
-    func reactions(for id: String) -> [ReactionGroup]
-    /// Send a fresh reaction.
-    func react(_ emoji: String, on targetID: String)
-    /// Add, or withdraw an own reaction.
-    func toggleReaction(_ group: ReactionGroup, on targetID: String)
-    /// Re-queue a failed send.
-    func retry(_ eventID: String)
-    /// Discard an own pending or failed send.
-    func delete(_ eventID: String)
-}
-
-extension View {
-    /// Presents ``MessageActionsSheet`` for whichever message `target` names.
-    ///
-    /// One modifier rather than a `.sheet` per surface, for the reason ``profileSheet(peer:presence:)``
-    /// is one: the channel and a thread open the same sheet from the same gesture, and a
-    /// second copy is a second place for the two to drift.
-    ///
-    /// `onReplyInThread` is absent inside a thread, where there is nowhere further to go —
-    /// the same asymmetry as ``TimelineRowView/onOpenThread``, and it is what removes the
-    /// row rather than leaving a control that cannot work.
-    func messageActionsSheet(
-        target: Binding<MessageActionTarget?>,
-        actions: any MessageActing,
-        isReadOnly: Bool = false,
-        onReplyInThread: ((TimelineRow) -> Void)? = nil
-    ) -> some View {
-        modifier(
-            MessageActionsSheetModifier(
-                target: target,
-                actions: actions,
-                isReadOnly: isReadOnly,
-                onReplyInThread: onReplyInThread
-            )
-        )
-    }
-}
-
-/// Presents the sheet, and defers the one action that cannot run while it is on screen.
-private struct MessageActionsSheetModifier: ViewModifier {
-    @Binding var target: MessageActionTarget?
-    let actions: any MessageActing
-    let isReadOnly: Bool
-    let onReplyInThread: ((TimelineRow) -> Void)?
-
-    /// The thread the sheet asked for, held until the sheet has actually gone.
-    @State private var pendingThread: TimelineRow?
-
-    func body(content: Content) -> some View {
-        content.sheet(item: $target, onDismiss: openPendingThread) { target in
-            MessageActionsSheet(
-                target: target,
-                actions: actions,
-                isReadOnly: isReadOnly,
-                // The sheet only needs to know *whether* the action exists; the row it
-                // applies to is the one it was presented for.
-                onReplyInThread: onReplyInThread.map { _ in { pendingThread = target.row } }
-            )
-        }
-    }
-
-    /// Pushes the thread the sheet asked for, once the sheet is off the screen.
-    ///
-    /// Pushing from inside the sheet's own button would start a navigation transition while
-    /// a modal dismissal is still running — two presentations animating over each other,
-    /// where UIKit drops the second. `sheet(item:onDismiss:)` is the hook that says the
-    /// modal has gone, and it fires for a swipe-down as well as for the button, which is why
-    /// the request is a stored row rather than a closure fired on the way out.
-    private func openPendingThread() {
-        guard let row = pendingThread else { return }
-        pendingThread = nil
-        onReplyInThread?(row)
-    }
-}
-
 /// The message actions sheet: a row of quick reactions with the full picker at the end of
 /// it, then the actions themselves.
 ///
@@ -118,7 +18,7 @@ private struct MessageActionsSheetModifier: ViewModifier {
 /// The background is deliberately not set. A sheet's default background is the system's, and
 /// on iOS 26 that is the Liquid Glass material — the same reasoning that keeps the composer
 /// to one glass surface applies here, so nothing inside draws its own.
-private struct MessageActionsSheet: View {
+struct MessageActionsSheet: View {
     let target: MessageActionTarget
     let actions: any MessageActing
     let isReadOnly: Bool
@@ -131,6 +31,11 @@ private struct MessageActionsSheet: View {
     @State private var detent: PresentationDetent = .height(260)
     @State private var isPickingEmoji = false
     @State private var isShowingWorkInProgress = false
+    @State private var isConfirmingDelete = false
+    /// Pushed on this sheet's own stack, the way the picker is — never a second sheet: a
+    /// modal presented from inside a modal races the first one's dismissal.
+    @State private var isEditing = false
+    @State private var draft = ""
 
     /// The height of a quick-reaction target, and of the emoji picker's button beside it.
     private static let paletteHeight: CGFloat = 48
@@ -157,14 +62,29 @@ private struct MessageActionsSheet: View {
                     .navigationTitle("Add reaction")
                     .navigationBarTitleDisplayMode(.inline)
             }
+            .navigationDestination(isPresented: $isEditing) { editor }
         }
         .presentationDetents([.height(260), .large], selection: $detent)
         .presentationDragIndicator(.visible)
         .alert("WIP", isPresented: $isShowingWorkInProgress) {
             Button("OK", role: .cancel) {}
         }
+        // Destructive for everybody in the channel, so it asks.
+        .alert("Delete message?", isPresented: $isConfirmingDelete) {
+            Button("Delete", role: .destructive) {
+                HiveHaptics.play(.delete)
+                actions.removeFromChannel(target.row.id)
+                dismiss()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This removes it for everyone in the channel.")
+        }
         .onChange(of: isPickingEmoji) { _, isPicking in
             detent = isPicking ? .large : .medium
+        }
+        .onChange(of: isEditing) { _, editing in
+            detent = editing ? .large : .medium
         }
     }
 
@@ -274,7 +194,66 @@ private struct MessageActionsSheet: View {
         actionRow("Remind Me", symbol: "clock") {
             isShowingWorkInProgress = true
         }
+        publishedMessageActions
         ownSendActions
+    }
+
+    /// Edit and Delete on a message that has *landed*.
+    ///
+    /// Gated by ``BuzzKit/MessageAuthority``, which answers the two separately because the
+    /// relay does: an admin may take a message down but may not rewrite it. These never
+    /// appear beside ``ownSendActions``' "Delete", which requires a row that has *not*
+    /// landed.
+    @ViewBuilder
+    private var publishedMessageActions: some View {
+        if !isReadOnly {
+            let authority = actions.authority(for: target.row)
+            if authority.canEdit {
+                actionRow("Edit Message", symbol: "pencil") {
+                    draft = target.row.content
+                    isEditing = true
+                }
+            }
+            if authority.canDelete {
+                actionRow("Delete Message", symbol: "trash", role: .destructive) {
+                    isConfirmingDelete = true
+                }
+            }
+        }
+    }
+
+    /// The edit field, pushed rather than presented. Seeded from the message's current
+    /// text, which is what makes this an *edit* rather than a re-send.
+    private var editor: some View {
+        VStack(spacing: 0) {
+            TextEditor(text: $draft)
+                .font(.hive(.body))
+                .scrollContentBackground(.hidden)
+                .padding(.horizontal, 16)
+                .padding(.top, 12)
+            Spacer(minLength: 0)
+        }
+        .navigationTitle("Edit message")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.visible, for: .navigationBar)
+        .toolbar {
+            ToolbarItem(placement: .confirmationAction) {
+                Button("Save") {
+                    actions.editMessage(target.row.id, to: draft)
+                    dismiss()
+                }
+                // An empty edit is a deletion wearing a disguise, and unchanged text still
+                // stamps the message as edited for everybody. Both refused.
+                .disabled(!isSaveable)
+            }
+        }
+    }
+
+    /// Whether the draft is worth publishing: non-empty once trimmed, and actually
+    /// different from what is already there.
+    private var isSaveable: Bool {
+        let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !trimmed.isEmpty && trimmed != target.row.content.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// Retry and Delete, on an own message that has not landed. They were in the long-press

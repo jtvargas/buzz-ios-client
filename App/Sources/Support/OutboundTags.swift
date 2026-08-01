@@ -73,6 +73,26 @@ enum OutboundTags {
         [["e", reactionID]]
     }
 
+    /// A message deletion's tags: the channel `h` scope and a single `e` naming the
+    /// message to remove.
+    ///
+    /// The `h` is not optional the way a reaction's is. The relay resolves the target and
+    /// **rejects the deletion outright** unless the target belongs to the `h`-tagged
+    /// channel (`side_effects.rs`, the `9005` arm) — the check that stops a deletion in one
+    /// room from reaching into another.
+    static func deletion(channel: String, target: String) -> [[String]] {
+        [["h", channel], ["e", target]]
+    }
+
+    /// An edit's tags: the channel `h` scope and a single `e` naming the message being
+    /// rewritten. The new text is the event's *content*.
+    ///
+    /// Same channel check as a deletion, and the projector takes the **last** `e` as the
+    /// target, so exactly one is sent.
+    static func edit(channel: String, target: String) -> [[String]] {
+        [["h", channel], ["e", target]]
+    }
+
     private static func addingMentions(
         _ pubkeys: [String],
         sender: String?,

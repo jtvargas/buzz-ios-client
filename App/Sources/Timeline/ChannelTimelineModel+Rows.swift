@@ -119,6 +119,25 @@ extension ChannelTimelineModel {
         let sender = self.sender
         Task { try? await sender.discard(eventID) }
     }
+
+    /// What this reader may do to `row`. See ``MessageMutation/authority(store:identity:channel:row:)``.
+    func authority(for row: TimelineRow) -> MessageAuthority {
+        MessageMutation.authority(store: store, identity: selfPubkey, channel: channel, row: row)
+    }
+
+    /// Deletes a published message for everybody.
+    func removeFromChannel(_ eventID: String) {
+        let channel = self.channel
+        let sender = self.sender
+        Task { await MessageMutation.remove(eventID, in: channel, via: sender) }
+    }
+
+    /// Rewrites a published message.
+    func editMessage(_ eventID: String, to text: String) {
+        let channel = self.channel
+        let sender = self.sender
+        Task { await MessageMutation.edit(eventID, to: text, in: channel, via: sender) }
+    }
 }
 
 /// Every requirement is already declared above and in `+Sending`; naming the protocol is
