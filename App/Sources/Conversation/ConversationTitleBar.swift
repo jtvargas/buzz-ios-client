@@ -101,6 +101,20 @@ struct ConversationTitleBar: ViewModifier {
     /// lead somewhere. The one heading that has nowhere to go is the Activity tab's, which
     /// names a screen instead of a conversation.
     var isInert = false
+    /// What the trailing `⋮` does, or `nil` for a surface with nothing to manage — a
+    /// thread, the Activity tab, the sidebar.
+    ///
+    /// It leads to the same sheet the heading does. Two doors to one room, on purpose: a
+    /// heading you have to already know is tappable is not an affordance, and a second
+    /// sheet holding the same channel's topic in slightly different words is how a UI
+    /// starts contradicting itself.
+    var manageAction: (() -> Void)?
+    /// What the trailing `person.3.fill` does, or `nil` for a surface with nobody to list.
+    ///
+    /// Absent on a one-to-one direct message on purpose: the heading there is already the
+    /// person and their presence dot, so a button offering to list the two of you is a
+    /// control that can only tell you what you are looking at.
+    var peopleAction: (() -> Void)?
 
     /// The bound on the text column, kept in step with the surface's width so the pill can
     /// be as wide as the bar allows in landscape without risking the overflow menu in
@@ -109,24 +123,31 @@ struct ConversationTitleBar: ViewModifier {
     /// and comes back is worse than one that starts narrow and grows.
     @State private var labelWidth: CGFloat = ConversationTitleBar.minimumLabelWidth
 
-    /// What the bar spends on everything that is not the name when the mark is a glyph: the
-    /// back button, the bar's leading and trailing margins, the glyph, and the capsule's own
-    /// padding. Measured, and deliberately ~25pt above the observed cliff.
-    private static let glyphChrome: CGFloat = 180
-    /// The narrowest column the heading is ever given — also the seed, so it is a width that
-    /// is safe on the narrowest iPhone that runs iOS 26 rather than a placeholder.
-    private static let minimumLabelWidth: CGFloat = 190
     /// The face's point size. Fixed rather than `@ScaledMetric`: the bar caps its own type
     /// growth, so an avatar that kept growing would be the one thing left in the item still
     /// pushing it towards the overflow menu at an accessibility size.
+    ///
+    /// The rest of the metrics — the reserve, the floor, what a trailing button costs — live
+    /// in `ConversationTitleBarMetrics.swift`, because they are arithmetic with its own tests
+    /// rather than anything this view draws. This one stays because ``markView`` draws with it.
     static let avatarSize: CGFloat = 26
+
+    /// How many controls sit at the trailing edge. Derived rather than passed, so a caller
+    /// cannot hand the heading a width budget that disagrees with what it is drawing.
+    private var trailingActionCount: Int {
+        (peopleAction == nil ? 0 : 1) + (manageAction == nil ? 0 : 1)
+    }
 
     func body(content: Content) -> some View {
         content
             .onGeometryChange(for: CGFloat.self) { proxy in
                 proxy.size.width
             } action: { width in
-                labelWidth = Self.labelWidth(forSurfaceWidth: width, mark: mark)
+                labelWidth = Self.labelWidth(
+                    forSurfaceWidth: width,
+                    mark: mark,
+                    trailingActions: trailingActionCount
+                )
             }
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -140,7 +161,53 @@ struct ConversationTitleBar: ViewModifier {
                 // letting the bar centre or stretch it, and is the seam anything added at
                 // the trailing edge later would sit the other side of.
                 ToolbarSpacer(.flexible, placement: .topBarLeading)
+
+                if let peopleAction {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button(action: peopleAction) { peopleGlyph }
+                            .accessibilityLabel("People")
+                            .accessibilityHint("Double tap to see who is in this conversation")
+                    }
+                }
+
+                // What makes the two trailing buttons two capsules instead of one. iOS 26
+                // groups adjacent items in a placement into a single piece of glass, which
+                // would read as one segmented control offering two unrelated things: who is
+                // here, and what this channel is. The spacer is the seam between them.
+                if peopleAction != nil, manageAction != nil {
+                    ToolbarSpacer(.fixed, placement: .topBarTrailing)
+                }
+
+                if let manageAction {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button(action: manageAction) { manageGlyph }
+                            .accessibilityLabel("Manage channel")
+                            .accessibilityHint("Double tap to mute, read the channel’s context, or edit its canvas")
+                    }
+                }
             }
+    }
+
+    /// The `person.3.fill`. Filled rather than outlined so it carries the same weight as
+    /// the `⋮` beside it — an outlined glyph next to a solid one reads as the disabled one
+    /// of the pair.
+    private var peopleGlyph: some View {
+        Image(systemName: "person.3.fill")
+            .font(.hiveSymbol(.footnote, weight: .semibold))
+            .foregroundStyle(Color.hiveAccent)
+            .accessibilityHidden(true)
+    }
+
+    /// The `⋮`. Rotated rather than named: SF Symbols ships `ellipsis` horizontal and has
+    /// no plain vertical counterpart (`ellipsis.vertical.bubble` is a speech bubble), so a
+    /// quarter turn is the whole of it. Hidden from VoiceOver — the button above carries
+    /// the label, and a rotated glyph would otherwise be read as "ellipsis".
+    private var manageGlyph: some View {
+        Image(systemName: "ellipsis")
+            .font(.hiveSymbol(.body, weight: .semibold))
+            .rotationEffect(.degrees(90))
+            .foregroundStyle(Color.hiveAccent)
+            .accessibilityHidden(true)
     }
 
     /// Deliberately without a `glassEffect` or vertical padding of its own: both belong to
@@ -277,50 +344,6 @@ struct ConversationTitleBar: ViewModifier {
         return "\(members) · \(present) online"
     }
 
-    /// The mark for a conversation: a `#` for a channel, the peer's own face for a direct
-    /// message, and how many people are in it for a group one.
-    ///
-    /// Pure and tested rather than branched at each call site, because "what marks a
-    /// conversation" is a product rule and there are three surfaces that could each answer it
-    /// differently. A `#` in front of a person's name would be a category error, and so would
-    /// a face in front of a room's name — or in front of a list of four of them.
-    static func mark(for conversation: ConversationIdentity) -> Mark {
-        switch conversation.kind {
-        case .channel:
-            .symbol("number")
-        case .group:
-            .count(conversation.memberCount)
-        case .direct, .agent:
-            .avatar(
-                url: conversation.picture,
-                seed: conversation.avatarSeed,
-                initials: conversation.initials
-            )
-        }
-    }
-
-    /// The text column a surface `width` points wide gets, for a heading carrying `mark`.
-    /// Exposed so the rule that keeps the heading out of the overflow menu is tested rather
-    /// than only screenshotted.
-    static func labelWidth(forSurfaceWidth width: CGFloat, mark: Mark) -> CGFloat {
-        max(minimumLabelWidth, width - reservedChrome(for: mark))
-    }
-
-    /// What the bar spends on everything that is not the name.
-    ///
-    /// A face is wider than a glyph and costs the name that difference — charged here rather
-    /// than absorbed, because absorbing it is how a long agent name would take the whole
-    /// heading into the `…` menu on a narrow screen.
-    static func reservedChrome(for mark: Mark) -> CGFloat {
-        switch mark {
-        case .none, .symbol, .count:
-            glyphChrome
-        case .avatar:
-            // The face, less the glyph it stands in for: a `#` at `.title3` measures ~14pt
-            // wide on the iOS 26 simulator.
-            glyphChrome + (avatarSize - 14)
-        }
-    }
 }
 
 extension View {
@@ -331,14 +354,16 @@ extension View {
         title: String,
         subtitle: ConversationTitleBar.Subtitle? = nil,
         actionHint: String? = nil,
-        action: @escaping () -> Void
+        action: @escaping () -> Void,
+        peopleAction: (() -> Void)? = nil
     ) -> some View {
         modifier(ConversationTitleBar(
             mark: mark,
             title: title,
             subtitle: subtitle,
             action: action,
-            actionHint: actionHint
+            actionHint: actionHint,
+            peopleAction: peopleAction
         ))
     }
 

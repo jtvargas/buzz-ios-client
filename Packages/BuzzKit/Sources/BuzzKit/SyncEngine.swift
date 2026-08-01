@@ -387,6 +387,7 @@ public actor SyncEngine {
                 agentDirectoryFilter(),
                 membershipFilter(selfPubkeyHex: pubkey),
                 readStateFilter(selfPubkeyHex: pubkey),
+                channelMutesFilter(selfPubkeyHex: pubkey),
             ],
             sink: self
         )

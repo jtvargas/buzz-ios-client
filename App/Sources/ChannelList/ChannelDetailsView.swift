@@ -16,8 +16,13 @@ struct ChannelDetailsView: View {
     @State private var confirmsDelete = false
     @State private var operationError: String?
     @State private var isMutating = false
+    /// Pushed on this sheet's own stack, never presented as a second sheet: a modal
+    /// presented from inside a modal races the first one's dismissal (see Part 13).
+    @State private var isEditingCanvas = false
+    @State private var canvasDraft = ""
     private let channel: ChannelListRow
     private let engine: SyncEngine?
+    private let selfPubkey: String?
 
     init(
         channel: ChannelListRow,
@@ -28,6 +33,7 @@ struct ChannelDetailsView: View {
     ) {
         self.channel = channel
         self.engine = engine
+        self.selfPubkey = selfPubkey
         _model = State(initialValue: ChannelDetailsModel(
             channelID: channel.id,
             store: store,
@@ -46,11 +52,10 @@ struct ChannelDetailsView: View {
                 // member list above all — are exactly what it wants instead.
                 if conversation.isOneToOne {
                     peerSection(conversation)
-                    // A DM has no topic to set, so the section appears only when one
-                    // somehow exists rather than as an empty placeholder.
-                    if !topic.isEmpty {
-                        Section("Topic") { Text(topic) }
-                    }
+                    // Mute is the one management control a direct message has: it has no
+                    // topic to set, no roster to manage and no canvas to share, but it can
+                    // certainly be something you would rather not be told about.
+                    muteSection
                 } else {
                     channelSections
                 }
@@ -73,9 +78,19 @@ struct ChannelDetailsView: View {
                     Button("Done") { dismiss() }
                 }
             }
+            .navigationDestination(isPresented: $isEditingCanvas) {
+                ChannelCanvasEditor(text: $canvasDraft, onSave: saveCanvas)
+            }
         }
         .task { await model.run() }
         .task { await presence.run() }
+        // Only where a canvas can be drawn. A direct message has no shared document and
+        // renders no canvas section, so fetching one there would be a relay round trip for
+        // something this sheet has already decided not to show.
+        .task {
+            guard !channel.isDirectMessage else { return }
+            await model.loadCanvas(using: engine)
+        }
         .confirmationDialog(
             "Archive Channel?",
             isPresented: $confirmsArchive,
@@ -169,35 +184,19 @@ private extension ChannelDetailsView {
 private extension ChannelDetailsView {
     @ViewBuilder
     var channelSections: some View {
-        Section("Topic") {
-            Text(topic.isEmpty ? "No topic set" : topic)
-                .foregroundStyle(topic.isEmpty ? .secondary : .primary)
+        muteSection
+
+        Section("Context") {
+            contextRow("Description", model.context.description)
+            contextRow("Topic", model.context.topic)
+            contextRow("Purpose", model.context.purpose)
         }
+
+        canvasSection
 
         Section("Settings") {
             LabeledContent("Visibility", value: channel.isPrivate ? "Private" : "Public")
-            LabeledContent("Members", value: "\(model.members.count)")
-        }
-
-        Section("Members") {
-            if model.members.isEmpty, !model.hasLoaded {
-                ProgressView()
-            } else if model.members.isEmpty {
-                Text("No members available")
-                    .foregroundStyle(.secondary)
-            } else {
-                ForEach(model.members, id: \.pubkey) { member in
-                    MemberRow(
-                        pubkey: member.pubkey,
-                        name: names.name(for: member.pubkey),
-                        picture: names.picture(for: member.pubkey) ?? member.picture
-                            .flatMap(URL.init(string:)),
-                        initials: names.initials(for: member.pubkey),
-                        role: member.role,
-                        isOnline: presence.isOnline(member.pubkey)
-                    )
-                }
-            }
+            membersLink
         }
 
         if engine != nil, model.permissions.canArchive || model.permissions.canDelete {
@@ -218,8 +217,146 @@ private extension ChannelDetailsView {
         }
     }
 
-    var topic: String {
-        channel.about?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    /// The roster, one push away rather than spelled out here.
+    ///
+    /// The same ``ConversationPeopleList`` the `person.3.fill` button in the navigation bar
+    /// opens, not a second copy: one list of who is in a room, reachable from wherever a
+    /// reader thinks to look for it. Inlining it under this sheet's other six sections was
+    /// what made the sheet long enough that the management controls fell off the bottom of
+    /// a phone.
+    @ViewBuilder
+    var membersLink: some View {
+        NavigationLink {
+            ConversationPeopleList(
+                people: model.members.map(ConversationPerson.init(member:)),
+                isLoading: !model.hasLoaded,
+                emptyMessage: "No members available",
+                presence: presence
+            )
+            .navigationTitle("Members")
+            .navigationBarTitleDisplayMode(.inline)
+        } label: {
+            LabeledContent("Members", value: "\(model.members.count)")
+        }
+    }
+
+    /// The mute toggle. Its own section so the switch is not read as one more fact about
+    /// the channel: everything else on this sheet describes the room, and this is the one
+    /// row that changes what the room does to you.
+    ///
+    /// Offered without an engine too — disabled — rather than hidden, so the sheet does
+    /// not silently lose a control depending on how it was opened.
+    @ViewBuilder
+    var muteSection: some View {
+        Section {
+            Toggle(isOn: Binding(
+                get: { model.isMuted },
+                set: { setMuted($0) }
+            )) {
+                Label {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Mute conversation")
+                        Text("Suppress its unread badge")
+                            .font(.hive(.caption))
+                            .foregroundStyle(.secondary)
+                    }
+                } icon: {
+                    Image(systemName: model.isMuted ? "bell.slash" : "bell")
+                }
+            }
+            .disabled(engine == nil)
+        }
+    }
+
+    /// One `Context` row. All three are drawn whether or not they are set, matching the
+    /// other Buzz clients: on a *management* sheet, "no purpose set" is information —
+    /// it is the difference between a channel nobody has described and one you are
+    /// looking at the wrong way.
+    @ViewBuilder
+    func contextRow(_ label: String, _ value: String?) -> some View {
+        let text = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        VStack(alignment: .leading, spacing: 3) {
+            Text(label)
+                .font(.hive(.caption, weight: .semibold))
+                .foregroundStyle(.secondary)
+            Text(text.isEmpty ? "Not set" : text)
+                .font(.hive(.body))
+                .foregroundStyle(text.isEmpty ? .secondary : .primary)
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    /// The shared document. Hidden for a direct message, which has no shared document
+    /// to speak of — the other clients hide it there too.
+    @ViewBuilder
+    var canvasSection: some View {
+        if !channel.isDirectMessage {
+            Section("Canvas") {
+                switch model.canvas {
+                case .loading:
+                    ProgressView()
+                case .failed:
+                    Text("Couldn’t load the canvas.")
+                        .foregroundStyle(.secondary)
+                case let .loaded(canvas):
+                    canvasBody(canvas)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    func canvasBody(_ canvas: ChannelCanvas?) -> some View {
+        let body = canvas?.content.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        Text(body.isEmpty ? "No canvas set for this channel." : body)
+            .font(.hive(.body))
+            .foregroundStyle(body.isEmpty ? .secondary : .primary)
+            // Enough to recognise the document without turning the sheet into it. The
+            // editor is where the whole thing lives.
+            .lineLimit(8)
+        if engine != nil {
+            Button(body.isEmpty ? "Create Canvas" : "Edit Canvas", systemImage: "square.and.pencil") {
+                canvasDraft = canvas?.content ?? ""
+                isEditingCanvas = true
+            }
+        }
+    }
+
+    func setMuted(_ muted: Bool) {
+        guard let engine else { return }
+        Task { await engine.setChannelMuted(channel.id, muted: muted) }
+    }
+
+    /// Queues the edited canvas and pops back to the sheet.
+    ///
+    /// **The echo is not a relay confirmation.** The write rides the durable outbox like
+    /// every other publish in this app, so what `try` can report is that the event was
+    /// signed and queued — not that the relay took it. That is the same bargain a sent
+    /// message makes here, and it is the right one for a document somebody just typed: a
+    /// canvas written on a train must not vanish when the editor closes.
+    ///
+    /// The cost, and it is real: a canvas the relay *refuses* still shows here until the
+    /// sheet is reopened, because the canvas is not projected and so has no observation to
+    /// correct it from. Nobody has yet watched this relay accept a kind 40100 from this
+    /// client — see the PR.
+    func saveCanvas() {
+        guard let engine else { return }
+        let content = canvasDraft
+        isMutating = true
+        Task {
+            do {
+                try await engine.setChannelCanvas(channel.id, content: content)
+                model.applyLocalCanvas(
+                    content,
+                    authorPubkey: selfPubkey ?? "",
+                    at: Int64(Date().timeIntervalSince1970)
+                )
+                isEditingCanvas = false
+            } catch {
+                operationError = String(describing: error)
+            }
+            isMutating = false
+        }
     }
 
     func archive() {
@@ -261,35 +398,5 @@ private extension ChannelDetailsView {
         default:
             String(describing: error)
         }
-    }
-}
-
-/// One roster row, named and pictured through the shared directory rather than from
-/// the roster's own raw fields, so a member reads the same here as in the timeline.
-private struct MemberRow: View {
-    let pubkey: String
-    let name: String
-    let picture: URL?
-    let initials: String
-    let role: String?
-    let isOnline: Bool
-
-    var body: some View {
-        HStack(spacing: 10) {
-            AvatarView(url: picture, seed: pubkey, monogram: initials, size: 32)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(name)
-                    .font(.hive(.body, weight: .medium))
-                if let role, !role.isEmpty {
-                    Text(role.capitalized)
-                        .font(.hive(.caption))
-                        .foregroundStyle(.secondary)
-                }
-            }
-            Spacer()
-            PresenceDot(isOnline: isOnline)
-        }
-        .accessibilityElement(children: .combine)
-        .accessibilityValue(isOnline ? "Online" : "Offline")
     }
 }

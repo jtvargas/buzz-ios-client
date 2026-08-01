@@ -95,6 +95,12 @@ enum ConversationFixture {
         /// `ConversationReactionScrollTests`, which fails as inconclusive rather than passing
         /// if the chip beat it.
         var reactAfter = 25_000
+        /// The channel's name, for the one thing in this bar that is not a scroll shape:
+        /// whether the heading survives beside the trailing buttons or is moved into the
+        /// `…` overflow menu. A toolbar item that does not fit is not truncated — it
+        /// disappears — so the only way to see the rule hold is to give it a name long
+        /// enough to break it.
+        var channelName = "Fixture"
 
         /// Parses the arguments the test launched us with, or `nil` for a normal run.
         ///
@@ -124,6 +130,9 @@ enum ConversationFixture {
                 .map { String($0.dropFirst("-imageShape=".count)) }
             if let index = value("reactOn") { options.reactOn = max(0, index) }
             if let after = value("reactAfter") { options.reactAfter = max(0, after) }
+            if let name = arguments.first(where: { $0.hasPrefix("-channelName=") }) {
+                options.channelName = String(name.dropFirst("-channelName=".count))
+            }
             return options
         }
     }

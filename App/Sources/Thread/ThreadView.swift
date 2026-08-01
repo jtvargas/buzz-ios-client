@@ -27,10 +27,16 @@ struct ThreadView: View {
     @State private var profilePeer: ProfilePeer?
     /// The reply whose actions sheet is open, if any — set by a long press on a row.
     @State private var messageActions: MessageActionTarget?
+    /// Whether the participants sheet is open — the `person.3.fill` in the bar.
+    @State private var showsPeople = false
     /// This device's per-thread read marks. Absent on a surface reached without them (the
     /// conversation fixture), where nothing is recorded.
     @Environment(\.threadReadMarks) private var threadReads
     private let channelID: String
+    /// Kept so the participants sheet can start its own presence stream. The `presence`
+    /// model above is this view's; a sheet is a separate lifetime and reads it from the
+    /// same store rather than borrowing a model whose `.task` belongs to this screen.
+    private let presenceStore: PresenceStore
 
     /// The mark on a thread's heading. `text.append` rather than a bubble or an arrow: it is
     /// the symbol for adding a line to something already written, which is what a thread is.
@@ -105,6 +111,7 @@ struct ThreadView: View {
         focusingComposer focusesComposer: Bool = false
     ) {
         channelID = channel
+        presenceStore = presence
         self.landing = landing
         self.focusesComposer = focusesComposer
         _model = State(initialValue: ThreadModel(
@@ -172,8 +179,19 @@ struct ThreadView: View {
             title: "Thread",
             subtitle: .text(context),
             actionHint: "Double tap to return to the conversation",
-            action: { dismiss() }
+            action: { dismiss() },
+            // A thread has no roster — you are not a *member* of one — so the only honest
+            // answer to "who is in here" is whoever has spoken, which is what the rows say.
+            // No `⋮` beside it: there is nothing about a thread to manage, and the channel
+            // it hangs off has its own.
+            peopleAction: { showsPeople = true }
         )
+        .sheet(isPresented: $showsPeople) {
+            ConversationPeopleSheet(
+                threadParticipants: participants,
+                presenceStore: presenceStore
+            )
+        }
         .profileSheet(peer: $profilePeer, presence: presence)
         // The channel's sheet, minus "Reply in thread": this *is* the thread.
         .messageActionsSheet(
@@ -330,6 +348,12 @@ struct ThreadView: View {
     /// reader's eye is already on.
     private var context: String {
         conversation.isDirect ? conversation.title : "#\(conversation.title)"
+    }
+
+    /// Who has spoken in this thread. Derived from the rows already on screen rather than
+    /// queried, so the sheet cannot disagree with what the reader can scroll through.
+    private var participants: [ConversationPerson] {
+        ConversationPerson.threadParticipants(in: model.rows, root: model.root)
     }
 
     /// The scaffold's "this surface is leaving the screen" report. A reply composer's

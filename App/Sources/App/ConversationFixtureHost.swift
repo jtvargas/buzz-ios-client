@@ -56,6 +56,11 @@ struct ConversationFixtureHost: View {
                 NavigationStack {
                     surface(prepared)
                 }
+                // Without this the heading resolves through an *empty* directory and every
+                // fixture conversation is titled "Untitled conversation" — which is what
+                // made a long-name assertion about the navigation bar silently vacuous.
+                // The real app always injects one; the fixture now does too.
+                .environment(\.entityNames, EntityNames(channels: [channelRow]))
             } else {
                 // Surfaced rather than crashed: a fixture that traps reads in CI as a crash in
                 // the app, which is the most expensive kind of false report.
@@ -67,6 +72,22 @@ struct ConversationFixtureHost: View {
                 .accessibilityIdentifier("fixtureFailure")
             }
         }
+    }
+
+    /// The conversation the fixture opens, as the sidebar would have handed it over. Built
+    /// once and read twice — by the surface, and by the directory that titles it — so the
+    /// two cannot name the same channel differently.
+    private var channelRow: ChannelListRow {
+        ChannelListRow(
+            id: ConversationFixture.channelID,
+            name: options.channelName,
+            about: nil,
+            picture: nil,
+            isPrivate: false,
+            lastMessageAt: nil,
+            lastMessageSnippet: nil,
+            lastMessageAuthor: nil
+        )
     }
 
     @ViewBuilder
@@ -85,16 +106,7 @@ struct ConversationFixtureHost: View {
             )
         case .channel:
             ChannelTimelineView(
-                channel: ChannelListRow(
-                    id: ConversationFixture.channelID,
-                    name: "Fixture",
-                    about: nil,
-                    picture: nil,
-                    isPrivate: false,
-                    lastMessageAt: nil,
-                    lastMessageSnippet: nil,
-                    lastMessageAuthor: nil
-                ),
+                channel: channelRow,
                 store: prepared.store,
                 sender: prepared.sender,
                 typing: NoopEphemeralPublisher(),

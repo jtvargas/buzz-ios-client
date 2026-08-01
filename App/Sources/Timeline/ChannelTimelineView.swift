@@ -18,6 +18,8 @@ struct ChannelTimelineView: View {
     @State private var access: ChannelAccessModel
     @State private var openedThread: ThreadRoute?
     @State private var showsChannelDetails = false
+    /// Whether the roster sheet is open — the `person.3.fill` beside the `⋮`.
+    @State private var showsPeople = false
     /// The message whose actions sheet is open, if any — set by a long press on a row.
     @State private var messageActions: MessageActionTarget?
     /// Whose profile is open, if anyone's — set by a tap on a row's avatar or name.
@@ -197,6 +199,13 @@ struct ChannelTimelineView: View {
                 selfPubkey: selfPubkey
             )
         }
+        .sheet(isPresented: $showsPeople) {
+            ConversationPeopleSheet(
+                channel: channelID,
+                store: store,
+                presenceStore: presenceStore
+            )
+        }
         // The same modifier a thread uses, so the two surfaces cannot present a
         // different profile sheet for the same tap.
         .profileSheet(peer: $profilePeer, presence: presence)
@@ -349,7 +358,12 @@ struct ChannelTimelineView: View {
             title: identity.title,
             subtitle: subtitle(for: identity),
             action: { showsChannelDetails = true },
-            actionHint: "Double tap to show conversation details"
+            actionHint: "Double tap to show conversation details",
+            manageAction: { showsChannelDetails = true },
+            // Withheld from a one-to-one direct message: the heading there is already the
+            // person and their presence dot, so a button that would list the two of you is
+            // a control whose only answer is what the reader is looking at.
+            peopleAction: identity.isOneToOne ? nil : { showsPeople = true }
         )
     }
 

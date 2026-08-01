@@ -137,8 +137,23 @@ enum UnreadIndicator: Hashable, Sendable {
     /// - Parameter isDirect: whether this is a direct message — with a person, with an
     ///   agent, or with a few people. None of them is a room you are in for the traffic,
     ///   so all of them count every message.
-    static func resolve(unreadCount: Int, mentionCount: Int, isDirect: Bool) -> UnreadIndicator {
-        guard unreadCount > 0 else { return .caughtUp }
+    /// - Parameter isMuted: whether the reader has muted this conversation. A muted row
+    ///   reads exactly as a caught-up one — no bold name, no badge — which is the whole
+    ///   of what mute can mean in a client with no push notifications.
+    ///
+    ///   Unconditional, deliberately: a mention inside a muted channel is suppressed
+    ///   here too. Slack keeps the mention badge, and that is a defensible other answer
+    ///   — but the row's copy says it suppresses the unread badge, and a mute with an
+    ///   exception is a mute the reader has to remember the rules of. Nothing is lost:
+    ///   the mention still reaches the Activity tab, which exists to be the one place
+    ///   nothing is filtered out of.
+    static func resolve(
+        unreadCount: Int,
+        mentionCount: Int,
+        isDirect: Bool,
+        isMuted: Bool = false
+    ) -> UnreadIndicator {
+        guard unreadCount > 0, !isMuted else { return .caughtUp }
         if isDirect { return .directUnread(unreadCount) }
         return mentionCount > 0 ? .mention(mentionCount) : .unread
     }
@@ -251,7 +266,8 @@ struct SidebarContent {
                     // the same resolved identity the row is titled and filed by — so a
                     // conversation cannot be a DM in the sidebar's heading and a channel in
                     // its badge.
-                    isDirect: conversation.isDirect
+                    isDirect: conversation.isDirect,
+                    isMuted: channel.isMuted
                 ),
                 isStarred: starred.contains(channel.id)
             )

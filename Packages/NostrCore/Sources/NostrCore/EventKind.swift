@@ -102,6 +102,16 @@ public struct EventKind: RawRepresentable, Hashable, Sendable, ExpressibleByInte
     /// Relay-signed: the relay rejects a client-submitted one outright.
     public static let systemMessage: EventKind = 40099
 
+    /// A channel's canvas: one shared Markdown document per channel, `h`-tagged like a
+    /// message, the prose carried plainly in `content`.
+    ///
+    /// Ordinary channel-scoped content and **not** relay-signed: the relay gates it on
+    /// membership alone (`crates/buzz-relay/src/handlers/ingest.rs` requires the `h`
+    /// scope and `ChannelsWrite`), so any member may rewrite it — no admin rank
+    /// required. Replaceable in practice by convention rather than by NIP-01 range:
+    /// clients read the newest one for the channel.
+    public static let canvas: EventKind = 40100
+
     // MARK: - Buzz channel commands
 
     /// Open-or-create a direct-message channel.
