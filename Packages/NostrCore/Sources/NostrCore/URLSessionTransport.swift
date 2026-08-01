@@ -25,9 +25,29 @@ public actor URLSessionTransport: RelayTransport {
     private let openTimeout: Duration
     private var task: URLSessionWebSocketTask?
     private var lastActivity: ContinuousClock.Instant?
-    /// A frame the open probe consumed before any read loop existed, replayed
-    /// by the next ``receive()`` so nothing is dropped or reordered.
-    private var stashedFrame: URLSessionWebSocketTask.Message?
+    /// What became of the read the open probe armed. `URLSession` queues receive
+    /// completions and delivers them in order, so this read owns the socket's
+    /// **next** frame whether or not the probe still cares about it — see
+    /// ``probeOpen()``.
+    private var probeRead: ProbeRead = .none
+    /// A ``receive()`` parked because the probe's read owns the next frame. It is
+    /// resumed by ``settleProbeReceive(_:generation:once:continuation:)``; arming
+    /// a second read here instead is what used to lose a frame.
+    private var parkedReader: CheckedContinuation<URLSessionWebSocketTask.Message, Error>?
+    /// Bumped by every ``connect(url:)``, so a probe read left over from a socket
+    /// this transport has moved on from is recognised and discarded.
+    private var connectGeneration: UInt64 = 0
+
+    /// The lifecycle of the read armed by ``probeOpen()``.
+    private enum ProbeRead {
+        /// No probe read is outstanding — ``receive()`` reads the socket itself.
+        case none
+        /// Armed and not yet completed: it, not a fresh read, will carry the
+        /// next frame.
+        case outstanding
+        /// Completed with nobody waiting. The next ``receive()`` takes this.
+        case settled(Result<URLSessionWebSocketTask.Message, any Error>)
+    }
 
     /// - Parameters:
     ///   - session: the session to open tasks on; injectable for tests.
@@ -50,6 +70,9 @@ public actor URLSessionTransport: RelayTransport {
         let task = session.webSocketTask(with: url)
         self.task = task
         task.resume()
+        // Every socket gets its own generation, so a read armed on an abandoned
+        // one cannot hand its frame — or its closing error — to this one.
+        connectGeneration &+= 1
 
         do {
             let deadline = openTimeout
@@ -98,15 +121,10 @@ public actor URLSessionTransport: RelayTransport {
         guard let task else { throw TransportError.connectionClosed }
 
         let message: URLSessionWebSocketTask.Message
-        if let stashed = stashedFrame {
-            stashedFrame = nil
-            message = stashed
-        } else {
-            do {
-                message = try await task.receive()
-            } catch {
-                throw TransportError.receiveFailed(String(describing: error))
-            }
+        do {
+            message = try await nextMessage(task)
+        } catch {
+            throw TransportError.receiveFailed(String(describing: error))
         }
         markActivity()
 
@@ -152,6 +170,11 @@ public actor URLSessionTransport: RelayTransport {
     public func close() {
         task?.cancel(with: .normalClosure, reason: nil)
         task = nil
+        // The cancelled socket completes the probe's read with an error, which
+        // resumes any parked reader through the ordinary path; what it cannot do
+        // is clear a frame settled but never taken, which would otherwise be
+        // replayed onto the *next* socket this transport opens.
+        if case .settled = probeRead { probeRead = .none }
     }
 
     public func lastReceivedAt() -> ContinuousClock.Instant? {
@@ -175,8 +198,16 @@ public actor URLSessionTransport: RelayTransport {
     ///    is pending. A ping sent with no reader never completes, so the probe
     ///    arms its own receive. Against a relay that talks first (Buzz sends
     ///    its AUTH challenge on connect) the first frame doubles as the open
-    ///    proof and is stashed for the read loop; a silent relay is proven by
+    ///    proof and is handed to the read loop; a silent relay is proven by
     ///    the pong the pending receive pumps.
+    ///
+    ///    In that second case the armed receive **outlives the probe**, and
+    ///    `URLSession` serves queued receives in the order they were armed — so
+    ///    it, not the read loop, is handed the first frame the relay ever sends.
+    ///    That read therefore stays part of the read path (``ProbeRead``) rather
+    ///    than being abandoned: it was once, and against a silent relay the
+    ///    frame it swallowed was the `EOSE` a pairing session waits on, so
+    ///    pairing hung on "Connecting to your desktop…" until it timed out.
     /// 2. A socket torn down mid-ping can fire the ping handler more than once
     ///    (send failure, then connection abort). Every resume path goes
     ///    through a once-guard, so whichever loses the race is a no-op.
@@ -188,10 +219,16 @@ public actor URLSessionTransport: RelayTransport {
     private func probeOpen() async throws {
         guard let task else { throw TransportError.connectionClosed }
         let once = ResumeOnce()
+        let generation = connectGeneration
+        probeRead = .outstanding
         try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
                 task.receive { result in
-                    Task { await self.settleProbeReceive(result, once: once, continuation: continuation) }
+                    Task {
+                        await self.settleProbeReceive(
+                            result, generation: generation, once: once, continuation: continuation
+                        )
+                    }
                 }
                 task.sendPing { error in
                     guard once.claim() else { return }
@@ -207,22 +244,64 @@ public actor URLSessionTransport: RelayTransport {
         }
     }
 
-    /// Settles the probe from its armed receive: a frame proves the socket
-    /// open and is stashed — before resuming, so the first ``receive()`` call
-    /// can never miss it. A receive error settles the probe as failed only if
-    /// the ping has not already settled it; otherwise it belongs to the read
-    /// path and resurfaces on the next ``receive()``.
+    /// Settles the probe's armed read.
+    ///
+    /// The result is handed to the read path **first** — to a parked
+    /// ``receive()`` if one is waiting, otherwise held for the next one — and
+    /// only then, if the ping has not already spoken, used to settle the probe
+    /// itself. Handing it over first is what makes the frame impossible to lose:
+    /// this read has already consumed the socket's next frame by the time it
+    /// runs, so anything short of delivering it drops that frame on the floor.
     private func settleProbeReceive(
         _ result: Result<URLSessionWebSocketTask.Message, any Error>,
+        generation: UInt64,
         once: ResumeOnce,
         continuation: CheckedContinuation<Void, Error>
     ) {
+        // A read from a socket this transport has already replaced carries
+        // nothing the current one should see — but its probe still has to be
+        // let go, so only the hand-off is skipped.
+        if generation == connectGeneration {
+            if let reader = parkedReader {
+                parkedReader = nil
+                probeRead = .none
+                reader.resume(with: result)
+            } else {
+                probeRead = .settled(result)
+            }
+        }
+
+        guard once.claim() else { return }
         switch result {
-        case let .success(message):
-            stashedFrame = message
-            if once.claim() { continuation.resume() }
+        case .success:
+            continuation.resume()
         case let .failure(error):
-            if once.claim() { continuation.resume(throwing: error) }
+            continuation.resume(throwing: error)
+        }
+    }
+
+    /// The socket's next frame, from whichever read owns it.
+    ///
+    /// While the probe's read is outstanding it owns that frame, so a caller
+    /// parks here rather than arming a second read — two reads would be served
+    /// in the order they were armed, which puts the frame in the probe's hands
+    /// and leaves the caller waiting on the one after it.
+    private func nextMessage(_ task: URLSessionWebSocketTask) async throws -> URLSessionWebSocketTask.Message {
+        switch probeRead {
+        case let .settled(result):
+            probeRead = .none
+            return try result.get()
+        case .outstanding where parkedReader == nil:
+            return try await withCheckedThrowingContinuation { continuation in
+                parkedReader = continuation
+            }
+        case .outstanding:
+            // A second concurrent reader has no claim on the probe's frame — the
+            // owner drives one read loop — so it queues behind it, which is the
+            // order `URLSession` would give it anyway.
+            return try await task.receive()
+        case .none:
+            return try await task.receive()
         }
     }
 
