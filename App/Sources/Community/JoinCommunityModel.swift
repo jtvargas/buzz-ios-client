@@ -127,10 +127,18 @@ final class JoinCommunityModel {
 
     private func linkTextChanged() {
         let parsed = InviteLink.parse(linkText)
-        // The same link re-parsed is not a change: the text field reports one on every
-        // keystroke, and re-adopting would cancel a policy fetch that is already in flight
-        // and start it again, for ever, while the reader looks at a spinner.
-        guard parsed != link else { return }
+        // The same invitation re-parsed is not a change. `didSet` fires on every assignment,
+        // including a same-value write-back, and re-adopting would cancel a policy fetch
+        // already in flight and start it again while the reader watches a spinner.
+        //
+        // Compared on the *invitation* — the relay and the code — rather than on the whole
+        // value, because this field shows an invite in its `https` form and that form
+        // carries no receipt (§ ``BuzzKit/InviteLink/absoluteText``). Comparing everything
+        // would throw a handoff's acceptance away on the first write-back of text the reader
+        // never touched, and silently turn a one-tap join into the terms screen again.
+        guard parsed?.relayURLString != link?.relayURLString || parsed?.code != link?.code else {
+            return
+        }
         adopt(parsed)
     }
 
@@ -141,8 +149,12 @@ final class JoinCommunityModel {
         error = nil
         ageConfirmed = false
         alreadyJoined = nil
+        // Cleared here rather than in each branch below: two of the three ways out of this
+        // method ask the relay nothing, and a reader who replaces an invite to a stranger's
+        // relay with one to a community they are already in would otherwise be left looking
+        // at terms loading for a question nobody is going to answer.
+        isReadingPolicy = false
         guard let parsed else {
-            isReadingPolicy = false
             step = .needsLink
             return
         }

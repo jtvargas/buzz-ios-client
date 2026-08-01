@@ -4,41 +4,6 @@ import Foundation
 import NostrCore
 import Testing
 
-/// A relay that answers from a script and remembers what it was asked.
-private actor ScriptedTransport: InviteTransport {
-    private(set) var paths: [String] = []
-    private(set) var bodies: [Data] = []
-    private var answers: [String: [(Data, Int)]]
-    private let failure: TransportError?
-
-    /// - Parameter answers: keyed by the request path, so a test names only the calls it
-    ///   is about. An unscripted path answers 500, which every caller reads as a failure.
-    init(answers: [String: [(Data, Int)]] = [:], failure: TransportError? = nil) {
-        self.answers = answers
-        self.failure = failure
-    }
-
-    func get(from url: URL, headers _: [String: String]) async throws -> (Data, Int) {
-        try record(url, body: nil)
-    }
-
-    func post(body: Data, to url: URL, headers _: [String: String]) async throws -> (Data, Int) {
-        try record(url, body: body)
-    }
-
-    private func record(_ url: URL, body: Data?) throws -> (Data, Int) {
-        paths.append(url.path())
-        if let body { bodies.append(body) }
-        if let failure { throw failure }
-        guard var queued = answers[url.path()], !queued.isEmpty else { return (Data(), 500) }
-        let answer = queued.removeFirst()
-        answers[url.path()] = queued
-        return answer
-    }
-
-    func callCount(for path: String) -> Int { paths.filter { $0 == path }.count }
-}
-
 /// What the join screen decides before it talks to anything.
 ///
 /// These drive the real ``JoinCommunityModel`` against a scripted relay. What they reach is
@@ -50,83 +15,16 @@ private actor ScriptedTransport: InviteTransport {
 /// it, ``AppEnvironment/joinCommunity(relayURLString:key:)`` takes over and is tested by
 /// ``CommunitySwitchTests``. The *code* does not stop there: a scripted success runs on into
 /// a real Keychain write and a real engine start against a relay that does not exist, which
-/// is why ``forget(_:_:)`` has a second half.
+/// is why ``JoinHarness.forget(_:_:)`` has a second half.
 @MainActor
 @Suite(.serialized)
 struct JoinCommunityModelTests {
-    // MARK: - Harness
-
-    private static func data(_ text: String) -> Data { Data(text.utf8) }
-
-    private static let policyPath = "/api/join-policy"
-    private static let acceptPath = "/api/invites/accept-policy"
-    private static let claimPath = "/api/invites/claim"
-
-    private static let openRelay: [String: [(Data, Int)]] = [policyPath: [(data("{}"), 200)]]
-
-    private static func policedRelay(ageRequired: Bool) -> [String: [(Data, Int)]] {
-        [
-            policyPath: [(data("""
-            {"policy":{"terms_markdown":"# Terms","privacy_markdown":"# Privacy",
-             "age_attestation_required":\(ageRequired),"version":"v1"}}
-            """), 200)],
-            acceptPath: [(data(#"{"receipt":"r.mac"}"#), 200)],
-            claimPath: [(data(#"{"status":"joined","community_id":"c","host":"h","role":"member"}"#), 200)],
-        ]
-    }
-
-    /// An environment with one community per relay and nothing signed in, plus the defaults
-    /// suite to throw away. Written before the environment is built so legacy adoption —
-    /// which fires only on an empty directory — never runs against this machine's Keychain.
-    private func harness(_ relays: String...) -> (AppEnvironment, String) {
-        let suite = "hive.tests.join.\(UUID().uuidString)"
-        let storage = CommunityStorage(defaults: UserDefaults(suiteName: suite)!)
-        var directory = CommunityDirectory()
-        for relay in relays { directory.add(Community.new(relayURLString: relay)) }
-        storage.save(directory)
-        return (AppEnvironment(communityStorage: storage), suite)
-    }
-
-    /// Throws away everything a run created.
-    ///
-    /// The defaults suite is the obvious half. The other half is that a join which gets past
-    /// the claim goes on to do the real thing — a key in the Keychain, a database on disk —
-    /// and those outlive the suite: the Keychain account is named after a fresh UUID, so
-    /// without this every successful-path run leaves one behind for ever.
-    private func forget(_ suite: String, _ environment: AppEnvironment? = nil) {
-        for community in environment?.communities.communities ?? [] {
-            try? KeychainSigner(account: community.keychainAccount).delete()
-            AppEnvironment.deleteStore(filename: community.storeFilename)
-        }
-        UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite)
-    }
-
-    private func model(
-        _ environment: AppEnvironment,
-        transport: ScriptedTransport,
-        initialLink: InviteLink? = nil
-    ) -> JoinCommunityModel {
-        JoinCommunityModel(environment: environment, initialLink: initialLink) { relay in
-            InviteClient(relayURLString: relay, transport: transport)
-        }
-    }
-
-    /// Waits for the background policy read to land. It runs off the reader's path
-    /// deliberately, so there is nothing to await — the screen simply fills in.
-    private func settle(_ model: JoinCommunityModel) async throws {
-        for _ in 0 ..< 200 {
-            if !model.isReadingPolicy { return }
-            try await Task.sleep(for: .milliseconds(5))
-        }
-        Issue.record("the join policy never resolved")
-    }
-
     // MARK: - Reading the link
 
     @Test func aLinkThatIsNotAnInviteLeavesTheScreenWaiting() {
-        let (environment, suite) = harness()
-        defer { forget(suite, environment) }
-        let model = model(environment, transport: ScriptedTransport())
+        let (environment, suite) = JoinHarness.harness()
+        defer { JoinHarness.forget(suite, environment) }
+        let model = JoinHarness.model(environment, transport: ScriptedTransport())
 
         model.linkText = "https://relay.example/channels/abc"
 
@@ -139,13 +37,13 @@ struct JoinCommunityModelTests {
     }
 
     @Test func anInviteLinkNamesTheRelayItWillJoin() async throws {
-        let (environment, suite) = harness()
-        defer { forget(suite, environment) }
-        let transport = ScriptedTransport(answers: Self.openRelay)
-        let model = model(environment, transport: transport)
+        let (environment, suite) = JoinHarness.harness()
+        defer { JoinHarness.forget(suite, environment) }
+        let transport = ScriptedTransport(answers: JoinHarness.openRelay)
+        let model = JoinHarness.model(environment, transport: transport)
 
         model.linkText = "https://relay.example/invite/v2.abc"
-        try await settle(model)
+        try await JoinHarness.settle(model)
 
         #expect(model.step == .reviewing)
         #expect(model.link?.relayURLString == "wss://relay.example")
@@ -158,31 +56,73 @@ struct JoinCommunityModelTests {
     /// cancel the policy read and start another, for ever, while the reader watches a
     /// spinner that never stops.
     @Test func retypingTheSameLinkDoesNotAskTheRelayAgain() async throws {
-        let (environment, suite) = harness()
-        defer { forget(suite, environment) }
-        let transport = ScriptedTransport(answers: [Self.policyPath: [
-            (Self.data("{}"), 200), (Self.data("{}"), 200),
+        let (environment, suite) = JoinHarness.harness()
+        defer { JoinHarness.forget(suite, environment) }
+        let transport = ScriptedTransport(answers: [JoinHarness.policyPath: [
+            (JoinHarness.data("{}"), 200), (JoinHarness.data("{}"), 200),
         ]])
-        let model = model(environment, transport: transport)
+        let model = JoinHarness.model(environment, transport: transport)
 
         model.linkText = "https://relay.example/invite/abc"
-        try await settle(model)
+        try await JoinHarness.settle(model)
         model.linkText = "https://relay.example/invite/abc "
-        try await settle(model)
+        try await JoinHarness.settle(model)
 
-        #expect(await transport.callCount(for: Self.policyPath) == 1)
+        #expect(await transport.callCount(for: JoinHarness.policyPath) == 1)
+    }
+
+    /// The field shows an invite in its `https` form, and that form carries no receipt. A
+    /// write-back of text the reader never edited — SwiftUI does them — must not turn a
+    /// one-tap handoff into the terms screen, nor drop the acceptance already made in a
+    /// browser.
+    @Test func aWriteBackOfUnchangedTextKeepsTheAcceptanceTheHandoffCarried() async throws {
+        let (environment, suite) = JoinHarness.harness()
+        defer { JoinHarness.forget(suite, environment) }
+        let transport = ScriptedTransport(answers: JoinHarness.policedRelay(ageRequired: true))
+        let link = try #require(
+            InviteLink.parse("buzz://join?relay=wss%3A%2F%2Frelay.example&code=abc&policy_receipt=web.mac")
+        )
+        let model = JoinHarness.model(environment, transport: transport, initialLink: link)
+        try await JoinHarness.settle(model)
+        let asked = await transport.callCount(for: JoinHarness.policyPath)
+
+        model.linkText = model.linkText
+
+        #expect(model.link?.policyReceipt == "web.mac")
+        #expect(model.canJoin)
+        // And the relay is not asked all over again for a link that did not change.
+        #expect(await transport.callCount(for: JoinHarness.policyPath) == asked)
+    }
+
+    /// Replacing an invite to a stranger's relay with one to a community already on this
+    /// phone asks that relay nothing — so the terms row has to stop loading, or it sits
+    /// there for a question nobody is going to answer.
+    @Test func movingToACommunityAlreadyJoinedStopsWaitingOnTerms() async throws {
+        let (environment, suite) = JoinHarness.harness("wss://known.example")
+        defer { JoinHarness.forget(suite, environment) }
+        // Held open, so the first relay is still being asked when the second link arrives —
+        // which is the only moment this can go wrong.
+        let transport = ScriptedTransport(answers: JoinHarness.policedRelay(ageRequired: false), delay: .seconds(30))
+        let model = JoinHarness.model(environment, transport: transport)
+
+        model.linkText = "https://stranger.example/invite/abc"
+        #expect(model.isReadingPolicy)
+        model.linkText = "https://known.example/invite/abc"
+
+        #expect(model.alreadyJoined != nil)
+        #expect(!model.isReadingPolicy)
     }
 
     // MARK: - What has to be supplied before joining
 
     @Test func anAgeAttestationTheRelayRequiresIsTheReadersToMake() async throws {
-        let (environment, suite) = harness()
-        defer { forget(suite, environment) }
-        let transport = ScriptedTransport(answers: Self.policedRelay(ageRequired: true))
-        let model = model(environment, transport: transport)
+        let (environment, suite) = JoinHarness.harness()
+        defer { JoinHarness.forget(suite, environment) }
+        let transport = ScriptedTransport(answers: JoinHarness.policedRelay(ageRequired: true))
+        let model = JoinHarness.model(environment, transport: transport)
 
         model.linkText = "https://relay.example/invite/abc"
-        try await settle(model)
+        try await JoinHarness.settle(model)
 
         #expect(model.policy?.ageAttestationRequired == true)
         #expect(!model.canJoin)
@@ -191,25 +131,25 @@ struct JoinCommunityModelTests {
     }
 
     @Test func aPolicyWithNoAttestationDoesNotHoldTheButton() async throws {
-        let (environment, suite) = harness()
-        defer { forget(suite, environment) }
-        let transport = ScriptedTransport(answers: Self.policedRelay(ageRequired: false))
-        let model = model(environment, transport: transport)
+        let (environment, suite) = JoinHarness.harness()
+        defer { JoinHarness.forget(suite, environment) }
+        let transport = ScriptedTransport(answers: JoinHarness.policedRelay(ageRequired: false))
+        let model = JoinHarness.model(environment, transport: transport)
 
         model.linkText = "https://relay.example/invite/abc"
-        try await settle(model)
+        try await JoinHarness.settle(model)
 
         #expect(model.policy != nil)
         #expect(model.canJoin)
     }
 
     @Test func anExistingKeyHasToBeAKeyBeforeItCanBeUsed() async throws {
-        let (environment, suite) = harness()
-        defer { forget(suite, environment) }
-        let model = model(environment, transport: ScriptedTransport(answers: Self.openRelay))
+        let (environment, suite) = JoinHarness.harness()
+        defer { JoinHarness.forget(suite, environment) }
+        let model = JoinHarness.model(environment, transport: ScriptedTransport(answers: JoinHarness.openRelay))
 
         model.linkText = "https://relay.example/invite/abc"
-        try await settle(model)
+        try await JoinHarness.settle(model)
         model.identity = .existing
 
         #expect(!model.canJoin)
@@ -226,33 +166,33 @@ struct JoinCommunityModelTests {
     /// the first acceptance did not count — and the relay would issue a second receipt
     /// identical to the one already in hand.
     @Test func aLinkCarryingAnAcceptanceSkipsTheTermsStep() async throws {
-        let (environment, suite) = harness()
-        defer { forget(suite, environment) }
-        let transport = ScriptedTransport(answers: Self.policedRelay(ageRequired: true))
+        let (environment, suite) = JoinHarness.harness()
+        defer { JoinHarness.forget(suite, environment) }
+        let transport = ScriptedTransport(answers: JoinHarness.policedRelay(ageRequired: true))
         let link = try #require(
             InviteLink.parse("buzz://join?relay=wss%3A%2F%2Frelay.example&code=abc&policy_receipt=web.mac")
         )
-        let model = model(environment, transport: transport, initialLink: link)
-        try await settle(model)
+        let model = JoinHarness.model(environment, transport: transport, initialLink: link)
+        try await JoinHarness.settle(model)
 
         // Not held on an attestation that was made in the browser.
         #expect(model.canJoin)
         await model.submit()
 
-        #expect(await transport.callCount(for: Self.acceptPath) == 0)
+        #expect(await transport.callCount(for: JoinHarness.acceptPath) == 0)
         let claim = try #require(await transport.bodies.last)
         let sent = try #require(try JSONSerialization.jsonObject(with: claim) as? [String: Any])
         #expect(sent["policy_receipt"] as? String == "web.mac")
     }
 
     @Test func acceptingInAppExchangesTheAttestationForTheReceiptTheClaimCarries() async throws {
-        let (environment, suite) = harness()
-        defer { forget(suite, environment) }
-        let transport = ScriptedTransport(answers: Self.policedRelay(ageRequired: true))
-        let model = model(environment, transport: transport)
+        let (environment, suite) = JoinHarness.harness()
+        defer { JoinHarness.forget(suite, environment) }
+        let transport = ScriptedTransport(answers: JoinHarness.policedRelay(ageRequired: true))
+        let model = JoinHarness.model(environment, transport: transport)
 
         model.linkText = "https://relay.example/invite/abc"
-        try await settle(model)
+        try await JoinHarness.settle(model)
         model.ageConfirmed = true
         await model.submit()
 
@@ -273,16 +213,16 @@ struct JoinCommunityModelTests {
     /// that collected a dead community from each of those would fill its switcher with
     /// entries that can never connect.
     @Test func anExhaustedInviteAddsNothingToThisPhone() async throws {
-        let (environment, suite) = harness()
-        defer { forget(suite, environment) }
+        let (environment, suite) = JoinHarness.harness()
+        defer { JoinHarness.forget(suite, environment) }
         let transport = ScriptedTransport(answers: [
-            Self.policyPath: [(Self.data("{}"), 200)],
-            Self.claimPath: [(Self.data(#"{"error":"invite_exhausted"}"#), 403)],
+            JoinHarness.policyPath: [(JoinHarness.data("{}"), 200)],
+            JoinHarness.claimPath: [(JoinHarness.data(#"{"error":"invite_exhausted"}"#), 403)],
         ])
-        let model = model(environment, transport: transport)
+        let model = JoinHarness.model(environment, transport: transport)
 
         model.linkText = "https://relay.example/invite/abc"
-        try await settle(model)
+        try await JoinHarness.settle(model)
         await model.submit()
 
         #expect(model.error?.contains("already been used") == true)
@@ -309,13 +249,13 @@ struct JoinCommunityModelTests {
     /// part of this flow an older relay simply does not serve. Reporting a failure there
     /// would condemn a join that is about to work.
     @Test func aRelayThatWillNotDiscussItsTermsIsNotAnErrorYet() async throws {
-        let (environment, suite) = harness()
-        defer { forget(suite, environment) }
+        let (environment, suite) = JoinHarness.harness()
+        defer { JoinHarness.forget(suite, environment) }
         let transport = ScriptedTransport(failure: .requestFailed("offline"))
-        let model = model(environment, transport: transport)
+        let model = JoinHarness.model(environment, transport: transport)
 
         model.linkText = "https://relay.example/invite/abc"
-        try await settle(model)
+        try await JoinHarness.settle(model)
 
         #expect(model.error == nil)
         #expect(model.policy == nil)
@@ -325,10 +265,10 @@ struct JoinCommunityModelTests {
     // MARK: - A community this phone is already in
 
     @Test func anInviteToACommunityAlreadyOnThisPhoneOpensItInstead() async throws {
-        let (environment, suite) = harness("wss://relay.example")
-        defer { forget(suite, environment) }
-        let transport = ScriptedTransport(answers: Self.openRelay)
-        let model = model(environment, transport: transport)
+        let (environment, suite) = JoinHarness.harness("wss://relay.example")
+        defer { JoinHarness.forget(suite, environment) }
+        let transport = ScriptedTransport(answers: JoinHarness.openRelay)
+        let model = JoinHarness.model(environment, transport: transport)
 
         model.linkText = "https://relay.example/invite/abc"
 
@@ -341,16 +281,16 @@ struct JoinCommunityModelTests {
 
         await model.submit()
         #expect(environment.communitySheet == nil)
-        #expect(await transport.callCount(for: Self.claimPath) == 0)
+        #expect(await transport.callCount(for: JoinHarness.claimPath) == 0)
     }
 
     /// The same relay written differently is the same relay: a trailing slash and a
     /// capitalised host are not a second community, and an invite to one you are in must
     /// not create one.
     @Test func matchingAnExistingCommunityIgnoresHowTheRelayWasSpelled() {
-        let (environment, suite) = harness("wss://Relay.Example/")
-        defer { forget(suite, environment) }
-        let model = model(environment, transport: ScriptedTransport())
+        let (environment, suite) = JoinHarness.harness("wss://Relay.Example/")
+        defer { JoinHarness.forget(suite, environment) }
+        let model = JoinHarness.model(environment, transport: ScriptedTransport())
 
         model.linkText = "https://relay.example/invite/abc"
 
@@ -360,8 +300,8 @@ struct JoinCommunityModelTests {
     // MARK: - Arriving from outside
 
     @Test func aHandoffURLOpensTheJoinScreenCarryingItsInvite() {
-        let (environment, suite) = harness()
-        defer { forget(suite, environment) }
+        let (environment, suite) = JoinHarness.harness()
+        defer { JoinHarness.forget(suite, environment) }
         let url = URL(string: "buzz://join?relay=wss%3A%2F%2Frelay.example&code=v2.abc&policy_receipt=r")!
 
         #expect(environment.handle(incomingURL: url))
@@ -375,8 +315,8 @@ struct JoinCommunityModelTests {
     }
 
     @Test func aURLThatIsNotAnInviteOpensNothing() {
-        let (environment, suite) = harness()
-        defer { forget(suite, environment) }
+        let (environment, suite) = JoinHarness.harness()
+        defer { JoinHarness.forget(suite, environment) }
 
         #expect(!environment.handle(incomingURL: URL(string: "buzz://message?channel=a&id=b")!))
         #expect(environment.communitySheet == nil)
