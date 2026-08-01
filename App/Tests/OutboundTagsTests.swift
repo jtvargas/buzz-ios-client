@@ -78,4 +78,27 @@ struct OutboundTagsTests {
         let event = try signed(.deletion, tags: tags)
         #expect(event.referencedEventIDs == ["REACTION"])
     }
+
+    @Test("a deletion carries the channel scope the relay validates the target against")
+    func deletion() throws {
+        let tags = OutboundTags.deletion(channel: "room", target: "TARGET")
+        // The `h` is load-bearing, not decoration: the relay rejects a 9005 whose target
+        // does not belong to the h-tagged channel, which is what stops a deletion in one
+        // room reaching into another.
+        #expect(tags == [["h", "room"], ["e", "TARGET"]])
+
+        let event = try signed(.groupDeleteEvent, tags: tags)
+        #expect(event.referencedEventIDs == ["TARGET"])
+    }
+
+    @Test("an edit names exactly one target, because the projector takes the last e tag")
+    func edit() throws {
+        let tags = OutboundTags.edit(channel: "room", target: "TARGET")
+        #expect(tags == [["h", "room"], ["e", "TARGET"]])
+
+        let event = try signed(.messageEdit, tags: tags)
+        // Exactly one, not merely a correct last one: a second `e` here would silently
+        // rewrite whichever message came last in the list.
+        #expect(event.referencedEventIDs == ["TARGET"])
+    }
 }

@@ -370,8 +370,27 @@ extension ThreadModel {
         let sender = self.sender
         Task { try? await sender.discard(eventID) }
     }
-}
 
+    /// What this reader may do to `row` — the channel's answer, arrived at the same way,
+    /// because a message does not change hands by being read inside its thread.
+    func authority(for row: TimelineRow) -> MessageAuthority {
+        MessageMutation.authority(store: store, identity: selfPubkey, channel: channel, row: row)
+    }
+
+    /// Deletes a published reply for everybody.
+    func removeFromChannel(_ eventID: String) {
+        let channel = self.channel
+        let sender = self.sender
+        Task { await MessageMutation.remove(eventID, in: channel, via: sender) }
+    }
+
+    /// Rewrites a published reply.
+    func editMessage(_ eventID: String, to text: String) {
+        let channel = self.channel
+        let sender = self.sender
+        Task { await MessageMutation.edit(eventID, to: text, in: channel, via: sender) }
+    }
+}
 /// The same five the channel's model already had — see the note on
 /// ``ChannelTimelineModel``'s conformance. It is what lets one actions sheet serve both
 /// surfaces.
