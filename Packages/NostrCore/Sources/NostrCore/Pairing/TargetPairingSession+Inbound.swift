@@ -11,6 +11,21 @@ extension TargetPairingSession {
     /// offer when no live source is subscribed yet and permits a retry; the main
     /// relay accepts unconditionally, so the retry path never fires there. If every
     /// attempt is rejected, the source is not reachable and the session fails.
+    ///
+    /// # The code is shown only once the offer is on its way
+    ///
+    /// ``TargetPairingPhase/comparing(sasCode:)`` asks the reader to check a number
+    /// against their desktop, so it must not appear until the desktop has actually
+    /// been asked. This used to be set *before* the publish, which made two very
+    /// different situations look identical on the phone: an offer sitting on the
+    /// desktop waiting to be confirmed, and an offer that never left. Both showed a
+    /// code and then, thirty seconds later, a timeout — with nothing to say which had
+    /// happened. The relay's `OK` is the first moment the phone knows the offer is
+    /// somewhere the desktop can reach, so that is where the code appears.
+    ///
+    /// The *state* still moves before the publish: a source can answer the instant
+    /// the relay fans the offer out, and an inbound `sas-confirm` arriving while this
+    /// session still called itself `.connecting` would be discarded as out-of-order.
     func publishOffer() async {
         guard internalState == .connecting else { return }
         let offer = PairingMessage.offer(version: NostrPairURI.supportedVersion, sessionID: sessionID.hexString)
@@ -21,7 +36,6 @@ extension TargetPairingSession {
 
         internalState = .awaitingSasConfirm
         armStepDeadline()
-        setPhase(.comparing(sasCode: sasCode))
 
         var attemptsLeft = 3
         while attemptsLeft > 0, !internalState.isTerminal {
@@ -29,10 +43,18 @@ extension TargetPairingSession {
             do {
                 accepted = try await connection?.publish(event) ?? false
             } catch {
-                // Socket dropped mid-publish: the deadline/close path will terminate.
+                // The socket dropped mid-publish. Reported rather than left to the
+                // deadline: waiting thirty seconds to say "timed out" describes the
+                // clock, not what went wrong.
+                guard !internalState.isTerminal else { return }
+                await fail(mapConnectionError(error))
                 return
             }
-            if accepted { return }
+            if accepted {
+                // Delivered. Only now is there a code worth comparing.
+                if !internalState.isTerminal { setPhase(.comparing(sasCode: sasCode)) }
+                return
+            }
             attemptsLeft -= 1
             if attemptsLeft > 0 { try? await sleep(.seconds(1)) }
         }

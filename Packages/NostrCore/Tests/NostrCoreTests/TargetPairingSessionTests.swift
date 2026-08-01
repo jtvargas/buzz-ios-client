@@ -86,6 +86,31 @@ import Testing
         #expect(try published.first.map { try source.decode($0) } == .offer(version: 1, sessionID: Self.sessionIDHex))
     }
 
+    /// The code asks the reader to compare it against their desktop, so it must
+    /// not appear before the desktop has been asked anything. A relay that
+    /// refuses every attempt means the offer never left — and a code on screen
+    /// there is a lie the reader spends thirty seconds acting on.
+    @Test func anOfferNoRelayAcceptedNeverShowsACode() async throws {
+        let channel = ScriptedPairingChannel()
+        await channel.scriptPublishVerdicts([false, false, false])
+        let session = try makeSession(handler: RecordingPayloadHandler(), channel: channel)
+
+        let log = PhaseLog()
+        let stream = await session.phases()
+        let watcher = Task { for await phase in stream { await log.record(phase) } }
+        defer { watcher.cancel() }
+
+        await session.start()
+
+        #expect(await log.sawComparing == false)
+        guard case .failed = await session.phase else {
+            #expect(Bool(false), "expected the session to fail once every attempt was refused")
+            return
+        }
+        // All three attempts were made — the session did not give up after one.
+        #expect(await channel.published.count == 3)
+    }
+
     @Test func happyPathPayloadThenConfirm() async throws {
         let handler = RecordingPayloadHandler(importSucceeds: true)
         let channel = ScriptedPairingChannel()
@@ -222,6 +247,30 @@ import Testing
         await session.start()
         #expect(await awaitPhase(session) { $0 == .failed(.timedOut) } == .failed(.timedOut))
         #expect(await aborts(channel.published, source) == [.abort(reason: "timeout")])
+    }
+
+    /// A stall before the offer is out is the relay's, not the desktop's — and
+    /// the two send the reader to different devices. Blaming the desktop for a
+    /// channel that never opened is a wrong instruction, not a vague one.
+    @Test func aStallBeforeTheOfferBlamesTheRelayNotTheDesktop() async throws {
+        let channel = ScriptedPairingChannel()
+        await channel.hangOpen()
+        let session = try makeSession(
+            handler: RecordingPayloadHandler(), channel: channel, stepTimeout: .milliseconds(50)
+        )
+
+        let task = Task { await session.start() }
+        defer { task.cancel() }
+
+        let failure = await awaitPhase(session) { if case .failed = $0 { true } else { false } }
+        guard case let .failed(error) = failure, case .connectionFailed = error else {
+            #expect(Bool(false), "expected a connection failure, got \(String(describing: failure))")
+            return
+        }
+        // Only the closing abort went out — the desktop was never asked anything,
+        // which is why it cannot be the one at fault.
+        let sent = await channel.published.compactMap { try? source().decode($0) }
+        #expect(sent.allSatisfy { if case .offer = $0 { false } else { true } })
     }
 
     @Test func peerAbortTerminatesWithoutRepublishing() async throws {

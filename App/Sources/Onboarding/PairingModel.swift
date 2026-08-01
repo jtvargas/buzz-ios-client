@@ -140,7 +140,14 @@ final class PairingModel {
         case .transcriptMismatch:
             "The codes didn't match. For your security, pairing was stopped."
         case .timedOut:
-            "Pairing timed out. Start again from your desktop."
+            // The desktop's session expires two minutes after its QR appears and
+            // then ignores an offer in silence — no error, no code, the QR still
+            // on screen. Naming that window is the only actionable thing to say:
+            // "timed out" describes our clock, not the one that ran out.
+            """
+            Your desktop didn't answer. Its pairing code stops working about two \
+            minutes after it appears — start pairing again there, then scan it straight away.
+            """
         case .peerAborted:
             "Your desktop cancelled the pairing."
         case .importFailed:

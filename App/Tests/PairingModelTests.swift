@@ -103,6 +103,26 @@ import Testing
         #expect(message.contains("didn't match"))
     }
 
+    /// A silent desktop is the most common way pairing fails, and the reason is
+    /// never on screen: its code expires two minutes after it appears and then
+    /// discards offers without a word. The message has to carry that window,
+    /// because it is the only thing the reader can act on.
+    @Test func aSilentDesktopIsExplainedByItsExpiringCode() async {
+        let session = FakePairingSession()
+        let model = makeModel(session)
+        model.submitScan(Self.validURI)
+        await parkBriefly()
+
+        await session.emit(.failed(.timedOut))
+        await parkBriefly()
+        guard case let .failed(message) = model.screen else {
+            #expect(Bool(false), "expected a failed screen")
+            return
+        }
+        #expect(message.contains("two minutes"))
+        #expect(message.contains("start pairing again"))
+    }
+
     @Test func scanAgainResetsToScanning() async {
         let session = FakePairingSession()
         let model = makeModel(session)
