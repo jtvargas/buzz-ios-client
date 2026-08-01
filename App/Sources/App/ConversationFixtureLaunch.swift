@@ -47,6 +47,7 @@ extension ConversationFixture {
         // twelve seconds), and what the shape is *for* is content that lands after the first
         // layout, so the landing must not depend on the view at all.
         land(Array(events.dropFirst(primed)), into: store, after: .milliseconds(250))
+        land(try reaction(for: options, among: events), into: store, after: .milliseconds(options.reactAfter))
         let prepared = Prepared(
             store: store,
             // A third identity, so what the composer sends is not attributed to one of the
@@ -57,6 +58,29 @@ extension ConversationFixture {
         )
         preparation.value = prepared
         return prepared
+    }
+
+    /// The reaction a shape asked for, signed by somebody who is not in the conversation.
+    ///
+    /// A chip is the smallest thing that changes a row's height *where it stands* — nothing is
+    /// added to the list, nothing is removed, nothing moves order — which is the change the
+    /// scroll engine used to treat as an insertion and correct a reader in history for. It
+    /// arrives through the store like any other event, so the surface learns about it the same
+    /// way it learns about a peer's.
+    ///
+    /// A fourth key: a reaction from one of the two authors would be true to life, and the
+    /// reader's own would be truer still, but neither changes what the row does and a separate
+    /// identity keeps the shape's grouping (see ``ConversationFixture/authorRun``) untouched.
+    private static func reaction(for options: Options, among events: [NostrEvent]) throws -> [NostrEvent] {
+        guard let index = options.reactOn, events.indices.contains(index) else { return [] }
+        let target = events[index]
+        return [try NostrEvent.signed(
+            kind: .reaction,
+            content: "👍",
+            tags: [["e", target.id], ["h", channelID]],
+            createdAt: Date(timeIntervalSince1970: TimeInterval(1_700_000_000 + events.count * 60)),
+            with: try PrivateKey()
+        )]
     }
 
     /// Ingests a batch and waits for it, from a synchronous caller.

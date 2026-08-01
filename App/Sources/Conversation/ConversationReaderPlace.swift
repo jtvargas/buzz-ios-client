@@ -136,6 +136,20 @@ final class ConversationReaderPlace {
         var isFinite: Bool { contentHeight.isFinite && offset.isFinite && distance.isFinite }
     }
 
+    /// What opened the settling window, which is what decides the rule applied across it.
+    ///
+    /// The two differ over exactly one reader — the one parked in history — and they differ
+    /// because the question is not the same. See ``rowDidChangeInPlace()``.
+    private enum Change {
+        /// Rows arrived, an older page was inserted, a row was pruned. Content above the
+        /// reader may have moved, so their distance to the newest message is what has to
+        /// survive.
+        case structural
+        /// A row already in the list changed height where it stands. Nothing above it moved,
+        /// so the offset the reader is on already is their place.
+        case inPlace
+    }
+
     /// What a reading asks the scroll view to do.
     enum Correction: Equatable {
         case none
@@ -154,7 +168,21 @@ final class ConversationReaderPlace {
     /// by taking the pill to a particular message.
     var hasMoved = false
     /// Whether a jump to the newest message is still animating — see ``scrollCameToRest()``.
-    private var isLandingOnNewest = false
+    ///
+    /// Readable by the scaffold because one other decision has to know it: the band observer
+    /// that reports *whether the newest row is in view*, which the owner turns into the tail
+    /// freeze. A jump to the newest message begins, by definition, somewhere that is not the
+    /// bottom, so the first readings it produces say "away from the newest message" — and
+    /// believing them re-freezes the tail underneath a trip whose whole purpose is to reach
+    /// it. See ``ConversationScaffold``'s `Edges` observer for what that costs an own send.
+    ///
+    /// One exposure, deliberately left: a jump issued to a reader who is *already* at the
+    /// newest row moves nothing, so no scroll phase change is delivered and this is never
+    /// cleared until they take hold of the list. It is benign because it travels with
+    /// ``hasMoved`` being `false` — the state in which this whole file already holds them at
+    /// the newest message — and because the jumps that reach here are asked for by a reader
+    /// who is not at the bottom (``ChannelTimelineModel/shouldJumpToOwnSend``).
+    private(set) var isLandingOnNewest = false
 
     /// The distance last seen while the height was holding still and no settling window was
     /// open — the reader's own place, as opposed to a place a correction put them in.
@@ -167,6 +195,9 @@ final class ConversationReaderPlace {
     /// of these rather than on the first one: the reading that follows a commit is not
     /// guaranteed to be the one carrying the new height.
     private var stableRun = 0
+    /// What the open window was opened for. Read once, at the end of ``correction(for:atBottomSlack:)``,
+    /// and only for the reader it separates.
+    private var change: Change = .structural
 
     /// Below this, a correction is not worth a frame.
     private static let tolerance: CGFloat = 0.5
@@ -192,12 +223,65 @@ final class ConversationReaderPlace {
     /// arriving while the reader is at the bottom belong at the bottom, and rows arriving
     /// while they are away are held behind the tail freeze and commit nothing.
     func contentDidChange() {
+        change = .structural
         settling = Self.settlingReadings
         // The run that closes a window has to be a run measured *inside* it. Without this
         // the stillness before the commit counts toward it, and the window shuts on the
         // first reading — before the new content has been measured at all, which is the one
         // moment it exists to cover.
         stableRun = 0
+    }
+
+    /// A row already in the list changed height where it stands — a reaction chip appeared or
+    /// went away, a mention resolved, a reply summary changed. Nothing was added, removed or
+    /// reordered.
+    ///
+    /// This is a different question from ``contentDidChange()``, and for a reader parked in
+    /// history it wants the opposite answer. The rule that carries them across an *insertion*
+    /// is that the distance to the newest message survives it, because a page landing above
+    /// them moves everything they are looking at down by its own height. A chip appearing on
+    /// a message they can see moves nothing above it — the growth is entirely below the row it
+    /// is on — so the offset they are already on *is* their place, and correcting toward a
+    /// distance pushes them down by the growth. That is the reported jump.
+    ///
+    /// The size of it is not the chip. A `LazyVStack` sizes every row it has not measured at
+    /// the average of the ones it has, so one row changing height re-estimates the whole
+    /// extent — and the extent is what the distance is derived from. A 28-point chip can move
+    /// `contentSize.height` by hundreds, which is why the jump reads as arbitrary rather than
+    /// as a nudge, and why this is the one rule here that reads no estimated number at all.
+    ///
+    /// A structural window already open outranks this: a page really did land above the
+    /// reader, and that correction must not be traded away by a reaction arriving in the same
+    /// breath. The reverse is safe — a row growing inside a structural window is covered by
+    /// the distance rule, slightly wrongly and by one chip.
+    ///
+    /// Knowingly wrong in one place: a chip landing on a row *above* the reader's viewport
+    /// does move what they are looking at, by its own height, and nothing here corrects it.
+    /// The error is bounded by one chip, about 28 points, once; the only correction available
+    /// is arithmetic on the estimated extent, whose error is unbounded and was the defect.
+    func rowDidChangeInPlace() {
+        guard settling == 0 || change == .inPlace else { return }
+        change = .inPlace
+        settling = Self.settlingReadings
+        stableRun = 0
+    }
+
+    /// The reader took hold of the list themselves — a drag, or the deceleration one left
+    /// behind.
+    ///
+    /// Their place is theirs from this moment, so a jump still in flight is overruled here
+    /// rather than where it would have ended. That distinction is the tail freeze's: while a
+    /// jump is in flight the band observer declines to re-freeze (see ``isLandingOnNewest``),
+    /// and someone who grabs the list mid-flight and pulls back into history has to be able to
+    /// re-arm it — but a conversation they have brought to rest produces no further readings
+    /// for the observer to act on. Ending the flight at rest instead leaves the tail released
+    /// under a reader who is plainly reading history.
+    ///
+    /// ``scrollCameToRest()`` reads the same as it did: a flight the reader overruled was
+    /// already answered `.none` by ``hasMoved``.
+    func readerTookHold() {
+        hasMoved = true
+        isLandingOnNewest = false
     }
 
     /// A jump to the newest message has just been issued.
@@ -253,96 +337,6 @@ final class ConversationReaderPlace {
         return hasMoved ? .none : .bottom
     }
 
-    /// The keyboard came up or went away, taking room off the bottom of the scrollable
-    /// region or giving it back. Says what that implies for the reader's place.
-    ///
-    /// # Why this is a separate entrance and not another geometry reading
-    ///
-    /// Because this is the one height change in this surface whose *cause* is known, and the
-    /// rest of this type exists precisely because the causes are not. ``correction(for:)``
-    /// is handed a number and has to infer whether content arrived or the `LazyVStack`
-    /// re-measured; it gets that right by refusing to act unless the owner declared a
-    /// commit. A keyboard declares itself: the room above it changed, nothing was inserted,
-    /// and no estimate is involved.
-    ///
-    /// # Why an at-bottom reader is moved and a reader in history is not
-    ///
-    /// For a reader resting on the newest message, the keyboard arriving is the message they
-    /// are about to reply to going under it — the owner's report, verbatim: *"the message list
-    /// does not push up, the composer and keyboard end up covering the latest message"*. For a
-    /// reader parked in history it is nothing: what they are reading is nowhere near the bottom
-    /// edge, and moving the conversation under them to make room at an end they are not looking
-    /// at is the same defect this file spends the rest of its length preventing — and the
-    /// owner's own scope, *"if the user has scrolled up at all, no push is required"*.
-    ///
-    /// So the predicate is the one already written above for a content change: a
-    /// conversation nobody has moved belongs at its newest message, and so does one whose
-    /// reader is already there. Everyone else stays where they are.
-    ///
-    /// # How often this does anything, and why it is not `.sizeChanges` again
-    ///
-    /// Less often than it looks. A scroll view already resting against its bottom has its
-    /// offset clamped up when an inset takes room there, so most conversations follow with no
-    /// help at all. It earns its place on the ones whose content landed *after* the first
-    /// layout, where the resting offset is not against the true bottom — nothing clamps, and
-    /// the newest message does not move by a single point. Measured on iPhone 17 Pro / iOS 26
-    /// against a 311-point keyboard, unmodified `main`, `ConversationScrollTests`:
-    /// `thread-8-longlast` moved 311 and `thread-8-longlast-primed` — the same content
-    /// delivered one relay round trip later — moved **0**, leaving 299 points of the message
-    /// under the keyboard. `thread-12-longlast` moved 0 in that run and 311 in the one before
-    /// it, which is why the report was "a weird issue": it turns on how much of the stack had
-    /// been measured when the keyboard arrived.
-    ///
-    /// `defaultScrollAnchor(.bottom, for: .sizeChanges)` is the modifier that used to cover
-    /// this, and it is deliberately gone — see ``ConversationScaffold``. The difference is not
-    /// the trigger, which is the same container change; it is the destination. That anchor
-    /// resolved against `contentSize.height`, and on a `LazyVStack` measuring one row taller
-    /// than the viewport that number is largely invented, so it landed the reader past the end
-    /// of the real content with nothing rendered. This lands on a row.
-    ///
-    /// # What this deliberately does not cover
-    ///
-    /// A composer that grows *under typing* takes room off the same edge for the same reason,
-    /// and is still not wired to anything: doing so from the bar's own geometry is what turned
-    /// the growth suite into a runner the harness killed as unresponsive, twice, and that
-    /// diagnosis is open. An attachment is covered — by ``composerRoomDidChange(isAtBottom:)``,
-    /// which is declared rather than measured and so cannot reach a keystroke. See
-    /// ``ConversationScaffold`` for both.
-    ///
-    /// - Parameter isAtBottom: whether the scaffold's own hysteresis currently reads the
-    ///   reader as resting on the newest message.
-    func keyboardRoomDidChange(isAtBottom: Bool) -> Correction {
-        roomBelowDidChange(isAtBottom: isAtBottom)
-    }
-
-    /// The composer itself changed height — a picture was attached, or the strip holding one
-    /// went away.
-    ///
-    /// The same room, off the same edge, with the same decision behind it, so it is the same
-    /// rule; what differs is where the trigger comes from. A keyboard is a container change
-    /// this surface can see. The bar's height is a number this surface *measures*, and
-    /// measuring it is what hung the runner — so the owner declares the change instead, from
-    /// the one event that causes it. See ``ConversationScaffold/composerRevision``.
-    ///
-    /// Kept as its own entrance rather than folded into the keyboard's, because the two are
-    /// only the same by coincidence of the current rule: if an attachment ever wants a
-    /// different destination from a keyboard — the strip rather than the newest row, say —
-    /// this is where that difference goes, and a shared name would have hidden the question.
-    func composerRoomDidChange(isAtBottom: Bool) -> Correction {
-        roomBelowDidChange(isAtBottom: isAtBottom)
-    }
-
-    /// The rule both entrances share: a conversation nobody has moved belongs at its newest
-    /// message, and so does one whose reader is already there. Everyone else stays put.
-    private func roomBelowDidChange(isAtBottom: Bool) -> Correction {
-        // A finger on the list outranks the keyboard: a correction mid-drag fights the
-        // reader, exactly as it does on a content change. This is also the interactive
-        // dismissal, where the room above the keyboard changes on every frame of a drag.
-        guard !isScrolling else { return .none }
-        guard !hasMoved || isAtBottom else { return .none }
-        return .bottom
-    }
-
     /// Reads one geometry sample and says what it implies.
     ///
     /// - Parameter atBottomSlack: the band the scaffold counts as *at* the newest message.
@@ -382,10 +376,17 @@ final class ConversationReaderPlace {
         settling -= 1
         guard !isScrolling else { return .none }
         // A conversation nobody has moved belongs at its newest message, and so does one
-        // whose reader is already there.
+        // whose reader is already there. Both rules agree about them, and separate only
+        // over the reader below.
         guard hasMoved, let anchored = anchoredDistance, anchored > atBottomSlack else {
             return .bottom
         }
+        // A row grew where it stands: nothing above it moved, so the offset this reader is
+        // already on is their place, and leaving it alone is the whole of the expected
+        // behaviour — *content above the reacted message must stay in place*. See
+        // ``rowDidChangeInPlace()`` for why correcting here moves them by far more than the
+        // chip that caused it.
+        guard change == .structural else { return .none }
         // Raising the offset by `d` lowers the distance to the bottom by `d`, so this is
         // the offset at which the distance is the one the reader had. A correction toward
         // the invariant rather than a delta applied to it, so a height that arrives in

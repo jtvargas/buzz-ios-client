@@ -160,6 +160,7 @@ struct ChannelTimelineView: View {
             jumpToken: model.jumpToken,
             jumpTarget: model.jumpTarget,
             contentRevision: model.contentRevision,
+            rowRevision: model.rowRevision,
             newestID: model.items.newestMessageID,
             composerRevision: model.attachments.barRevision,
             onReachedTop: loadOlderPage,

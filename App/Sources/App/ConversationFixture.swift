@@ -83,6 +83,18 @@ enum ConversationFixture {
         /// Measured, twice. One picture per launch is a conversation that never has to be
         /// scrolled, so the tap is the only interaction in the test.
         var imageShape: String?
+        /// Which message a reaction lands on, counted the way the rows are labelled, or `nil`
+        /// for none. The chip arrives through the store's own observation, which is the path a
+        /// peer's reaction takes and the path the reader's own takes a moment after the tap.
+        var reactOn: Int?
+        /// How long after launch that reaction lands, in milliseconds.
+        ///
+        /// Long by default, because the suite has to get the reader *parked* first and a chip
+        /// that arrives during the parking would be measured against a conversation still
+        /// moving. The test guards the other side of it — see
+        /// `ConversationReactionScrollTests`, which fails as inconclusive rather than passing
+        /// if the chip beat it.
+        var reactAfter = 25_000
 
         /// Parses the arguments the test launched us with, or `nil` for a normal run.
         ///
@@ -110,6 +122,8 @@ enum ConversationFixture {
             options.imageShape = arguments
                 .first { $0.hasPrefix("-imageShape=") }
                 .map { String($0.dropFirst("-imageShape=".count)) }
+            if let index = value("reactOn") { options.reactOn = max(0, index) }
+            if let after = value("reactAfter") { options.reactAfter = max(0, after) }
             return options
         }
     }

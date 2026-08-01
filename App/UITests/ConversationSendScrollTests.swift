@@ -92,12 +92,111 @@ final class ConversationSendScrollTests: ConversationScrollHarness {
         }
     }
 
+    /// The same trip from *deep* in history, which is the owner's report of 2026-07-31:
+    /// *"sending a new message while deeply scrolled up … lands on empty space, forcing the
+    /// user to manually scroll further."*
+    ///
+    /// # Why depth is its own case and not a bigger number in the one above
+    ///
+    /// Because it is a different mechanism, and the shallow case does not reach it. Two swipes
+    /// leave the reader inside the band the surface still calls "away from the bottom" for one
+    /// or two readings; from twenty messages back the jump spends most of a second in flight,
+    /// and every geometry reading it produces on the way says `awayFromBottom`. The owner's
+    /// tail freeze is written from exactly those readings — so it re-armed one frame after the
+    /// send released it, and the author's own message, arriving newer than a boundary that had
+    /// just been put back, was held behind it: never rendered, never landed on, counted into
+    /// the pill instead. The trip then ended on whatever was newest before they typed.
+    ///
+    /// So the assertion that matters here is the same one as above — *the message I just sent
+    /// is on screen, above the composer* — asked from a depth where the flight is long enough
+    /// to be mistaken for the reader leaving.
+    ///
+    /// Channel only. The thread shapes hold eight replies, which is not two screens of history
+    /// on this device however hard it is swiped, and a park that cannot go deep would assert
+    /// the shallow case again under a different name.
+    func testSendingFromDeepHistoryLandsOnTheMessageJustSent() {
+        let shape = Self.shapesUnderTest.first { $0.name == "channel-50-plain" }
+        guard let shape else { return XCTFail("channel-50-plain is not among the shapes") }
+        let app = launch(shape.arguments)
+        defer { app.terminate() }
+
+        let newestAtRest = rendered(app).last?.index ?? 0
+        parkDeep(app)
+        print("SHAPE \(shape.name)-deep parked \(describe(app))")
+
+        // Non-vacuity, and it is the whole point of this case: a park that did not go deep
+        // asserts the shallow trip a second time. Measured in *messages* rather than points,
+        // because that is what "deeply scrolled up" means to a reader.
+        let newestParked = readable(app).last?.index ?? 0
+        XCTAssertGreaterThanOrEqual(
+            newestAtRest - newestParked,
+            Self.deepEnough,
+            "the reader is only \(newestAtRest - newestParked) messages back — this is not the deep case"
+        )
+
+        send(Self.sentText, in: app, shape: "\(shape.name)-deep")
+        print("SHAPE \(shape.name)-deep sent   \(describe(app))")
+
+        let band = readableBand(app)
+        guard let landed = readable(app).first(where: { $0.index == Self.sentIndex }) else {
+            let all = rendered(app).map { "m\($0.index)@\(Int($0.frame.minY))" }.joined(separator: " ")
+            return XCTFail(
+                "\(shape.name)-deep: the message that was just sent is not on screen; rendered=[\(all)]"
+            )
+        }
+        XCTAssertLessThanOrEqual(
+            landed.frame.maxY, band.maxY + 8,
+            "\(shape.name)-deep: the message just sent is \(Int(landed.frame.maxY - band.maxY))pt under the composer"
+        )
+        // The other edge, and the one the report names. Landing *short* of the newest row
+        // leaves it sitting a screen above the composer with nothing under it, which is the
+        // "empty space" the reader then has to scroll out of themselves.
+        XCTAssertGreaterThanOrEqual(
+            landed.frame.maxY, band.maxY - Self.restsAgainstComposer,
+            """
+            \(shape.name)-deep: the message just sent rests \(Int(band.maxY - landed.frame.maxY))pt \
+            above the composer, with empty space below it
+            """
+        )
+    }
+
     // MARK: - Driving it
+
+    /// How many messages back counts as *deep*. Two swipes on this shape move about eight, so
+    /// this is comfortably past what the case above already covers.
+    private static let deepEnough = 14
+
+    /// How far above the composer the newest message may rest and still be said to be against
+    /// it. Generous — the list carries 8pt of its own padding and a row's trailing metadata is
+    /// not part of its text frame — but far short of the screenful the report describes.
+    private static let restsAgainstComposer: CGFloat = 140
 
     /// Drags the conversation back into history and lets it settle.
     private func park(_ app: XCUIApplication) {
         for _ in 0 ..< 2 {
             app.windows.firstMatch.swipeDown(velocity: .slow)
+        }
+        Thread.sleep(forTimeInterval: 1.5)
+    }
+
+    /// The same, until the conversation stops going back — several viewports rather than two.
+    ///
+    /// Fast, and many. A single row in a `-spread` channel is up to 833 points tall, so a slow
+    /// swipe can cross less than one message; measured, eight of them moved the reader three.
+    /// A flick carries its momentum and crosses several.
+    ///
+    /// Bounded by a count *and* by the history running out: this fixture paginates nothing, so
+    /// once the oldest rendered row stops receding there is nothing above left to reach.
+    private func parkDeep(_ app: XCUIApplication) {
+        var oldest = rendered(app).map(\.index).min() ?? Int.max
+        var stalls = 0
+        for _ in 0 ..< 24 {
+            app.windows.firstMatch.swipeDown(velocity: .fast)
+            Thread.sleep(forTimeInterval: 0.3)
+            let reached = rendered(app).map(\.index).min() ?? oldest
+            stalls = reached < oldest ? 0 : stalls + 1
+            if stalls >= 3 { break }
+            oldest = min(oldest, reached)
         }
         Thread.sleep(forTimeInterval: 1.5)
     }
