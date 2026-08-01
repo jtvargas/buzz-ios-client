@@ -1,3 +1,4 @@
+import BuzzKit
 import Foundation
 import NostrCore
 
@@ -140,6 +141,25 @@ extension AppEnvironment {
             pairedCommunityID = nil
             return await openFromGate(target, returningTo: communities.activeID)
         }
+    }
+
+    // MARK: - Arriving from outside the app
+
+    /// Handles a URL the system handed this app, returning whether it was one Hive knows.
+    ///
+    /// The only one today is an invitation. It is opened rather than acted on: a link that
+    /// silently joined a community on being tapped would make a shared URL into a
+    /// membership, and the host it names is exactly the thing the reader has to see before
+    /// agreeing to anything.
+    ///
+    /// The sheet is raised from here — above the workspace's remount boundary — rather than
+    /// from whatever screen happens to be up, so an invite tapped while a conversation is
+    /// open lands the same way as one tapped on the sidebar.
+    @discardableResult
+    func handle(incomingURL url: URL) -> Bool {
+        guard let link = InviteLink.parse(url.absoluteString) else { return false }
+        communitySheet = .join(link)
+        return true
     }
 
     // MARK: - Moving between communities

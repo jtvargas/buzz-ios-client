@@ -139,6 +139,18 @@ struct OnboardingView: View {
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.glass)
+
+            // The fourth way in, and the only one that works on a relay you are not already
+            // a member of. It is last because the three above are what a reader with their
+            // own relay came here to do; it is present because a reader with an invite link
+            // has no other route (§ ``JoinCommunityModel``).
+            Button {
+                environment.communitySheet = .join(nil)
+            } label: {
+                Label("Join with an Invite", systemImage: "envelope.open")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.glass)
         }
         .controlSize(.large)
     }

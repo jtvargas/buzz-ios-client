@@ -114,12 +114,21 @@ struct Community: Identifiable, Codable, Equatable, Sendable {
     /// two entries listing the same conversations, each with its own copy of the same
     /// history. Returns `nil` for a string that is not a relay URL at all, which callers
     /// treat as "no match" rather than as a match against other unparseable strings.
+    ///
+    /// A port that is the *default* for the scheme is dropped, for the same reason a
+    /// trailing slash is: `wss://relay.example:443` and `wss://relay.example` are one
+    /// destination written two ways. Flutter does the same
+    /// (`invite_join_provider.dart:227-234`), and the relay itself strips `:443`/`:80`
+    /// before deciding which community a request belongs to
+    /// (`buzz-core/src/tenant.rs:124-132`). It matters more now that a relay URL can arrive
+    /// from an invite link rather than only from the field somebody typed.
     static func relayIdentity(of urlString: String) -> String? {
         guard let url = RelayEndpoint.websocketURL(from: urlString),
               let scheme = url.scheme?.lowercased(),
               let host = url.host()?.lowercased()
         else { return nil }
-        let port = url.port.map { ":\($0)" } ?? ""
+        let defaultPort = scheme == "wss" ? 443 : 80
+        let port = url.port.flatMap { $0 == defaultPort ? nil : ":\($0)" } ?? ""
         var path = url.path()
         while path.hasSuffix("/") { path.removeLast() }
         return "\(scheme)://\(host)\(port)\(path)"

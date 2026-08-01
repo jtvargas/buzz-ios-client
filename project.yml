@@ -62,6 +62,17 @@ targets:
           - InterVariable-Italic.ttf
           - GeistMono-Variable.ttf
           - GeistMono-Italic-Variable.ttf
+        # `buzz://join?relay=…&code=…` — how a relay's own invite page hands an
+        # invitation to the installed app once its terms have been accepted in the
+        # browser (`buzz/web/src/features/invite/ui/InvitePage.tsx:113`). The scheme
+        # is shared with the desktop and Flutter clients by design: one link works on
+        # whichever of them is installed. Without this declaration the page's "Accept
+        # invite in Buzz" button does nothing on this phone.
+        CFBundleURLTypes:
+          - CFBundleURLName: xyz.buzz.join
+            CFBundleTypeRole: Viewer
+            CFBundleURLSchemes:
+              - buzz
         # The relay is owner-configured and may be a plaintext `ws://` endpoint on
         # a LAN or Tailscale address (the Pi in the slice's live run), which ATS
         # blocks by default. This is a self-hosted developer client, not an App

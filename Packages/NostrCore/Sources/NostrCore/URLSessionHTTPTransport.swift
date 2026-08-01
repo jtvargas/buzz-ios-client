@@ -25,15 +25,20 @@ public struct URLSessionHTTPTransport: HTTPTransport {
     }
 
     /// The one request path, named by its verb.
+    ///
+    /// - Parameter body: the request body, or `nil` for a verb that carries none.
+    ///   Distinguished from empty `Data` deliberately: assigning `httpBody` at all
+    ///   makes `URLSession` send a `Content-Length`, which a bodyless `GET` should
+    ///   not have.
     func send(
         method: String,
-        body: Data,
+        body: Data?,
         to url: URL,
         headers: [String: String]
     ) async throws -> (Data, Int) {
         var request = URLRequest(url: url)
         request.httpMethod = method
-        request.httpBody = body
+        if let body { request.httpBody = body }
         for (name, value) in headers {
             request.setValue(value, forHTTPHeaderField: name)
         }
@@ -68,5 +73,16 @@ public extension URLSessionHTTPTransport {
     /// `BuzzKit` declares the conformance that makes this satisfy its own seam.
     func put(body: Data, to url: URL, headers: [String: String]) async throws -> (Data, Int) {
         try await send(method: "PUT", body: body, to: url, headers: headers)
+    }
+
+    /// Performs a `GET`, for the endpoints that are read without a body.
+    ///
+    /// Here for the same reason ``put(body:to:headers:)`` is: the relay's
+    /// join-policy document is fetched unauthenticated with no body, and adding a
+    /// verb to ``HTTPTransport`` would oblige three test doubles to grow a method
+    /// none of their subjects call. `BuzzKit`'s ``InviteTransport`` declares the
+    /// conformance.
+    func get(from url: URL, headers: [String: String] = [:]) async throws -> (Data, Int) {
+        try await send(method: "GET", body: nil, to: url, headers: headers)
     }
 }

@@ -29,7 +29,8 @@ What follows describes the app as it is on `main`, not as it is planned. Anythin
 
 - **Several communities on one phone.** A community is a relay, and each one keeps its own identity in the Keychain and its own database on disk, so two communities never see each other's conversations or sign with each other's key.
 - **Switch from the home heading** — the community name at the top left opens the list: which one is open, the relay under each name, and rename or remove by swiping a row. Removing one deletes its key and its local messages; nothing is removed from the relay.
-- **Add one the same three ways you signed in**: create an identity, scan a desktop QR, or paste an `nsec`. Adding a relay this phone is already in re-keys that community rather than making a second copy of it.
+- **Join by invitation.** Paste an invite link, or tap one and let the relay's own page hand it over (`buzz://join`). Hive shows the relay host you are about to join, fetches the relay's terms and privacy notice when it has any — with the age statement its operator requires, which is yours to make — and then claims the code with a key created for that community. This is the only way into a relay that gates on membership, which is what every community published on a directory is.
+- **Add one the same three ways you signed in**: create an identity, scan a desktop QR, or paste an `nsec`. That is enough for a relay you can already read; a relay that requires membership needs an invite. Adding a relay this phone is already in re-keys that community rather than making a second copy of it.
 - Switching stops the engine on the way out and brings the next one up against its own relay, so no frame of one community's conversations is drawn under another's name. A community you have signed out of stays in the list and leads to the sign-in gate, with its history still on the device.
 
 **Conversations**

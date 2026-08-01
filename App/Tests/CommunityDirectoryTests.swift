@@ -11,6 +11,13 @@ import Testing
         #expect(Community.relayIdentity(of: "ws://host:3004") == "ws://host:3004")
         // A port is part of the relay: two ports on one host are two relays.
         #expect(Community.relayIdentity(of: "ws://host:3004") != Community.relayIdentity(of: "ws://host:3005"))
+        // Except the scheme's own default, which is the same destination spelled out. An
+        // invite link can carry it, and two entries for one relay each keep their own copy
+        // of the same history.
+        #expect(Community.relayIdentity(of: "wss://homelab.ts.net:443") == "wss://homelab.ts.net")
+        #expect(Community.relayIdentity(of: "ws://host:80") == "ws://host")
+        #expect(Community.relayIdentity(of: "ws://host:443") == "ws://host:443")
+        #expect(Community.new(relayURLString: "wss://a.example").isSameRelay(as: "wss://a.example:443"))
     }
 
     @Test func refusesAnythingThatIsNotARelayURL() {

@@ -28,10 +28,19 @@ struct CommunitySwitcherView: View {
                     }
                 }
                 Section {
+                    // Joining leads, because it is the one that works everywhere: a
+                    // community you were invited to is closed to you until its code is
+                    // redeemed, and pointing Hive at its relay without one gets a connected
+                    // socket and an empty sidebar (§ ``JoinCommunityModel``).
+                    Button {
+                        environment.communitySheet = .join(nil)
+                    } label: {
+                        Label("Join with an invite", systemImage: "envelope.open")
+                    }
                     Button {
                         environment.communitySheet = .add
                     } label: {
-                        Label("Add community", systemImage: "plus.circle")
+                        Label("Add a relay", systemImage: "plus.circle")
                     }
                 } footer: {
                     Text(Self.footer)
@@ -78,11 +87,13 @@ struct CommunitySwitcherView: View {
         "This phone will forget the key for this community and delete the messages saved "
             + "here. Nothing is removed from the relay — you can join again with the same key."
 
-    /// Says what a community *is*, and names the gesture that renames or removes one —
-    /// there is no Edit button, so nothing else on this screen would.
+    /// Says what a community *is*, which of the two ways in to reach for, and names the
+    /// gesture that renames or removes one — there is no Edit button, so nothing else on
+    /// this screen would.
     static let footer =
         "Each community is its own relay, with its own identity and its own conversations. "
-            + "Swipe a row to rename or remove it."
+            + "Use an invite unless you run the relay yourself. Swipe a row to rename or "
+            + "remove it."
 
     // MARK: - Rows
 
