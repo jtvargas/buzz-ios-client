@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import VisionKit
 
 /// A picture that pinches, double-taps and pans, in a `UIScrollView`.
 ///
@@ -117,14 +118,52 @@ extension MessageMediaZoomView {
         private let maximumMagnification: CGFloat
         private weak var scrollView: MessageMediaScrollView?
         private weak var imageView: UIImageView?
+        /// The system's Live Text over this picture — see ``MessageMediaLiveText``.
+        private let liveText = ImageAnalysisInteraction()
+        /// The analysis in flight, held so a replaced picture can cancel the one it
+        /// supersedes. The viewer shows the inline bitmap and swaps in the full-resolution
+        /// decode a moment later, so this happens on every page a reader opens.
+        private var analysisTask: Task<Void, Never>?
 
         init(maximumMagnification: CGFloat) {
             self.maximumMagnification = maximumMagnification
         }
 
+        deinit { analysisTask?.cancel() }
+
         func attach(scrollView: MessageMediaScrollView, imageView: UIImageView) {
             self.scrollView = scrollView
             self.imageView = imageView
+
+            // A `UIImageView` does not take touches by default, and an interaction on a view
+            // that declines them never begins. This is the line that makes Live Text work at
+            // all, and the one to suspect first if it silently does not.
+            imageView.isUserInteractionEnabled = true
+            // Text and the things text implies — a phone number, an address — and nothing
+            // else. `.automatic` would add subject lift, which claims a long press *anywhere*
+            // on the picture, and this surface already spends its long presses and drags on
+            // zoom and on dismissal. See ``MessageMediaLiveText`` for what is left out.
+            liveText.preferredInteractionTypes = .automaticTextOnly
+            imageView.addInteraction(liveText)
+
+            // The first picture arrives through the initialiser, so `show(_:)` — which only
+            // acts on a *replacement* — never sees it.
+            if let image = imageView.image { analyse(image) }
+        }
+
+        /// Starts the analysis for `image`, abandoning whatever was running for the last one.
+        ///
+        /// The result is dropped rather than applied if the picture moved on while it ran: an
+        /// analysis carries coordinates into the bitmap it was made from, so applying a stale
+        /// one puts the selection somewhere the words are not.
+        private func analyse(_ image: UIImage) {
+            analysisTask?.cancel()
+            liveText.analysis = nil
+            analysisTask = Task { [weak self] in
+                let analysis = await MessageMediaLiveText.analysis(of: image)
+                guard !Task.isCancelled, let self, imageView?.image === image else { return }
+                liveText.analysis = analysis
+            }
         }
 
         /// Shows `image`, keeping the reader where they were.
@@ -135,6 +174,9 @@ extension MessageMediaZoomView {
         func show(_ image: UIImage) {
             guard let imageView, imageView.image !== image else { return }
             imageView.image = image
+            // The higher-resolution decode is a different bitmap, so the text found in the
+            // one it replaces is positioned for a picture that is no longer on screen.
+            analyse(image)
             // The replacement is the same picture at a higher resolution, so its shape is
             // unchanged and preserving the *relative* magnification keeps the swap
             // invisible — the fitted scale changes, what is on screen does not.
