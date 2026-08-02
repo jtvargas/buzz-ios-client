@@ -20,13 +20,22 @@ import UIKit
 struct HomeShortcutCards: View {
     /// The number on each card. Every card has one — see ``HomeShortcutCard/count``.
     let count: (HomeShortcut) -> Int
+    /// Whether a card is asking for attention *now*, which is the only thing that spends
+    /// the accent. For most cards that is simply "something is in it"; Later is the one
+    /// where having items and wanting attention are different questions — a reminder due
+    /// tomorrow is waiting, not calling.
+    let isCalling: (HomeShortcut) -> Bool
     let press: (HomeShortcut) -> Void
 
     var body: some View {
         HStack(spacing: Self.betweenCards) {
             ForEach(HomeShortcut.allCases) { shortcut in
                 Button { press(shortcut) } label: {
-                    HomeShortcutCard(shortcut: shortcut, count: count(shortcut))
+                    HomeShortcutCard(
+                        shortcut: shortcut,
+                        count: count(shortcut),
+                        isCalling: isCalling(shortcut)
+                    )
                 }
                 // The card's own border is still the whole button — any bordered *system*
                 // style would draw a second background inside a card already drawing its
@@ -58,6 +67,9 @@ struct HomeShortcutCard: View {
     /// Not an `Int?`. Both cards always have a number, so an optional here would be a state
     /// nothing can produce and every reader would still have to unwrap.
     let count: Int
+    /// See ``HomeShortcutCards/isCalling``. Passed in rather than derived from ``count``,
+    /// because for Later the two differ.
+    var isCalling: Bool = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: Self.betweenLines) {
@@ -119,7 +131,7 @@ struct HomeShortcutCard: View {
     /// the accent. Derived from the symbol rather than switched on the case, so a fourth
     /// destination gets the right treatment without anyone remembering this rule.
     private var border: Color {
-        Self.spendsAccentOnEdge(shortcut, count: count) ? .hiveAccent : Self.restingBorder
+        Self.spendsAccentOnEdge(shortcut, isCalling: isCalling) ? .hiveAccent : Self.restingBorder
     }
 
     /// The card's wash — still the accent, still only when something is waiting. The wash is
@@ -128,7 +140,7 @@ struct HomeShortcutCard: View {
     /// from across the screen. `0.18` is the app's own number for "this is mine, lightly",
     /// the opacity a reacted chip and a sent bubble already draw the accent at.
     private var fill: Color {
-        Self.hasSomethingWaiting(count) ? Color.hiveAccent.opacity(Self.fillOpacity) : .clear
+        isCalling ? Color.hiveAccent.opacity(Self.fillOpacity) : .clear
     }
 
     /// Whether this card is drawn in the accent: whether there is anything in it.
@@ -147,8 +159,8 @@ struct HomeShortcutCard: View {
     /// Whether this card draws its edge in the accent — see ``border``. Pure and exposed
     /// for the same reason ``hasSomethingWaiting(_:)`` is: what a border looks like is not
     /// something a test can read back off a rendered card.
-    static func spendsAccentOnEdge(_ shortcut: HomeShortcut, count: Int) -> Bool {
-        hasSomethingWaiting(count) && !shortcut.signalsWithGlyph
+    static func spendsAccentOnEdge(_ shortcut: HomeShortcut, isCalling: Bool) -> Bool {
+        isCalling && !shortcut.signalsWithGlyph
     }
 
     /// What a screen reader hears: the destination, then what is in it.
@@ -200,8 +212,9 @@ struct HomeShortcutCard: View {
 enum HomeShortcut: String, CaseIterable, Hashable, Identifiable {
     /// Recent thread activity across every channel.
     case threads
-    /// Saved-for-later items. Not built yet — the card exists so the shape of the home
-    /// screen is right, and says so when pressed.
+    /// Messages saved to be reminded about. See ``LaterView``. The one card whose contents
+    /// carry a time, and so the one whose count and whose *accent* answer different
+    /// questions — see ``HomeShortcutCards/isCalling``.
     case later
     /// Conversations holding unsent text. See ``DraftsView``.
     case drafts

@@ -388,6 +388,7 @@ public actor SyncEngine {
                 membershipFilter(selfPubkeyHex: pubkey),
                 readStateFilter(selfPubkeyHex: pubkey),
                 channelMutesFilter(selfPubkeyHex: pubkey),
+                remindersFilter(selfPubkeyHex: pubkey),
             ],
             sink: self
         )

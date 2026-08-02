@@ -66,8 +66,13 @@ struct ChannelListView: View {
     /// every push that hides the tab bar, and a `@State` inside ``ThreadsView`` is a push it
     /// cannot see. Only the storage moved — that screen still declares the destination.
     @State private var openedThread: ThreadRoute?
-    /// Whether the Later shortcut's "not built yet" notice is showing.
-    @State private var showsLaterNotice = false
+    /// The pushed Later screen. A route rather than a `Bool` so it sits alongside the
+    /// other programmatic pushes this stack owns.
+    @State private var showsLater: LaterRoute?
+    /// Drives the Later screen and keeps the scheduled alerts in step. Built here rather
+    /// than inside the screen so the shortcut card's count is live whether or not anyone
+    /// has opened it.
+    @State private var laterModel: LaterModel?
     /// The pushed conversations. Explicit, because every push here is programmatic —
     /// a row's button, a sheet that is already dismissing, a `#`-reference in a message.
     ///
@@ -206,14 +211,7 @@ struct ChannelListView: View {
                         openedThread: $openedThread
                     )
                 }
-                .alert("Later isn't built yet", isPresented: $showsLaterNotice) {
-                    Button("OK", role: .cancel) {}
-                } message: {
-                    Text(
-                        "Saving a message for later is coming. The shortcut is here so the "
-                            + "rest of this screen can be built around it."
-                    )
-                }
+                .navigationDestination(item: $showsLater) { _ in laterDestination }
         }
         // Declared here on the stack and by nothing below it — ``ChannelListTabBar`` holds
         // the measurements that put it here rather than on the pushed views.
@@ -240,6 +238,23 @@ struct ChannelListView: View {
         // swipe — which runs no app code — fills the slot too. See ``ConversationResume``.
         .onChange(of: path) { previous, current in
             resume.observe(path: current, previously: previous)
+        }
+        // A tapped reminder alert opens the app on the sidebar, and stops there.
+        //
+        // It used to push Later and light the row that had come due. The owner asked for it
+        // and then asked for it back: the alert has already said what came due, so the tap is
+        // a way *into the app* rather than a request for a particular screen — and a tap that
+        // takes over the navigation is one that has to be undone before anything else can be
+        // done. So this pops whatever was open and leaves the reader where the app starts.
+        //
+        // `initial: true` because the tap that *launches* the app sets this before this view
+        // exists, and that is the only signal there will be.
+        .onChange(of: environment.reminderAlerts.opened, initial: true) { _, reminderID in
+            guard reminderID != nil else { return }
+            environment.reminderAlerts.opened = nil
+            openedThread = nil
+            showsLater = nil
+            path = []
         }
         // The router hands back an opened conversation once; this is the one place that turns
         // it into a push, and it clears the value so an unrelated body pass cannot re-push.
@@ -282,6 +297,20 @@ struct ChannelListView: View {
         // The card's number only. The list itself is read by the pushed screen, so a table
         // written on every keystroke is not re-read behind a sidebar nobody is looking at.
         .task { await draftsModel.runCount() }
+        // Built and observed here rather than inside ``LaterView``, so the shortcut card's
+        // count is live before anyone opens the screen — and so the alerts stay reconciled
+        // with what is pending even when the screen has never been on.
+        .task {
+            guard laterModel == nil else { return }
+            let model = LaterModel(
+                store: store,
+                engine: engine,
+                scheduler: ReminderScheduler(),
+                authorName: { names.name(for: $0) }
+            )
+            laterModel = model
+            await model.run()
+        }
         .task { await presence.run() }
         .task { await directory.run() }
         .task { await ticker.run() }
@@ -445,26 +474,57 @@ private extension ChannelListView {
     /// The Threads and Later cards, in one row above the conversations — one list row
     /// holding both, because they are a set of destinations rather than two rows.
     var shortcuts: some View {
-        HomeShortcutCards(count: count(for:), press: press(_:))
+        HomeShortcutCards(count: count(for:), isCalling: isCalling(_:), press: press(_:))
             .listRowInsets(Self.cardsInsets)
             .listRowSeparator(.hidden)
+    }
+
+    /// The Later screen. Lifted out of the stack's builder because that builder is already
+    /// at the type-checker's limit — inlining this one pushed it over.
+    @ViewBuilder
+    var laterDestination: some View {
+        if let laterModel {
+            LaterView(
+                model: laterModel,
+                channelName: { conversationRow(for: $0).name ?? "" },
+                openTarget: { target in
+                    showsLater = nil
+                    path = ConversationRoute(
+                        channel: conversationRow(for: target.channelID)
+                    ).pushed(onto: path)
+                }
+            )
+        }
     }
 
     func count(for shortcut: HomeShortcut) -> Int {
         switch shortcut {
         // The store's unread threads, less the ones this device has opened or replied in.
         case .threads: threadReads.unseenCount(among: model.unreadThreads)
-        // Nothing is saved anywhere yet, so this is the truth rather than a placeholder.
-        case .later: 0
+        // Reminders still waiting, live from the store.
+        case .later: laterModel?.pending.count ?? 0
         // Live from the store, de-duplicated so a keystroke does not move the card.
         case .drafts: draftsModel.count
+        }
+    }
+
+    /// Whether a card is asking to be dealt with *now* — see ``HomeShortcutCards/isCalling``.
+    ///
+    /// For Threads and Drafts that is still "is there anything in it": an unread thread and
+    /// an unsent draft are both already overdue. Later is the one card whose contents have a
+    /// *time* on them, so having three reminders says nothing about whether any of them wants
+    /// attention yet — the owner asked for the colour only once one has come due.
+    func isCalling(_ shortcut: HomeShortcut) -> Bool {
+        switch shortcut {
+        case .later: laterModel?.isDue ?? false
+        case .threads, .drafts: HomeShortcutCard.hasSomethingWaiting(count(for: shortcut))
         }
     }
 
     func press(_ shortcut: HomeShortcut) {
         switch shortcut {
         case .threads: showsThreads = ThreadsRoute()
-        case .later: showsLaterNotice = true
+        case .later: showsLater = LaterRoute()
         case .drafts: showsDrafts = DraftsRoute()
         }
     }
