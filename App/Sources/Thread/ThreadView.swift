@@ -64,7 +64,7 @@ struct ThreadView: View {
         store: BuzzEventStore,
         engine: SyncEngine,
         drafts: ComposerDrafts? = nil,
-        uploader: (any MediaUploading)? = nil,
+        uploader: @escaping MediaUploaderProvider,
         selfPubkey: String?,
         landingOn landing: ThreadLanding = .latestReply,
         focusingComposer focusesComposer: Bool = false
@@ -105,7 +105,7 @@ struct ThreadView: View {
         presence: PresenceStore,
         typing: any EphemeralPublishing = NoopEphemeralPublisher(),
         drafts: ComposerDrafts? = nil,
-        uploader: (any MediaUploading)? = nil,
+        uploader: @escaping MediaUploaderProvider,
         selfPubkey: String?,
         landingOn landing: ThreadLanding = .latestReply,
         focusingComposer focusesComposer: Bool = false

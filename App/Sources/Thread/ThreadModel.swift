@@ -137,7 +137,7 @@ final class ThreadModel {
         opener: any ThreadOpening,
         typing: any EphemeralPublishing = NoopEphemeralPublisher(),
         drafts: ComposerDrafts? = nil,
-        uploader: (any MediaUploading)? = nil,
+        uploader: @escaping MediaUploaderProvider = { nil },
         selfPubkey: String?,
         typingThrottle: Duration = .seconds(3),
         clock: @escaping @Sendable () -> ContinuousClock.Instant = { ContinuousClock.now }

@@ -49,7 +49,7 @@ struct ComposerAttachmentSendTests {
         let sender = try RecordingSender()
         let uploader = StubUploader()
         let model = ChannelTimelineModel(
-            channel: "room-1", store: store, sender: sender, uploader: uploader
+            channel: "room-1", store: store, sender: sender, uploader: { uploader }
         )
 
         await Self.attach(2, to: model.attachments, through: uploader)
@@ -91,7 +91,7 @@ struct ComposerAttachmentSendTests {
         let sender = try RecordingSender()
         let uploader = StubUploader()
         let model = ChannelTimelineModel(
-            channel: "room-1", store: store, sender: sender, uploader: uploader
+            channel: "room-1", store: store, sender: sender, uploader: { uploader }
         )
 
         await Self.attach(1, to: model.attachments, through: uploader)
@@ -114,7 +114,7 @@ struct ComposerAttachmentSendTests {
         let sender = try RecordingSender()
         let uploader = StubUploader()
         let model = ChannelTimelineModel(
-            channel: "room-1", store: store, sender: sender, uploader: uploader
+            channel: "room-1", store: store, sender: sender, uploader: { uploader }
         )
 
         model.attachments.add([StubPickedItem(data: TestPicture.png())])
@@ -164,7 +164,7 @@ struct ComposerAttachmentSendTests {
             store: store,
             sender: sender,
             opener: StubThreadOpener(store: store, events: []),
-            uploader: uploader,
+            uploader: { uploader },
             selfPubkey: nil
         )
 

@@ -3,6 +3,12 @@ import Foundation
 import Observation
 import UIKit
 
+/// Resolves the session's uploader when an attachment is picked.
+///
+/// The provider is deliberately main-actor isolated: it reads the app's observable
+/// environment, while ``MediaUploading`` remains `Sendable` for the actual request.
+typealias MediaUploaderProvider = @MainActor @Sendable () -> (any MediaUploading)?
+
 /// What the composer is carrying besides text.
 ///
 /// Owned by the conversation model beside ``MentionDraft`` and cleared by the same
@@ -77,10 +83,10 @@ final class ComposerAttachmentsModel {
     /// mean an old phone re-encoding a large HEIC losing a picture that was going to arrive.
     static let uploadDeadline: Duration = .seconds(270)
 
-    /// `nil` before a relay is configured, and in tests that do not exercise
-    /// uploading. A pick with no uploader fails with a reason rather than
-    /// silently doing nothing.
-    private let uploader: (any MediaUploading)?
+    /// The app environment can build this after a conversation screen exists, so this is
+    /// resolved at pick time rather than captured when the model is constructed. A pick with
+    /// no uploader fails with a reason rather than silently doing nothing.
+    private let uploader: MediaUploaderProvider
 
     /// The in-flight pick batches, so a sign-out or a send can stop them. Not
     /// observable: nothing renders them.
@@ -96,7 +102,7 @@ final class ComposerAttachmentsModel {
     private let uploadDeadline: Duration
 
     init(
-        uploader: (any MediaUploading)? = nil,
+        uploader: @escaping MediaUploaderProvider = { nil },
         sourceDeadline: Duration = ComposerAttachmentsModel.sourceDeadline,
         uploadDeadline: Duration = ComposerAttachmentsModel.uploadDeadline
     ) {
@@ -255,7 +261,7 @@ final class ComposerAttachmentsModel {
     /// bounded at all.
     private func upload(_ item: any ComposerPickedItem, as id: UUID) async {
         do {
-            guard let uploader else { throw ComposerAttachmentError.noUploader }
+            guard let uploader = uploader() else { throw ComposerAttachmentError.noUploader }
             let data = try await Self.within(
                 sourceDeadline, or: .sourceTimedOut, item.loadData
             )
@@ -361,7 +367,11 @@ final class ComposerAttachmentsModel {
             // strip this one is to decode it, and decoding an animation loses the animation.
             "That animation carries data that can't be removed without flattening it."
         case ComposerAttachmentError.noUploader:
-            "Not connected to a relay yet."
+            // Not "sign in": this is reached while the workspace is still opening — on
+            // launch, or on a community switch — and an author who is already signed in
+            // would be told to do the thing they have just done. Says what is true and
+            // what waiting will fix.
+            "This conversation isn't ready for pictures yet — try again in a moment."
         case ComposerAttachmentError.sourceTimedOut:
             // Names iCloud because that is what it almost always is, and because it is the
             // one the author can actually do something about.

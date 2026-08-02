@@ -40,6 +40,7 @@ struct ChannelTimelineView: View {
     /// ``ThreadPrefetching``.
     private let prefetcher: (any ThreadPrefetching)?
     private let presenceStore: PresenceStore
+    private let uploader: MediaUploaderProvider
     private let lifecycleEngine: SyncEngine?
     private let selfPubkey: String?
     /// Whether the composer takes the keyboard once this conversation has settled. Set
@@ -62,7 +63,7 @@ struct ChannelTimelineView: View {
         store: BuzzEventStore,
         engine: SyncEngine,
         drafts: ComposerDrafts? = nil,
-        uploader: (any MediaUploading)? = nil,
+        uploader: @escaping MediaUploaderProvider,
         selfPubkey: String?,
         knownPeer: String? = nil,
         focusingComposer focusesComposer: Bool = false
@@ -105,7 +106,7 @@ struct ChannelTimelineView: View {
         prefetcher: (any ThreadPrefetching)? = nil,
         presence: PresenceStore,
         drafts: ComposerDrafts? = nil,
-        uploader: (any MediaUploading)? = nil,
+        uploader: @escaping MediaUploaderProvider,
         selfPubkey: String?,
         knownPeer: String? = nil,
         lifecycleEngine: SyncEngine? = nil,
@@ -119,6 +120,7 @@ struct ChannelTimelineView: View {
         self.opener = opener
         self.prefetcher = prefetcher
         presenceStore = presence
+        self.uploader = uploader
         self.lifecycleEngine = lifecycleEngine
         self.selfPubkey = selfPubkey
         self.knownPeer = knownPeer
@@ -230,6 +232,7 @@ struct ChannelTimelineView: View {
                 // The model's, not a second copy: a thread pushed from a row keeps its
                 // own draft in the same place this channel keeps its own.
                 drafts: model.drafts,
+                uploader: uploader,
                 selfPubkey: selfPubkey,
                 focusingComposer: route.focusesComposer
             )
