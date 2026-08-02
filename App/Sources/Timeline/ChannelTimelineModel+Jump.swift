@@ -37,6 +37,37 @@ extension ChannelTimelineModel {
         jumpToken += 1
     }
 
+    /// Releases the frozen tail, rebuilds the rendered rows, and lands on a loaded message.
+    ///
+    /// This is the Stage 1 boundary: no store or relay lookup is attempted. A target that is
+    /// not already loaded returns false so the router can report that limitation instead of
+    /// leaving a request armed for an unrelated future commit.
+    @discardableResult
+    func prepareLanding(on eventID: String) -> Bool {
+        pendingLanding = eventID
+        tail.release()
+        rebuild()
+        guard pendingLanding == nil else {
+            pendingLanding = nil
+            return false
+        }
+        return true
+    }
+
+    /// Re-asks for a pending message-link landing once its row is in the rendered set.
+    ///
+    /// Called from ChannelTimelineModel.rebuild(). Like landOnOwnSend(among:), this touches
+    /// only the jump command, never isAtBottom: writing that flag here would re-enter rebuild
+    /// through its own observer. A frozen row remains pending until the landing request
+    /// releases the tail and rebuilds.
+    func landOnPending(among rendered: [TimelineRow]) {
+        guard let target = pendingLanding,
+              rendered.contains(where: { $0.id == target }) else { return }
+        pendingLanding = nil
+        jumpTarget = .message(target)
+        jumpToken += 1
+    }
+
     /// Lands the author on the message they just sent, now that it has an id.
     ///
     /// The second half of the trip ``send()`` started at the tap. If the row is already

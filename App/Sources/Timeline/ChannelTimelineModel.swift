@@ -93,12 +93,11 @@ final class ChannelTimelineModel {
         }
     }
 
-    /// An own send that has been queued but has not appeared on screen yet — the row the next
-    /// rebuild has to land the author on. See ``landOnOwnSend(among:)``.
-    ///
-    /// Not observable: nothing renders it, and the moment it clears already bumps
-    /// ``jumpToken``, which is what the scaffold watches.
+    /// An own send awaiting its row, consumed by ``landOnOwnSend(among:)``.
     @ObservationIgnored var awaitingOwnSend: String?
+
+    /// A loaded message-link target consumed by the next rebuild.
+    var pendingLanding: String?
 
     /// What the affordances above the composer show: how many arrivals the freeze holds
     /// back, which one to land on, and whether the newest row is far enough below to
@@ -366,6 +365,7 @@ final class ChannelTimelineModel {
             if isStructural { contentRevision += 1 } else { rowRevision += 1 }
         }
         jump.hold(count: split.held.count, firstID: split.held.first?.id)
+        landOnPending(among: split.rendered)
         landOnOwnSend(among: split.rendered)
         markReadIfNeeded()
     }

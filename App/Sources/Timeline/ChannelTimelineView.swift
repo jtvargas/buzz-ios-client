@@ -25,6 +25,7 @@ struct ChannelTimelineView: View {
     /// Whose profile is open, if anyone's — set by a tap on a row's avatar or name.
     @State private var profilePeer: ProfilePeer?
     @Environment(\.entityNames) private var names
+    @Environment(\.messageLandingRouter) private var messageLandingRouter
     private let channel: ChannelListRow
     private let channelID: String
     private let store: BuzzEventStore
@@ -249,6 +250,21 @@ struct ChannelTimelineView: View {
         // the replies themselves, so on a cold launch a row would otherwise say "3 replies"
         // over an empty strip. See ``BuzzKit/SyncEngine/prefetchThreads(in:)``.
         .task { await prefetcher?.prefetchThreads(in: channelID) }
+        // Landing is not part of ConversationRoute: that route intentionally does nothing
+        // when this channel is already on top. This task handles both a freshly pushed
+        // timeline and the timeline already visible when its link was pressed. It clears
+        // only after the synchronous work so later stages can safely add suspension points.
+        .task(id: messageLandingRouter?.pendingLanding) {
+            guard let landing = messageLandingRouter?.pendingLanding,
+                  landing.channelID == channelID else { return }
+            if model.prepareLanding(on: landing.eventID) {
+                if messageLandingRouter?.pendingLanding == landing {
+                    messageLandingRouter?.pendingLanding = nil
+                }
+            } else if messageLandingRouter?.pendingLanding == landing {
+                messageLandingRouter?.fail(.notInStore)
+            }
+        }
     }
 
     /// How this conversation presents itself — a channel, or the person on the other

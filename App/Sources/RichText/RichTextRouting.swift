@@ -11,6 +11,9 @@ enum RichTextRoute: Equatable {
     case profile(pubkey: String)
     /// Navigate to this conversation.
     case conversation(channelID: String)
+    /// Land on a message in this conversation. Stage 1 lands in an already-loaded channel;
+    /// later routing stages use the retained root id to choose a thread destination.
+    case message(channelID: String, eventID: String, threadRootID: String?)
     /// Hand back to the system's own link handling (Safari, Mail).
     case external(URL)
 
@@ -23,12 +26,8 @@ enum RichTextRoute: Equatable {
             self = .profile(pubkey: pubkey)
         case let .channel(id):
             self = .conversation(channelID: id)
-        // An internal message link navigates to the conversation it names. It does not
-        // scroll to the message itself: nothing in the app can select a message by id
-        // yet, and pushing the channel is the honest subset rather than a link that
-        // looks like it will land somewhere it cannot.
-        case let .message(channel, _, _):
-            self = .conversation(channelID: channel)
+        case let .message(channel, event, thread):
+            self = .message(channelID: channel, eventID: event, threadRootID: thread)
         case let .web(url), let .mail(url):
             self = .external(url)
         case nil:
