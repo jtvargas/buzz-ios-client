@@ -224,7 +224,7 @@ struct ComposerAttachmentsTests {
         await Self.waitUntil { model.uploadError != nil }
 
         #expect(model.attachments.isEmpty)
-        #expect(model.uploadError == "No session is mounted yet.")
+        #expect(model.uploadError == "Sign in before adding a picture.")
     }
 
     /// The conversation model is allowed to exist before the session finishes mounting.

@@ -367,7 +367,7 @@ final class ComposerAttachmentsModel {
             // strip this one is to decode it, and decoding an animation loses the animation.
             "That animation carries data that can't be removed without flattening it."
         case ComposerAttachmentError.noUploader:
-            "No session is mounted yet."
+            "Sign in before adding a picture."
         case ComposerAttachmentError.sourceTimedOut:
             // Names iCloud because that is what it almost always is, and because it is the
             // one the author can actually do something about.
