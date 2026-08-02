@@ -429,7 +429,14 @@ private extension ChannelTimelineView {
             onReact: { model.react($0, on: row.id) },
             onToggleReaction: { model.toggleReaction($0, on: row.id) },
             onOpenThread: row.isDeleted ? nil : { open(thread: row) },
-            onLongPress: { messageActions = MessageActionTarget(row: row, isOwn: model.isOwn(row)) },
+            onLongPress: {
+                messageActions = MessageActionTarget(
+                    row: row,
+                    isOwn: model.isOwn(row),
+                    channelID: channelID,
+                    threadRootID: nil
+                )
+            },
             onOpenProfile: { profilePeer = ProfilePeer(pubkey: $0) },
             conversation: conversation
         )
