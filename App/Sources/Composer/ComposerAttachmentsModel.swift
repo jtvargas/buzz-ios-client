@@ -367,7 +367,11 @@ final class ComposerAttachmentsModel {
             // strip this one is to decode it, and decoding an animation loses the animation.
             "That animation carries data that can't be removed without flattening it."
         case ComposerAttachmentError.noUploader:
-            "Sign in before adding a picture."
+            // Not "sign in": this is reached while the workspace is still opening — on
+            // launch, or on a community switch — and an author who is already signed in
+            // would be told to do the thing they have just done. Says what is true and
+            // what waiting will fix.
+            "This conversation isn't ready for pictures yet — try again in a moment."
         case ComposerAttachmentError.sourceTimedOut:
             // Names iCloud because that is what it almost always is, and because it is the
             // one the author can actually do something about.
