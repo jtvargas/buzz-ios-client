@@ -37,10 +37,11 @@ struct MessageActionsSheet: View {
     @State private var isEditing = false
     @State private var draft = ""
 
-    /// Where the sheet rests before anything is pushed onto it. The owner's number
-    /// (2026-08-01). Named rather than written twice: the initial detent and the detent
-    /// *set* must agree, and two literals are two places to change one of them.
-    private static let restingHeight: CGFloat = 320
+    /// Where the sheet rests before anything is pushed onto it. The owner's number, raised
+    /// from 320 to 360 (2026-08-02) when "Copy Link To Message" made the list one row longer.
+    /// Named rather than written twice: the initial detent and the detent *set* must agree,
+    /// and two literals are two places to change one of them.
+    private static let restingHeight: CGFloat = 360
 
     /// The height of a quick-reaction target, and of the emoji picker's button beside it.
     private static let paletteHeight: CGFloat = 48
@@ -192,6 +193,16 @@ struct MessageActionsSheet: View {
         }
         actionRow("Copy Message", symbol: "doc.on.doc") {
             UIPasteboard.general.string = target.row.content
+            dismiss()
+        }
+        actionRow("Copy Link To Message", symbol: "link") {
+            if let url = MessageLink.url(
+                channelID: target.channelID,
+                messageID: target.row.id,
+                threadRootID: target.threadRootID
+            ) {
+                UIPasteboard.general.string = url.absoluteString
+            }
             dismiss()
         }
         // Deliberately does not dismiss: the alert is the whole outcome, and closing the

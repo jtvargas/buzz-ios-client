@@ -273,7 +273,7 @@ struct ThreadView: View {
                 onToggleReaction: { model.toggleReaction($0, on: row.id) },
                 // No `onOpenThread`: a reply inside a thread has nowhere further to go,
                 // which is also why no row here draws a reply preview.
-                onLongPress: { messageActions = MessageActionTarget(row: row, isOwn: model.isOwn(row)) },
+                onLongPress: { messageActions = messageActionTarget(for: row) },
                 onOpenProfile: { profilePeer = ProfilePeer(pubkey: $0) },
                 conversation: conversation
             )
@@ -286,7 +286,7 @@ struct ThreadView: View {
             if row.id == model.root {
                 ThreadOpenerDivider(
                     replyCount: model.replyCount,
-                    onOpenActions: { messageActions = MessageActionTarget(row: row, isOwn: model.isOwn(row)) }
+                    onOpenActions: { messageActions = messageActionTarget(for: row) }
                 )
             }
         }
@@ -364,9 +364,9 @@ struct ThreadView: View {
         model.mentionAutocomplete.dismissComposer()
     }
 
-    /// Raises the reply composer's keyboard for a thread opened by "Reply in thread" — and
-    /// waits for the push to finish first.
-    ///
+    private func messageActionTarget(for row: TimelineRow) -> MessageActionTarget {
+        .init(row: row, isOwn: model.isOwn(row), channelID: channelID, threadRootID: model.root)
+    }
 }
 
 /// The reply composer: a Liquid Glass capsule field and a prominent send button, the

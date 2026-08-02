@@ -12,6 +12,10 @@ struct MessageActionTarget: Identifiable, Equatable {
     let row: TimelineRow
     /// Whether this is the local identity's own send — what gates Retry and Delete.
     let isOwn: Bool
+    /// The channel that owns the message — required for a portable deep link.
+    let channelID: String
+    /// The thread root when the message is a reply, or `nil` for a channel message.
+    let threadRootID: String?
 
     var id: String { row.id }
 }
