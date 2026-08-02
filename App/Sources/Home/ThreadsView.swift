@@ -119,6 +119,7 @@ struct ThreadsView: View {
                     names: names,
                     isUnseen: isUnseen(activity),
                     onOpen: { open(activity, at: .opener, focusesComposer: false) },
+                    onOpenLatest: { open(activity, at: .latestReply, focusesComposer: false) },
                     onReply: { open(activity, at: .latestReply, focusesComposer: true) },
                     onMarkAsRead: { markAsRead(activity) },
                     onOpenProfile: { profilePeer = ProfilePeer(pubkey: $0) }
