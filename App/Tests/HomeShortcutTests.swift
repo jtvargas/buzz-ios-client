@@ -170,7 +170,9 @@ struct HomeShortcutTests {
         let run = Task { await model.run() }
         defer { run.cancel() }
 
-        let opener = try peer.message("question", in: "general", at: 1_000)
+        // The reader authored the opener, so this thread remains in the
+        // participation-scoped unread list while peer replies drive the count.
+        let opener = try reader.message("question", in: "general", at: 1_000)
         _ = try await store.ingest(batch: [
             try relay.channelMetadata("general", name: "General", at: 500),
             opener,
