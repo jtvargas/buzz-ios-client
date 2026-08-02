@@ -63,11 +63,20 @@ public struct ChannelDirectoryClient: ChannelDirectoryFetching, Sendable {
     private let transport: any HTTPTransport
     private let queryURL: URL
     private let signer: any EventSigner
+    /// Read once per fetch, and only to decide whether an ephemeral channel's deadline has
+    /// passed. Injected so that rule is testable without waiting out a real TTL.
+    private let now: @Sendable () -> Date
 
-    public init(transport: any HTTPTransport, queryURL: URL, signer: some EventSigner) {
+    public init(
+        transport: any HTTPTransport,
+        queryURL: URL,
+        signer: some EventSigner,
+        now: @escaping @Sendable () -> Date = Date.init
+    ) {
         self.transport = transport
         self.queryURL = queryURL
         self.signer = signer
+        self.now = now
     }
 
     public func fetch(
@@ -102,8 +111,20 @@ public struct ChannelDirectoryClient: ChannelDirectoryFetching, Sendable {
         // viewer has not joined, which is every channel in a community they have just
         // been invited to. That is the difference between a sidebar and a blank panel
         // on a first join.
+        //
+        // Ephemeral channels whose deadline has passed are **not** discoverable, even
+        // though the relay still serves them. See ``hasOutlivedItsDeadline(_:now:)``: the
+        // relay never deletes a channel row, so an expired one is open and answerable for
+        // ever, and discovery is the one route by which somebody who never joined it can
+        // be shown it. A viewer's own memberships are left alone — leaving a channel is
+        // theirs to do, not this client's.
         let discoveryPages = try await fetchAll(DirectoryFilter(kinds: [.groupMetadata], tagQueries: [:]))
-        let discoverableChannels = Set(discoveryPages.compactMap(\.addressableIdentifier))
+        let asOf = now()
+        let discoverableChannels = Set(
+            discoveryPages
+                .filter { !Self.hasOutlivedItsDeadline($0, now: asOf) }
+                .compactMap(\.addressableIdentifier)
+        )
 
         let relevantChannels = currentChannels
             .union(previouslyActiveChannels)
@@ -350,6 +371,51 @@ public struct ChannelDirectoryClient: ChannelDirectoryFetching, Sendable {
             guard let name = tag.first else { return false }
             return name.lowercased() == "public"
         }
+    }
+
+    /// Whether this channel was given a life and has outlived it.
+    ///
+    /// # Why a client has to decide this at all
+    ///
+    /// Because nothing else ever will. A Buzz relay records `ttl_seconds` and a
+    /// `ttl_deadline` on an ephemeral channel and publishes both on its kind-39000
+    /// (`buzz-relay/src/handlers/side_effects.rs:1101-1107`, *"clients use this to show
+    /// countdown timers"*) — and then **never deletes the row**: there is no
+    /// `DELETE FROM channels` anywhere in the relay. So a channel created to live for five
+    /// minutes is still open, still answering, and still in every discovery response
+    /// months later.
+    ///
+    /// That is not hypothetical. `homelab.tail4bc643.ts.net` is carrying eight of them —
+    /// `livesub-*` and `buzzkit-p2-*`, created by this package's own live suite
+    /// (`LivePiSupport.swift:165`, `ttlSeconds: 300`) — each owned by a throwaway key,
+    /// each with one member who is not the viewer, each eleven days past a five-minute
+    /// deadline, and each shown to everybody on that relay.
+    ///
+    /// Read from the deadline the relay publishes rather than from the name, because the
+    /// names are an accident of which fixtures happened to leak; a client that hid
+    /// `livesub-*` would be hiding this week's debris and none of next week's.
+    ///
+    /// Absent or unparseable means *not expired*. A channel with no deadline is an
+    /// ordinary one, and a deadline this client cannot read is not grounds for hiding a
+    /// conversation.
+    static func hasOutlivedItsDeadline(_ event: NostrEvent, now: Date) -> Bool {
+        guard let tag = event.tags.first(where: { $0.first?.lowercased() == "ttl_deadline" }),
+              tag.count > 1,
+              let deadline = Self.rfc3339(tag[1])
+        else { return false }
+        return deadline < now
+    }
+
+    /// The relay writes these with `chrono`'s `to_rfc3339`, which carries fractional
+    /// seconds; `ISO8601DateFormatter` needs to be told that, and told separately not to
+    /// expect them. Both are tried rather than assuming the shape of somebody else's clock.
+    private static func rfc3339(_ text: String) -> Date? {
+        let withFraction = ISO8601DateFormatter()
+        withFraction.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = withFraction.date(from: text) { return date }
+        let plain = ISO8601DateFormatter()
+        plain.formatOptions = [.withInternetDateTime]
+        return plain.date(from: text)
     }
 
     private static func isArchived(_ event: NostrEvent) -> Bool {
