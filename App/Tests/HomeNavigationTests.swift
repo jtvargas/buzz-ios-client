@@ -48,6 +48,15 @@ struct HomeNavigationTests {
         }
     }
 
+    @Test("the home heading carries a cached community mark")
+    func communityHeadingCarriesCachedData() {
+        let icon = Data([0x89, 0x50, 0x4E, 0x47])
+        #expect(
+            ChannelListView.communityHeadingMark(name: "Hive", iconData: icon)
+                == .community(name: "Hive", iconData: icon)
+        )
+    }
+
     // MARK: - Who is allowed to hide the tab bar
 
     /// The four states the channel list's stack can be in, and the bar in each.
