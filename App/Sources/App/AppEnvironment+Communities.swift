@@ -194,6 +194,7 @@ extension AppEnvironment {
                 return
             }
             await startActiveCommunity(mountsBeforeConnect: true)
+            refreshCommunityIcon(for: community)
         }
     }
 
@@ -230,6 +231,7 @@ extension AppEnvironment {
         // After the teardown, so the file is not deleted underneath an open connection:
         // dropping the store is what closes it.
         Self.deleteStore(filename: removed.storeFilename)
+        communityStorage.removeIcon(for: removed)
         guard wasActive else { return }
         guard let next = communities.active, Self.hasStoredKey(account: next.keychainAccount) else {
             setPhase(.needsIdentity)
@@ -314,6 +316,7 @@ extension AppEnvironment {
         do {
             setPhase(.bootstrapping)
             try await startSession(for: community, mountsBeforeConnect: false)
+            refreshCommunityIcon(for: community)
             // The sheet the reader joined from went with the workspace it was attached to;
             // closing it here is what makes a successful join end on the new community
             // rather than on a form that has nothing left to do.
@@ -348,6 +351,64 @@ extension AppEnvironment {
         }
         RelayEndpoint.storedURLString = previous.relayURLString
         await startActiveCommunity(mountsBeforeConnect: true)
+    }
+
+    // MARK: - Community mark
+
+    /// Refreshes the relay-owned community icon after opening a community.
+    ///
+    /// The information document is unauthenticated, so this does not delay engine startup or
+    /// make the icon a condition of joining. It is a best-effort cache refresh: a failed
+    /// lookup keeps the last good picture, while a successful document with no icon removes
+    /// the old one and returns the switcher to initials. This is also the join capture path —
+    /// the new record is opened immediately after the relay accepts its key.
+    func refreshCommunityIcon(for community: Community) {
+        Task { [weak self] in
+            guard let self,
+                  let client = RelayInfoClient(
+                      relayURLString: community.relayURLString,
+                      transport: URLSessionHTTPTransport()
+                  ),
+                  let info = try? await client.fetch(),
+                  info.isBuzzRelay
+            else { return }
+
+            let data: Data?
+            switch info.communityIcon {
+            case nil:
+                data = nil
+            case let .some(icon):
+                // A failed remote fetch is not the same thing as a relay that removed its
+                // icon. Keep the last good cache in that case.
+                guard let fetched = await Self.iconData(from: icon) else { return }
+                data = fetched
+            }
+
+            guard let current = self.communities.communities.first(where: { $0.id == community.id })
+            else { return }
+            guard let updated = try? self.communityStorage.replacingIcon(data, for: current) else {
+                return
+            }
+            self.updateCommunities { $0.update(updated) }
+        }
+    }
+
+    /// Reads a remote icon through the same HTTP transport boundary as relay metadata and
+    /// refuses a response larger than the inline icon limit before it reaches disk. Hosted
+    /// Buzz icons are inline; this branch keeps custom relays' HTTPS icons equally durable.
+    private static func iconData(from icon: RelayIcon) async -> Data? {
+        switch icon {
+        case let .inline(data):
+            return data
+        case let .remote(url):
+            guard let (data, status) = try? await URLSessionHTTPTransport().get(
+                from: url,
+                headers: [:]
+            ), (200 ... 299).contains(status), !data.isEmpty,
+                data.count <= RelayIcon.maximumInlineBytes
+            else { return nil }
+            return data
+        }
     }
 }
 

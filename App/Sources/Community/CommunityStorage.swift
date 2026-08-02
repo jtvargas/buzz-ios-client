@@ -8,11 +8,13 @@ import Foundation
 /// key itself never appears in it (§ ``Community``).
 struct CommunityStorage {
     private let defaults: UserDefaults
+    private let iconDirectory: URL?
 
     /// - Parameter defaults: injected so a test can drive a throwaway suite instead of the
     ///   app's own defaults, which a test run shares with whatever is installed.
-    init(defaults: UserDefaults = .standard) {
+    init(defaults: UserDefaults = .standard, iconDirectory: URL? = nil) {
         self.defaults = defaults
+        self.iconDirectory = iconDirectory
     }
 
     private static let listKey = "communities.v1"
@@ -51,6 +53,70 @@ struct CommunityStorage {
     func clear() {
         defaults.removeObject(forKey: Self.listKey)
         defaults.removeObject(forKey: Self.activeKey)
+    }
+
+    /// The cached bytes for a community's mark, or `nil` if the record predates icons or its
+    /// file has already gone away.
+    ///
+    /// Reading a missing cache as no icon is intentional: the record still identifies the
+    /// community and the next open can refresh it from the relay, while a damaged local file
+    /// never prevents the switcher from drawing the initials fallback.
+    func iconData(for community: Community) -> Data? {
+        guard let filename = community.iconFilename,
+              let directory = try? resolvedIconDirectory()
+        else { return nil }
+        return try? Data(contentsOf: directory.appendingPathComponent(filename))
+    }
+
+    /// Replaces the cached icon and returns the directory record that names the new file.
+    ///
+    /// The file is written atomically before the returned record is saved by
+    /// ``AppEnvironment/updateCommunities(_:)``. That order means a crash can leave an
+    /// unused image file, but cannot leave a record pointing at a half-written image; the
+    /// next refresh can safely replace it.
+    func replacingIcon(_ data: Data?, for community: Community) throws -> Community {
+        let directory = try resolvedIconDirectory()
+        var updated = community
+        if let data {
+            let filename = community.iconFilename ?? "community-icon-\(community.id.uuidString).data"
+            try data.write(to: directory.appendingPathComponent(filename), options: .atomic)
+            updated.iconFilename = filename
+        } else {
+            if let filename = community.iconFilename {
+                try? FileManager.default.removeItem(at: directory.appendingPathComponent(filename))
+            }
+            updated.iconFilename = nil
+        }
+        return updated
+    }
+
+    /// Removes a community's cached mark when the community itself is removed.
+    func removeIcon(for community: Community) {
+        guard let filename = community.iconFilename,
+              let directory = try? resolvedIconDirectory()
+        else { return }
+        try? FileManager.default.removeItem(at: directory.appendingPathComponent(filename))
+    }
+
+    private func resolvedIconDirectory() throws -> URL {
+        // Keep the cache beside the event store without depending on the composition root's
+        // `@MainActor` helper. Storage is also used by non-UI tests and by the synchronous
+        // launch migration, so this path lookup must remain a plain filesystem operation.
+        let directory: URL
+        if let iconDirectory {
+            directory = iconDirectory
+        } else {
+            directory = try FileManager.default
+                .url(
+                    for: .applicationSupportDirectory,
+                    in: .userDomainMask,
+                    appropriateFor: nil,
+                    create: true
+                )
+                .appendingPathComponent("Hive", isDirectory: true)
+        }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory
     }
 
     /// The directory to launch with, adopting the single-community install if that is what

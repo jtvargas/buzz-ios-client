@@ -57,6 +57,15 @@ struct Community: Identifiable, Codable, Equatable, Sendable {
     /// is a question about *one* store file, and answering it globally would wipe the
     /// histories of communities the new key never touched.
     var ownerPubkeyHex: String?
+    /// The filename of this community's icon in `Application Support/Hive`, or `nil` when
+    /// the relay did not publish one.
+    ///
+    /// The bytes stay beside the event store rather than in this record. A relay controls
+    /// the icon and ``RelayIcon/maximumInlineBytes`` permits 512 KB; putting that payload in
+    /// the JSON held by `UserDefaults` would turn a small directory record into an opaque
+    /// image cache. The filename is enough to recover the bytes without making defaults carry
+    /// them through every directory save.
+    var iconFilename: String?
     let addedAt: Date
 
     /// The Keychain account and database file the single-community app used. A migrated
@@ -79,6 +88,7 @@ struct Community: Identifiable, Codable, Equatable, Sendable {
             keychainAccount: "community-\(id.uuidString)",
             storeFilename: "store-\(id.uuidString).sqlite",
             ownerPubkeyHex: ownerPubkeyHex,
+            iconFilename: nil,
             addedAt: addedAt
         )
     }
@@ -99,6 +109,7 @@ struct Community: Identifiable, Codable, Equatable, Sendable {
             keychainAccount: legacyKeychainAccount,
             storeFilename: legacyStoreFilename,
             ownerPubkeyHex: ownerPubkeyHex,
+            iconFilename: nil,
             addedAt: addedAt
         )
     }
@@ -140,5 +151,21 @@ struct Community: Identifiable, Codable, Equatable, Sendable {
               let theirs = Community.relayIdentity(of: urlString)
         else { return false }
         return mine == theirs
+    }
+
+    /// The HTTPS address to hand to somebody else, reduced to the relay's origin.
+    ///
+    /// Hive cannot mint an invitation — ``InviteClient`` only redeems one — so the useful
+    /// copy action on a signed-in community is its relay address. The `Add a relay` field
+    /// accepts this HTTPS spelling and converts it back to the websocket form at the gate.
+    var relayOrigin: String? {
+        guard let websocket = RelayEndpoint.websocketURL(from: relayURLString),
+              var components = URLComponents(url: websocket, resolvingAgainstBaseURL: false)
+        else { return nil }
+        components.scheme = "https"
+        components.path = ""
+        components.query = nil
+        components.fragment = nil
+        return components.url?.absoluteString
     }
 }

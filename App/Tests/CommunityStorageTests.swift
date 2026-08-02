@@ -50,6 +50,29 @@ struct CommunityStorageTests {
         #expect(loaded.communities[0].storeFilename == first.storeFilename)
     }
 
+    @Test func anIconSurvivesARecordAndFileRoundTrip() throws {
+        let suite = "hive.tests.communities.icon.\(UUID().uuidString)"
+        let iconDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("hive-community-icons-\(UUID().uuidString)", isDirectory: true)
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        let storage = CommunityStorage(defaults: defaults, iconDirectory: iconDirectory)
+        let community = Community.new(relayURLString: "wss://icons.example", name: "Icons")
+        let bytes = Data([0x89, 0x50, 0x4E, 0x47])
+        defer {
+            defaults.removePersistentDomain(forName: suite)
+            try? FileManager.default.removeItem(at: iconDirectory)
+        }
+
+        let withIcon = try storage.replacingIcon(bytes, for: community)
+        var directory = CommunityDirectory()
+        directory.add(withIcon)
+        storage.save(directory)
+
+        let loaded = try #require(storage.load().communities.first)
+        #expect(loaded.iconFilename == withIcon.iconFilename)
+        #expect(storage.iconData(for: loaded) == bytes)
+    }
+
     @Test func clearingForgetsEverything() {
         let (storage, suite) = makeStorage()
         defer { forget(suite) }
