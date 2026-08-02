@@ -28,6 +28,7 @@ struct ThreadActivityRow: View {
 
     @Environment(\.openConversation) private var openConversation
     @Environment(\.openURL) private var openURL
+    @Environment(\.messageLandingRouter) private var messageLandingRouter
 
     /// The gutter the two messages indent their content by, so the **Reply** button under
     /// them can start on the same line their text does.
@@ -100,6 +101,12 @@ struct ThreadActivityRow: View {
                 onOpenProfile(pubkey)
             case let .conversation(channelID):
                 openConversation?(channelID)
+            case let .message(channelID, eventID, threadRootID):
+                messageLandingRouter?.open(
+                    channelID: channelID,
+                    eventID: eventID,
+                    threadRootID: threadRootID
+                )
             case let .external(url):
                 openURL(url)
             case .none:

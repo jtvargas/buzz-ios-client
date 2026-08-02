@@ -20,18 +20,23 @@ enum ConversationItem: Identifiable, Hashable {
     /// notice's `content` is a JSON body, and a row that fell through to the ordinary
     /// text path would print it.
     case notice(NoticeMarker)
+    /// The seam where the loaded set is not continuous — the row after which history is
+    /// missing. Carries the id of the row it follows, so it is stable across rebuilds and
+    /// cannot collide with a message's own id. See ``ConversationGapRow``.
+    case gap(after: String)
 
     var id: String {
         switch self {
         case let .day(marker): "day-\(marker.id)"
         case let .message(row, _): row.id
         case let .notice(marker): marker.id
+        case let .gap(after): "gap-\(after)"
         }
     }
 
     var message: TimelineRow? {
         switch self {
-        case .day, .notice: nil
+        case .day, .notice, .gap: nil
         case let .message(row, _): row
         }
     }
@@ -43,7 +48,7 @@ enum ConversationItem: Identifiable, Hashable {
     /// run they land in, which is also why neither can be a continuation itself.
     var continuesGroup: Bool {
         switch self {
-        case .day, .notice: false
+        case .day, .notice, .gap: false
         case let .message(_, continues): continues
         }
     }
@@ -53,7 +58,7 @@ enum ConversationItem: Identifiable, Hashable {
     /// notice both are.
     var isContent: Bool {
         switch self {
-        case .day: false
+        case .day, .gap: false
         case .message, .notice: true
         }
     }
@@ -137,8 +142,12 @@ enum ConversationGrouping {
 
     /// `rows` in the order they are rendered — oldest first, the order both the
     /// channel timeline and a thread already produce.
+    /// - Parameter gapAfter: the id of the row the loaded set stops being continuous
+    ///   after, or `nil` when it is continuous throughout. Defaulted, so a thread — which
+    ///   is always read whole and can never have a hole in it — needs to say nothing.
     static func items(
         for rows: [TimelineRow],
+        gapAfter: String? = nil,
         calendar: Calendar = .autoupdatingCurrent
     ) -> [ConversationItem] {
         var items: [ConversationItem] = []
@@ -171,6 +180,14 @@ enum ConversationGrouping {
             } else {
                 items.append(.message(row, continuesGroup: continues(row, after: previous)))
                 previous = row
+            }
+            // After the row it names, so the seam sits between the window and whatever the
+            // head page holds above it. `previous = nil` for the same reason a separator
+            // clears it: a run of one author's messages does not continue across a stretch
+            // of history nobody has read.
+            if row.id == gapAfter {
+                items.append(.gap(after: row.id))
+                previous = nil
             }
         }
         return collapsingArrivals(items)

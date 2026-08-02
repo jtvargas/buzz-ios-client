@@ -25,6 +25,7 @@ struct ChannelTimelineView: View {
     /// Whose profile is open, if anyone's — set by a tap on a row's avatar or name.
     @State private var profilePeer: ProfilePeer?
     @Environment(\.entityNames) private var names
+    @Environment(\.messageLandingRouter) private var messageLandingRouter
     private let channel: ChannelListRow
     private let channelID: String
     private let store: BuzzEventStore
@@ -249,6 +250,28 @@ struct ChannelTimelineView: View {
         // the replies themselves, so on a cold launch a row would otherwise say "3 replies"
         // over an empty strip. See ``BuzzKit/SyncEngine/prefetchThreads(in:)``.
         .task { await prefetcher?.prefetchThreads(in: channelID) }
+        // Landing is not part of ConversationRoute: that route intentionally does nothing
+        // when this channel is already on top. This task handles both a freshly pushed
+        // timeline and the timeline already visible when its link was pressed. It clears
+        // only after the synchronous work so later stages can safely add suspension points.
+        .task(id: MessageLandingTaskID(
+            landing: messageLandingRouter?.pendingLanding,
+            hasLoaded: model.hasLoaded,
+            contentRevision: model.contentRevision
+        )) {
+            guard let landing = messageLandingRouter?.pendingLanding,
+                  landing.channelID == channelID else { return }
+            if model.prepareLanding(on: landing.eventID) {
+                if messageLandingRouter?.pendingLanding == landing {
+                    messageLandingRouter?.pendingLanding = nil
+                }
+            } else if model.hasLoaded, !model.rows.isEmpty,
+                      messageLandingRouter?.pendingLanding == landing {
+                messageLandingRouter?.fail(
+                    landing.threadRootID == nil ? .notInStore : .messageIsInThread
+                )
+            }
+        }
     }
 
     /// How this conversation presents itself — a channel, or the person on the other
@@ -394,6 +417,12 @@ struct ChannelTimelineView: View {
 
 }
 
+private struct MessageLandingTaskID: Equatable {
+    let landing: MessageLanding?
+    let hasLoaded: Bool
+    let contentRevision: Int
+}
+
 /// The list's two element builders and the four small things the body reaches for. In an
 /// extension rather than the struct itself — the house style ``ChannelListView`` already
 /// follows — so the type reads as its state and its slots, and the helpers sit under them.
@@ -410,6 +439,12 @@ private extension ChannelTimelineView {
             messageRow(row, continuesGroup: continuesGroup)
         case let .notice(marker):
             SystemNoticeRowView(notice: marker.notice, alsoJoined: marker.alsoJoined, date: marker.date)
+        case .gap:
+            // Scrolling into the seam is the request for what is missing there — the
+            // mirror of the top sentinel, which is what `onReachedTop` already is for the
+            // other end. The model's guard makes a repeated appearance across one load ask
+            // once. See ``ConversationGapRow``.
+            ConversationGapRow { Task { await model.closeGap() } }
         }
     }
 

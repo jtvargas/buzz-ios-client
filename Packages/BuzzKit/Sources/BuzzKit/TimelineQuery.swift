@@ -20,13 +20,21 @@ extension BuzzEventStore {
     state, last_error, is_retryable, tags, edited_tags
     """
 
-    /// The keyset paging predicate over a `(created_at, id)` cursor. Descending id
-    /// in the tiebreak so it matches the query's `ORDER BY … id DESC`.
-    static func page(_ timestamp: String, _ identifier: String) -> String {
-        """
+    /// The keyset paging predicate over a `(created_at, id)` cursor.
+    ///
+    /// The comparison and the id tiebreak both follow `direction`, so the predicate always
+    /// matches the query's own `ORDER BY … created_at <dir>, id <dir>`. The two cannot be
+    /// set independently: a predicate that disagreed with the order would keep serving rows
+    /// it had already passed, which is the same silent failure the per-branch bound has —
+    /// see ``fetchTimeline(_:channel:from:direction:limit:)``.
+    ///
+    /// `direction` is an enum, not caller text, so the interpolation carries no input.
+    static func page(_ timestamp: String, _ identifier: String, _ direction: TimelineDirection) -> String {
+        let compare = direction.comparison
+        return """
         (:hasCursor = 0
-         OR \(timestamp) < :ts
-         OR (\(timestamp) = :ts AND \(identifier) < :id))
+         OR \(timestamp) \(compare) :ts
+         OR (\(timestamp) = :ts AND \(identifier) \(compare) :id))
         """
     }
 
