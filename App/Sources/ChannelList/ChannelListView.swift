@@ -150,7 +150,11 @@ struct ChannelListView: View {
                     // replaces. It falls back to the relay-derived name for the frame before
                     // a community exists at all.
                     title: environment.communities.active?.name ?? CommunityIdentity.name(),
-                    actionHint: "Double tap to switch community"
+                    actionHint: "Double tap to switch community",
+                    // Leaves at the speed of the finger. The panel is what replaces this
+                    // heading, so the heading has to go as the panel arrives rather than
+                    // the moment the drag starts.
+                    opacity: 1 - workspacePanel.progress
                 ) {
                     // The same panel the rightward drag brings, arriving under its own
                     // animation rather than a finger's — a heading that opened something
@@ -191,7 +195,16 @@ struct ChannelListView: View {
                     // One item, because two would push the heading towards the overflow
                     // menu ``ConversationTitleBar`` exists to stay out of — so the face
                     // carries the connection state that used to be a pill beside it.
-                    ToolbarItem(placement: .topBarTrailing) { accountButton(names: names) }
+                    ToolbarItem(placement: .topBarTrailing) {
+                        accountButton(names: names)
+                            // Leaves with the heading opposite it, at the same rate and for
+                            // the same reason: the bar belongs to the sidebar, and the panel
+                            // is covering the sidebar. Faded rather than removed so the bar's
+                            // layout does not shift under the fade.
+                            .opacity(1 - workspacePanel.progress)
+                            .allowsHitTesting(workspacePanel.progress < 0.5)
+                            .accessibilityHidden(workspacePanel.progress >= 0.5)
+                    }
                 }
                 .sheet(isPresented: $showAccount) {
                     AccountView(store: store, engine: engine, selfPubkey: environment.selfPubkeyHex)

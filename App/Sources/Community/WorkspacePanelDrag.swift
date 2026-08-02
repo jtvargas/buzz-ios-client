@@ -137,10 +137,13 @@ final class WorkspacePanelDragView: UIView, UIGestureRecognizerDelegate {
     }
 
     @objc private func handle(_ pan: UIPanGestureRecognizer) {
-        guard let state, let window = host?.window else { return }
+        guard let state, let host, let window = host.window else { return }
         switch pan.state {
         case .began:
             startProgress = state.progress
+            // The drag has won the hand; nothing under it should still be scrolling. See
+            // ``suspendScrolling(under:)``.
+            suspendScrolling(under: host)
         case .changed:
             let translation = pan.translation(in: window).x
             state.progress = WorkspacePanelGeometry.progress(
@@ -149,9 +152,57 @@ final class WorkspacePanelDragView: UIView, UIGestureRecognizerDelegate {
                 width: panelWidth
             )
         case .ended, .cancelled, .failed:
+            resumeScrolling()
             settle(state, velocity: pan.velocity(in: window).x, released: pan.state == .ended)
         default:
             break
+        }
+    }
+
+    // MARK: - Scrolling, while this drag owns the hand
+
+    /// The scroll views stopped for the duration of one drag, to be started again after it.
+    ///
+    /// Held strongly, and only for the length of a gesture: a weak box that emptied itself
+    /// mid-drag would leave a list that never scrolls again.
+    private var suspendedScrollViews: [UIScrollView] = []
+
+    /// Stops every scroll view under `view` from scrolling while this drag runs.
+    ///
+    /// The direction gate cannot do this on its own. It decides at 10pt, and simultaneity
+    /// with pans is what keeps the list's scrolling from beginning late — so for those first
+    /// frames the scroll and this drag are both live, and a hand moving mostly sideways still
+    /// carries the list a little vertically. The owner saw exactly that: "i start dragging but
+    /// the scroll on the sidebar is still responding".
+    ///
+    /// Toggling `isEnabled` is the cancellation: UIKit sends a disabled recogniser straight to
+    /// `.cancelled`, which ends the scroll rather than merely refusing the next touch. Turning
+    /// it back on does not resume it — a scroll cancelled this way needs a new finger, which
+    /// is the behaviour asked for.
+    private func suspendScrolling(under view: UIView) {
+        var found: [UIScrollView] = []
+        collectScrollViews(in: view, into: &found)
+        for scroll in found where scroll.panGestureRecognizer.isEnabled {
+            scroll.panGestureRecognizer.isEnabled = false
+            suspendedScrollViews.append(scroll)
+        }
+    }
+
+    /// Gives scrolling back. Called on every ending state, including the ones nobody chose:
+    /// a drag lost to a phone call must not leave a sidebar that cannot scroll.
+    private func resumeScrolling() {
+        for scroll in suspendedScrollViews {
+            scroll.panGestureRecognizer.isEnabled = true
+        }
+        suspendedScrollViews.removeAll()
+    }
+
+    /// Every scroll view beneath `view`, at any depth — the sidebar's own list, and the
+    /// panel's list of communities, which is inside this same subtree once the panel is out.
+    private func collectScrollViews(in view: UIView, into found: inout [UIScrollView]) {
+        for subview in view.subviews {
+            if let scroll = subview as? UIScrollView { found.append(scroll) }
+            collectScrollViews(in: subview, into: &found)
         }
     }
 
