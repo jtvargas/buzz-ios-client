@@ -37,6 +37,49 @@ extension ChannelTimelineModel {
         jumpToken += 1
     }
 
+    /// Releases a frozen tail only when the target is behind it, then rebuilds and lands on a
+    /// loaded message.
+    ///
+    /// This is the Stage 1 boundary: no store or relay lookup is attempted. A target that is
+    /// not rendered yet remains armed until the first loaded snapshot gives the view an honest
+    /// answer. ``hasLoaded`` means a read was attempted, so an empty head remains armed until
+    /// a non-empty snapshot arrives; the view supplies that readiness through its task id.
+    @discardableResult
+    func prepareLanding(on eventID: String) -> Bool {
+        pendingLanding = eventID
+        let ordered = loaded.values.sorted { lhs, rhs in
+            lhs.createdAt != rhs.createdAt ? lhs.createdAt < rhs.createdAt : lhs.id < rhs.id
+        }
+        if tail.split(ordered).held.contains(where: { $0.id == eventID }) {
+            tail.release()
+        }
+        suppressReadStateAdvance = true
+        rebuild()
+        suppressReadStateAdvance = false
+        guard pendingLanding == nil else {
+            // A primed but empty head can be the interval before this channel's backfill
+            // arrives. Only a non-empty snapshot can honestly say an absent target is not
+            // rendered in this stage.
+            if hasLoaded, !rows.isEmpty { pendingLanding = nil }
+            return false
+        }
+        return true
+    }
+
+    /// Re-asks for a pending message-link landing once its row is in the rendered set.
+    ///
+    /// Called from ChannelTimelineModel.rebuild(). Like landOnOwnSend(among:), this touches
+    /// only the jump command, never isAtBottom: writing that flag here would re-enter rebuild
+    /// through its own observer. A frozen row remains pending until the landing request
+    /// releases the tail and rebuilds.
+    func landOnPending(among rendered: [TimelineRow]) {
+        guard let target = pendingLanding,
+              rendered.contains(where: { $0.id == target }) else { return }
+        pendingLanding = nil
+        jumpTarget = .landing(target)
+        jumpToken += 1
+    }
+
     /// Lands the author on the message they just sent, now that it has an id.
     ///
     /// The second half of the trip ``send()`` started at the tap. If the row is already

@@ -157,10 +157,24 @@ struct RichTextInteractiveTests {
         #expect(RichTextRoute(url: url) == .conversation(channelID: "CH_DESIGN"))
     }
 
-    @Test("an internal message link routes to the conversation it names")
-    func messageLinkRoutesToConversation() throws {
-        let url = try #require(RichTextTarget.message(channel: "CH1", event: "EV1", thread: "R1").url)
-        #expect(RichTextRoute(url: url) == .conversation(channelID: "CH1"))
+    @Test("message links preserve event and thread ids in every supported shape")
+    func messageLinkRoutesToMessage() throws {
+        let cases: [(String?, RichTextRoute)] = [
+            (nil, .message(channelID: "CH1", eventID: "EV1", threadRootID: nil)),
+            ("R1", .message(channelID: "CH1", eventID: "EV1", threadRootID: "R1")),
+            ("EV1", .message(channelID: "CH1", eventID: "EV1", threadRootID: "EV1")),
+        ]
+        for (thread, expected) in cases {
+            let target = RichTextTarget.message(channel: "CH1", event: "EV1", thread: thread)
+            let url = try #require(target.url)
+            #expect(RichTextRoute(url: url) == expected)
+        }
+    }
+
+    @Test("a malformed internal message link remains unroutable")
+    func malformedMessageLinkDoesNotRoute() {
+        let url = URL(string: "buzz://message?channel=CH1&id=")!
+        #expect(RichTextRoute(url: url) == nil)
     }
 
     @Test("web and email links route to the system handler")

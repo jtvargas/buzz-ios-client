@@ -55,6 +55,8 @@ struct TimelineRowView: View {
     @Environment(\.openURL) private var openURL
     /// The stack's own navigation, for a pressed `#`-channel or internal message link.
     @Environment(\.openConversation) private var openConversation
+    /// The app-wide owner for a pressed message link.
+    @Environment(\.messageLandingRouter) private var messageLandingRouter
     /// Whether a control inside the row already answered the touch the row's own tap is
     /// about to act on. Internal for the same reason ``names`` is: the rules that read it
     /// live in `TimelineRowView+Taps.swift`.
@@ -205,6 +207,12 @@ struct TimelineRowView: View {
                 onOpenProfile?(pubkey)
             case let .conversation(channelID):
                 openConversation?(channelID)
+            case let .message(channelID, eventID, threadRootID):
+                messageLandingRouter?.open(
+                    channelID: channelID,
+                    eventID: eventID,
+                    threadRootID: threadRootID
+                )
             case let .external(url):
                 openURL(url)
             case .none:

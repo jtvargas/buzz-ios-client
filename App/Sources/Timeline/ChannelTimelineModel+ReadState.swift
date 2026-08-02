@@ -28,6 +28,7 @@ extension ChannelTimelineModel {
     /// Fire-and-forget so the observation loop never blocks on the publish, and
     /// grow-only on the engine side so a redundant call is a no-op.
     func markReadIfNeeded() {
+        guard !suppressReadStateAdvance else { return }
         guard let readStateMarking,
               let newest = rows.last?.createdAt, newest > lastMarkedReadAt else { return }
         lastMarkedReadAt = newest

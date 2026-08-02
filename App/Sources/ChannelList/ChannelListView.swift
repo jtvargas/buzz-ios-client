@@ -26,6 +26,7 @@ struct ChannelListView: View {
     @State private var directory: EntityDirectoryModel
     @State private var ticker = RelativeTimeTicker()
     @State private var router: DirectMessageRouter
+    @State private var messageLandingRouter: MessageLandingRouter
     /// Hiding a direct message. Owned here rather than injected, because this is the only
     /// surface that offers the action and the only one that can report its refusal — the
     /// row it was pressed on is gone by then.
@@ -102,6 +103,7 @@ struct ChannelListView: View {
         _presence = State(initialValue: PresenceModel(store: engine.presenceStore))
         _directory = State(initialValue: EntityDirectoryModel(store: store))
         _router = State(initialValue: DirectMessageRouter(opener: engine))
+        _messageLandingRouter = State(initialValue: MessageLandingRouter())
         _hider = State(initialValue: HideDirectMessageModel(hider: engine))
     }
 
@@ -230,6 +232,7 @@ struct ChannelListView: View {
         .environment(\.relativeTimeTicker, ticker)
         .environment(\.threadReadMarks, threadReads)
         .environment(\.directMessageRouter, router)
+        .environment(\.messageLandingRouter, messageLandingRouter)
         // An already-open conversation is left alone by ``ConversationRoute/pushed(onto:)``, so
         // pressing a reference to the channel you are reading stacks nothing.
         .environment(\.openConversation, OpenConversationAction { channelID in
@@ -254,6 +257,15 @@ struct ChannelListView: View {
             )
             path = route.pushed(onto: path)
         }
+        // Message landing is separate from the conversation route. If the target channel is
+        // already on top, pushed(onto:) intentionally does nothing and the timeline task
+        // consumes the pending request; otherwise this brings its owning timeline on screen
+        // without clearing a request another timeline may need.
+        .onChange(of: messageLandingRouter.pendingLanding) { _, landing in
+            guard let landing, path.last?.channel.id != landing.channelID else { return }
+            path = ConversationRoute(channel: conversationRow(for: landing.channelID))
+                .pushed(onto: path)
+        }
         .alert(
             "Could not open the conversation",
             isPresented: Binding(
@@ -264,6 +276,17 @@ struct ChannelListView: View {
             Button("OK", role: .cancel) { router.failure = nil }
         } message: {
             Text(router.failure ?? "")
+        }
+        .alert(
+            "Could not open the message",
+            isPresented: Binding(
+                get: { messageLandingRouter.failure != nil },
+                set: { if !$0 { messageLandingRouter.failure = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) { messageLandingRouter.failure = nil }
+        } message: {
+            Text(messageLandingRouter.failure ?? "")
         }
         // On the stack rather than on the row: a successful hide removes the row that was
         // pressed, and a refused one has to be reported from something that outlives it.

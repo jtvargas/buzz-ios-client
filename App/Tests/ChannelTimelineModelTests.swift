@@ -324,4 +324,5 @@ struct ChannelTimelineModelTests {
         await waitUntil { model.rows.count == 1 }
         #expect(model.rows.map(\.content) == ["here"])
     }
+
 }

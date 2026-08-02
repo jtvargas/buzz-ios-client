@@ -93,12 +93,14 @@ final class ChannelTimelineModel {
         }
     }
 
-    /// An own send that has been queued but has not appeared on screen yet — the row the next
-    /// rebuild has to land the author on. See ``landOnOwnSend(among:)``.
+    /// An own send awaiting its row, consumed by ``landOnOwnSend(among:)``.
     ///
     /// Not observable: nothing renders it, and the moment it clears already bumps
-    /// ``jumpToken``, which is what the scaffold watches.
+    /// ``jumpToken``.
     @ObservationIgnored var awaitingOwnSend: String?
+
+    /// A loaded message-link target consumed by the next rebuild.
+    var pendingLanding: String?
 
     /// What the affordances above the composer show: how many arrivals the freeze holds
     /// back, which one to land on, and whether the newest row is far enough below to
@@ -179,6 +181,10 @@ final class ChannelTimelineModel {
     ///
     /// Written from `ChannelTimelineModel+ReadState.swift` and nowhere else.
     @ObservationIgnored var lastMarkedReadAt: Int64 = 0
+    /// A deep-link rebuild may render held rows to reach its target, but that is not proof the
+    /// reader has read through the newest rendered row. The next ordinary rebuild may advance
+    /// the frontier once the reader has actually viewed the landing.
+    @ObservationIgnored var suppressReadStateAdvance = false
 
     init(
         channel: String,
@@ -367,6 +373,9 @@ final class ChannelTimelineModel {
         }
         jump.hold(count: split.held.count, firstID: split.held.first?.id)
         landOnOwnSend(among: split.rendered)
+        // Message links win if an own send and a link become renderable in one rebuild. Both
+        // commands bump the token, and the final target is the only one the observer can see.
+        landOnPending(among: split.rendered)
         markReadIfNeeded()
     }
 

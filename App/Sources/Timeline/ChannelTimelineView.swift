@@ -25,6 +25,7 @@ struct ChannelTimelineView: View {
     /// Whose profile is open, if anyone's — set by a tap on a row's avatar or name.
     @State private var profilePeer: ProfilePeer?
     @Environment(\.entityNames) private var names
+    @Environment(\.messageLandingRouter) private var messageLandingRouter
     private let channel: ChannelListRow
     private let channelID: String
     private let store: BuzzEventStore
@@ -249,6 +250,28 @@ struct ChannelTimelineView: View {
         // the replies themselves, so on a cold launch a row would otherwise say "3 replies"
         // over an empty strip. See ``BuzzKit/SyncEngine/prefetchThreads(in:)``.
         .task { await prefetcher?.prefetchThreads(in: channelID) }
+        // Landing is not part of ConversationRoute: that route intentionally does nothing
+        // when this channel is already on top. This task handles both a freshly pushed
+        // timeline and the timeline already visible when its link was pressed. It clears
+        // only after the synchronous work so later stages can safely add suspension points.
+        .task(id: MessageLandingTaskID(
+            landing: messageLandingRouter?.pendingLanding,
+            hasLoaded: model.hasLoaded,
+            contentRevision: model.contentRevision
+        )) {
+            guard let landing = messageLandingRouter?.pendingLanding,
+                  landing.channelID == channelID else { return }
+            if model.prepareLanding(on: landing.eventID) {
+                if messageLandingRouter?.pendingLanding == landing {
+                    messageLandingRouter?.pendingLanding = nil
+                }
+            } else if model.hasLoaded, !model.rows.isEmpty,
+                      messageLandingRouter?.pendingLanding == landing {
+                messageLandingRouter?.fail(
+                    landing.threadRootID == nil ? .notInStore : .messageIsInThread
+                )
+            }
+        }
     }
 
     /// How this conversation presents itself — a channel, or the person on the other
@@ -392,6 +415,12 @@ struct ChannelTimelineView: View {
         .map(ConversationTitleBar.Subtitle.text)
     }
 
+}
+
+private struct MessageLandingTaskID: Equatable {
+    let landing: MessageLanding?
+    let hasLoaded: Bool
+    let contentRevision: Int
 }
 
 /// The list's two element builders and the four small things the body reaches for. In an
