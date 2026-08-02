@@ -81,9 +81,9 @@ extension ConversationTitleBar {
         switch mark {
         case .none, .symbol, .count:
             glyphChrome
-        case .avatar:
-            // The face, less the glyph it stands in for: a `#` at `.title3` measures ~14pt
-            // wide on the iOS 26 simulator.
+        case .avatar, .community:
+            // The face or community mark, less the glyph it stands in for: a `#` at `.title3`
+            // measures ~14pt wide on the iOS 26 simulator.
             glyphChrome + (avatarSize - 14)
         }
     }

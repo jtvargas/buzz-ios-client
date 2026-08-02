@@ -1,4 +1,5 @@
 import BuzzKit
+import Foundation
 import SwiftUI
 
 /// The sidebar (§8): Starred, Channels, Direct Messages, and Agents as expandable
@@ -124,7 +125,7 @@ struct ChannelListView: View {
                 // and the switcher is what that heading is for. Your account is still one
                 // tap away at the trailing edge, where your own face is.
                 .conversationTitle(
-                    mark: Self.communityMark,
+                    mark: activeCommunityMark,
                     // The active community's own label, which a rename changes and a switch
                     // replaces. It falls back to the relay-derived name for the frame before
                     // a community exists at all.
@@ -279,15 +280,25 @@ struct ChannelListView: View {
         .task { await model.trackDirectory(of: engine) }
     }
 
-    /// The mark on the home heading: one cell of the honeycomb, for the workspace as a
-    /// whole — neither a room (`#`) nor a person (a face). Filled, because the bar draws
-    /// its mark small and a mesh of hairlines reads as noise there. Named so a test can
-    /// check the system has it: a missing symbol renders as nothing, silently.
+    /// The fallback mark used before an active community graph exists. The running home
+    /// heading uses ``activeCommunityMark`` so a cached picture or initials can replace this
+    /// symbol without waiting for a relay response. RootView still needs this fallback while
+    /// the identity gate is being composed.
     static let communitySymbol = "hexagon.fill"
 
     /// The one heading drawn in the accent: the workspace's own name is what the colour
     /// is *for*, where every other heading names a conversation inside it.
     static let communityMark = ConversationTitleBar.Mark.symbol(communitySymbol, accented: true)
+
+    /// Carries the persisted community mark into the title-bar seam without asking the
+    /// relay for anything. Kept pure so the cached-data contract can be pinned without
+    /// launching a navigation stack.
+    static func communityHeadingMark(
+        name: String,
+        iconData: Data?
+    ) -> ConversationTitleBar.Mark {
+        .community(name: name, iconData: iconData)
+    }
 
     /// What VoiceOver is told about the marked row. Names the gesture rather than the
     /// colour, because the colour is not the point and cannot be perceived here anyway.
@@ -304,6 +315,17 @@ struct ChannelListView: View {
 // MARK: - Content
 
 private extension ChannelListView {
+    /// The active community's mark is read from the local cache while the header is being
+    /// built. ``AppEnvironment/refreshCommunityIcon(for:)`` may still be checking the relay,
+    /// but a network response must never be on the critical path for this heading: the old
+    /// picture or the initials fallback is already an honest first frame.
+    var activeCommunityMark: ConversationTitleBar.Mark {
+        let community = environment.communities.active
+        let name = community?.name ?? CommunityIdentity.name()
+        let iconData = community.flatMap { environment.communityStorage.iconData(for: $0) }
+        return Self.communityHeadingMark(name: name, iconData: iconData)
+    }
+
     /// One flat list: the shortcut cards, then a heading row and its conversations for each
     /// grouping. `List` keeps the rows lazy and recycled; `SidebarRow.id` (the channel's
     /// group id) keeps their identity stable as unread counts stream in, so a re-read
