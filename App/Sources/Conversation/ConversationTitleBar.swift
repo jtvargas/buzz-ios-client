@@ -172,6 +172,12 @@ struct ConversationTitleBar: ViewModifier {
                         .accessibilityLabel(accessibilityLabel)
                         .accessibilityHint(actionHint ?? "")
                 }
+                // The glass capsule behind the heading is the bar's, not the button's, so
+                // `.opacity` on the label never touched it — it stayed as an empty grey pill
+                // sitting on top of the panel. This is the only control over it, and it is a
+                // `Visibility` rather than a number: the shape goes the moment the heading
+                // starts to leave, while the heading itself still fades with the finger.
+                .sharedBackgroundVisibility(opacity < 1 ? .hidden : .automatic)
                 // Keeps the heading a capsule of its own at the leading edge rather than
                 // letting the bar centre or stretch it, and is the seam anything added at
                 // the trailing edge later would sit the other side of.

@@ -205,6 +205,9 @@ struct ChannelListView: View {
                             .allowsHitTesting(workspacePanel.progress < 0.5)
                             .accessibilityHidden(workspacePanel.progress >= 0.5)
                     }
+                    // And its glass circle with it — see the same call in
+                    // ``ConversationTitleBar``. The face faded and left the ring behind.
+                    .sharedBackgroundVisibility(workspacePanel.isOpen ? .hidden : .automatic)
                 }
                 .sheet(isPresented: $showAccount) {
                     AccountView(store: store, engine: engine, selfPubkey: environment.selfPubkeyHex)
