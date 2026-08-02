@@ -272,6 +272,37 @@ extension BuzzEventStore {
     )
     """
 
+    /// Roots with a surviving reply authored by the current reader.
+    ///
+    /// Shared by the recent-activity and unread reads so participation has one definition:
+    /// the root author qualifies directly, while a reply qualifies only while it survives
+    /// the same deletion rule used by ``threadRepliesCTE``.
+    static let threadParticipantRootsCTE = """
+    participant AS (
+        SELECT DISTINCT t.root_id AS root_id
+        FROM thread t
+        LEFT JOIN event_owner teo ON teo.event_id = t.event_id
+        WHERE :selfPubkey IS NOT NULL
+          AND t.pubkey = :selfPubkey
+          AND NOT \(deletionApplies(target: "t.event_id", author: "t.pubkey", owner: "teo.owner_pubkey"))
+    )
+    """
+
+    /// The shared root-or-surviving-reply participation rule.
+    static func threadParticipationPredicate(rootID: String, rootAuthor: String) -> String {
+        """
+        (
+              :selfPubkey IS NULL
+              OR \(rootAuthor) = :selfPubkey
+              OR EXISTS (
+                    SELECT 1
+                    FROM participant
+                    WHERE participant.root_id = \(rootID)
+                  )
+        )
+        """
+    }
+
     /// Two reads rather than one wide join. ``threadSummaries(_:selfPubkey:limit:)``
     /// decides *which* threads and in what order, touching only ids, timestamps and keys;
     /// this one resolves the two messages per thread through ``fetchRows(_:ids:)`` — the
@@ -333,6 +364,7 @@ extension BuzzEventStore {
     private static let threadSummariesSQL = """
         WITH \(threadFrontierCTE),
         \(threadRepliesCTE),
+        \(threadParticipantRootsCTE),
         tally AS (
             SELECT r.root_id AS root_id,
                    COUNT(*)  AS reply_count,
@@ -404,16 +436,7 @@ extension BuzzEventStore {
           -- With an identity, Threads is a participation list: the reader wrote the root
           -- or at least one surviving reply. A nil identity is the library's keyless
           -- fallback and deliberately remains unfiltered.
-          AND (
-                :selfPubkey IS NULL
-                OR root.pubkey = :selfPubkey
-                OR EXISTS (
-                    SELECT 1
-                    FROM reply participant
-                    WHERE participant.root_id = tally.root_id
-                      AND participant.pubkey = :selfPubkey
-                )
-              )
+          AND \(threadParticipationPredicate(rootID: "tally.root_id", rootAuthor: "root.pubkey"))
         ORDER BY latest_reply_at DESC, latest_reply_id DESC
         LIMIT :limit
         """
