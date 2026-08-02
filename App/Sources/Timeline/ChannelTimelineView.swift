@@ -25,6 +25,7 @@ struct ChannelTimelineView: View {
     /// Whose profile is open, if anyone's — set by a tap on a row's avatar or name.
     @State private var profilePeer: ProfilePeer?
     @Environment(\.entityNames) private var names
+    @Environment(AppEnvironment.self) private var appEnvironment
     private let channel: ChannelListRow
     private let channelID: String
     private let store: BuzzEventStore
@@ -219,7 +220,19 @@ struct ChannelTimelineView: View {
             target: $messageActions,
             actions: model,
             isReadOnly: !access.isWritable,
-            onReplyInThread: { open(thread: $0, focusingComposer: true) }
+            onReplyInThread: { open(thread: $0, focusingComposer: true) },
+            onRemind: { row, due in
+                Task {
+                    guard let engine = appEnvironment.engine else { return }
+                    await ReminderCreation.set(
+                        row,
+                        channelID: channelID,
+                        due: due,
+                        engine: engine,
+                        authorName: names.name(for: row.pubkey)
+                    )
+                }
+            }
         )
         .navigationDestination(item: $openedThread) { route in
             ThreadView(

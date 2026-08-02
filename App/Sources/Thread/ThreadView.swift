@@ -32,6 +32,7 @@ struct ThreadView: View {
     /// This device's per-thread read marks. Absent on a surface reached without them (the
     /// conversation fixture), where nothing is recorded.
     @Environment(\.threadReadMarks) private var threadReads
+    @Environment(AppEnvironment.self) private var appEnvironment
     private let channelID: String
     /// Kept so the participants sheet can start its own presence stream. The `presence`
     /// model above is this view's; a sheet is a separate lifetime and reads it from the
@@ -197,7 +198,19 @@ struct ThreadView: View {
         .messageActionsSheet(
             target: $messageActions,
             actions: model,
-            isReadOnly: !access.isWritable
+            isReadOnly: !access.isWritable,
+            onRemind: { row, due in
+                Task {
+                    guard let engine = appEnvironment.engine else { return }
+                    await ReminderCreation.set(
+                        row,
+                        channelID: channelID,
+                        due: due,
+                        engine: engine,
+                        authorName: names.name(for: row.pubkey)
+                    )
+                }
+            }
         )
         // After the first render, so the scaffold's `onChange(of: jumpToken)` is installed
         // and the bump is a transition it sees — see ``ThreadModel/landOnOpener()``.

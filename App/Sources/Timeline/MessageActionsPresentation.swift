@@ -67,14 +67,16 @@ extension View {
         target: Binding<MessageActionTarget?>,
         actions: any MessageActing,
         isReadOnly: Bool = false,
-        onReplyInThread: ((TimelineRow) -> Void)? = nil
+        onReplyInThread: ((TimelineRow) -> Void)? = nil,
+        onRemind: ((TimelineRow, Date) -> Void)? = nil
     ) -> some View {
         modifier(
             MessageActionsSheetModifier(
                 target: target,
                 actions: actions,
                 isReadOnly: isReadOnly,
-                onReplyInThread: onReplyInThread
+                onReplyInThread: onReplyInThread,
+                onRemind: onRemind
             )
         )
     }
@@ -86,6 +88,10 @@ private struct MessageActionsSheetModifier: ViewModifier {
     let actions: any MessageActing
     let isReadOnly: Bool
     let onReplyInThread: ((TimelineRow) -> Void)?
+    /// Sets a reminder on a message. A closure rather than a ``MessageActing`` method
+    /// because it needs the engine, which neither conversation model holds — the two
+    /// screens that present this sheet do.
+    let onRemind: ((TimelineRow, Date) -> Void)?
 
     /// The thread the sheet asked for, held until the sheet has actually gone.
     @State private var pendingThread: TimelineRow?
@@ -98,7 +104,8 @@ private struct MessageActionsSheetModifier: ViewModifier {
                 isReadOnly: isReadOnly,
                 // The sheet only needs to know *whether* the action exists; the row it
                 // applies to is the one it was presented for.
-                onReplyInThread: onReplyInThread.map { _ in { pendingThread = target.row } }
+                onReplyInThread: onReplyInThread.map { _ in { pendingThread = target.row } },
+                onRemind: onRemind.map { remind in { due in remind(target.row, due) } }
             )
         }
     }

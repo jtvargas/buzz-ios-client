@@ -198,7 +198,10 @@ struct ConversationTitleBar: ViewModifier {
     private var peopleGlyph: some View {
         Image(systemName: "person.3.fill")
             .font(.hiveSymbol(.footnote, weight: .semibold))
-            .foregroundStyle(Color.hiveAccent)
+            // Named rather than hierarchical, for the reason given above ``label``: inside a
+            // `Button` a hierarchical `.secondary` resolves against the control's *tint* and
+            // comes back amber, which is the thing this is here to avoid.
+            .foregroundStyle(Color.secondary)
             .accessibilityHidden(true)
     }
 
@@ -210,7 +213,8 @@ struct ConversationTitleBar: ViewModifier {
         Image(systemName: "ellipsis")
             .font(.hiveSymbol(.body, weight: .semibold))
             .rotationEffect(.degrees(90))
-            .foregroundStyle(Color.hiveAccent)
+            // See ``peopleGlyph``: named, and deliberately not the accent.
+            .foregroundStyle(Color.secondary)
             .accessibilityHidden(true)
     }
 

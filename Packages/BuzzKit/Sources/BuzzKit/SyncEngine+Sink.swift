@@ -40,6 +40,16 @@ extension SyncEngine: EventSink {
                 await applyIncomingChannelMutes(appDataEvents)
             }
 
+            // Reminders (`kind:30300`) are the third encrypted-to-self feature and the
+            // only one with a kind of its own, so they are filtered by kind rather than
+            // sharing the `t`-tag dance above. Newly-inserted only, for the same reason:
+            // a reconnect resends every addressable reminder, and re-decrypting an
+            // unchanged one each time is wasted work for an idempotent apply.
+            let reminderEvents = batch.filter { $0.kind == .reminder && insertedIDs.contains($0.id) }
+            if !reminderEvents.isEmpty {
+                await applyIncomingReminders(reminderEvents)
+            }
+
             // A message is the end of its author's typing where it landed. Only the
             // newly-inserted ones: a reconnect replays messages already in the log, and
             // re-clearing on those would silence an indicator that has since started

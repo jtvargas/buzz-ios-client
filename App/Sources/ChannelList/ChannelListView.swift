@@ -66,8 +66,13 @@ struct ChannelListView: View {
     /// every push that hides the tab bar, and a `@State` inside ``ThreadsView`` is a push it
     /// cannot see. Only the storage moved — that screen still declares the destination.
     @State private var openedThread: ThreadRoute?
-    /// Whether the Later shortcut's "not built yet" notice is showing.
-    @State private var showsLaterNotice = false
+    /// The pushed Later screen. A route rather than a `Bool` so it sits alongside the
+    /// other programmatic pushes this stack owns.
+    @State private var showsLater: LaterRoute?
+    /// Drives the Later screen and keeps the scheduled alerts in step. Built here rather
+    /// than inside the screen so the shortcut card's count is live whether or not anyone
+    /// has opened it.
+    @State private var laterModel: LaterModel?
     /// The pushed conversations. Explicit, because every push here is programmatic —
     /// a row's button, a sheet that is already dismissing, a `#`-reference in a message.
     ///
@@ -206,14 +211,7 @@ struct ChannelListView: View {
                         openedThread: $openedThread
                     )
                 }
-                .alert("Later isn't built yet", isPresented: $showsLaterNotice) {
-                    Button("OK", role: .cancel) {}
-                } message: {
-                    Text(
-                        "Saving a message for later is coming. The shortcut is here so the "
-                            + "rest of this screen can be built around it."
-                    )
-                }
+                .navigationDestination(item: $showsLater) { _ in laterDestination }
         }
         // Declared here on the stack and by nothing below it — ``ChannelListTabBar`` holds
         // the measurements that put it here rather than on the pushed views.
@@ -282,6 +280,20 @@ struct ChannelListView: View {
         // The card's number only. The list itself is read by the pushed screen, so a table
         // written on every keystroke is not re-read behind a sidebar nobody is looking at.
         .task { await draftsModel.runCount() }
+        // Built and observed here rather than inside ``LaterView``, so the shortcut card's
+        // count is live before anyone opens the screen — and so the alerts stay reconciled
+        // with what is pending even when the screen has never been on.
+        .task {
+            guard laterModel == nil else { return }
+            let model = LaterModel(
+                store: store,
+                engine: engine,
+                scheduler: ReminderScheduler(),
+                authorName: { names.name(for: $0) }
+            )
+            laterModel = model
+            await model.run()
+        }
         .task { await presence.run() }
         .task { await directory.run() }
         .task { await ticker.run() }
@@ -450,12 +462,30 @@ private extension ChannelListView {
             .listRowSeparator(.hidden)
     }
 
+    /// The Later screen. Lifted out of the stack's builder because that builder is already
+    /// at the type-checker's limit — inlining this one pushed it over.
+    @ViewBuilder
+    var laterDestination: some View {
+        if let laterModel {
+            LaterView(
+                model: laterModel,
+                channelName: { conversationRow(for: $0).name ?? "" },
+                openTarget: { target in
+                    showsLater = nil
+                    path = ConversationRoute(
+                        channel: conversationRow(for: target.channelID)
+                    ).pushed(onto: path)
+                }
+            )
+        }
+    }
+
     func count(for shortcut: HomeShortcut) -> Int {
         switch shortcut {
         // The store's unread threads, less the ones this device has opened or replied in.
         case .threads: threadReads.unseenCount(among: model.unreadThreads)
-        // Nothing is saved anywhere yet, so this is the truth rather than a placeholder.
-        case .later: 0
+        // Reminders still waiting, live from the store.
+        case .later: laterModel?.pending.count ?? 0
         // Live from the store, de-duplicated so a keystroke does not move the card.
         case .drafts: draftsModel.count
         }
@@ -464,7 +494,7 @@ private extension ChannelListView {
     func press(_ shortcut: HomeShortcut) {
         switch shortcut {
         case .threads: showsThreads = ThreadsRoute()
-        case .later: showsLaterNotice = true
+        case .later: showsLater = LaterRoute()
         case .drafts: showsDrafts = DraftsRoute()
         }
     }

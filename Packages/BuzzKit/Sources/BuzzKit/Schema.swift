@@ -299,6 +299,36 @@ enum Schema {
             """)
         }
 
+        // The decrypted `kind:30300` reminders this identity has set (NIP-ER).
+        //
+        // Precious in the same sense as `read_state` and `channel_mute`: the rows are the
+        // decrypted plaintext of events the keyless projector cannot read, so a projection
+        // rebuild must not drop them. The engine decrypts an incoming reminder and applies
+        // it here. Keyed by the `d` tag rather than the event id, because an addressable
+        // event keeps its `d` across every revision — completing a reminder publishes a new
+        // event id for the same reminder.
+        migrator.registerMigration("v10.reminders") { db in
+            try db.execute(sql: """
+            CREATE TABLE reminder (
+                d               TEXT PRIMARY KEY NOT NULL,
+                event_id        TEXT NOT NULL,
+                created_at      INTEGER NOT NULL,
+                not_before      INTEGER,
+                status          TEXT NOT NULL,
+                target_event_id TEXT,
+                target_channel  TEXT,
+                target_author   TEXT,
+                preview         TEXT,
+                note            TEXT
+            )
+            """)
+            // The Later screen reads by status and orders by due time; the notification
+            // scheduler asks for pending reminders only.
+            try db.execute(sql: """
+            CREATE INDEX reminder_status_due ON reminder (status, not_before)
+            """)
+        }
+
         return migrator
     }
 

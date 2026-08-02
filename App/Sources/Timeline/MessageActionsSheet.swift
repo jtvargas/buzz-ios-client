@@ -24,6 +24,8 @@ struct MessageActionsSheet: View {
     let isReadOnly: Bool
     /// Absent inside a thread, where the message is already open.
     let onReplyInThread: (() -> Void)?
+    /// Sets a reminder on this message. Absent where there is no engine to publish one.
+    let onRemind: ((Date) -> Void)?
 
     @Environment(\.dismiss) private var dismiss
     /// Rests at medium, as asked. The picker is the only thing that takes the other one:
@@ -35,6 +37,7 @@ struct MessageActionsSheet: View {
     /// Pushed on this sheet's own stack, the way the picker is — never a second sheet: a
     /// modal presented from inside a modal races the first one's dismissal.
     @State private var isEditing = false
+    @State private var isRemindingMe = false
     @State private var draft = ""
 
     /// Where the sheet rests before anything is pushed onto it. The owner's number, raised
@@ -69,6 +72,14 @@ struct MessageActionsSheet: View {
                     .navigationBarTitleDisplayMode(.inline)
             }
             .navigationDestination(isPresented: $isEditing) { editor }
+            // Pushed on this sheet's own stack, like the emoji picker: a second sheet
+            // presented from inside this one races its dismissal.
+            .navigationDestination(isPresented: $isRemindingMe) {
+                RemindMeView { due in
+                    onRemind?(due)
+                    dismiss()
+                }
+            }
         }
         .presentationDetents([.height(Self.restingHeight), .large], selection: $detent)
         .presentationDragIndicator(.visible)
@@ -189,6 +200,13 @@ struct MessageActionsSheet: View {
             actionRow("Reply in thread", symbol: ThreadView.threadSymbol) {
                 onReplyInThread()
                 dismiss()
+            }
+        }
+        if onRemind != nil {
+            // Pushes rather than acting: the time is the decision, and this row is the way
+            // to it. `dismiss()` happens after a preset is chosen, not here.
+            actionRow("Remind Me", symbol: "clock.badge") {
+                isRemindingMe = true
             }
         }
         actionRow("Copy Message", symbol: "doc.on.doc") {
