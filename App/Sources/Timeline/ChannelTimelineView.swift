@@ -461,6 +461,7 @@ private extension ChannelTimelineView {
     /// what they came to read is the wrong answer to both.
     func open(thread row: TimelineRow, focusingComposer: Bool = false) {
         let root = row.rootID ?? row.id
+        _ = ConversationKeyboardResignation.resignActiveResponder()
         openedThread = ThreadRoute(root: root, channel: channelID, focusesComposer: focusingComposer)
     }
 
