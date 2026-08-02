@@ -14,20 +14,10 @@ struct LaterView: View {
     let channelName: (String) -> String
     /// Opens the message a reminder points at.
     let openTarget: (ReminderTarget) -> Void
-    /// The reminder that just came due, arriving from a tap on its alert.
-    ///
-    /// A binding rather than a value because this screen *consumes* it: it flashes the row
-    /// and then clears it, which is what lets the same reminder be pointed at twice — and
-    /// what stops the flash coming back every time this view redraws.
-    @Binding var highlight: String?
 
     @Environment(\.entityNames) private var names
     @State private var tab: LaterModel.Tab = .inProgress
     @State private var rescheduling: ReminderRow?
-    /// The row drawn in the accent right now, if any. Separate from ``highlight`` because
-    /// the two have different lifetimes: the signal is taken once, the flash outlives it by
-    /// ``flashDuration``.
-    @State private var flashing: String?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -42,36 +32,7 @@ struct LaterView: View {
                 Task { await model.snooze(row, to: due) }
             }
         }
-        // `initial: true` is the whole point: this screen is usually *pushed* by the same tap
-        // that sets the highlight, so by the time it exists the value has already changed and
-        // there is no later change to watch for.
-        .onChange(of: highlight, initial: true) { _, id in
-            guard let id else { return }
-            // A reminder that has come due is still pending, so it is on the first tab —
-            // and the reader arriving from an alert should not have to go looking for it.
-            tab = .inProgress
-            highlight = nil
-            flash(id)
-        }
     }
-
-    /// Draws attention to one row, briefly.
-    ///
-    /// Long enough to be *found* rather than merely blinked at — this is the reader arriving
-    /// from a notification and asking "which one?" — and short enough that the screen settles
-    /// back to being a list. The fade out is what makes it read as the screen answering the
-    /// question rather than as a row that is permanently different.
-    private func flash(_ id: String) {
-        withAnimation(.easeOut(duration: 0.2)) { flashing = id }
-        Task {
-            try? await Task.sleep(for: Self.flashDuration)
-            guard flashing == id else { return }
-            withAnimation(.easeInOut(duration: 0.5)) { flashing = nil }
-        }
-    }
-
-    /// How long the row that came due stays lit.
-    static let flashDuration: Duration = .seconds(2)
 
     private var tabs: some View {
         Picker("Filter", selection: $tab) {
@@ -97,20 +58,12 @@ struct LaterView: View {
         if rows.isEmpty {
             emptyState
         } else {
-            ScrollViewReader { proxy in
-                rowList(rows)
-                    // Also `initial: true`, and for the same reason as the highlight above:
-                    // the flash is usually already set by the time this list is built.
-                    .onChange(of: flashing, initial: true) { _, id in
-                        guard let id else { return }
-                        withAnimation { proxy.scrollTo(id, anchor: .center) }
-                    }
-            }
+            rowList(rows)
         }
     }
 
-    /// The rows themselves. Lifted out of ``list`` so the `ScrollViewReader` above reads as
-    /// one line rather than wrapping thirty.
+    /// The rows themselves. Lifted out of ``list`` so that branch reads as two lines rather
+    /// than wrapping thirty.
     private func rowList(_ rows: [ReminderRow]) -> some View {
         List {
             ForEach(rows) { row in
@@ -125,13 +78,18 @@ struct LaterView: View {
                     complete: { Task { await model.complete(row) } },
                     reschedule: { rescheduling = row }
                 )
-                .listRowInsets(EdgeInsets(top: 12, leading: 16, bottom: 12, trailing: 16))
-                // The row that came due, lit on arrival. `0.18` is the app's own number for
-                // "this is mine, lightly" — the opacity a reacted chip, a sent bubble and
-                // the shortcut card's wash all draw the accent at.
-                .listRowBackground(
-                    flashing == row.id ? Color.hiveAccent.opacity(Self.flashOpacity) : Color.clear
+                .listRowInsets(
+                    EdgeInsets(
+                        top: Self.rowPadding,
+                        leading: MessageRowMetrics.rowLeading,
+                        bottom: Self.rowPadding,
+                        trailing: MessageRowMetrics.rowLeading
+                    )
                 )
+                // Full-bleed, as Slack's are. The default separator starts at the row's
+                // leading inset, which on a row whose content is a message reads as a rule
+                // hung off the avatar rather than as the line between two entries.
+                .alignmentGuide(.listRowSeparatorLeading) { _ in 0 }
                 // Archiving is the destructive-looking action, so it is a swipe rather
                 // than a third button competing with the two that matter.
                 .swipeActions(edge: .trailing) {
@@ -147,8 +105,10 @@ struct LaterView: View {
         .listStyle(.plain)
     }
 
-    /// The strength of that wash — see ``rowList(_:)``.
-    private static let flashOpacity: CGFloat = 0.18
+    /// The air above and below a row. Enough that a row reads as an entry with a message in
+    /// it rather than as a line in a table — its content is three stacked parts, and Slack
+    /// gives the same stack about this much.
+    private static let rowPadding: CGFloat = 14
 
     @ViewBuilder
     private var emptyState: some View {

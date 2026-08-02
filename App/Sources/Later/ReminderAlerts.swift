@@ -8,8 +8,12 @@ import UserNotifications
 /// A reminder's alert is a *local* notification (see ``ReminderScheduler``), and iOS hands a
 /// tap on one to `UNUserNotificationCenter`'s delegate — one process-wide slot, with no
 /// SwiftUI equivalent. So the delegate is a small object that does exactly one thing: say
-/// which reminder was tapped. ``ChannelListView`` watches ``opened``, opens Later, and
-/// flashes the row that came due.
+/// which reminder was tapped. ``ChannelListView`` watches ``opened`` and pops to the sidebar.
+///
+/// This object still carries the reminder's id even though nothing reads it any more. The
+/// tap is a signal that has to arrive *as a change*, and a `Bool` set to `true` a second
+/// time is not one — the id is what makes two taps two events. It is also the thing the next
+/// person to want a destination out of a tap will need.
 ///
 /// # Why the delegate is installed in `init`
 ///

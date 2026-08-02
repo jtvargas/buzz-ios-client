@@ -73,12 +73,6 @@ struct ChannelListView: View {
     /// than inside the screen so the shortcut card's count is live whether or not anyone
     /// has opened it.
     @State private var laterModel: LaterModel?
-    /// The reminder a tapped alert arrived for, handed to the Later screen to point at.
-    ///
-    /// Held here rather than on ``LaterRoute`` because the screen may already be open: a
-    /// route only carries a value at the moment of the push, and the tap has to reach a
-    /// screen that is already on the stack too.
-    @State private var dueReminder: String?
     /// The pushed conversations. Explicit, because every push here is programmatic —
     /// a row's button, a sheet that is already dismissing, a `#`-reference in a message.
     ///
@@ -245,24 +239,22 @@ struct ChannelListView: View {
         .onChange(of: path) { previous, current in
             resume.observe(path: current, previously: previous)
         }
-        // A tapped reminder alert. The owner's rule: it opens Later, not the message — the
-        // reminder is the thing that came due, and the message is one tap further on from a
-        // row that says which one it was.
+        // A tapped reminder alert opens the app on the sidebar, and stops there.
+        //
+        // It used to push Later and light the row that had come due. The owner asked for it
+        // and then asked for it back: the alert has already said what came due, so the tap is
+        // a way *into the app* rather than a request for a particular screen — and a tap that
+        // takes over the navigation is one that has to be undone before anything else can be
+        // done. So this pops whatever was open and leaves the reader where the app starts.
         //
         // `initial: true` because the tap that *launches* the app sets this before this view
-        // exists, and that is the only signal there will be. Whatever else was open is closed
-        // first: the alert asked for one screen, and pushing Later underneath an open
-        // conversation would answer it with a screen nobody can see.
+        // exists, and that is the only signal there will be.
         .onChange(of: environment.reminderAlerts.opened, initial: true) { _, reminderID in
-            guard let reminderID else { return }
+            guard reminderID != nil else { return }
             environment.reminderAlerts.opened = nil
-            dueReminder = reminderID
             openedThread = nil
+            showsLater = nil
             path = []
-            // Only when it is not already up: replacing a live route with an identical one
-            // pops the screen and pushes it again, which would throw away the flash this tap
-            // is here to cause.
-            if showsLater == nil { showsLater = LaterRoute() }
         }
         // The router hands back an opened conversation once; this is the one place that turns
         // it into a push, and it clears the value so an unrelated body pass cannot re-push.
@@ -500,8 +492,7 @@ private extension ChannelListView {
                     path = ConversationRoute(
                         channel: conversationRow(for: target.channelID)
                     ).pushed(onto: path)
-                },
-                highlight: $dueReminder
+                }
             )
         }
     }
