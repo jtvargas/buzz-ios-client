@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// The community list, from the home heading: which communities this phone is signed in
 /// to, which one is open, and the way into another.
@@ -92,8 +93,8 @@ struct CommunitySwitcherView: View {
     /// this screen would.
     static let footer =
         "Each community is its own relay, with its own identity and its own conversations. "
-            + "Use an invite unless you run the relay yourself. Swipe a row to rename or "
-            + "remove it."
+            + "Use an invite unless you run the relay yourself. Long-press a row to copy "
+            + "its community link; swipe to rename or remove it."
 
     // MARK: - Rows
 
@@ -110,7 +111,8 @@ struct CommunitySwitcherView: View {
             CommunitySwitcherRow(
                 community: community,
                 isActive: isActive,
-                isSignedIn: AppEnvironment.hasStoredKey(account: community.keychainAccount)
+                isSignedIn: AppEnvironment.hasStoredKey(account: community.keychainAccount),
+                iconData: environment.communityStorage.iconData(for: community)
             )
         }
         .buttonStyle(.plain)
@@ -121,6 +123,12 @@ struct CommunitySwitcherView: View {
                 renaming = community
             }
             .tint(.hiveAccent)
+        }
+        .contextMenu {
+            Button("Copy community link", systemImage: "link") {
+                guard let origin = community.relayOrigin else { return }
+                UIPasteboard.general.string = origin
+            }
         }
         .listRowBackground(isActive ? Color.hiveAccent.opacity(0.10) : nil)
     }
@@ -143,14 +151,12 @@ struct CommunitySwitcherRow: View {
     /// list — its history is still here — and opening it leads to the gate rather than to a
     /// workspace it cannot authenticate for.
     let isSignedIn: Bool
+    /// The cached relay icon, kept out of ``Community`` itself so the record remains small.
+    let iconData: Data?
 
     var body: some View {
         HStack(spacing: 12) {
-            Image(systemName: ChannelListView.communitySymbol)
-                .font(.hiveSymbol(fixedSize: 22))
-                .foregroundStyle(isActive ? Color.hiveAccent : .secondary)
-                .frame(width: 28)
-                .accessibilityHidden(true)
+            CommunityMark(name: community.name, iconData: iconData, size: 36)
             VStack(alignment: .leading, spacing: 2) {
                 Text(community.name)
                     .font(.hive(.body, weight: isActive ? .semibold : .regular))

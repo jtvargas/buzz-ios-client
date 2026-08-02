@@ -27,9 +27,7 @@ struct CommunityCard: View {
 
     var body: some View {
         HStack(spacing: 14) {
-            iconView
-                .frame(width: 56, height: 56)
-                .clipShape(.rect(cornerRadius: 14))
+            CommunityMark(name: name, icon: icon, size: 56)
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(name)
@@ -68,35 +66,4 @@ struct CommunityCard: View {
         }
     }
 
-    @ViewBuilder
-    private var iconView: some View {
-        switch icon {
-        case let .inline(data):
-            if let image = UIImage(data: data) {
-                Image(uiImage: image).resizable().scaledToFill()
-            } else {
-                placeholder
-            }
-        case let .remote(url):
-            AsyncImage(url: url) { phase in
-                if case let .success(image) = phase {
-                    image.resizable().scaledToFill()
-                } else {
-                    placeholder
-                }
-            }
-        case nil:
-            placeholder
-        }
-    }
-
-    /// A community whose owner never set an icon still reads as a place rather than a hole.
-    private var placeholder: some View {
-        ZStack {
-            Color.hiveAccent.opacity(0.16)
-            Image(systemName: "person.3.fill")
-                .font(.hiveSymbol(fixedSize: 24))
-                .foregroundStyle(Color.hiveAccent)
-        }
-    }
 }

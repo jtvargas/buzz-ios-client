@@ -27,6 +27,11 @@ import Testing
         #expect(!Community.new(relayURLString: "garbage").isSameRelay(as: "garbage"))
     }
 
+    @Test func copiesACommunityAsItsHttpsRelayOrigin() {
+        let community = Community.new(relayURLString: "wss://Relay.Example:8443/path")
+        #expect(community.relayOrigin == "https://Relay.Example:8443")
+    }
+
     @Test func aNewCommunityOwnsStorageNoOtherCommunityNames() {
         let first = Community.new(relayURLString: "wss://a.example")
         let second = Community.new(relayURLString: "wss://b.example")
