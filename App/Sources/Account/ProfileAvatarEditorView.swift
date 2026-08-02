@@ -60,7 +60,6 @@ struct ProfileAvatarEditorView: View {
                     case .emoji: emojiTab
                     }
                 }
-                doneButton
             }
             .padding(.top, 12)
             .navigationTitle("Avatar")
@@ -69,6 +68,7 @@ struct ProfileAvatarEditorView: View {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
                 }
+                ToolbarItem(placement: .confirmationAction) { doneButton }
             }
         }
     }
@@ -301,21 +301,20 @@ struct ProfileAvatarEditorView: View {
 
     // MARK: - Done
 
+    /// The confirm action, in the navigation bar opposite Cancel.
+    ///
+    /// It was a full-width bar across the bottom, which is the shape a one-decision screen
+    /// usually wants — but this screen's decision is made *in a grid*, and a 50pt button
+    /// plus its margins took that grid's last two rows. In the bar it costs nothing, and it
+    /// sits where the Cancel it undoes already was.
     private var doneButton: some View {
-        Button {
+        Button("Done") {
             // `canSave` gates the button, so the value is there; the guard is what keeps
             // that a fact rather than an assumption.
             guard let picture = model.pictureValue else { return }
             onSave(picture)
             dismiss()
-        } label: {
-            Text("Done")
-                .font(.hive(.body, weight: .semibold))
-                .frame(maxWidth: .infinity, minHeight: 50)
         }
-        .buttonStyle(.glassProminent)
         .disabled(!model.canSave)
-        .padding(.horizontal, 20)
-        .padding(.bottom, 12)
     }
 }
