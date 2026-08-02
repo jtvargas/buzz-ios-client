@@ -82,12 +82,9 @@ struct WorkspacePanel: View {
                 }
                 .padding(.horizontal, Self.rowInset)
             }
-            // iOS 26 draws a soft dark band where a scroll view's content meets its top
-            // edge. On a list that begins directly under a heading it reads as a shadow the
-            // heading is casting onto the first row, which is what the owner saw. There is
-            // nothing above this list for content to disappear under, so the effect has
-            // nothing to explain.
-            .scrollEdgeEffectHidden(true, for: .top)
+            // The scroll edge effect at this top edge is deliberately LEFT ON, by the owner's
+            // call: the band is wanted, it just cannot sit against the heading. What separates
+            // them is ``underHeading``, not the effect's absence.
 
             Divider()
             actions
@@ -215,10 +212,11 @@ struct WorkspacePanel: View {
     /// selected background and that background's edge is what has to line up.
     private static let rowInset: CGFloat = 10
     private static let headingTop: CGFloat = 72
-    /// Between the heading and the first community. The rows carry their own selected
-    /// background, so a tight gap put that background's top edge against the heading's
-    /// baseline and the two read as one block.
-    private static let underHeading: CGFloat = 22
+    /// Between the heading and the first community. This gap is doing two jobs: the rows
+    /// carry their own selected background, whose top edge was landing on the heading's
+    /// baseline, and the scroll edge effect's dark band begins here. The band stays — it
+    /// just has to read as the list's own edge rather than as a shadow the heading casts.
+    private static let underHeading: CGFloat = 28
     private static let actionsBottom: CGFloat = 44
     private static let corner: CGFloat = 18
 }
