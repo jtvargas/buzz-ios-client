@@ -117,6 +117,13 @@ final class AppEnvironment {
         }
     }
 
+    /// A tap on a reminder's alert. Owned here and not by the sidebar for one reason: its
+    /// delegate has to be installed during launch (see ``ReminderAlerts``), and this object
+    /// is the only thing built that early. Community-independent, like the object graph
+    /// below it is not — the alert names a reminder, and the screen that opens finds it or
+    /// does not.
+    let reminderAlerts = ReminderAlerts()
+
     /// The community a pairing session has just committed a key into, held between the
     /// import and ``completePairing()``.
     ///

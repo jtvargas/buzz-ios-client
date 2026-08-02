@@ -70,9 +70,10 @@ final class ReminderScheduler {
         content.title = Self.title
         content.body = Self.body(authorName: authorName, preview: row.target?.preview ?? "")
         content.sound = .default
-        // So a tap can land on the message rather than just opening the app.
+        // So a tap can land on the reminder that came due rather than just opening the app —
+        // see ``ReminderAlerts``, which reads the first of these back.
         content.userInfo = [
-            "reminderID": row.id,
+            Self.reminderIDKey: row.id,
             "eventID": row.target?.eventID ?? "",
             "channelID": row.target?.channelID ?? "",
         ]
@@ -115,6 +116,14 @@ final class ReminderScheduler {
 // MARK: - Copy
 
 extension ReminderScheduler {
+    /// Where the reminder's `d` tag rides on the alert's payload. Named once because two
+    /// sides depend on it agreeing: this schedules with it, ``ReminderAlerts`` resolves a
+    /// tap through it, and a typo in either would simply open the app at the sidebar.
+    ///
+    /// `nonisolated` because the delegate that reads it is not on the main actor — the
+    /// notification centre calls it wherever it likes, and a constant string has no actor.
+    nonisolated static let reminderIDKey = "reminderID"
+
     /// The owner's wording, kept verbatim.
     static let title = "You asked me to remind you"
 

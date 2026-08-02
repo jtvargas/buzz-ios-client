@@ -73,6 +73,12 @@ struct ChannelListView: View {
     /// than inside the screen so the shortcut card's count is live whether or not anyone
     /// has opened it.
     @State private var laterModel: LaterModel?
+    /// The reminder a tapped alert arrived for, handed to the Later screen to point at.
+    ///
+    /// Held here rather than on ``LaterRoute`` because the screen may already be open: a
+    /// route only carries a value at the moment of the push, and the tap has to reach a
+    /// screen that is already on the stack too.
+    @State private var dueReminder: String?
     /// The pushed conversations. Explicit, because every push here is programmatic —
     /// a row's button, a sheet that is already dismissing, a `#`-reference in a message.
     ///
@@ -238,6 +244,25 @@ struct ChannelListView: View {
         // swipe — which runs no app code — fills the slot too. See ``ConversationResume``.
         .onChange(of: path) { previous, current in
             resume.observe(path: current, previously: previous)
+        }
+        // A tapped reminder alert. The owner's rule: it opens Later, not the message — the
+        // reminder is the thing that came due, and the message is one tap further on from a
+        // row that says which one it was.
+        //
+        // `initial: true` because the tap that *launches* the app sets this before this view
+        // exists, and that is the only signal there will be. Whatever else was open is closed
+        // first: the alert asked for one screen, and pushing Later underneath an open
+        // conversation would answer it with a screen nobody can see.
+        .onChange(of: environment.reminderAlerts.opened, initial: true) { _, reminderID in
+            guard let reminderID else { return }
+            environment.reminderAlerts.opened = nil
+            dueReminder = reminderID
+            openedThread = nil
+            path = []
+            // Only when it is not already up: replacing a live route with an identical one
+            // pops the screen and pushes it again, which would throw away the flash this tap
+            // is here to cause.
+            if showsLater == nil { showsLater = LaterRoute() }
         }
         // The router hands back an opened conversation once; this is the one place that turns
         // it into a push, and it clears the value so an unrelated body pass cannot re-push.
@@ -457,7 +482,7 @@ private extension ChannelListView {
     /// The Threads and Later cards, in one row above the conversations — one list row
     /// holding both, because they are a set of destinations rather than two rows.
     var shortcuts: some View {
-        HomeShortcutCards(count: count(for:), press: press(_:))
+        HomeShortcutCards(count: count(for:), isCalling: isCalling(_:), press: press(_:))
             .listRowInsets(Self.cardsInsets)
             .listRowSeparator(.hidden)
     }
@@ -475,7 +500,8 @@ private extension ChannelListView {
                     path = ConversationRoute(
                         channel: conversationRow(for: target.channelID)
                     ).pushed(onto: path)
-                }
+                },
+                highlight: $dueReminder
             )
         }
     }
@@ -488,6 +514,19 @@ private extension ChannelListView {
         case .later: laterModel?.pending.count ?? 0
         // Live from the store, de-duplicated so a keystroke does not move the card.
         case .drafts: draftsModel.count
+        }
+    }
+
+    /// Whether a card is asking to be dealt with *now* — see ``HomeShortcutCards/isCalling``.
+    ///
+    /// For Threads and Drafts that is still "is there anything in it": an unread thread and
+    /// an unsent draft are both already overdue. Later is the one card whose contents have a
+    /// *time* on them, so having three reminders says nothing about whether any of them wants
+    /// attention yet — the owner asked for the colour only once one has come due.
+    func isCalling(_ shortcut: HomeShortcut) -> Bool {
+        switch shortcut {
+        case .later: laterModel?.isDue ?? false
+        case .threads, .drafts: HomeShortcutCard.hasSomethingWaiting(count(for: shortcut))
         }
     }
 

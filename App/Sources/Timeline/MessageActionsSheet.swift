@@ -32,7 +32,6 @@ struct MessageActionsSheet: View {
     /// several hundred glyphs behind a search field do not fit in half a screen.
     @State private var detent: PresentationDetent = .height(Self.restingHeight)
     @State private var isPickingEmoji = false
-    @State private var isShowingWorkInProgress = false
     @State private var isConfirmingDelete = false
     /// Pushed on this sheet's own stack, the way the picker is — never a second sheet: a
     /// modal presented from inside a modal races the first one's dismissal.
@@ -83,9 +82,6 @@ struct MessageActionsSheet: View {
         }
         .presentationDetents([.height(Self.restingHeight), .large], selection: $detent)
         .presentationDragIndicator(.visible)
-        .alert("WIP", isPresented: $isShowingWorkInProgress) {
-            Button("OK", role: .cancel) {}
-        }
         // Destructive for everybody in the channel, so it asks.
         .alert("Delete message?", isPresented: $isConfirmingDelete) {
             Button("Delete", role: .destructive) {
@@ -102,6 +98,9 @@ struct MessageActionsSheet: View {
         }
         .onChange(of: isEditing) { _, editing in
             detent = editing ? .large : .height(Self.restingHeight)
+        }
+        .onChange(of: isRemindingMe) { _, isReminding in
+            detent = isReminding ? .large : .height(Self.restingHeight)
         }
     }
 
@@ -222,11 +221,6 @@ struct MessageActionsSheet: View {
                 UIPasteboard.general.string = url.absoluteString
             }
             dismiss()
-        }
-        // Deliberately does not dismiss: the alert is the whole outcome, and closing the
-        // sheet out from under it would leave the notice floating over the conversation.
-        actionRow("Remind Me", symbol: "clock") {
-            isShowingWorkInProgress = true
         }
         publishedMessageActions
         ownSendActions

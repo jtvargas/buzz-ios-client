@@ -42,11 +42,11 @@ struct DraftsScreenTests {
         #expect(HomeShortcut.drafts.signalsWithGlyph)
         #expect(HomeShortcut.later.signalsWithGlyph)
 
-        #expect(HomeShortcutCard.spendsAccentOnEdge(.threads, count: 3))
-        #expect(!HomeShortcutCard.spendsAccentOnEdge(.drafts, count: 3))
-        // Empty is a hairline for everyone.
-        #expect(!HomeShortcutCard.spendsAccentOnEdge(.threads, count: 0))
-        #expect(!HomeShortcutCard.spendsAccentOnEdge(.drafts, count: 0))
+        #expect(HomeShortcutCard.spendsAccentOnEdge(.threads, isCalling: true))
+        #expect(!HomeShortcutCard.spendsAccentOnEdge(.drafts, isCalling: true))
+        // A card asking for nothing is a hairline, whatever its glyph can do.
+        #expect(!HomeShortcutCard.spendsAccentOnEdge(.threads, isCalling: false))
+        #expect(!HomeShortcutCard.spendsAccentOnEdge(.drafts, isCalling: false))
     }
 
     // MARK: - What a row says
