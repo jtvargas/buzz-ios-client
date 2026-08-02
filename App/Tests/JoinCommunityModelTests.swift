@@ -30,7 +30,7 @@ struct JoinCommunityModelTests {
 
         #expect(model.step == .needsLink)
         #expect(model.link == nil)
-        #expect(!model.canJoin)
+        #expect(!model.canContinue)
         // Not an error: a half-typed link is the normal state of a text field, and calling
         // it wrong on every keystroke is how a form shouts at someone who is doing fine.
         #expect(model.error == nil)
@@ -45,11 +45,11 @@ struct JoinCommunityModelTests {
         model.linkText = "https://relay.example/invite/v2.abc"
         try await JoinHarness.settle(model)
 
-        #expect(model.step == .reviewing)
+        #expect(model.step == .community)
         #expect(model.link?.relayURLString == "wss://relay.example")
         #expect(model.link?.code == "v2.abc")
         #expect(model.policy == nil)
-        #expect(model.canJoin)
+        #expect(model.canContinue)
     }
 
     /// The text field reports a change on every keystroke. Re-adopting on each one would
@@ -89,7 +89,7 @@ struct JoinCommunityModelTests {
         model.linkText = model.linkText
 
         #expect(model.link?.policyReceipt == "web.mac")
-        #expect(model.canJoin)
+        #expect(model.canContinue)
         // And the relay is not asked all over again for a link that did not change.
         #expect(await transport.callCount(for: JoinHarness.policyPath) == asked)
     }
@@ -125,12 +125,19 @@ struct JoinCommunityModelTests {
         try await JoinHarness.settle(model)
 
         #expect(model.policy?.ageAttestationRequired == true)
-        #expect(!model.canJoin)
+        #expect(model.blocked == .needsAgeAttestation)
         model.ageConfirmed = true
-        #expect(model.canJoin)
+        // Still held, on the other half of what this relay asks — see the next test.
+        #expect(model.blocked == .needsTermsAccepted)
+        model.termsAccepted = true
+        #expect(model.canContinue)
     }
 
-    @Test func aPolicyWithNoAttestationDoesNotHoldTheButton() async throws {
+    /// Hive listed the Terms and the Privacy Policy and then took a press on `Join` as
+    /// agreement to both. Desktop does not — it holds its button until an explicit box is
+    /// ticked (`JoinPolicyNotice.tsx:60-105`) — and a relay that publishes documents is owed
+    /// the same deliberate answer from either client.
+    @Test func documentsThisCommunityPublishesHaveToBeAgreedTo() async throws {
         let (environment, suite) = JoinHarness.harness()
         defer { JoinHarness.forget(suite, environment) }
         let transport = ScriptedTransport(answers: JoinHarness.policedRelay(ageRequired: false))
@@ -139,10 +146,29 @@ struct JoinCommunityModelTests {
         model.linkText = "https://relay.example/invite/abc"
         try await JoinHarness.settle(model)
 
-        #expect(model.policy != nil)
-        #expect(model.canJoin)
+        #expect(model.publishesDocuments)
+        #expect(model.blocked == .needsTermsAccepted)
+        model.termsAccepted = true
+        #expect(model.canContinue)
     }
 
+    /// A relay that publishes nothing to read asks for nothing to be agreed to. An
+    /// `I agree to the terms` switch over two absent documents would be asking for consent to
+    /// nothing at all.
+    @Test func aRelayWithNoDocumentsAsksForNoAgreement() async throws {
+        let (environment, suite) = JoinHarness.harness()
+        defer { JoinHarness.forget(suite, environment) }
+        let model = JoinHarness.model(environment, transport: ScriptedTransport(answers: JoinHarness.openRelay))
+
+        model.linkText = "https://relay.example/invite/abc"
+        try await JoinHarness.settle(model)
+
+        #expect(!model.publishesDocuments)
+        #expect(model.canContinue)
+    }
+
+    /// And the key is asked for on the *second* step, so a reader on the first is never held
+    /// up by something they have not been shown yet.
     @Test func anExistingKeyHasToBeAKeyBeforeItCanBeUsed() async throws {
         let (environment, suite) = JoinHarness.harness()
         defer { JoinHarness.forget(suite, environment) }
@@ -151,12 +177,85 @@ struct JoinCommunityModelTests {
         model.linkText = "https://relay.example/invite/abc"
         try await JoinHarness.settle(model)
         model.identity = .existing
+        // Still on step one, where the key is not being asked for.
+        #expect(model.canContinue)
 
-        #expect(!model.canJoin)
+        await model.primaryAction()
+        #expect(model.step == .identity)
+
+        #expect(model.blocked == .needsValidKey)
         model.nsec = "not an nsec"
-        #expect(!model.canJoin)
+        #expect(!model.canContinue)
         model.nsec = try PrivateKey().nsec
-        #expect(model.canJoin)
+        #expect(model.canContinue)
+    }
+
+    // MARK: - Moving between the two steps
+
+    @Test func theFirstStepEndsOnNextAndTheSecondOnJoin() async throws {
+        let (environment, suite) = JoinHarness.harness()
+        defer { JoinHarness.forget(suite, environment) }
+        let transport = ScriptedTransport(answers: JoinHarness.openRelay)
+        let model = JoinHarness.model(environment, transport: transport)
+
+        model.linkText = "https://relay.example/invite/abc"
+        try await JoinHarness.settle(model)
+
+        #expect(model.step == .community)
+        #expect(model.actionTitle == "Next")
+        #expect(!model.canGoBack)
+
+        await model.primaryAction()
+
+        #expect(model.step == .identity)
+        #expect(model.actionTitle == "Join")
+        #expect(model.canGoBack)
+        // Reaching the second step claims nothing: the relay has been asked for its terms
+        // and for nothing else.
+        #expect(await transport.callCount(for: JoinHarness.claimPath) == 0)
+    }
+
+    /// Going back is a step back to re-read something, not a cancellation.
+    @Test func goingBackKeepsWhatTheReaderHasAlreadyTyped() async throws {
+        let (environment, suite) = JoinHarness.harness()
+        defer { JoinHarness.forget(suite, environment) }
+        let model = JoinHarness.model(environment, transport: ScriptedTransport(answers: JoinHarness.openRelay))
+
+        model.linkText = "https://relay.example/invite/abc"
+        try await JoinHarness.settle(model)
+        await model.primaryAction()
+        model.displayName = "Jay"
+
+        model.goBack()
+
+        #expect(model.step == .community)
+        #expect(model.displayName == "Jay")
+        // And forward again, without having to re-agree to anything.
+        await model.primaryAction()
+        #expect(model.step == .identity)
+    }
+
+    /// Replacing the invitation replaces the community, and the terms that were agreed to
+    /// were the old one's. A reader who had reached the second step must not stay on it
+    /// holding an acceptance for a relay they are no longer joining.
+    @Test func aDifferentInviteTakesTheReaderBackToTheFirstStep() async throws {
+        let (environment, suite) = JoinHarness.harness()
+        defer { JoinHarness.forget(suite, environment) }
+        let transport = ScriptedTransport(answers: JoinHarness.policedRelay(ageRequired: true))
+        let model = JoinHarness.model(environment, transport: transport)
+
+        model.linkText = "https://relay.example/invite/abc"
+        try await JoinHarness.settle(model)
+        model.ageConfirmed = true
+        model.termsAccepted = true
+        await model.primaryAction()
+        #expect(model.step == .identity)
+
+        model.linkText = "https://other.example/invite/xyz"
+
+        #expect(model.step == .community)
+        #expect(!model.ageConfirmed)
+        #expect(!model.termsAccepted)
     }
 
     // MARK: - The terms step, and when it is skipped
@@ -176,7 +275,7 @@ struct JoinCommunityModelTests {
         try await JoinHarness.settle(model)
 
         // Not held on an attestation that was made in the browser.
-        #expect(model.canJoin)
+        #expect(model.canContinue)
         await model.submit()
 
         #expect(await transport.callCount(for: JoinHarness.acceptPath) == 0)
@@ -194,6 +293,7 @@ struct JoinCommunityModelTests {
         model.linkText = "https://relay.example/invite/abc"
         try await JoinHarness.settle(model)
         model.ageConfirmed = true
+        model.termsAccepted = true
         await model.submit()
 
         let bodies = await transport.bodies
@@ -229,7 +329,7 @@ struct JoinCommunityModelTests {
         #expect(environment.communities.communities.isEmpty)
         #expect(environment.phase == .needsIdentity)
         // Back on the decision, not stuck mid-flight.
-        #expect(model.step == .reviewing)
+        #expect(model.step == .community)
     }
 
     /// The read runs before the reader has asked for anything, and the endpoint is the one
@@ -246,7 +346,7 @@ struct JoinCommunityModelTests {
 
         #expect(model.error == nil)
         #expect(model.policy == nil)
-        #expect(model.canJoin)
+        #expect(model.canContinue)
     }
 
     // MARK: - A community this phone is already in
@@ -261,7 +361,7 @@ struct JoinCommunityModelTests {
 
         #expect(model.alreadyJoined != nil)
         #expect(model.actionTitle == "Open")
-        #expect(model.canJoin)
+        #expect(model.canContinue)
         // Nothing is asked of a relay this phone is already a member of — least of all a
         // use of an invite that may be bounded.
         #expect(await transport.paths.isEmpty)

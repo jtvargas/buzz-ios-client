@@ -39,7 +39,7 @@ struct CommunityLookupTests {
         // The name is the host's, derived exactly as Buzz Desktop derives it on the same
         // relay — never the relay's own `name`, which is the same string everywhere.
         #expect(lookup.name == "buzzdir")
-        #expect(model.canJoin)
+        #expect(model.canContinue)
     }
 
     /// A host that will not answer leaves the card unverified and gates nothing. An operator
@@ -60,7 +60,7 @@ struct CommunityLookupTests {
 
         #expect(!lookup.isVerified)
         #expect(lookup.icon == nil)
-        #expect(model.canJoin)
+        #expect(model.canContinue)
     }
 
     /// The honest half of the badge: a plain Nostr relay answers the same document and has no

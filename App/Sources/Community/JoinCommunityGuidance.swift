@@ -44,6 +44,35 @@ extension JoinCommunityModel {
         case .needsValidKey: "That isn't a valid nsec. One starts with nsec1."
         case .needsAgeAttestation:
             "This community asks you to confirm your age before joining — the switch above."
+        case .needsTermsAccepted:
+            "This community publishes terms, and asks you to agree to them — the switch above."
+        }
+    }
+
+    /// The heading over the step the reader is on.
+    ///
+    /// Each names the question that step asks, rather than numbering it: `Step 2 of 2` tells
+    /// somebody where they are in a form, and `Who you'll be here` tells them what the screen
+    /// is for. The sheet's own title says which operation this is; these say which half of it.
+    var stepTitle: String {
+        switch step {
+        case .needsLink, .community: alreadyJoined != nil ? "Already here" : "The community"
+        case .identity, .joining: "Who you'll be here"
+        }
+    }
+
+    /// The line under that heading. Says what the step is asking for and, on the first one,
+    /// what pressing the button will and will not do — nothing is claimed until the second.
+    var stepBlurb: String {
+        switch step {
+        case .needsLink, .community:
+            alreadyJoined != nil
+                ? "This relay is already one of your communities on this phone."
+                : "Check where you're going, and what this community asks of you. Nothing is "
+                + "claimed until the next screen."
+        case .identity, .joining:
+            "How this community sees you, and which key signs for you in it. Both are only "
+                + "for this community."
         }
     }
 
@@ -60,6 +89,25 @@ extension JoinCommunityModel {
 
     static var notAnInviteNote: String {
         "That isn't an invite link yet. One looks like https://relay.example/invite/v2.abc."
+    }
+
+    /// What the agreement switch is labelled: the documents this community actually publishes,
+    /// named.
+    ///
+    /// Desktop's is fixed copy naming both (`JoinPolicyNotice.tsx:74-102`), which is right on a
+    /// deployment that always has both and wrong on a relay that publishes only one — a switch
+    /// promising agreement to a Privacy Policy that does not exist is a claim about a document
+    /// nobody can read. So the label is built from the policy, and the buttons beside it open
+    /// exactly the documents it names.
+    var termsAgreementLabel: String {
+        switch (policy?.termsMarkdown != nil, policy?.privacyMarkdown != nil) {
+        case (true, true): "I agree to the Terms of Service and the Privacy Policy"
+        case (true, false): "I agree to the Terms of Service"
+        case (false, true): "I agree to the Privacy Policy"
+        // Not reachable from the view, which draws this row only when there is a document to
+        // agree to (§ ``JoinCommunityModel/publishesDocuments``), and not worth a crash.
+        case (false, false): "I agree to this community's terms"
+        }
     }
 
     // MARK: - Saying what happened

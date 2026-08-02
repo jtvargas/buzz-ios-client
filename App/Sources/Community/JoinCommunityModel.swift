@@ -35,14 +35,30 @@ import NostrCore
 @MainActor
 @Observable
 final class JoinCommunityModel {
-    /// How far along the reader is. Not a wizard — the whole thing is one screen — but the
-    /// screen shows different things at each of these, and the join button means different
-    /// things too.
+    /// How far along the reader is.
+    ///
+    /// # Why this is two screens now and was one before
+    ///
+    /// It was one deliberately: a reader is making one decision — *do I want to be in this* —
+    /// and everything for it belonged in front of them at once. What broke that is that the
+    /// screen grew a third thing. It now carries the community and its terms, **and** a name,
+    /// **and** a choice of identity, and only the first of those is the decision. The other
+    /// two are consequences of having already made it, and asking somebody to pick which key
+    /// they will be before they have decided they want in is asking them to furnish a room
+    /// they have not agreed to rent.
+    ///
+    /// So the split is along the decision, not down the middle of the form: ``community`` is
+    /// *which community, and on what terms*, ``identity`` is *who you will be there*. Desktop
+    /// draws the same line — its spotlight step redeems the invite and says `Next`
+    /// (`InviteRedeemForm.tsx:317`), and the profile and key steps come after
+    /// (`CommunityOnboardingFlow.tsx`).
     enum Step: Equatable {
         /// No usable link yet.
         case needsLink
-        /// A link, and whatever the relay says it wants. The decision point.
-        case reviewing
+        /// A link, and whatever the relay says it wants of a joiner. The decision point.
+        case community
+        /// Who the reader will be in it: their name here, and the key that owns it.
+        case identity
         /// Talking to the relay.
         case joining
     }
@@ -91,6 +107,21 @@ final class JoinCommunityModel {
     /// this app on their behalf — the relay refuses a receipt without it, and that refusal
     /// is the correct outcome of not ticking the box.
     var ageConfirmed = false
+    /// That the reader agrees to the documents this community publishes.
+    ///
+    /// Hive had no such switch: it listed the Terms and the Privacy Policy as two buttons and
+    /// then took *pressing Join* as agreement to both. Desktop does not — it holds its own
+    /// button until an `I agree to the Buzz Terms of Service and Privacy Policy` box is ticked
+    /// (`desktop/src/features/onboarding/ui/JoinPolicyNotice.tsx:60-105`, gated at
+    /// `InviteRedeemForm.tsx:303-307`) — and a relay that took the trouble to publish terms is
+    /// owed the same acceptance from both clients.
+    ///
+    /// It is not part of the receipt: `POST /api/join-policy/accept` carries the version and
+    /// the age answer and nothing else (§ ``BuzzKit/InviteClient/acceptPolicy(code:policyVersion:ageConfirmed:)``).
+    /// Presenting a receipt for a version *is* the acceptance as far as the relay is
+    /// concerned; this switch is what makes the reader's half of it deliberate rather than
+    /// inferred from a tap on a button labelled something else.
+    var termsAccepted = false
 
     // MARK: - What the app knows
 
@@ -162,6 +193,7 @@ final class JoinCommunityModel {
         policy = nil
         error = nil
         ageConfirmed = false
+        termsAccepted = false
         alreadyJoined = nil
         // Cleared here rather than in each branch below: two of the three ways out of this
         // method ask the relay nothing, and a reader who replaces an invite to a stranger's
@@ -173,7 +205,9 @@ final class JoinCommunityModel {
             step = .needsLink
             return
         }
-        step = .reviewing
+        // Back to the first step, even if the reader had already reached the second: they
+        // have replaced the community, and the terms they agreed to were the old one's.
+        step = .community
         alreadyJoined = environment.communities.communities.first { $0.isSameRelay(as: parsed.relayURLString) }
         // A community already on this phone needs no invite: the reader is a member, and
         // the operation in front of them is opening it. Asking its relay for a join policy
@@ -202,56 +236,47 @@ final class JoinCommunityModel {
         }
     }
 
-    // MARK: - Whether the button can be pressed
+    // MARK: - Moving between the steps
+    //
+    // What each step is *waiting for*, and what its button says, is § ``JoinCommunityFlow`` —
+    // all derived, all read-only. What moves the reader between them stays here, beside the
+    // `private(set)` state it sets.
 
-    /// What the join is still waiting for, or `nil` when it is waiting for the tap.
+    /// What the button on this step does: go on to the next one, open a community already
+    /// here, or join.
     ///
-    /// Written as the *reason* rather than as a boolean because the screen has to say it. A
-    /// Join button that is grey with nothing on screen explaining it is a state a reader
-    /// cannot get out of — it was reported as "it stays disabled", twice, about two different
-    /// causes on two different screens, which is exactly what an unexplained control looks
-    /// like from outside.
-    var blocked: Blocker? {
-        guard step == .reviewing, link != nil else { return .needsLink }
-        // Already a member: nothing else on the screen is being asked for, because the
-        // operation is opening rather than joining.
-        if alreadyJoined != nil { return nil }
-        if identity == .existing, (try? PrivateKey(nsec: nsec.trimmingCharacters(in: .whitespacesAndNewlines))) == nil {
-            return .needsValidKey
+    /// One entry point rather than the view switching on ``step`` itself, so the button's
+    /// meaning and the button's label (§ ``actionTitle``) cannot come apart.
+    func primaryAction() async {
+        guard canContinue else { return }
+        switch step {
+        case .needsLink, .joining:
+            return
+        case .community:
+            // A community already on this phone has no second step: there is no identity to
+            // choose, because the one it is already signed in with is the answer.
+            if alreadyJoined != nil {
+                await submit()
+            } else {
+                step = .identity
+            }
+        case .identity:
+            await submit()
         }
-        // An attestation the relay requires is the reader's to make, so the button waits
-        // for it rather than the relay refusing after the fact — but only when the terms
-        // have not already been accepted elsewhere. A handoff carrying a receipt has been
-        // through this screen's equivalent in a browser.
-        if link?.policyReceipt == nil, policy?.ageAttestationRequired == true, !ageConfirmed {
-            return .needsAgeAttestation
-        }
-        return nil
     }
 
-    /// Whether everything this join needs has been supplied.
-    var canJoin: Bool { blocked == nil }
-
-    /// The things a join can be waiting for. One case per control on the screen, so the
-    /// sentence under the button can point at the one that is not answered yet.
-    enum Blocker: Equatable {
-        case needsLink
-        case needsValidKey
-        case needsAgeAttestation
-    }
-
-    /// What the button says. Named here rather than in the view because the *operation*
-    /// changes with the state, not just the wording.
-    var actionTitle: String {
-        if alreadyJoined != nil { return "Open" }
-        return step == .joining ? "Joining…" : "Join"
+    /// Back to the community and its terms. Keeps everything the reader has typed: this is a
+    /// step back to re-read something, not a cancellation.
+    func goBack() {
+        guard step == .identity else { return }
+        step = .community
     }
 
     // MARK: - Doing it
 
     /// Runs the join, reporting into ``error`` and leaving the screen up if it fails.
     func submit() async {
-        guard canJoin, let link else { return }
+        guard canContinue, let link else { return }
         error = nil
 
         // Already a member on this device. Redeeming the code again would succeed —
@@ -275,8 +300,12 @@ final class JoinCommunityModel {
             return
         }
 
+        let returnTo = step
         step = .joining
-        defer { if step == .joining { step = .reviewing } }
+        // Back to the step the reader pressed from, so a refused join leaves them looking at
+        // the controls their next attempt will use rather than at the first screen again with
+        // their key thrown away.
+        defer { if step == .joining { step = returnTo } }
 
         do {
             let receipt = try await policyReceipt(link: link, client: client)

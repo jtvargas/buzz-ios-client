@@ -25,7 +25,7 @@ struct JoinCommunityGuidanceTests {
         model.linkText = "https://tech.communities.buzz.xyz"
 
         #expect(model.link == nil)
-        #expect(!model.canJoin)
+        #expect(!model.canContinue)
         #expect(model.linkNote == JoinCommunityModel.relayNotInviteNote)
         // Still not an error: nothing has failed, and this text field is where a mistake
         // is meant to be made.
@@ -74,13 +74,36 @@ struct JoinCommunityGuidanceTests {
         #expect(model.blocked == .needsAgeAttestation)
         #expect(model.blockedNote?.contains("age") == true)
         model.ageConfirmed = true
+        #expect(model.blocked == .needsTermsAccepted)
+        #expect(model.blockedNote?.contains("terms") == true)
+        model.termsAccepted = true
         #expect(model.blocked == nil)
         #expect(model.blockedNote == nil)
 
-        // And the other control on the screen that can hold it.
+        // And the control on the *second* step that can hold it there.
+        await model.primaryAction()
         model.identity = .existing
         #expect(model.blocked == .needsValidKey)
         #expect(model.blockedNote?.contains("nsec1") == true)
+    }
+
+    /// The switch is labelled with the documents this community actually publishes. A relay
+    /// serving only one must not be described as having both — a promise to agree to a
+    /// Privacy Policy nobody can read is a claim about a document that does not exist.
+    @Test func theAgreementNamesTheDocumentsThatExist() async throws {
+        let (environment, suite) = JoinHarness.harness()
+        defer { JoinHarness.forget(suite, environment) }
+        let transport = ScriptedTransport(answers: [JoinHarness.policyPath: [(JoinHarness.data("""
+        {"policy":{"terms_markdown":"# Terms","age_attestation_required":false,"version":"v1"}}
+        """), 200)]])
+        let model = JoinHarness.model(environment, transport: transport)
+
+        model.linkText = "https://relay.example/invite/abc"
+        try await JoinHarness.settle(model)
+
+        #expect(model.publishesDocuments)
+        #expect(model.termsAgreementLabel.contains("Terms of Service"))
+        #expect(!model.termsAgreementLabel.contains("Privacy"))
     }
 
     /// An empty field is not a refusal, and the footer under it is already saying what to do
