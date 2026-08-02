@@ -2,15 +2,25 @@ import BuzzKit
 import SwiftUI
 import UIKit
 
-/// The account hub: edit your profile, copy your `npub`, back up your secret key,
-/// and sign out. Presented as a sheet from the channel list.
+/// The account hub: change your picture, edit your name and bio, copy your key, back up
+/// your secret key, and sign out. Presented as a sheet from the channel list.
+///
+/// # Why it is cards and not a `Form`
+///
+/// This was a `Form` with two text fields and a Save button, which made the screen a
+/// settings page whose subject was a string. The subject is a *person*: the picture is the
+/// largest thing on it, the two facts that describe you sit under it, and the keypair —
+/// which is fixed and cannot be edited at all — is a separate card rather than three more
+/// rows of the same list. That is the shape Buzz's own profile screen has, so someone who
+/// set their avatar on desktop finds the same screen here.
 struct AccountView: View {
     @Environment(AppEnvironment.self) private var environment
+    @Environment(\.entityNames) private var names
     @Environment(\.dismiss) private var dismiss
 
     @State private var model: ProfileModel?
+    @State private var isEditingAvatar = false
     @State private var showSignOutConfirm = false
-    @State private var copiedNpub = false
 
     private let store: BuzzEventStore
     private let engine: SyncEngine
@@ -24,13 +34,22 @@ struct AccountView: View {
 
     var body: some View {
         NavigationStack {
-            Form {
-                if let model {
-                    profileSection(model)
-                    keySection(model)
+            ScrollView {
+                VStack(spacing: 20) {
+                    if let model {
+                        avatarHeader(model)
+                        AccountProfileInfoCard(model: model)
+                        AccountIdentityCard(model: model, selfPubkey: selfPubkey)
+                    } else {
+                        ProgressView().padding(.top, 60)
+                    }
+                    signOutButton
                 }
-                signOutSection
+                .padding(.horizontal, 20)
+                .padding(.top, 8)
+                .padding(.bottom, 32)
             }
+            .background(Color(.systemGroupedBackground))
             .navigationTitle("Account")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -48,58 +67,65 @@ struct AccountView: View {
         }
     }
 
-    // MARK: - Profile
+    // MARK: - Avatar
 
-    @ViewBuilder
-    private func profileSection(_ model: ProfileModel) -> some View {
-        @Bindable var model = model
-        Section("Profile") {
-            TextField("Display name", text: $model.draftDisplayName)
-                .textInputAutocapitalization(.words)
-            TextField("About", text: $model.draftAbout, axis: .vertical)
-                .lineLimit(1 ... 4)
+    /// The header avatar's point size. Larger than ``ProfileSheetView/avatarSize`` because
+    /// this screen is where the picture is *changed*, so it is the subject rather than an
+    /// illustration of one.
+    private static let avatarSize: CGFloat = 112
+
+    private func avatarHeader(_ model: ProfileModel) -> some View {
+        VStack(spacing: 10) {
             Button {
-                Task { await model.save() }
+                isEditingAvatar = true
             } label: {
-                if model.isSaving {
-                    ProgressView()
-                } else {
-                    Text(model.didSave ? "Saved" : "Save Profile")
-                }
+                AvatarView(
+                    // The draft rather than the resolved name table, so the new picture is
+                    // on screen the moment Done is tapped instead of when the relay echoes
+                    // the metadata back.
+                    url: model.draftPicture.flatMap(URL.init(string:)),
+                    seed: model.pubkeyHex,
+                    monogram: names.initials(for: model.pubkeyHex),
+                    size: Self.avatarSize,
+                    shape: .circle
+                )
+                // The badge sits on the circle's edge rather than beside it, so the control
+                // that changes the picture is visibly part of the picture — which is what
+                // makes a tap on the face itself the obvious move.
+                .overlay(alignment: .bottomTrailing) { editBadge }
             }
-            .disabled(model.isSaving || !model.hasLoaded)
-            if let saveError = model.saveError {
-                Text(saveError).font(.hive(.footnote)).foregroundStyle(.red)
+            .buttonStyle(.hivePress(.control, in: .circle))
+            .accessibilityLabel("Change your picture")
+
+            Text("Update how your name, picture, and bio appear across Buzz.")
+                .font(.hive(.footnote))
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+        }
+        .padding(.bottom, 4)
+        .sheet(isPresented: $isEditingAvatar) {
+            ProfileAvatarEditorView(
+                picture: model.draftPicture,
+                uploader: environment.mediaUploader,
+                monogram: names.initials(for: model.pubkeyHex),
+                seed: model.pubkeyHex
+            ) { picture in
+                Task { await model.updateAvatar(picture) }
             }
         }
     }
 
-    // MARK: - Key
-
-    @ViewBuilder
-    private func keySection(_ model: ProfileModel) -> some View {
-        Section("Your key") {
-            Button {
-                UIPasteboard.general.string = model.npub
-                copiedNpub = true
-            } label: {
-                LabeledContent {
-                    Image(systemName: copiedNpub ? "checkmark" : "doc.on.doc")
-                } label: {
-                    Text(model.npub)
-                        .font(.hiveMono(.footnote))
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
-            }
-            .accessibilityLabel("Copy your npub")
-
-            if let selfPubkey {
-                NavigationLink("Back Up Secret Key") {
-                    KeyBackupView(selfPubkey: selfPubkey)
-                }
-            }
-        }
+    private var editBadge: some View {
+        Image(systemName: "pencil")
+            .font(.hiveSymbol(.footnote, weight: .semibold))
+            .foregroundStyle(Color(.systemBackground))
+            .frame(width: 34, height: 34)
+            .background(Circle().fill(.tint))
+            // A ring in the page's own colour, so the badge reads as sitting on top of the
+            // avatar rather than punched out of it — the same treatment the connection dot
+            // gets in ``AccountAvatarButton``.
+            .overlay(Circle().strokeBorder(Color(.systemGroupedBackground), lineWidth: 3))
+            .accessibilityHidden(true)
     }
 
     // MARK: - Sign out
@@ -121,34 +147,34 @@ struct AccountView: View {
         return "This signs out of every community on this phone. " + base
     }
 
-    private var signOutSection: some View {
-        Section {
+    private var signOutButton: some View {
+        Button("Sign Out", role: .destructive) {
+            showSignOutConfirm = true
+        }
+        .font(.hive(.body, weight: .medium))
+        .frame(maxWidth: .infinity, minHeight: 44)
+        // Not while the session is still coming up. The workspace now mounts before the
+        // engine has started (so a slow relay never blocks the app), which put this
+        // button on screen during a launch for the first time — and a teardown that
+        // lands mid-start races a setup that cannot be cancelled. See
+        // ``AppEnvironment/signOut()``. There is also nothing to leave yet.
+        .disabled(environment.isStartingEngine)
+        .padding(.top, 4)
+        .confirmationDialog(
+            signOutTitle,
+            isPresented: $showSignOutConfirm,
+            titleVisibility: .visible
+        ) {
             Button("Sign Out", role: .destructive) {
-                showSignOutConfirm = true
+                // A refusal is reported by the app rather than here: signing out
+                // replaces the workspace this sheet is attached to, so by the time
+                // there is anything to say, this view is gone. See
+                // ``AppEnvironment/signOut()``.
+                Task { await environment.signOut() }
             }
-            .frame(maxWidth: .infinity)
-            // Not while the session is still coming up. The workspace now mounts before the
-            // engine has started (so a slow relay never blocks the app), which put this
-            // button on screen during a launch for the first time — and a teardown that
-            // lands mid-start races a setup that cannot be cancelled. See
-            // ``AppEnvironment/signOut()``. There is also nothing to leave yet.
-            .disabled(environment.isStartingEngine)
-            .confirmationDialog(
-                signOutTitle,
-                isPresented: $showSignOutConfirm,
-                titleVisibility: .visible
-            ) {
-                Button("Sign Out", role: .destructive) {
-                    // A refusal is reported by the app rather than here: signing out
-                    // replaces the workspace this sheet is attached to, so by the time
-                    // there is anything to say, this view is gone. See
-                    // ``AppEnvironment/signOut()``.
-                    Task { await environment.signOut() }
-                }
-                Button("Cancel", role: .cancel) {}
-            } message: {
-                Text(signOutMessage)
-            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(signOutMessage)
         }
     }
 }
