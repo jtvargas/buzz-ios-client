@@ -316,6 +316,8 @@ final class ConversationReaderPlace {
     func jumpToNewestBegan() {
         hasMoved = false
         isLandingOnNewest = true
+        isLandingOnMessage = false
+        shouldReassertMessage = false
     }
 
     /// A jump to a message has just been issued. Unlike a jump to the newest row, this is a
@@ -353,13 +355,13 @@ final class ConversationReaderPlace {
     /// jump starts and the reader's own drag sets it again, so someone who took hold of the
     /// list mid-flight is left where they put it.
     func scrollCameToRest() -> Correction {
-        if shouldReassertMessage {
-            shouldReassertMessage = false
-            return .message
+        if isLandingOnNewest {
+            isLandingOnNewest = false
+            return hasMoved ? .none : .bottom
         }
-        guard isLandingOnNewest else { return .none }
-        isLandingOnNewest = false
-        return hasMoved ? .none : .bottom
+        guard shouldReassertMessage else { return .none }
+        shouldReassertMessage = false
+        return .message
     }
 
     /// Reads one geometry sample and says what it implies.

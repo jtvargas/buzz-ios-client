@@ -14,6 +14,8 @@ enum MessageLandingFailure: Equatable {
     case offlineOrTimedOut
     /// The relay completed the lookup but returned no accessible event.
     case relayReturnedNothing
+    /// The event is a thread reply, which stage 1 cannot open on the channel timeline.
+    case messageIsInThread
 }
 
 /// A message link waiting for the timeline that owns its channel to consume it.
@@ -63,6 +65,8 @@ final class MessageLandingRouter {
             return "Couldn’t load that message. Check your connection."
         case .relayReturnedNothing:
             return "That message is unavailable. It may have been deleted, or you may not be in that channel."
+        case .messageIsInThread:
+            return "That message is in a thread. Opening thread links is coming next."
         }
     }
 }

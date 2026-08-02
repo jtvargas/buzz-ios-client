@@ -367,8 +367,11 @@ struct ConversationScaffold<Content: View, Bar: View, Accessory: View>: View {
         case let .offset(target):
             position.scrollTo(y: target)
         case .message:
-            if case let .message(id) = jumpTarget {
+            switch jumpTarget {
+            case let .message(id), let .landing(id):
                 proxy.scrollTo(id, anchor: .top)
+            case .bottom:
+                break
             }
         }
     }
@@ -405,9 +408,15 @@ struct ConversationScaffold<Content: View, Bar: View, Accessory: View>: View {
                 // message they have not read; a target too near the end of the content lands as
                 // far as the scroll view can go, which is the bottom — where it is anyway.
                 proxy.scrollTo(id, anchor: .top)
-                // Landing on a message is the reader choosing a place that is not the
-                // newest one, exactly as a drag is. Without this, the next content change
-                // would put them back at the bottom they deliberately left.
+                // This is an internal jump to content already in the conversation. Keep the
+                // existing reader-place behavior; only an external deep-link landing owns
+                // correction suppression while its rows are being measured.
+                place.hasMoved = true
+            case let .landing(id):
+                // Deep-link content may be an unmeasured island in a freshly pushed timeline.
+                // Its animated rows must not be mistaken for a place the reader chose until
+                // the landing is held or the reader takes over.
+                proxy.scrollTo(id, anchor: .top)
                 place.jumpToMessageBegan()
             }
         }

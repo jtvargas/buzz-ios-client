@@ -173,6 +173,21 @@ struct ConversationReaderCauseTests {
         #expect(feed(place, [span(height: 49_028, offset: 30_000, distance: 5_028)]) == [.none])
     }
 
+    @Test("an internal message jump leaves reader corrections live")
+    func anInternalMessageJumpDoesNotSuppressCorrections() {
+        let place = ConversationReaderPlace()
+        place.hasMoved = true
+        park(place, height: 45_000, offset: 30_000, distance: 1_000)
+        // The scaffold's internal `.message` arm writes hasMoved directly. It must not
+        // acquire the deep-link suppression bits used by `jumpToMessageBegan()`.
+        place.hasMoved = true
+        place.contentDidChange()
+
+        #expect(feed(place, [span(height: 49_000, offset: 30_000, distance: 5_000)]) == [.offset(34_000)])
+        #expect(!place.isLandingOnMessage)
+        #expect(!place.shouldReassertMessage)
+    }
+
     @Test("a message landing reasserts its row and anchors the resting distance")
     func aMessageLandingIsReassertedAtRest() {
         let place = ConversationReaderPlace()
@@ -203,5 +218,16 @@ struct ConversationReaderCauseTests {
         #expect(!place.isLandingOnMessage)
         #expect(!place.shouldReassertMessage)
         #expect(place.scrollCameToRest() == .none)
+    }
+
+    @Test("a newest jump wins its rest assertion after a landing")
+    func aNewestJumpWinsAfterLanding() {
+        let place = ConversationReaderPlace()
+        place.jumpToMessageBegan()
+        place.jumpToNewestBegan()
+
+        #expect(place.scrollCameToRest() == .bottom)
+        #expect(!place.isLandingOnNewest)
+        #expect(!place.shouldReassertMessage)
     }
 }

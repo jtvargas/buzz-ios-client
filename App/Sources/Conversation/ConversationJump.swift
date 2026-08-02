@@ -7,6 +7,9 @@ enum ConversationJumpTarget: Equatable {
     case bottom
     /// One particular message, by id — the *first* arrival the reader has not seen.
     case message(String)
+    /// A deep link landing on content the reader has not measured yet. Unlike ``message``,
+    /// this owns correction suppression until the reader takes hold of the list.
+    case landing(String)
 }
 
 /// Which control a conversation is offering above its composer, if any.

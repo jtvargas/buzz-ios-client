@@ -256,7 +256,8 @@ struct ChannelTimelineView: View {
         // only after the synchronous work so later stages can safely add suspension points.
         .task(id: MessageLandingTaskID(
             landing: messageLandingRouter?.pendingLanding,
-            hasLoaded: model.hasLoaded
+            hasLoaded: model.hasLoaded,
+            contentRevision: model.contentRevision
         )) {
             guard let landing = messageLandingRouter?.pendingLanding,
                   landing.channelID == channelID else { return }
@@ -264,8 +265,11 @@ struct ChannelTimelineView: View {
                 if messageLandingRouter?.pendingLanding == landing {
                     messageLandingRouter?.pendingLanding = nil
                 }
-            } else if model.hasLoaded, messageLandingRouter?.pendingLanding == landing {
-                messageLandingRouter?.fail(.notInStore)
+            } else if model.hasLoaded, !model.rows.isEmpty,
+                      messageLandingRouter?.pendingLanding == landing {
+                messageLandingRouter?.fail(
+                    landing.threadRootID == nil ? .notInStore : .messageIsInThread
+                )
             }
         }
     }
@@ -416,6 +420,7 @@ struct ChannelTimelineView: View {
 private struct MessageLandingTaskID: Equatable {
     let landing: MessageLanding?
     let hasLoaded: Bool
+    let contentRevision: Int
 }
 
 /// The list's two element builders and the four small things the body reaches for. In an

@@ -37,18 +37,30 @@ extension ChannelTimelineModel {
         jumpToken += 1
     }
 
-    /// Releases the frozen tail, rebuilds the rendered rows, and lands on a loaded message.
+    /// Releases a frozen tail only when the target is behind it, then rebuilds and lands on a
+    /// loaded message.
     ///
     /// This is the Stage 1 boundary: no store or relay lookup is attempted. A target that is
     /// not rendered yet remains armed until the first loaded snapshot gives the view an honest
-    /// answer. ``ChannelTimelineView`` supplies that readiness through ``hasLoaded``.
+    /// answer. ``hasLoaded`` means a read was attempted, so an empty head remains armed until
+    /// a non-empty snapshot arrives; the view supplies that readiness through its task id.
     @discardableResult
     func prepareLanding(on eventID: String) -> Bool {
         pendingLanding = eventID
-        tail.release()
+        let ordered = loaded.values.sorted { lhs, rhs in
+            lhs.createdAt != rhs.createdAt ? lhs.createdAt < rhs.createdAt : lhs.id < rhs.id
+        }
+        if tail.split(ordered).held.contains(where: { $0.id == eventID }) {
+            tail.release()
+        }
+        suppressReadStateAdvance = true
         rebuild()
+        suppressReadStateAdvance = false
         guard pendingLanding == nil else {
-            if hasLoaded { pendingLanding = nil }
+            // A primed but empty head can be the interval before this channel's backfill
+            // arrives. Only a non-empty snapshot can honestly say an absent target is not
+            // rendered in this stage.
+            if hasLoaded, !rows.isEmpty { pendingLanding = nil }
             return false
         }
         return true
@@ -64,7 +76,7 @@ extension ChannelTimelineModel {
         guard let target = pendingLanding,
               rendered.contains(where: { $0.id == target }) else { return }
         pendingLanding = nil
-        jumpTarget = .message(target)
+        jumpTarget = .landing(target)
         jumpToken += 1
     }
 

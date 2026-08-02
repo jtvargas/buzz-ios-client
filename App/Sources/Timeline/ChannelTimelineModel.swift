@@ -181,6 +181,10 @@ final class ChannelTimelineModel {
     ///
     /// Written from `ChannelTimelineModel+ReadState.swift` and nowhere else.
     @ObservationIgnored var lastMarkedReadAt: Int64 = 0
+    /// A deep-link rebuild may render held rows to reach its target, but that is not proof the
+    /// reader has read through the newest rendered row. The next ordinary rebuild may advance
+    /// the frontier once the reader has actually viewed the landing.
+    @ObservationIgnored var suppressReadStateAdvance = false
 
     init(
         channel: String,
