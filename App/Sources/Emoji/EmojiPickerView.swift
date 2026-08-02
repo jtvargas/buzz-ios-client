@@ -34,6 +34,9 @@ struct EmojiPickerView: View {
     let onSelect: (String) -> Void
 
     @State private var query = ""
+    /// Whether the bottom field holds the keyboard — the one thing that decides whether the
+    /// dismiss button is there to be pressed.
+    @FocusState private var isSearchFocused: Bool
 
     /// The cell, and so the touch target: the platform's 44pt minimum, never smaller.
     private static let cell: CGFloat = 44
@@ -79,25 +82,48 @@ struct EmojiPickerView: View {
         .overlay { emptyState }
     }
 
-    /// The search field, drawn rather than asked for.
+    /// The search field, drawn rather than asked for, with the button that gives the
+    /// keyboard back.
     ///
     /// `.searchable` cannot go here — it places itself, and every placement it offers is a
-    /// bar at the top. Drawing it by hand means drawing back what the system field gave for
-    /// free, and the part that matters is the **glass**: the shell is
-    /// ``glassEffect(_:in:)`` on a capsule, floating clear of the grid with nothing opaque
-    /// behind it, so glyphs scrolling underneath refract instead of being hidden by a slab.
-    /// That is ``MessageComposerView``'s shape — the app's other hand-built field over
-    /// scrolling content — down to the 12/8 float.
+    /// bar at the top. Drawing it by hand means drawing back everything the system field
+    /// gave for free, and it gave two things that had to be re-made by name: the **glass**,
+    /// and the **cancel button beside it**. A hand-built field that keeps the keyboard with
+    /// no way to put it down is the worst of the two arrangements.
+    ///
+    /// The shell is ``glassEffect(_:in:)`` on a capsule floating clear of the grid with
+    /// nothing opaque behind it, so glyphs scrolling underneath refract instead of being
+    /// hidden by a slab — ``MessageComposerView``'s shape, down to the 12/8 float. Both
+    /// pieces of glass sit in one `GlassEffectContainer` so they are sampled together and
+    /// read as one control rather than two lozenges that happen to be adjacent.
     private var bottomSearchBar: some View {
+        GlassEffectContainer {
+            HStack(spacing: 8) {
+                searchField
+                if isSearchFocused {
+                    dismissKeyboardButton
+                }
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .animation(.snappy(duration: 0.25), value: isSearchFocused)
+    }
+
+    private var searchField: some View {
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass")
                 .font(.hiveSymbol(.footnote))
                 .foregroundStyle(.secondary)
             TextField("Search emoji", text: $query)
                 .font(.hive(.body))
+                .focused($isSearchFocused)
                 .submitLabel(.search)
                 .autocorrectionDisabled()
                 .textInputAutocapitalization(.never)
+                // The keyboard's own return key does what the button does, for anyone who
+                // never looks away from it.
+                .onSubmit { isSearchFocused = false }
             if !query.isEmpty {
                 Button {
                     query = ""
@@ -117,9 +143,32 @@ struct EmojiPickerView: View {
         // `.interactive()` because this one is tapped: the glass answers the finger the way
         // every other control in the app does.
         .glassEffect(.regular.interactive(), in: .capsule)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
         .animation(.snappy(duration: 0.2), value: query.isEmpty)
+    }
+
+    /// Puts the keyboard away without discarding the search.
+    ///
+    /// `.searchable`'s Cancel clears the field as it dismisses, because there the search is
+    /// the screen and leaving is abandoning it. Here the search *result* is the grid behind
+    /// the keyboard: someone types `cat`, then wants the keyboard gone so they can see and
+    /// tap what they found. Clearing on dismiss would delete the thing they were reaching
+    /// for. The `✕` inside the field is what clears; this only unfocuses.
+    private var dismissKeyboardButton: some View {
+        Button {
+            isSearchFocused = false
+        } label: {
+            Image(systemName: "keyboard.chevron.compact.down")
+                .font(.hiveSymbol(.footnote, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 44, height: 44)
+                .contentShape(.circle)
+        }
+        .buttonStyle(.hivePress(.control, in: .circle))
+        .glassEffect(.regular.interactive(), in: .circle)
+        .accessibilityLabel("Hide keyboard")
+        // From the trailing edge, so it reads as sliding out from under the field rather
+        // than appearing on top of the grid.
+        .transition(.move(edge: .trailing).combined(with: .opacity))
     }
 
     private func cell(_ emoji: String) -> some View {
