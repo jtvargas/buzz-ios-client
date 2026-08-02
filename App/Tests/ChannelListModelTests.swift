@@ -173,6 +173,33 @@ struct ChannelListModelTests {
         #expect(model.isWritable == false)
     }
 
+    /// Keyless is not a lock, and this is the branch that says so:
+    /// ``ChannelAccessModel/init(channelID:identity:store:)`` answers `.active` outright
+    /// when there is no identity, because access is recorded *per reader* and a session
+    /// with nobody in it has nobody to have lost it. Falling through to the store instead
+    /// would read no row, resolve `.unavailable`, and tell a reader their own conversation
+    /// is read-only — a claim the relay would immediately contradict.
+    ///
+    /// Both readers of this flag are conversation surfaces that hide the composer and strip
+    /// the actions sheet down to its read-only shape on it — `ChannelTimelineView` and
+    /// `ThreadView`. So getting this wrong locks a signed-out reader out of writing
+    /// anywhere, on a path no other test walks: every other keyless case in the app suite
+    /// is about what gets *listed*, not what may be written.
+    @Test("no identity is writable, not merely unknown")
+    func channelAccessWithoutIdentityIsWritable() async throws {
+        let temp = TempStore()
+        defer { temp.remove() }
+        let store = try temp.open()
+
+        // Deliberately a channel the store has never heard of: with an identity that is
+        // exactly the shape that resolves `.unavailable`, so the assertion below fails if
+        // the nil case ever stops being answered ahead of the read.
+        let model = ChannelAccessModel(channelID: "general", identity: nil, store: store)
+
+        #expect(model.state == .active)
+        #expect(model.isWritable)
+    }
+
     @Test("launch and fallback surfaces expose stable recovery copy")
     func directoryPresentationCopy() {
         #expect(ChannelBootstrapView.message == "Connecting…")
