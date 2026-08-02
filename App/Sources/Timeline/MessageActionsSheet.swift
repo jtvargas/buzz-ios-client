@@ -194,6 +194,16 @@ struct MessageActionsSheet: View {
             UIPasteboard.general.string = target.row.content
             dismiss()
         }
+        actionRow("Copy Link To Message", symbol: "link") {
+            if let url = MessageLink.url(
+                channelID: target.channelID,
+                messageID: target.row.id,
+                threadRootID: target.threadRootID
+            ) {
+                UIPasteboard.general.string = url.absoluteString
+            }
+            dismiss()
+        }
         // Deliberately does not dismiss: the alert is the whole outcome, and closing the
         // sheet out from under it would leave the notice floating over the conversation.
         actionRow("Remind Me", symbol: "clock") {

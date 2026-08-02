@@ -66,8 +66,18 @@ struct MessageActionsTests {
     func targetIdentityIsTheMessage() {
         // `sheet(item:)` keys off this. Were the id constant, long-pressing a second message
         // while the first sheet was still animating away would show the first one's actions.
-        let first = MessageActionTarget(row: row(id: "A"), isOwn: false)
-        let second = MessageActionTarget(row: row(id: "B"), isOwn: false)
+        let first = MessageActionTarget(
+            row: row(id: "A"),
+            isOwn: false,
+            channelID: "CHANNEL",
+            threadRootID: nil
+        )
+        let second = MessageActionTarget(
+            row: row(id: "B"),
+            isOwn: false,
+            channelID: "CHANNEL",
+            threadRootID: nil
+        )
         #expect(first.id == "A")
         #expect(second.id == "B")
         #expect(first != second)

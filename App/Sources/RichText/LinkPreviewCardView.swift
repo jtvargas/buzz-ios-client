@@ -72,6 +72,31 @@ struct LinkPreviewCardView: View {
         // rather than left on the shared corner radius, because ``MessageMediaFrame/fill`` is
         // translucent: a wash in a shape this card does not have would show through it.
         .buttonStyle(.hivePress(.control, in: MessageMediaFrame.shape))
+        // The card owns a hold on itself, exactly as it already owns a tap on itself.
+        //
+        // A message row is holdable everywhere — that is how its actions sheet opens — so this
+        // press and the row's are the same physical gesture landing on two things at once, and
+        // one of them has to win. The card wins, on the rule the tap already follows: pressing a
+        // card opens the link and does *not* open the thread behind it, so holding a card copies
+        // the link and does not open the message's sheet behind it. Innermost thing under the
+        // finger owns the touch, for both durations. The reader aims at a card and gets the
+        // card's answer; every other point on the message still gets the sheet.
+        //
+        // `highPriorityGesture` and not `gesture`, because two recognisers have to be beaten and
+        // only one of them is the row's: the card is a `Button`, and its own tap must not also
+        // fire on the release of a hold — a hold that copied the link *and* opened it in Safari
+        // is the whole feature reading as broken.
+        //
+        // A bare `LongPressGesture` with `onEnded` alone, and nothing that observes the press
+        // going down — no `onPressingChanged`, no `@GestureState`. That is not stylistic: a
+        // gesture that tracks from touch-down takes the touch away from the scroll view it is
+        // inside, and this app has already shipped a conversation that could not be scrolled at
+        // all that way. See ``PressFeedbackButtonStyle`` and `TimelineRowView.pressGesture`,
+        // which both carry the same prohibition.
+        .highPriorityGesture(
+            LongPressGesture(minimumDuration: LinkCopy.longPressDuration)
+                .onEnded { _ in LinkCopy.copy(preview) }
+        )
         .frame(maxWidth: MessageMediaLayout.maximumWidth, alignment: .leading)
         // A message row folds its children into one utterance with
         // `.accessibilityElement(children: .combine)`, which keeps this label and drops
@@ -80,8 +105,12 @@ struct LinkPreviewCardView: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilityLabel)
         .accessibilityAddTraits(.isLink)
+        // A hold is not reachable by VoiceOver, so the copy needs a named action or it does not
+        // exist for anybody navigating by rotor — the same reason "Open link" is spelled out
+        // here rather than left to the combined row's tap.
         .accessibilityActions {
             Button("Open link", action: open)
+            Button("Copy link") { LinkCopy.copy(preview) }
         }
     }
 
