@@ -359,7 +359,11 @@ private extension ChannelListView {
                     .listRowInsets(Self.headerInsets)
                     .listRowSeparator(.hidden)
                     if expansion(for: section.section).wrappedValue {
-                        rows(of: section, resumable: resumable)
+                        if section.rows.isEmpty {
+                            emptySectionRow(section.section)
+                        } else {
+                            rows(of: section, resumable: resumable)
+                        }
                     }
                 }
             }
@@ -506,6 +510,27 @@ private extension ChannelListView {
     }
 
     /// The relay answered, and the answer is that this key is in nothing.
+    /// What a persistent heading shows instead of rows.
+    ///
+    /// A plain line of secondary text, not a `ContentUnavailableView`: that one centres
+    /// itself in whatever space it is given and is built to own a screen, so inside a
+    /// `List` row it opens a gap the size of the rest of the sidebar. This has to read
+    /// as one quiet row under its heading.
+    ///
+    /// It is not a button. Nothing on this phone starts a direct message — a DM begins
+    /// from a person, on their profile — so an empty DMs heading that offered a tap
+    /// would be offering a dead end.
+    func emptySectionRow(_ section: SidebarSection) -> some View {
+        Text(section.emptyMessage)
+            .font(.subheadline)
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 6)
+            .listRowInsets(Self.rowInsets)
+            .listRowSeparator(.hidden)
+            .accessibilityIdentifier("sidebar-section-empty-\(section.rawValue)")
+    }
+
     var emptyState: some View {
         ContentUnavailableView(
             "No conversations yet",

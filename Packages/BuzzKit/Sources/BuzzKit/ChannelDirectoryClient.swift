@@ -93,7 +93,21 @@ public struct ChannelDirectoryClient: ChannelDirectoryFetching, Sendable {
             }
         )
 
-        let relevantChannels = currentChannels.union(previouslyActiveChannels)
+        // Everything the relay is willing to show this key, whether or not a roster
+        // names them. `POST /query` scopes channel-scoped events to
+        // `get_accessible_channel_ids`, which is the viewer's memberships **UNION every
+        // channel with `visibility = 'open'`** (`buzz-db/src/channel.rs:746-761`,
+        // enforced at `buzz-relay/src/api/bridge.rs:1005`). Asking only "whose roster
+        // contains me?" — the query above — therefore cannot see an open channel the
+        // viewer has not joined, which is every channel in a community they have just
+        // been invited to. That is the difference between a sidebar and a blank panel
+        // on a first join.
+        let discoveryPages = try await fetchAll(DirectoryFilter(kinds: [.groupMetadata], tagQueries: [:]))
+        let discoverableChannels = Set(discoveryPages.compactMap(\.addressableIdentifier))
+
+        let relevantChannels = currentChannels
+            .union(previouslyActiveChannels)
+            .union(discoverableChannels)
         var stateEvents: [NostrEvent] = []
         let ordered = relevantChannels.sorted()
         for start in stride(from: 0, to: ordered.count, by: Self.channelBatchSize) {
@@ -107,7 +121,7 @@ public struct ChannelDirectoryClient: ChannelDirectoryFetching, Sendable {
             )
         }
 
-        let events = Self.latestReplaceables(in: membershipPages + stateEvents)
+        let events = Self.latestReplaceables(in: membershipPages + discoveryPages + stateEvents)
         var states = Self.accessStates(
             for: relevantChannels,
             from: events,
@@ -150,11 +164,21 @@ public struct ChannelDirectoryClient: ChannelDirectoryFetching, Sendable {
             }
             let isMember = roster.map { Self.roster($0, contains: viewer) } ?? false
             let isArchived = metadata.map(Self.isArchived) ?? false
+            let isOpen = metadata.map(Self.isOpen) ?? false
 
             if isMember {
                 states[channelID] = metadata == nil ? .unavailable : (isArchived ? .archived : .active)
             } else if isArchived {
                 states[channelID] = .archived
+            } else if isOpen {
+                // Not on the roster, but the relay treats an open channel as fully the
+                // viewer's: it serves the history and *accepts their writes* — membership
+                // is checked first, open visibility is the accepted fallback
+                // (`buzz-relay/src/handlers/ingest.rs:531-545`). So `.active` is the
+                // honest state, not a generous one, and `.notMember` would take a
+                // conversation read-only that the relay would happily accept a message
+                // into.
+                states[channelID] = .active
             } else if roster != nil {
                 states[channelID] = .notMember
             } else {
@@ -310,6 +334,21 @@ public struct ChannelDirectoryClient: ChannelDirectoryFetching, Sendable {
         event.tags.contains { tag in
             guard tag.count > 1, tag[0] == "p" else { return false }
             return tag[1].caseInsensitiveCompare(pubkey) == .orderedSame
+        }
+    }
+
+    /// Whether the relay called this channel open, from its own tag on kind:39000.
+    ///
+    /// The relay stamps exactly one of `public` / `private` from the same `visibility`
+    /// column the access query reads (`side_effects.rs:1064-1071`). Read *positively* —
+    /// a metadata event predating the tag would otherwise turn every private channel
+    /// the viewer has left into one they can walk back into. Not to be confused with
+    /// `closed`, which every channel carries: that is NIP-29 for "joining takes an
+    /// explicit act", not "you may not look".
+    private static func isOpen(_ event: NostrEvent) -> Bool {
+        event.tags.contains { tag in
+            guard let name = tag.first else { return false }
+            return name.lowercased() == "public"
         }
     }
 

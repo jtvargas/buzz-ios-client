@@ -30,9 +30,12 @@ extension SidebarSectionsTests {
 
         // A channel and a DM starred together: both land under one heading, and neither
         // is left behind under its own kind. `dm-peer` was the only direct message, so
-        // that heading is gone entirely rather than left standing and empty.
+        // DMs is left standing and empty — the one heading that does that, because a
+        // person with no conversations needs telling, and a starred DM has still left
+        // the section it was filed under.
         let content = build(rows, names: resolver, starred: ["general", "dm-peer"])
-        #expect(content.sections.map(\.section) == [.starred, .channels])
+        #expect(content.sections.map(\.section) == [.starred, .channels, .directMessages])
+        #expect(content.sections[2].rows.isEmpty)
         #expect(Set(content.sections[0].rows.map(\.id)) == ["general", "dm-peer"])
         #expect(content.sections[1].rows.map(\.id) == ["random"])
 
@@ -51,11 +54,11 @@ extension SidebarSectionsTests {
             selfPubkey: me
         )
 
-        #expect(build(rows, names: resolver).sections.map(\.section) == [.channels])
+        #expect(build(rows, names: resolver).sections.map(\.section) == [.channels, .directMessages])
         // Starring everything leaves no Channels heading at all — an empty section is
-        // absent, not empty, exactly as for the kind-derived ones.
+        // absent, not empty, for every heading except DMs.
         let all = build(rows, names: resolver, starred: ["general", "random"])
-        #expect(all.sections.map(\.section) == [.starred])
+        #expect(all.sections.map(\.section) == [.starred, .directMessages])
         #expect(all.sections[0].rows.map(\.id) == ["general", "random"])
     }
 
@@ -70,7 +73,7 @@ extension SidebarSectionsTests {
         )
         // A conversation starred on this device and since left, or not yet synced.
         let content = build(rows, names: resolver, starred: ["gone"])
-        #expect(content.sections.map(\.section) == [.channels])
+        #expect(content.sections.map(\.section) == [.channels, .directMessages])
     }
 
     @Test("stars persist under a pinned defaults key")

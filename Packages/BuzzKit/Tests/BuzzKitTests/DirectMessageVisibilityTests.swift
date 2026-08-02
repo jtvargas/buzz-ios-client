@@ -13,9 +13,15 @@ import Testing
 /// and nothing else on the wire carries it.
 @Suite("Hidden direct messages")
 struct DirectMessageVisibilityTests {
-    /// Builds the three responses one `fetch` consumes, in the order it asks for
-    /// them: the visibility snapshot, the membership page, then the per-channel
-    /// state batch.
+    /// Builds the four responses one `fetch` consumes, in the order it asks for
+    /// them: the visibility snapshot, the membership page, the unrestricted
+    /// open-channel discovery page, then the per-channel state batch.
+    ///
+    /// The discovery page answers "every channel this key may see", which for a DM
+    /// fixture is the same metadata the batch carries — none of these channels is
+    /// open, so it changes no state here. It is scripted anyway because the fake
+    /// transport *blocks* on an unscripted request rather than failing it, so a
+    /// missing response hangs the test instead of reporting it.
     private struct Relay {
         let relay: Fixture
         let identity: Fixture
@@ -90,6 +96,7 @@ struct DirectMessageVisibilityTests {
             body: try Self.json([fixture.visibility(viewer: identity, hiding: ["dm-hidden"])])
         )
         await transport.enqueue(status: 200, body: try Self.json(rosters))
+        await transport.enqueue(status: 200, body: try Self.json(metadata))
         await transport.enqueue(status: 200, body: try Self.json(rosters + metadata))
 
         let snapshot = try await Self.client(transport, signer: signer).fetch(
@@ -126,6 +133,7 @@ struct DirectMessageVisibilityTests {
 
         await transport.enqueue(status: 200, body: try Self.json([older, newer]))
         await transport.enqueue(status: 200, body: try Self.json(rosters))
+        await transport.enqueue(status: 200, body: try Self.json(metadata))
         await transport.enqueue(status: 200, body: try Self.json(rosters + metadata))
 
         let snapshot = try await Self.client(transport, signer: signer).fetch(
@@ -159,6 +167,7 @@ struct DirectMessageVisibilityTests {
 
         await transport.enqueue(status: 200, body: try Self.json([stranger]))
         await transport.enqueue(status: 200, body: try Self.json(rosters))
+        await transport.enqueue(status: 200, body: try Self.json(metadata))
         await transport.enqueue(status: 200, body: try Self.json(rosters + metadata))
 
         let snapshot = try await Self.client(transport, signer: signer).fetch(
@@ -191,6 +200,7 @@ struct DirectMessageVisibilityTests {
             ])
         )
         await transport.enqueue(status: 200, body: try Self.json(rosters))
+        await transport.enqueue(status: 200, body: try Self.json(metadata))
         await transport.enqueue(status: 200, body: try Self.json(rosters + metadata))
 
         // `dm-removed` reaches this pass only because it was active in the last good
@@ -221,6 +231,7 @@ struct DirectMessageVisibilityTests {
         // the sidebar down — the fallback the spec defines is "nothing is hidden".
         await transport.enqueue(status: 403, body: "restricted")
         await transport.enqueue(status: 200, body: try Self.json(rosters))
+        await transport.enqueue(status: 200, body: try Self.json(metadata))
         await transport.enqueue(status: 200, body: try Self.json(rosters + metadata))
 
         let snapshot = try await Self.client(transport, signer: signer).fetch(
@@ -242,6 +253,7 @@ struct DirectMessageVisibilityTests {
 
         await transport.enqueue(status: 200, body: "not json")
         await transport.enqueue(status: 200, body: try Self.json(rosters))
+        await transport.enqueue(status: 200, body: try Self.json(metadata))
         await transport.enqueue(status: 200, body: try Self.json(rosters + metadata))
 
         let snapshot = try await Self.client(transport, signer: signer).fetch(
