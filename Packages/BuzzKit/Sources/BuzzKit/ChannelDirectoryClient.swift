@@ -63,11 +63,20 @@ public struct ChannelDirectoryClient: ChannelDirectoryFetching, Sendable {
     private let transport: any HTTPTransport
     private let queryURL: URL
     private let signer: any EventSigner
+    /// Read once per fetch, and only to decide whether an ephemeral channel's deadline has
+    /// passed. Injected so that rule is testable without waiting out a real TTL.
+    private let now: @Sendable () -> Date
 
-    public init(transport: any HTTPTransport, queryURL: URL, signer: some EventSigner) {
+    public init(
+        transport: any HTTPTransport,
+        queryURL: URL,
+        signer: some EventSigner,
+        now: @escaping @Sendable () -> Date = Date.init
+    ) {
         self.transport = transport
         self.queryURL = queryURL
         self.signer = signer
+        self.now = now
     }
 
     public func fetch(
@@ -93,7 +102,33 @@ public struct ChannelDirectoryClient: ChannelDirectoryFetching, Sendable {
             }
         )
 
-        let relevantChannels = currentChannels.union(previouslyActiveChannels)
+        // Everything the relay is willing to show this key, whether or not a roster
+        // names them. `POST /query` scopes channel-scoped events to
+        // `get_accessible_channel_ids`, which is the viewer's memberships **UNION every
+        // channel with `visibility = 'open'`** (`buzz-db/src/channel.rs:746-761`,
+        // enforced at `buzz-relay/src/api/bridge.rs:1005`). Asking only "whose roster
+        // contains me?" — the query above — therefore cannot see an open channel the
+        // viewer has not joined, which is every channel in a community they have just
+        // been invited to. That is the difference between a sidebar and a blank panel
+        // on a first join.
+        //
+        // Ephemeral channels whose deadline has passed are **not** discoverable, even
+        // though the relay still serves them. See ``hasOutlivedItsDeadline(_:now:)``: the
+        // relay never deletes a channel row, so an expired one is open and answerable for
+        // ever, and discovery is the one route by which somebody who never joined it can
+        // be shown it. A viewer's own memberships are left alone — leaving a channel is
+        // theirs to do, not this client's.
+        let discoveryPages = try await fetchAll(DirectoryFilter(kinds: [.groupMetadata], tagQueries: [:]))
+        let asOf = now()
+        let discoverableChannels = Set(
+            discoveryPages
+                .filter { !Self.hasOutlivedItsDeadline($0, now: asOf) }
+                .compactMap(\.addressableIdentifier)
+        )
+
+        let relevantChannels = currentChannels
+            .union(previouslyActiveChannels)
+            .union(discoverableChannels)
         var stateEvents: [NostrEvent] = []
         let ordered = relevantChannels.sorted()
         for start in stride(from: 0, to: ordered.count, by: Self.channelBatchSize) {
@@ -107,11 +142,12 @@ public struct ChannelDirectoryClient: ChannelDirectoryFetching, Sendable {
             )
         }
 
-        let events = Self.latestReplaceables(in: membershipPages + stateEvents)
+        let events = Self.latestReplaceables(in: membershipPages + discoveryPages + stateEvents)
         var states = Self.accessStates(
             for: relevantChannels,
             from: events,
-            viewer: selfPubkey
+            viewer: selfPubkey,
+            now: asOf
         )
 
         // A hide is not a membership change, so every hidden DM has just been resolved
@@ -133,10 +169,17 @@ public struct ChannelDirectoryClient: ChannelDirectoryFetching, Sendable {
     }
 
     /// Reads each channel's relay-signed state into the viewer's access to it.
+    ///
+    /// `now` is here for one reason: an expired ephemeral channel has to lose its access
+    /// row, not merely fail to gain one. Filtering discovery only protects a device that
+    /// has never seen the channel. Any device that has already cached one as `.active`
+    /// feeds it back in through `previouslyActiveChannels`, and this is the only place
+    /// that can retire it. See the `isOpen` branch below.
     static func accessStates(
         for channels: Set<String>,
         from events: [NostrEvent],
-        viewer: String
+        viewer: String,
+        now: Date
     ) -> [String: ChannelAccessState] {
         let byChannel = Dictionary(grouping: events) { $0.addressableIdentifier ?? "" }
         var states: [String: ChannelAccessState] = [:]
@@ -150,11 +193,30 @@ public struct ChannelDirectoryClient: ChannelDirectoryFetching, Sendable {
             }
             let isMember = roster.map { Self.roster($0, contains: viewer) } ?? false
             let isArchived = metadata.map(Self.isArchived) ?? false
+            let isOpen = metadata.map(Self.isOpen) ?? false
+            let hasExpired = metadata.map { Self.hasOutlivedItsDeadline($0, now: now) } ?? false
 
             if isMember {
                 states[channelID] = metadata == nil ? .unavailable : (isArchived ? .archived : .active)
             } else if isArchived {
                 states[channelID] = .archived
+            } else if isOpen, !hasExpired {
+                // Not on the roster, but the relay treats an open channel as fully the
+                // viewer's: it serves the history and *accepts their writes* — membership
+                // is checked first, open visibility is the accepted fallback
+                // (`buzz-relay/src/handlers/ingest.rs:531-545`). So `.active` is the
+                // honest state, not a generous one, and `.notMember` would take a
+                // conversation read-only that the relay would happily accept a message
+                // into.
+                //
+                // Unless its deadline has passed, and this is the only rung that can undo
+                // that. Discovery declining to *offer* an expired channel does nothing for
+                // a device that already holds an `.active` row for one: that row comes
+                // back every pass as `previouslyActiveChannels`, lands here, reads as open,
+                // and is written back active — for ever. Falling through to `.notMember`
+                // below is what actually retires it, and it is the truthful answer anyway:
+                // the roster does not name this viewer.
+                states[channelID] = .active
             } else if roster != nil {
                 states[channelID] = .notMember
             } else {
@@ -311,6 +373,68 @@ public struct ChannelDirectoryClient: ChannelDirectoryFetching, Sendable {
             guard tag.count > 1, tag[0] == "p" else { return false }
             return tag[1].caseInsensitiveCompare(pubkey) == .orderedSame
         }
+    }
+
+    /// Whether the relay called this channel open, from its own tag on kind:39000.
+    ///
+    /// The relay stamps exactly one of `public` / `private` from the same `visibility`
+    /// column the access query reads (`side_effects.rs:1064-1071`). Read *positively* —
+    /// a metadata event predating the tag would otherwise turn every private channel
+    /// the viewer has left into one they can walk back into. Not to be confused with
+    /// `closed`, which every channel carries: that is NIP-29 for "joining takes an
+    /// explicit act", not "you may not look".
+    private static func isOpen(_ event: NostrEvent) -> Bool {
+        event.tags.contains { tag in
+            guard let name = tag.first else { return false }
+            return name.lowercased() == "public"
+        }
+    }
+
+    /// Whether this channel was given a life and has outlived it.
+    ///
+    /// # Why a client has to decide this at all
+    ///
+    /// Because it cannot assume the relay already has. A Buzz relay records `ttl_seconds`
+    /// and a `ttl_deadline` on an ephemeral channel and publishes both on its kind-39000
+    /// (`buzz-relay/src/handlers/side_effects.rs:1101-1107`, *"clients use this to show
+    /// countdown timers"*). Expiry is meant to be handled server-side by a reaper that
+    /// archives the row every 60 seconds (`buzz-db/src/channel.rs:1495`, run from
+    /// `buzz-relay/src/main.rs:643`) — it archives rather than deletes, which is why there
+    /// is no `DELETE FROM channels` in the relay to find.
+    ///
+    /// But *meant to* is not *has*. `homelab.tail4bc643.ts.net` is carrying eight
+    /// unarchived expired channels — `livesub-*` and `buzzkit-p2-*`, created by this
+    /// package's own live suite (`LivePiSupport.swift:165`, `ttlSeconds: 300`) — each
+    /// owned by a throwaway key, each with one member who is not the viewer, each eleven
+    /// days past a five-minute deadline, and each still served to everybody on that relay.
+    /// They were made on 22 July, one day before the reaper landed, and that relay has not
+    /// swept them since. A client that trusts the archived flag alone shows all eight.
+    ///
+    /// Read from the deadline the relay publishes rather than from the name, because the
+    /// names are an accident of which fixtures happened to leak; a client that hid
+    /// `livesub-*` would be hiding this week's debris and none of next week's.
+    ///
+    /// Absent or unparseable means *not expired*. A channel with no deadline is an
+    /// ordinary one, and a deadline this client cannot read is not grounds for hiding a
+    /// conversation.
+    static func hasOutlivedItsDeadline(_ event: NostrEvent, now: Date) -> Bool {
+        guard let tag = event.tags.first(where: { $0.first?.lowercased() == "ttl_deadline" }),
+              tag.count > 1,
+              let deadline = Self.rfc3339(tag[1])
+        else { return false }
+        return deadline < now
+    }
+
+    /// The relay writes these with `chrono`'s `to_rfc3339`, which carries fractional
+    /// seconds; `ISO8601DateFormatter` needs to be told that, and told separately not to
+    /// expect them. Both are tried rather than assuming the shape of somebody else's clock.
+    private static func rfc3339(_ text: String) -> Date? {
+        let withFraction = ISO8601DateFormatter()
+        withFraction.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = withFraction.date(from: text) { return date }
+        let plain = ISO8601DateFormatter()
+        plain.formatOptions = [.withInternetDateTime]
+        return plain.date(from: text)
     }
 
     private static func isArchived(_ event: NostrEvent) -> Bool {

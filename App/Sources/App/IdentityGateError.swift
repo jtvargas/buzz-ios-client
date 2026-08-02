@@ -13,7 +13,7 @@ enum IdentityGateError: Equatable {
     var message: String {
         switch self {
         case .invalidRelayURL:
-            "Enter a valid relay URL, e.g. ws://100.111.202.55:3004"
+            "Enter a relay address, like wss://relay.example — or the https:// address it serves its pages on."
         case .invalidSecretKey:
             "That doesn't look like a valid nsec key."
         case .couldNotStoreKey:

@@ -1,3 +1,4 @@
+import BuzzKit
 import Foundation
 import NostrCore
 
@@ -86,28 +87,35 @@ extension AppEnvironment {
     /// key, commits it to the community that relay belongs to, and opens it. The secret
     /// never leaves the Keychain — the decoded key is handed straight to the signer and not
     /// retained here.
+    /// The relay is taken in either of the two forms people actually have one written down
+    /// in — the socket URL a relay operator quotes (`wss://…`) and the web address the same
+    /// relay serves its own pages on (`https://…`) — and reduced to the socket form the
+    /// engine connects on. A community is identified by that reduced string
+    /// (``Community/relayIdentity(of:)`` accepts only `ws`/`wss`), so normalising here rather
+    /// than at the field is what stops the same relay pasted in its two forms from becoming
+    /// two communities.
     func submitIdentity(relayURLString: String, nsec: String) async -> IdentityGateError? {
-        guard RelayEndpoint.websocketURL(from: relayURLString) != nil else {
+        guard let relay = RelayEndpoint.websocketURLString(fromAnyRelay: relayURLString) else {
             return .invalidRelayURL
         }
         let trimmedSecret = nsec.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let key = try? PrivateKey(nsec: trimmedSecret) else {
             return .invalidSecretKey
         }
-        return await joinCommunity(relayURLString: relayURLString, key: key)
+        return await joinCommunity(relayURLString: relay, key: key)
     }
 
     /// Creates a brand-new identity in-app: a fresh secp256k1 key, committed to the
     /// community for the given relay. The generated key is handed straight to the signer
     /// and never retained here — the same custody discipline as the paste path.
     func createIdentity(relayURLString: String) async -> IdentityGateError? {
-        guard RelayEndpoint.websocketURL(from: relayURLString) != nil else {
+        guard let relay = RelayEndpoint.websocketURLString(fromAnyRelay: relayURLString) else {
             return .invalidRelayURL
         }
         guard let key = try? PrivateKey() else {
             return .couldNotStoreKey
         }
-        return await joinCommunity(relayURLString: relayURLString, key: key)
+        return await joinCommunity(relayURLString: relay, key: key)
     }
 
     /// The application-specific sink a ``TargetPairingSession`` hands its decrypted
@@ -142,6 +150,25 @@ extension AppEnvironment {
         }
     }
 
+    // MARK: - Arriving from outside the app
+
+    /// Handles a URL the system handed this app, returning whether it was one Hive knows.
+    ///
+    /// The only one today is an invitation. It is opened rather than acted on: a link that
+    /// silently joined a community on being tapped would make a shared URL into a
+    /// membership, and the host it names is exactly the thing the reader has to see before
+    /// agreeing to anything.
+    ///
+    /// The sheet is raised from here — above the workspace's remount boundary — rather than
+    /// from whatever screen happens to be up, so an invite tapped while a conversation is
+    /// open lands the same way as one tapped on the sidebar.
+    @discardableResult
+    func handle(incomingURL url: URL) -> Bool {
+        guard let link = InviteLink.parse(url.absoluteString) else { return false }
+        communitySheet = .join(link)
+        return true
+    }
+
     // MARK: - Moving between communities
 
     /// Opens another community: stops the current one, then brings up its relay, its
@@ -167,6 +194,7 @@ extension AppEnvironment {
                 return
             }
             await startActiveCommunity(mountsBeforeConnect: true)
+            refreshCommunityIcon(for: community)
         }
     }
 
@@ -203,6 +231,7 @@ extension AppEnvironment {
         // After the teardown, so the file is not deleted underneath an open connection:
         // dropping the store is what closes it.
         Self.deleteStore(filename: removed.storeFilename)
+        communityStorage.removeIcon(for: removed)
         guard wasActive else { return }
         guard let next = communities.active, Self.hasStoredKey(account: next.keychainAccount) else {
             setPhase(.needsIdentity)
@@ -287,6 +316,7 @@ extension AppEnvironment {
         do {
             setPhase(.bootstrapping)
             try await startSession(for: community, mountsBeforeConnect: false)
+            refreshCommunityIcon(for: community)
             // The sheet the reader joined from went with the workspace it was attached to;
             // closing it here is what makes a successful join end on the new community
             // rather than on a form that has nothing left to do.
@@ -321,6 +351,64 @@ extension AppEnvironment {
         }
         RelayEndpoint.storedURLString = previous.relayURLString
         await startActiveCommunity(mountsBeforeConnect: true)
+    }
+
+    // MARK: - Community mark
+
+    /// Refreshes the relay-owned community icon after opening a community.
+    ///
+    /// The information document is unauthenticated, so this does not delay engine startup or
+    /// make the icon a condition of joining. It is a best-effort cache refresh: a failed
+    /// lookup keeps the last good picture, while a successful document with no icon removes
+    /// the old one and returns the switcher to initials. This is also the join capture path —
+    /// the new record is opened immediately after the relay accepts its key.
+    func refreshCommunityIcon(for community: Community) {
+        Task { [weak self] in
+            guard let self,
+                  let client = RelayInfoClient(
+                      relayURLString: community.relayURLString,
+                      transport: URLSessionHTTPTransport()
+                  ),
+                  let info = try? await client.fetch(),
+                  info.isBuzzRelay
+            else { return }
+
+            let data: Data?
+            switch info.communityIcon {
+            case nil:
+                data = nil
+            case let .some(icon):
+                // A failed remote fetch is not the same thing as a relay that removed its
+                // icon. Keep the last good cache in that case.
+                guard let fetched = await Self.iconData(from: icon) else { return }
+                data = fetched
+            }
+
+            guard let current = self.communities.communities.first(where: { $0.id == community.id })
+            else { return }
+            guard let updated = try? self.communityStorage.replacingIcon(data, for: current) else {
+                return
+            }
+            self.updateCommunities { $0.update(updated) }
+        }
+    }
+
+    /// Reads a remote icon through the same HTTP transport boundary as relay metadata and
+    /// refuses a response larger than the inline icon limit before it reaches disk. Hosted
+    /// Buzz icons are inline; this branch keeps custom relays' HTTPS icons equally durable.
+    private static func iconData(from icon: RelayIcon) async -> Data? {
+        switch icon {
+        case let .inline(data):
+            return data
+        case let .remote(url):
+            guard let (data, status) = try? await URLSessionHTTPTransport().get(
+                from: url,
+                headers: [:]
+            ), (200 ... 299).contains(status), !data.isEmpty,
+                data.count <= RelayIcon.maximumInlineBytes
+            else { return nil }
+            return data
+        }
     }
 }
 

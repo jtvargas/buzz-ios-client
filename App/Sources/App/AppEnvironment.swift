@@ -93,14 +93,28 @@ final class AppEnvironment {
         let message: String
     }
 
-    /// The two doors onto the community list.
-    enum CommunitySheet: String, Identifiable {
+    /// The doors onto the community list.
+    enum CommunitySheet: Identifiable, Equatable {
         /// The list, from the home heading: switch, rename, remove.
         case switcher
-        /// Joining another one — the same three paths as onboarding.
+        /// Adding a relay this phone can already get into — the same three paths as
+        /// onboarding. Enough for an open relay, and not enough for a closed one.
         case add
+        /// Redeeming an invitation, which is the only way into a relay that gates on
+        /// membership. Carries the invite when one arrived from outside the app.
+        case join(InviteLink?)
 
-        var id: String { rawValue }
+        /// Identity for `.sheet(item:)`, which re-presents when this changes. An invite
+        /// arriving while the join screen is already open is a *different* sheet by this
+        /// measure, so the incoming link replaces what is on screen instead of being
+        /// swallowed by the presentation already in flight.
+        var id: String {
+            switch self {
+            case .switcher: "switcher"
+            case .add: "add"
+            case let .join(link): "join:\(link?.code ?? "")"
+            }
+        }
     }
 
     /// The community a pairing session has just committed a key into, held between the

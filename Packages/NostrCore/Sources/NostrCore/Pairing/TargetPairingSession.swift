@@ -232,10 +232,18 @@ public actor TargetPairingSession {
         }
     }
 
+    /// A deadline says only that time ran out; *which* deadline says what ran out
+    /// of it. Still `.connecting` means the channel never finished opening, so the
+    /// source was never asked anything and blaming it would send the reader to the
+    /// wrong device. Past that, the offer is out and the silence is the source's.
     private func deadlineFired() async {
         guard !internalState.isTerminal else { return }
         await sendAbort(.timeout)
-        await fail(.timedOut)
+        if internalState == .connecting {
+            await fail(.connectionFailed("the pairing relay never became ready"))
+        } else {
+            await fail(.timedOut)
+        }
     }
 
     // MARK: - Terminal handling

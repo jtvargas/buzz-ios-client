@@ -281,6 +281,10 @@ struct ChannelAccessTests {
         await transport.enqueue(status: 200, body: "[]")
         await transport.enqueue(status: 200, body: pageBody)
         await transport.enqueue(status: 200, body: "[]")
+        // Open-channel discovery, between the membership pages and the state batches.
+        // Empty, so the 500 channels under test still come from membership alone and
+        // the batching assertions below are about exactly what they were.
+        await transport.enqueue(status: 200, body: "[]")
         for _ in 0 ..< 5 {
             await transport.enqueue(status: 200, body: "[]")
         }
@@ -292,14 +296,17 @@ struct ChannelAccessTests {
         #expect(snapshot.states.count == ChannelDirectoryClient.pageSize)
 
         let requests = await transport.requests
-        #expect(requests.count == 8)
+        // Visibility, two membership pages, discovery, then five bounded state batches.
+        #expect(requests.count == 9)
         let secondPage = try #require(
             try JSONSerialization.jsonObject(with: requests[2].body) as? [[String: Any]]
         )
         #expect(secondPage[0]["until"] as? Int == 1_700_000_000)
         #expect(secondPage[0]["before_id"] as? String == String(repeating: "0", count: 64))
 
-        for request in requests.dropFirst(3) {
+        // Request 3 is open-channel discovery; its shape is asserted in
+        // ``OpenChannelDiscoveryTests``. Everything after it is a bounded state batch.
+        for request in requests.dropFirst(4) {
             let filters = try #require(
                 try JSONSerialization.jsonObject(with: request.body) as? [[String: Any]]
             )

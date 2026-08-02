@@ -114,7 +114,7 @@ extension SidebarSectionsTests {
         #expect(content.sections[2].rows[0].conversation.peer == agent)
     }
 
-    @Test("a section with no rows is absent, not empty")
+    @Test("a section with no rows is absent, not empty — except DMs")
     func emptySectionsAreHidden() {
         let rows = [channel("general", name: "General")]
         let resolver = names(
@@ -125,10 +125,30 @@ extension SidebarSectionsTests {
         )
 
         let content = build(rows, names: resolver)
-        #expect(content.sections.map(\.section) == [.channels])
+        // Starred and Agents are absent; DMs stays and carries no rows, because for a
+        // person the absence of conversations is itself the thing worth showing.
+        #expect(content.sections.map(\.section) == [.channels, .directMessages])
+        #expect(content.sections[1].rows.isEmpty)
         #expect(!content.isEmpty)
+        // But a sidebar with nothing in it stays nothing: a lone "DMs" heading over a
+        // blank list says less than the whole-list empty state it would displace.
         #expect(build([], names: resolver).isEmpty)
         #expect(SidebarContent.empty.isEmpty)
+    }
+
+    @Test("the persistent DMs heading is skipped for a session that cannot have DMs")
+    func keylessSessionGetsNoDirectMessagesHeading() {
+        let rows = [channel("general", name: "General")]
+        // No `selfPubkey`: the roster rule needs to find *you* to call anything a DM, so
+        // the section could never fill. An empty heading here would be a standing
+        // promise the app cannot keep.
+        let resolver = names(
+            entities: [DirectoryEntity(pubkey: peer, profileName: "Ada")],
+            rosters: ["general": [me, peer, other]],
+            channels: rows
+        )
+
+        #expect(build(rows, names: resolver).sections.map(\.section) == [.channels])
     }
 
     @Test("a keyless session cannot tell a DM from a channel, so everything is a channel")

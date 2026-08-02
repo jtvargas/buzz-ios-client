@@ -57,6 +57,15 @@ struct Community: Identifiable, Codable, Equatable, Sendable {
     /// is a question about *one* store file, and answering it globally would wipe the
     /// histories of communities the new key never touched.
     var ownerPubkeyHex: String?
+    /// The filename of this community's icon in `Application Support/Hive`, or `nil` when
+    /// the relay did not publish one.
+    ///
+    /// The bytes stay beside the event store rather than in this record. A relay controls
+    /// the icon and ``RelayIcon/maximumInlineBytes`` permits 512 KB; putting that payload in
+    /// the JSON held by `UserDefaults` would turn a small directory record into an opaque
+    /// image cache. The filename is enough to recover the bytes without making defaults carry
+    /// them through every directory save.
+    var iconFilename: String?
     let addedAt: Date
 
     /// The Keychain account and database file the single-community app used. A migrated
@@ -79,6 +88,7 @@ struct Community: Identifiable, Codable, Equatable, Sendable {
             keychainAccount: "community-\(id.uuidString)",
             storeFilename: "store-\(id.uuidString).sqlite",
             ownerPubkeyHex: ownerPubkeyHex,
+            iconFilename: nil,
             addedAt: addedAt
         )
     }
@@ -99,6 +109,7 @@ struct Community: Identifiable, Codable, Equatable, Sendable {
             keychainAccount: legacyKeychainAccount,
             storeFilename: legacyStoreFilename,
             ownerPubkeyHex: ownerPubkeyHex,
+            iconFilename: nil,
             addedAt: addedAt
         )
     }
@@ -114,12 +125,21 @@ struct Community: Identifiable, Codable, Equatable, Sendable {
     /// two entries listing the same conversations, each with its own copy of the same
     /// history. Returns `nil` for a string that is not a relay URL at all, which callers
     /// treat as "no match" rather than as a match against other unparseable strings.
+    ///
+    /// A port that is the *default* for the scheme is dropped, for the same reason a
+    /// trailing slash is: `wss://relay.example:443` and `wss://relay.example` are one
+    /// destination written two ways. Flutter does the same
+    /// (`invite_join_provider.dart:227-234`), and the relay itself strips `:443`/`:80`
+    /// before deciding which community a request belongs to
+    /// (`buzz-core/src/tenant.rs:124-132`). It matters more now that a relay URL can arrive
+    /// from an invite link rather than only from the field somebody typed.
     static func relayIdentity(of urlString: String) -> String? {
         guard let url = RelayEndpoint.websocketURL(from: urlString),
               let scheme = url.scheme?.lowercased(),
               let host = url.host()?.lowercased()
         else { return nil }
-        let port = url.port.map { ":\($0)" } ?? ""
+        let defaultPort = scheme == "wss" ? 443 : 80
+        let port = url.port.flatMap { $0 == defaultPort ? nil : ":\($0)" } ?? ""
         var path = url.path()
         while path.hasSuffix("/") { path.removeLast() }
         return "\(scheme)://\(host)\(port)\(path)"
@@ -131,5 +151,21 @@ struct Community: Identifiable, Codable, Equatable, Sendable {
               let theirs = Community.relayIdentity(of: urlString)
         else { return false }
         return mine == theirs
+    }
+
+    /// The HTTPS address to hand to somebody else, reduced to the relay's origin.
+    ///
+    /// Hive cannot mint an invitation — ``InviteClient`` only redeems one — so the useful
+    /// copy action on a signed-in community is its relay address. The `Add a relay` field
+    /// accepts this HTTPS spelling and converts it back to the websocket form at the gate.
+    var relayOrigin: String? {
+        guard let websocket = RelayEndpoint.websocketURL(from: relayURLString),
+              var components = URLComponents(url: websocket, resolvingAgainstBaseURL: false)
+        else { return nil }
+        components.scheme = "https"
+        components.path = ""
+        components.query = nil
+        components.fragment = nil
+        return components.url?.absoluteString
     }
 }

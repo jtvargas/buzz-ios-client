@@ -48,6 +48,69 @@ struct URLSessionTransportTests {
         }
     }
 
+    // MARK: - The first frame a relay sends
+
+    @Test(
+        "A relay that stays silent until spoken to still has its first frame delivered",
+        .timeLimit(.minutes(1))
+    )
+    func silentRelayFirstFrameIsDelivered() async throws {
+        // `relay.damus.io` and `nos.lol` are this shape: nothing on connect, so
+        // the open probe is settled by its pong and the read it armed outlives
+        // it — holding the queue position the relay's first frame lands in.
+        let server = try LoopbackWebSocketServer(greeting: nil, replies: ["[\"EOSE\",\"sub\"]"])
+        defer { server.stop() }
+
+        let transport = URLSessionTransport()
+        try await transport.connect(url: try #require(server.url))
+        try await transport.send("[\"REQ\",\"sub\",{}]")
+
+        let frame = await firstFrame(from: transport, within: .seconds(5))
+        #expect(frame == "[\"EOSE\",\"sub\"]")
+        await transport.close()
+    }
+
+    @Test("A relay that greets on connect has its greeting delivered first", .timeLimit(.minutes(1)))
+    func greetingRelayKeepsFrameOrder() async throws {
+        // A Buzz relay is this shape: its NIP-42 challenge arrives unprompted and
+        // doubles as the proof the socket is open.
+        let server = try LoopbackWebSocketServer(
+            greeting: "[\"AUTH\",\"challenge\"]",
+            replies: ["[\"EOSE\",\"sub\"]"]
+        )
+        defer { server.stop() }
+
+        let transport = URLSessionTransport()
+        try await transport.connect(url: try #require(server.url))
+
+        #expect(await firstFrame(from: transport, within: .seconds(5)) == "[\"AUTH\",\"challenge\"]")
+        try await transport.send("[\"REQ\",\"sub\",{}]")
+        #expect(await firstFrame(from: transport, within: .seconds(5)) == "[\"EOSE\",\"sub\"]")
+        await transport.close()
+    }
+
+    /// `receive()` bounded by a deadline, so a transport that never delivers
+    /// fails in seconds with a legible `nil` rather than hanging the suite.
+    ///
+    /// The deadline closes the socket rather than merely giving up: `receive()`
+    /// is not cancellable, so an abandoned one would keep the task group open
+    /// for ever — which is a hang, not a failure. Closing completes the pending
+    /// read with an error, which is what lets the reader finish.
+    private func firstFrame(from transport: URLSessionTransport, within deadline: Duration) async -> String? {
+        await withTaskGroup(of: String?.self) { group in
+            group.addTask { try? await transport.receive() }
+            group.addTask {
+                // A cancelled sleep means the reader won — leave the socket alone.
+                do { try await Task.sleep(for: deadline) } catch { return nil }
+                await transport.close()
+                return nil
+            }
+            let first = await group.next() ?? nil
+            group.cancelAll()
+            return first
+        }
+    }
+
     // MARK: - Operations before connect
 
     @Test("receive() before connect throws connectionClosed")

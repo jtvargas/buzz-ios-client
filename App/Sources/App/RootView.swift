@@ -20,6 +20,7 @@ struct RootView: View {
                 switch sheet {
                 case .switcher: CommunitySwitcherView()
                 case .add: OnboardingView(isAddingCommunity: true)
+                case let .join(link): JoinCommunityView(initialLink: link)
                 }
             }
             .alert(

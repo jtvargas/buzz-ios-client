@@ -38,6 +38,13 @@ struct HiveApp: App {
                 // And the same colour on the window underneath, for what UIKit draws:
                 // the composer's caret and selection handles, menus, alerts.
                 .hiveWindowTint()
+                // An invitation handed over by the system — the relay's own web page sends
+                // `buzz://join?relay=…&code=…` once its terms have been accepted there
+                // (`buzz/web/src/features/invite/ui/InvitePage.tsx:113`). Declared on the
+                // whole window rather than inside ``launch``, so an invite tapped while the
+                // app is at the identity gate is handled by the same door as one tapped
+                // with a community open.
+                .onOpenURL { url in _ = environment.handle(incomingURL: url) }
         }
         .onChange(of: scenePhase) { _, phase in
             environment.handleScenePhase(phase)

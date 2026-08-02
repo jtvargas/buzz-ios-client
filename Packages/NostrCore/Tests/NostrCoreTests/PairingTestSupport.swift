@@ -13,7 +13,14 @@ actor ScriptedPairingChannel: PairingChannel {
     private var isClosed = false
     private(set) var closeCount = 0
 
+    private var openHangs = false
+
     func failOpen(_ error: Error) { openError = error }
+
+    /// An ``open()`` that never returns — a relay that accepts the socket and
+    /// then goes quiet, which is a stall, not an error, and so has no error to
+    /// script.
+    func hangOpen() { openHangs = true }
 
     /// Scripts the `OK` verdicts publishes return, in order; publishes past the
     /// script default to `true` (the main-relay behaviour).
@@ -21,6 +28,9 @@ actor ScriptedPairingChannel: PairingChannel {
 
     func open() async throws {
         if let openError { throw openError }
+        while openHangs, !Task.isCancelled {
+            try await Task.sleep(for: .milliseconds(20))
+        }
     }
 
     func publish(_ event: NostrEvent) async throws -> Bool {
@@ -115,5 +125,18 @@ actor RecordingPayloadHandler: PairingPayloadHandler {
     func importPayload(payloadType: String, payload: String) async -> Bool {
         received.append(Received(payloadType: payloadType, payload: payload))
         return result
+    }
+}
+
+/// Records every phase a session publishes, for assertions about what the reader
+/// was shown *along the way* — a final phase cannot answer whether a code
+/// appeared before it.
+actor PhaseLog {
+    private(set) var phases: [TargetPairingPhase] = []
+
+    func record(_ phase: TargetPairingPhase) { phases.append(phase) }
+
+    var sawComparing: Bool {
+        phases.contains { if case .comparing = $0 { true } else { false } }
     }
 }

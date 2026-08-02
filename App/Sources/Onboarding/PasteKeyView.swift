@@ -28,7 +28,7 @@ struct PasteKeyView: View {
     var body: some View {
         Form {
             Section("Relay") {
-                TextField("ws://host:port", text: $relayURLString)
+                TextField("wss://relay.example", text: $relayURLString)
                     .textContentType(.URL)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()

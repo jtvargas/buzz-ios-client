@@ -66,6 +66,31 @@ enum SidebarSection: String, CaseIterable, Hashable, Sendable, Identifiable {
     /// reintroduce the overlap.
     static let symbolColumnWidth: CGFloat = 36
 
+    /// Whether this heading stays on screen with nothing underneath it.
+    ///
+    /// Only DMs. The other three are *discovered* — you learn the app has Agents by
+    /// meeting one — so an empty heading there is a promise about the product rather
+    /// than a fact about your account, and Agents in particular is "when applicable".
+    /// A person's DMs are different: the absence is the information. Somebody freshly
+    /// joined to a community, which after an invite is everybody, needs to see that
+    /// they have no conversations yet rather than be left to wonder whether the app
+    /// has DMs at all or has simply not loaded them.
+    ///
+    /// This is the section's own disposition and not the whole rule —
+    /// ``SidebarContent/build(channels:names:starred:)`` also requires a sidebar with
+    /// something else in it and a reader with a key, for the reasons stated there.
+    var persistsWhenEmpty: Bool { self == .directMessages }
+
+    /// What stands in for the rows when a persistent section has none.
+    var emptyMessage: String {
+        switch self {
+        case .directMessages: "No direct messages yet"
+        case .starred: "Nothing starred yet"
+        case .channels: "No channels yet"
+        case .agents: "No agents yet"
+        }
+    }
+
     /// The `UserDefaults` key behind this section's expansion state.
     ///
     /// The exact strings are pinned by a test: renaming one silently discards the
@@ -232,9 +257,12 @@ struct SidebarSectionContent: Identifiable {
 
 /// The whole sidebar, derived from one channel-list snapshot and one directory.
 struct SidebarContent {
-    /// Only the sections that have rows, in canonical order. A section with nothing in
-    /// it is *absent* rather than empty, so an install with no agents never meets an
-    /// "Agents" heading (JT's "Agents, when applicable").
+    /// The sections to draw, in canonical order.
+    ///
+    /// A section with nothing in it is *absent* rather than empty — so an install with
+    /// no agents never meets an "Agents" heading (JT's "Agents, when applicable") —
+    /// with the single exception of the one that ``SidebarSection/persistsWhenEmpty``
+    /// names, which stays and shows its ``SidebarSection/emptyMessage``.
     let sections: [SidebarSectionContent]
 
     static let empty = SidebarContent(sections: [])
@@ -274,8 +302,22 @@ struct SidebarContent {
             grouped[row.section, default: []].append(row)
         }
 
+        // A persistent heading earns its place only in a sidebar that is otherwise
+        // populated, and only for a reader who could have the thing it names:
+        //
+        // - **Nothing at all** stays *nothing at all*. A lone "DMs — none yet" over a
+        //   blank sidebar is a worse answer than the whole-list empty state, which says
+        //   the same thing about everything rather than about one heading.
+        // - **A session with no key** cannot tell a DM from a channel — the roster rule
+        //   in ``EntityNames`` needs to find *you* in the roster — so every conversation
+        //   files under Channels and the DMs heading could never fill. Promising an
+        //   empty section that is structurally unfillable is worse than omitting it.
+        let sidebarHasRows = !grouped.isEmpty
+        let viewerIsIdentified = names.selfPubkey != nil
         let sections = SidebarSection.allCases.compactMap { section -> SidebarSectionContent? in
-            guard let rows = grouped[section], !rows.isEmpty else { return nil }
+            let rows = grouped[section] ?? []
+            let persists = section.persistsWhenEmpty && sidebarHasRows && viewerIsIdentified
+            guard !rows.isEmpty || persists else { return nil }
             return SidebarSectionContent(section: section, rows: rows.sorted(by: precedes))
         }
         return SidebarContent(sections: sections)

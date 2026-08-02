@@ -1,4 +1,5 @@
 import BuzzKit
+import Foundation
 import SwiftUI
 
 /// The sidebar (§8): Starred, Channels, Direct Messages, and Agents as expandable
@@ -39,6 +40,17 @@ struct ChannelListView: View {
     /// Every composer holding unsent text. Owned here for the reason the thread read
     /// marks are: this view draws the count and the pushed screen draws the list.
     @State private var draftsModel: DraftsModel
+    /// The active community's picture, read from disk once per icon rather than once per
+    /// `body`.
+    ///
+    /// Held here because the alternative is a filesystem read inside the heading's own
+    /// `body`, and this `body` re-evaluates on everything the sidebar watches — an unread
+    /// count arriving, presence moving, a row being read. `CommunityStorage.iconData(for:)`
+    /// is a synchronous `Data(contentsOf:)` of up to half a megabyte
+    /// (`RelayIcon.maximumInlineBytes`), so on that path it is a main-thread disk read
+    /// several times a second for bytes that did not change. Refreshed by the `task` below,
+    /// keyed on the community and the filename, so a new icon still lands.
+    @State private var activeCommunityIcon: Data?
     @State private var showAccount = false
     /// Whether the new-channel sheet is up.
     @State private var showsCreateChannel = false
@@ -124,7 +136,7 @@ struct ChannelListView: View {
                 // and the switcher is what that heading is for. Your account is still one
                 // tap away at the trailing edge, where your own face is.
                 .conversationTitle(
-                    mark: Self.communityMark,
+                    mark: activeCommunityMark,
                     // The active community's own label, which a rename changes and a switch
                     // replaces. It falls back to the relay-derived name for the frame before
                     // a community exists at all.
@@ -277,17 +289,39 @@ struct ChannelListView: View {
         // samples, and two verdicts in one main-actor turn are one body pass. See
         // ``ChannelListModel/trackDirectory(of:)``.
         .task { await model.trackDirectory(of: engine) }
+        // Once per icon, not once per `body` — see ``activeCommunityIcon``. Keyed on the
+        // community *and* its filename, so switching community and an operator replacing a
+        // picture both land, and nothing else re-opens the file.
+        //
+        // The read itself stays on this actor. What was wrong was its *frequency*, not its
+        // thread: one file open when the picture changes is ordinary, and hopping off the
+        // actor to do it would buy a few milliseconds at the cost of a frame drawn without
+        // the icon that was already there.
+        .task(id: activeCommunityIconKey) {
+            activeCommunityIcon = environment.communities.active
+                .flatMap { environment.communityStorage.iconData(for: $0) }
+        }
     }
 
-    /// The mark on the home heading: one cell of the honeycomb, for the workspace as a
-    /// whole — neither a room (`#`) nor a person (a face). Filled, because the bar draws
-    /// its mark small and a mesh of hairlines reads as noise there. Named so a test can
-    /// check the system has it: a missing symbol renders as nothing, silently.
+    /// The fallback mark used before an active community graph exists. The running home
+    /// heading uses ``activeCommunityMark`` so a cached picture or initials can replace this
+    /// symbol without waiting for a relay response. RootView still needs this fallback while
+    /// the identity gate is being composed.
     static let communitySymbol = "hexagon.fill"
 
     /// The one heading drawn in the accent: the workspace's own name is what the colour
     /// is *for*, where every other heading names a conversation inside it.
     static let communityMark = ConversationTitleBar.Mark.symbol(communitySymbol, accented: true)
+
+    /// Carries the persisted community mark into the title-bar seam without asking the
+    /// relay for anything. Kept pure so the cached-data contract can be pinned without
+    /// launching a navigation stack.
+    static func communityHeadingMark(
+        name: String,
+        iconData: Data?
+    ) -> ConversationTitleBar.Mark {
+        .community(name: name, iconData: iconData)
+    }
 
     /// What VoiceOver is told about the marked row. Names the gesture rather than the
     /// colour, because the colour is not the point and cannot be perceived here anyway.
@@ -304,6 +338,29 @@ struct ChannelListView: View {
 // MARK: - Content
 
 private extension ChannelListView {
+    /// The active community's mark, drawn from bytes already on this device.
+    /// ``AppEnvironment/refreshCommunityIcon(for:)`` may still be checking the relay, but a
+    /// network response must never be on the critical path for this heading: the old picture
+    /// or the initials fallback is already an honest first frame.
+    ///
+    /// Reads ``activeCommunityIcon`` rather than the filesystem — see that property for why
+    /// a `body` must not be the thing that opens the file.
+    var activeCommunityMark: ConversationTitleBar.Mark {
+        Self.communityHeadingMark(
+            name: environment.communities.active?.name ?? CommunityIdentity.name(),
+            iconData: activeCommunityIcon
+        )
+    }
+
+    /// What ``activeCommunityIcon`` is refreshed against: which community, and which file
+    /// under it. The filename is in the key because ``CommunityStorage/replacingIcon(_:for:)``
+    /// reuses it when a community already had one, so an id alone would keep drawing the
+    /// picture an operator has since changed.
+    var activeCommunityIconKey: String {
+        let community = environment.communities.active
+        return "\(community?.id.uuidString ?? "-")|\(community?.iconFilename ?? "-")"
+    }
+
     /// One flat list: the shortcut cards, then a heading row and its conversations for each
     /// grouping. `List` keeps the rows lazy and recycled; `SidebarRow.id` (the channel's
     /// group id) keeps their identity stable as unread counts stream in, so a re-read
@@ -359,7 +416,11 @@ private extension ChannelListView {
                     .listRowInsets(Self.headerInsets)
                     .listRowSeparator(.hidden)
                     if expansion(for: section.section).wrappedValue {
-                        rows(of: section, resumable: resumable)
+                        if section.rows.isEmpty {
+                            emptySectionRow(section.section)
+                        } else {
+                            rows(of: section, resumable: resumable)
+                        }
                     }
                 }
             }
@@ -506,6 +567,27 @@ private extension ChannelListView {
     }
 
     /// The relay answered, and the answer is that this key is in nothing.
+    /// What a persistent heading shows instead of rows.
+    ///
+    /// A plain line of secondary text, not a `ContentUnavailableView`: that one centres
+    /// itself in whatever space it is given and is built to own a screen, so inside a
+    /// `List` row it opens a gap the size of the rest of the sidebar. This has to read
+    /// as one quiet row under its heading.
+    ///
+    /// It is not a button. Nothing on this phone starts a direct message — a DM begins
+    /// from a person, on their profile — so an empty DMs heading that offered a tap
+    /// would be offering a dead end.
+    func emptySectionRow(_ section: SidebarSection) -> some View {
+        Text(section.emptyMessage)
+            .font(.subheadline)
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 6)
+            .listRowInsets(Self.rowInsets)
+            .listRowSeparator(.hidden)
+            .accessibilityIdentifier("sidebar-section-empty-\(section.rawValue)")
+    }
+
     var emptyState: some View {
         ContentUnavailableView(
             "No conversations yet",

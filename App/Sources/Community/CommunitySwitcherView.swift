@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// The community list, from the home heading: which communities this phone is signed in
 /// to, which one is open, and the way into another.
@@ -28,10 +29,19 @@ struct CommunitySwitcherView: View {
                     }
                 }
                 Section {
+                    // Joining leads, because it is the one that works everywhere: a
+                    // community you were invited to is closed to you until its code is
+                    // redeemed, and pointing Hive at its relay without one gets a connected
+                    // socket and an empty sidebar (§ ``JoinCommunityModel``).
+                    Button {
+                        environment.communitySheet = .join(nil)
+                    } label: {
+                        Label("Join with an invite", systemImage: "envelope.open")
+                    }
                     Button {
                         environment.communitySheet = .add
                     } label: {
-                        Label("Add community", systemImage: "plus.circle")
+                        Label("Add a relay", systemImage: "plus.circle")
                     }
                 } footer: {
                     Text(Self.footer)
@@ -78,11 +88,13 @@ struct CommunitySwitcherView: View {
         "This phone will forget the key for this community and delete the messages saved "
             + "here. Nothing is removed from the relay — you can join again with the same key."
 
-    /// Says what a community *is*, and names the gesture that renames or removes one —
-    /// there is no Edit button, so nothing else on this screen would.
+    /// Says what a community *is*, which of the two ways in to reach for, and names the
+    /// gesture that renames or removes one — there is no Edit button, so nothing else on
+    /// this screen would.
     static let footer =
         "Each community is its own relay, with its own identity and its own conversations. "
-            + "Swipe a row to rename or remove it."
+            + "Use an invite unless you run the relay yourself. Long-press a row to copy "
+            + "its community link; swipe to rename or remove it."
 
     // MARK: - Rows
 
@@ -99,7 +111,8 @@ struct CommunitySwitcherView: View {
             CommunitySwitcherRow(
                 community: community,
                 isActive: isActive,
-                isSignedIn: AppEnvironment.hasStoredKey(account: community.keychainAccount)
+                isSignedIn: AppEnvironment.hasStoredKey(account: community.keychainAccount),
+                iconData: environment.communityStorage.iconData(for: community)
             )
         }
         .buttonStyle(.plain)
@@ -110,6 +123,12 @@ struct CommunitySwitcherView: View {
                 renaming = community
             }
             .tint(.hiveAccent)
+        }
+        .contextMenu {
+            Button("Copy community link", systemImage: "link") {
+                guard let origin = community.relayOrigin else { return }
+                UIPasteboard.general.string = origin
+            }
         }
         .listRowBackground(isActive ? Color.hiveAccent.opacity(0.10) : nil)
     }
@@ -132,14 +151,12 @@ struct CommunitySwitcherRow: View {
     /// list — its history is still here — and opening it leads to the gate rather than to a
     /// workspace it cannot authenticate for.
     let isSignedIn: Bool
+    /// The cached relay icon, kept out of ``Community`` itself so the record remains small.
+    let iconData: Data?
 
     var body: some View {
         HStack(spacing: 12) {
-            Image(systemName: ChannelListView.communitySymbol)
-                .font(.hiveSymbol(fixedSize: 22))
-                .foregroundStyle(isActive ? Color.hiveAccent : .secondary)
-                .frame(width: 28)
-                .accessibilityHidden(true)
+            CommunityMark(name: community.name, iconData: iconData, size: 36)
             VStack(alignment: .leading, spacing: 2) {
                 Text(community.name)
                     .font(.hive(.body, weight: isActive ? .semibold : .regular))

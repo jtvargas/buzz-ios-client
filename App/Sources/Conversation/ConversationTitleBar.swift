@@ -1,3 +1,4 @@
+import Foundation
 import SwiftUI
 
 /// The conversation's heading, as the navigation bar's own leading item: a mark — a `#`,
@@ -41,7 +42,7 @@ import SwiftUI
 struct ConversationTitleBar: ViewModifier {
     /// The mark before the name: what this conversation *is*, in one glyph or one face.
     ///
-    /// An enum rather than an optional symbol name because the three cases are not variations
+    /// An enum rather than an optional symbol name because the four cases are not variations
     /// on one drawing — a face is a different width, a different shape, and a different
     /// reserve against the overflow rule than a glyph is.
     enum Mark: Equatable {
@@ -57,6 +58,9 @@ struct ConversationTitleBar: ViewModifier {
         /// The peer's picture, falling back to their monogram. A person is recognised by
         /// their face before their name, which a glyph cannot do.
         case avatar(url: URL?, seed: String, initials: String)
+        /// The active community's persisted mark. Unlike a remote avatar, its bytes are
+        /// already on this device and can be drawn in the first header frame.
+        case community(name: String, iconData: Data?)
         /// How many people are in a group direct message. Drawn where a face would be, and
         /// costed as a glyph: it is a digit or two, not a 26-point picture.
         case count(Int)
@@ -260,6 +264,8 @@ struct ConversationTitleBar: ViewModifier {
                 .accessibilityHidden(true)
         case let .avatar(url, seed, initials):
             AvatarView(url: url, seed: seed, monogram: initials, size: Self.avatarSize)
+        case let .community(name, iconData):
+            CommunityMark(name: name, iconData: iconData, size: Self.avatarSize)
         case let .count(count):
             Text(ConversationMark.countText(count))
                 .font(.hive(.body, weight: .bold))
