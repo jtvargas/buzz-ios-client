@@ -44,7 +44,7 @@ extension BuzzEventStore {
     /// Log rows only, no outbox branch: a caller asks for ids it already has, and those
     /// come from the log. An id that is not in the log is simply absent from the result.
     ///
-    /// # Why the kinds match ``fetchTimeline(_:channel:before:limit:)``
+    /// # Why the kinds match ``fetchTimeline(_:channel:from:direction:limit:)``
     ///
     /// The channel page returns messages *and* kind-40099 relay notices, so a caller
     /// holding a page holds ids of both. Filtering to the message kind here would make a

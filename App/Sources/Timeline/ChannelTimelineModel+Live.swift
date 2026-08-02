@@ -51,4 +51,22 @@ extension ChannelTimelineModel {
     nonisolated func fetch(before cursor: TimelineCursor?) -> [TimelineRow] {
         (try? store.timeline(channel: channel, before: cursor, limit: pageSize)) ?? []
     }
+
+    /// Reads one page *forward* from a position, oldest first.
+    ///
+    /// Beside its descending twin because they are one read with the comparison and the
+    /// order flipped together — see ``BuzzKit/TimelineDirection``.
+    ///
+    /// The only caller is the gap the deep-history window leaves behind
+    /// (``ChannelTimelineModel/closeGap()``). Ordinary paging is downward and stays that
+    /// way: a conversation rests at its newest message, so there is nothing above the head
+    /// for a forward page to fetch. This exists because a *window* has a newer side, which
+    /// no other read in this model has ever needed.
+    ///
+    /// `limit` is a parameter rather than ``pageSize`` because both callers ask for one row
+    /// more than they intend to keep, and use the surplus to tell "the page filled" from
+    /// "the channel ran out" without a second query.
+    nonisolated func fetch(after cursor: TimelineCursor, limit: Int) -> [TimelineRow] {
+        (try? store.timeline(channel: channel, after: cursor, limit: limit)) ?? []
+    }
 }

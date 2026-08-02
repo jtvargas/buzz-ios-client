@@ -171,6 +171,31 @@ final class ChannelTimelineModel {
     /// Internal because the jump that releases it lives beside this file.
     var tail = TimelineTail()
 
+    /// The newest row of a spliced history window, when the loaded set is not contiguous —
+    /// and so the row the gap seam is drawn after. `nil` whenever there is no gap.
+    ///
+    /// # Why the loaded set can have a hole in it at all
+    ///
+    /// Landing on a linked message from deep history reads a window *around* it rather than
+    /// paging the whole way down to it: the walk would be O(depth) reads, each one rebuilding
+    /// and re-reading reactions over a growing set. So the window arrives as an island, with
+    /// the head page still loaded above it and an unread stretch of history in between.
+    ///
+    /// A hole the reader cannot see is the dishonest version of this feature — the day
+    /// separator that falls between the island and the head renders a three-week gap as an
+    /// ordinary change of date. This is what the seam is drawn from.
+    ///
+    /// Observable, unlike ``earliest``, because the grouping reads it to place the seam.
+    private(set) var gapFrontier: TimelineCursor?
+    /// Whether a forward page is in flight, so the seam appearing repeatedly across one
+    /// load asks once.
+    ///
+    /// Not observable, unlike ``isLoadingOlder``: nothing renders it, and nothing can —
+    /// ``closeGap()`` has no suspension point, so it is set and cleared inside one
+    /// MainActor turn and no frame is ever drawn while it is `true`. It is a re-entrancy
+    /// guard and nothing else. Same treatment, for the same reason, as ``awaitingOwnSend``.
+    @ObservationIgnored private var isClosingGap = false
+
     /// Whether ``primeIfNeeded()`` has already read page one. Not observable: nothing
     /// reads it, and it is written from inside a `body`.
     @ObservationIgnored private var hasPrimed = false
@@ -335,6 +360,127 @@ final class ChannelTimelineModel {
         // Bring in the older rows' reactions and mentions immediately rather than
         // waiting on the next commit signal, so a scroll back never shows chip-less
         // or unresolved history.
+        refreshLoadedAnnotations()
+    }
+
+    // MARK: - Landing on history the screen has never loaded
+
+    /// Reads a window of history around `id` and merges it into the loaded set, returning
+    /// whether the message is one this surface can show at all.
+    ///
+    /// # Why a window rather than paging down to it
+    ///
+    /// ``loadOlder()`` walks 50 rows at a time and re-reads reactions, mentions and thread
+    /// participants over the *whole* loaded set on each pass, so reaching a message three
+    /// weeks back costs O(depth) reads over a growing id list. The window is two indexed
+    /// reads whatever the depth. What it costs instead is contiguity — see ``gapFrontier``.
+    ///
+    /// # What `false` means, and what it deliberately does not distinguish
+    ///
+    /// Three different things make a message unshowable here: it is not in the store at
+    /// all, it belongs to another channel, or it is a thread reply — which
+    /// ``BuzzKit/BuzzEventStore/timeline(channel:before:limit:)`` excludes from a channel
+    /// page by construction, so it can be in the store and still never be a row on this
+    /// surface. This answers only "can this surface show it"; the caller has the target's
+    /// `rootID` and the link's channel and is better placed to say which.
+    ///
+    /// # Why the membership check is the window read itself
+    ///
+    /// ``BuzzKit/BuzzEventStore/rows(for:)`` is not channel-scoped and does not apply the
+    /// thread-reply exclusion, so it will happily return a row belonging to another
+    /// conversation. The channel-scoped read is what proves the row is *ours* — asking
+    /// whether the target came back inside its own window is one query that settles the
+    /// channel and the surface together.
+    ///
+    /// Synchronous, and on the main actor deliberately: these are two indexed local reads
+    /// (measured at ~1 ms for this query shape), and running them here is what puts the
+    /// splice and the landing in **one** ``rebuild()``. Splitting them across an `await`
+    /// would open the reader-place correction window before the jump that answers it.
+    ///
+    /// - Parameters:
+    ///   - above: rows to read older than the target.
+    ///   - below: rows to read newer than it. Weighted heavier than `above` because the
+    ///     landing anchors the target at the *top* of the viewport, so this is the side the
+    ///     reader actually looks at. Provisional — a device call, not a derivation.
+    @discardableResult
+    func loadWindow(around id: String, above: Int = 20, below: Int = 30) -> Bool {
+        guard let target = (try? store.rows(for: [id]))?.first else { return false }
+
+        // Inclusive of the target: the predicate is strictly `<`, so a cursor one second
+        // past it admits the target's own second and everything older. Over-inclusive by
+        // the rows sharing that second, which are neighbours the window wants anyway.
+        let ceiling = TimelineCursor(createdAt: target.createdAt + 1, id: "")
+        let older = (try? store.timeline(channel: channel, before: ceiling, limit: above + 1)) ?? []
+        guard older.contains(where: { $0.id == id }) else { return false }
+
+        // One row more than is kept, so a full page is distinguishable from a channel that
+        // ran out — the same trick ``loadOlder()`` plays with `older.count < pageSize`.
+        let probeLimit = below + 1
+        let newer = fetch(after: TimelineCursor(row: target), limit: probeLimit)
+
+        for row in older { loaded[row.id] = row }
+        for row in newer.prefix(below) { loaded[row.id] = row }
+
+        // Contiguous when the forward read ran out of channel before filling, or when the
+        // row past the window is one the head page already holds. Otherwise there is real
+        // history in between and the seam says so. Resolved here rather than left for the
+        // first ``closeGap()`` so the seam never appears and then vanishes.
+        if newer.count < probeLimit || loaded[newer[below].id] != nil {
+            for row in newer { loaded[row.id] = row }
+            gapFrontier = nil
+        } else {
+            // Falls back to the target for a zero-width newer side, where the frontier is
+            // the target itself rather than nothing — a `nil` here would read as "no gap".
+            gapFrontier = newer.prefix(below).last.map(TimelineCursor.init(row:))
+                ?? TimelineCursor(row: target)
+        }
+
+        refreshLoadedAnnotations()
+        rebuild()
+        return true
+    }
+
+    /// Reads the page immediately newer than the window's frontier, closing the gap from
+    /// its older side.
+    ///
+    /// Driven by the seam coming into view, which is the mirror of ``loadOlder()`` being
+    /// driven by the top of the loaded history: both are a level the surface can report
+    /// repeatedly across one load, so both are idempotent while one is in flight.
+    ///
+    /// The gap closes — and the seam goes — when a page comes back short, or when it
+    /// reaches a row the loaded set already holds. Those are the same two conditions
+    /// ``loadWindow(around:above:below:)`` resolves, for the same reason.
+    func closeGap() async {
+        guard let frontier = gapFrontier, !isClosingGap else { return }
+        isClosingGap = true
+        defer { isClosingGap = false }
+
+        let probeLimit = pageSize + 1
+        let page = fetch(after: frontier, limit: probeLimit)
+        guard !page.isEmpty else {
+            gapFrontier = nil
+            rebuild()
+            return
+        }
+
+        for row in page.prefix(pageSize) { loaded[row.id] = row }
+        if page.count < probeLimit || loaded[page[pageSize].id] != nil {
+            for row in page { loaded[row.id] = row }
+            gapFrontier = nil
+        } else {
+            gapFrontier = page.prefix(pageSize).last.map(TimelineCursor.init(row:))
+        }
+
+        refreshLoadedAnnotations()
+        rebuild()
+    }
+
+    /// Re-reads the reactions, mentions and thread participants for the whole loaded set.
+    ///
+    /// Extracted from ``loadOlder()``'s tail, which did exactly this inline and now shares
+    /// it with the two window reads: rows arriving from any of the three must not render
+    /// chip-less or with unresolved `@`-tokens while waiting for the next commit signal.
+    private func refreshLoadedAnnotations() {
         let ids = Array(loaded.keys)
         applyReactions(fetchReactions(for: ids))
         applyMentions(fetchMentions(for: ids))
@@ -364,7 +510,7 @@ final class ChannelTimelineModel {
         // equal or not — so an arrival held behind the freeze, which renders exactly what
         // was already rendered, would still invalidate the list it was held back from.
         if rows != split.rendered { rows = split.rendered }
-        let grouped = ConversationGrouping.items(for: split.rendered)
+        let grouped = ConversationGrouping.items(for: split.rendered, gapAfter: gapFrontier?.id)
         if items != grouped {
             // Which of the two revisions this is: ``[ConversationItem]/isStructuralChange(to:)``.
             let isStructural = items.isStructuralChange(to: grouped)
