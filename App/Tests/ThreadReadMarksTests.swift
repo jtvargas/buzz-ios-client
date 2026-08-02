@@ -68,7 +68,9 @@ struct ThreadReadMarksTests {
         defer { defaults.removePersistentDomain(forName: suiteName) }
         let marks = ThreadReadMarks(defaults: defaults)
 
-        let opener = try peer.message("question", in: "general", at: 1_000)
+        // The reader authored the opener, so this thread remains visible to the
+        // participation-scoped unread query before the cross-device replies arrive.
+        let opener = try reader.message("question", in: "general", at: 1_000)
         _ = try await store.ingest(batch: [
             try relay.channelMetadata("general", name: "General", at: 500),
             opener,
