@@ -40,6 +40,17 @@ struct ChannelListView: View {
     /// Every composer holding unsent text. Owned here for the reason the thread read
     /// marks are: this view draws the count and the pushed screen draws the list.
     @State private var draftsModel: DraftsModel
+    /// The active community's picture, read from disk once per icon rather than once per
+    /// `body`.
+    ///
+    /// Held here because the alternative is a filesystem read inside the heading's own
+    /// `body`, and this `body` re-evaluates on everything the sidebar watches — an unread
+    /// count arriving, presence moving, a row being read. `CommunityStorage.iconData(for:)`
+    /// is a synchronous `Data(contentsOf:)` of up to half a megabyte
+    /// (`RelayIcon.maximumInlineBytes`), so on that path it is a main-thread disk read
+    /// several times a second for bytes that did not change. Refreshed by the `task` below,
+    /// keyed on the community and the filename, so a new icon still lands.
+    @State private var activeCommunityIcon: Data?
     @State private var showAccount = false
     /// Whether the new-channel sheet is up.
     @State private var showsCreateChannel = false
@@ -278,6 +289,18 @@ struct ChannelListView: View {
         // samples, and two verdicts in one main-actor turn are one body pass. See
         // ``ChannelListModel/trackDirectory(of:)``.
         .task { await model.trackDirectory(of: engine) }
+        // Once per icon, not once per `body` — see ``activeCommunityIcon``. Keyed on the
+        // community *and* its filename, so switching community and an operator replacing a
+        // picture both land, and nothing else re-opens the file.
+        //
+        // The read itself stays on this actor. What was wrong was its *frequency*, not its
+        // thread: one file open when the picture changes is ordinary, and hopping off the
+        // actor to do it would buy a few milliseconds at the cost of a frame drawn without
+        // the icon that was already there.
+        .task(id: activeCommunityIconKey) {
+            activeCommunityIcon = environment.communities.active
+                .flatMap { environment.communityStorage.iconData(for: $0) }
+        }
     }
 
     /// The fallback mark used before an active community graph exists. The running home
@@ -315,15 +338,27 @@ struct ChannelListView: View {
 // MARK: - Content
 
 private extension ChannelListView {
-    /// The active community's mark is read from the local cache while the header is being
-    /// built. ``AppEnvironment/refreshCommunityIcon(for:)`` may still be checking the relay,
-    /// but a network response must never be on the critical path for this heading: the old
-    /// picture or the initials fallback is already an honest first frame.
+    /// The active community's mark, drawn from bytes already on this device.
+    /// ``AppEnvironment/refreshCommunityIcon(for:)`` may still be checking the relay, but a
+    /// network response must never be on the critical path for this heading: the old picture
+    /// or the initials fallback is already an honest first frame.
+    ///
+    /// Reads ``activeCommunityIcon`` rather than the filesystem — see that property for why
+    /// a `body` must not be the thing that opens the file.
     var activeCommunityMark: ConversationTitleBar.Mark {
+        Self.communityHeadingMark(
+            name: environment.communities.active?.name ?? CommunityIdentity.name(),
+            iconData: activeCommunityIcon
+        )
+    }
+
+    /// What ``activeCommunityIcon`` is refreshed against: which community, and which file
+    /// under it. The filename is in the key because ``CommunityStorage/replacingIcon(_:for:)``
+    /// reuses it when a community already had one, so an id alone would keep drawing the
+    /// picture an operator has since changed.
+    var activeCommunityIconKey: String {
         let community = environment.communities.active
-        let name = community?.name ?? CommunityIdentity.name()
-        let iconData = community.flatMap { environment.communityStorage.iconData(for: $0) }
-        return Self.communityHeadingMark(name: name, iconData: iconData)
+        return "\(community?.id.uuidString ?? "-")|\(community?.iconFilename ?? "-")"
     }
 
     /// One flat list: the shortcut cards, then a heading row and its conversations for each
