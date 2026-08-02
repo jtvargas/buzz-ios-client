@@ -40,15 +40,15 @@ extension ChannelTimelineModel {
     /// Releases the frozen tail, rebuilds the rendered rows, and lands on a loaded message.
     ///
     /// This is the Stage 1 boundary: no store or relay lookup is attempted. A target that is
-    /// not already loaded returns false so the router can report that limitation instead of
-    /// leaving a request armed for an unrelated future commit.
+    /// not rendered yet remains armed until the first loaded snapshot gives the view an honest
+    /// answer. ``ChannelTimelineView`` supplies that readiness through ``hasLoaded``.
     @discardableResult
     func prepareLanding(on eventID: String) -> Bool {
         pendingLanding = eventID
         tail.release()
         rebuild()
         guard pendingLanding == nil else {
-            pendingLanding = nil
+            if hasLoaded { pendingLanding = nil }
             return false
         }
         return true

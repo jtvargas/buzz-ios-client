@@ -94,6 +94,9 @@ final class ChannelTimelineModel {
     }
 
     /// An own send awaiting its row, consumed by ``landOnOwnSend(among:)``.
+    ///
+    /// Not observable: nothing renders it, and the moment it clears already bumps
+    /// ``jumpToken``.
     @ObservationIgnored var awaitingOwnSend: String?
 
     /// A loaded message-link target consumed by the next rebuild.
@@ -365,8 +368,10 @@ final class ChannelTimelineModel {
             if isStructural { contentRevision += 1 } else { rowRevision += 1 }
         }
         jump.hold(count: split.held.count, firstID: split.held.first?.id)
-        landOnPending(among: split.rendered)
         landOnOwnSend(among: split.rendered)
+        // Message links win if an own send and a link become renderable in one rebuild. Both
+        // commands bump the token, and the final target is the only one the observer can see.
+        landOnPending(among: split.rendered)
         markReadIfNeeded()
     }
 

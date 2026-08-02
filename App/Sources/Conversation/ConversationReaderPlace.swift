@@ -157,6 +157,8 @@ final class ConversationReaderPlace {
         case bottom
         /// Land at this `contentOffset.y`.
         case offset(CGFloat)
+        /// Re-assert the message row that a message landing targeted.
+        case message
     }
 
     /// Whether a finger is on the list, or a scroll it started is still running. Nothing is
@@ -183,6 +185,14 @@ final class ConversationReaderPlace {
     /// the newest message — and because the jumps that reach here are asked for by a reader
     /// who is not at the bottom (``ChannelTimelineModel/shouldJumpToOwnSend``).
     private(set) var isLandingOnNewest = false
+    /// Whether a message landing still owns correction suppression. It remains live after the
+    /// animation until the reader takes hold, because both structural and in-place windows can
+    /// otherwise take their `.bottom` path before they inspect the change kind.
+    private(set) var isLandingOnMessage = false
+    /// Whether the message row needs its one post-animation re-assert. This is separate from
+    /// ``isLandingOnMessage``: the correction suppression remains live until the reader takes
+    /// hold, while the row re-assert is consumed once at rest.
+    private(set) var shouldReassertMessage = false
 
     /// The distance last seen while the height was holding still and no settling window was
     /// open — the reader's own place, as opposed to a place a correction put them in.
@@ -280,8 +290,11 @@ final class ConversationReaderPlace {
     /// ``scrollCameToRest()`` reads the same as it did: a flight the reader overruled was
     /// already answered `.none` by ``hasMoved``.
     func readerTookHold() {
+        if isLandingOnMessage, let last, last.isFinite { anchoredDistance = last.distance }
         hasMoved = true
         isLandingOnNewest = false
+        isLandingOnMessage = false
+        shouldReassertMessage = false
     }
 
     /// A jump to the newest message has just been issued.
@@ -303,6 +316,14 @@ final class ConversationReaderPlace {
     func jumpToNewestBegan() {
         hasMoved = false
         isLandingOnNewest = true
+    }
+
+    /// A jump to a message has just been issued. Unlike a jump to the newest row, this is a
+    /// reader-selected place and must remain a moved reader after the animation finishes.
+    func jumpToMessageBegan() {
+        hasMoved = true
+        isLandingOnMessage = true
+        shouldReassertMessage = true
     }
 
     /// A scroll has come to rest. Says whether the jump that started it still has work to do.
@@ -332,6 +353,10 @@ final class ConversationReaderPlace {
     /// jump starts and the reader's own drag sets it again, so someone who took hold of the
     /// list mid-flight is left where they put it.
     func scrollCameToRest() -> Correction {
+        if shouldReassertMessage {
+            shouldReassertMessage = false
+            return .message
+        }
         guard isLandingOnNewest else { return .none }
         isLandingOnNewest = false
         return hasMoved ? .none : .bottom
@@ -351,6 +376,10 @@ final class ConversationReaderPlace {
         guard span.isFinite else { return .none }
         let previous = last
         last = span
+        // A message landing owns the scroll position until its animated row jump has rested.
+        // This must precede the bottom fallback below: an in-place window reaches that guard
+        // too, and would otherwise snap a landing back to the newest row.
+        if isLandingOnMessage { return .none }
         // Nothing to compare the first reading against, and a scroll view mid-first-layout
         // reports a zero height that means "not measured yet" rather than "empty".
         guard let previous, previous.contentHeight > 0 else { return .none }

@@ -366,6 +366,10 @@ struct ConversationScaffold<Content: View, Bar: View, Accessory: View>: View {
             if let newestID { proxy.scrollTo(newestID, anchor: .bottom) }
         case let .offset(target):
             position.scrollTo(y: target)
+        case .message:
+            if case let .message(id) = jumpTarget {
+                proxy.scrollTo(id, anchor: .top)
+            }
         }
     }
 
@@ -404,7 +408,7 @@ struct ConversationScaffold<Content: View, Bar: View, Accessory: View>: View {
                 // Landing on a message is the reader choosing a place that is not the
                 // newest one, exactly as a drag is. Without this, the next content change
                 // would put them back at the bottom they deliberately left.
-                place.hasMoved = true
+                place.jumpToMessageBegan()
             }
         }
     }

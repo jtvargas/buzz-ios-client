@@ -254,14 +254,17 @@ struct ChannelTimelineView: View {
         // when this channel is already on top. This task handles both a freshly pushed
         // timeline and the timeline already visible when its link was pressed. It clears
         // only after the synchronous work so later stages can safely add suspension points.
-        .task(id: messageLandingRouter?.pendingLanding) {
+        .task(id: MessageLandingTaskID(
+            landing: messageLandingRouter?.pendingLanding,
+            hasLoaded: model.hasLoaded
+        )) {
             guard let landing = messageLandingRouter?.pendingLanding,
                   landing.channelID == channelID else { return }
             if model.prepareLanding(on: landing.eventID) {
                 if messageLandingRouter?.pendingLanding == landing {
                     messageLandingRouter?.pendingLanding = nil
                 }
-            } else if messageLandingRouter?.pendingLanding == landing {
+            } else if model.hasLoaded, messageLandingRouter?.pendingLanding == landing {
                 messageLandingRouter?.fail(.notInStore)
             }
         }
@@ -408,6 +411,11 @@ struct ChannelTimelineView: View {
         .map(ConversationTitleBar.Subtitle.text)
     }
 
+}
+
+private struct MessageLandingTaskID: Equatable {
+    let landing: MessageLanding?
+    let hasLoaded: Bool
 }
 
 /// The list's two element builders and the four small things the body reaches for. In an

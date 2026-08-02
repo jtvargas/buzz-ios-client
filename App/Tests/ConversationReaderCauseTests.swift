@@ -156,4 +156,52 @@ struct ConversationReaderCauseTests {
         // produces no further reading for it to act on.
         #expect(!place.isLandingOnNewest)
     }
+
+    // MARK: - A message landing
+
+    @Test("a message landing suppresses both settling paths until rest")
+    func aMessageLandingSuppressesStructuralAndInPlaceCorrections() {
+        let place = ConversationReaderPlace()
+        place.hasMoved = true
+        park(place, height: 45_000, offset: 30_000, distance: 1_000)
+        place.jumpToMessageBegan()
+
+        place.contentDidChange()
+        #expect(feed(place, [span(height: 49_000, offset: 30_000, distance: 5_000)]) == [.none])
+
+        place.rowDidChangeInPlace()
+        #expect(feed(place, [span(height: 49_028, offset: 30_000, distance: 5_028)]) == [.none])
+    }
+
+    @Test("a message landing reasserts its row and anchors the resting distance")
+    func aMessageLandingIsReassertedAtRest() {
+        let place = ConversationReaderPlace()
+        park(place, height: 45_000, offset: 30_000, distance: 1_000)
+        place.jumpToMessageBegan()
+        let restingSpan = span(height: 49_000, offset: 30_000, distance: 4_321)
+        #expect(feed(place, [restingSpan]) == [.none])
+
+        #expect(place.scrollCameToRest() == .message)
+        #expect(place.isLandingOnMessage)
+        #expect(!place.shouldReassertMessage)
+
+        // The landing remains protected while the reader leaves the list untouched. Touching
+        // it ends that protection and anchors the place to the last finite reading.
+        place.readerTookHold()
+        #expect(!place.isLandingOnMessage)
+        #expect(place.anchoredDistance == 4_321)
+        place.contentDidChange()
+        #expect(feed(place, [span(height: 50_000, offset: 30_000, distance: 5_321)]) == [.offset(31_000)])
+    }
+
+    @Test("a reader taking hold cancels a message landing")
+    func aReaderTakingHoldCancelsMessageLanding() {
+        let place = ConversationReaderPlace()
+        place.jumpToMessageBegan()
+        place.readerTookHold()
+
+        #expect(!place.isLandingOnMessage)
+        #expect(!place.shouldReassertMessage)
+        #expect(place.scrollCameToRest() == .none)
+    }
 }
