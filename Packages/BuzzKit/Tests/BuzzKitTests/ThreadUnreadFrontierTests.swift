@@ -43,11 +43,11 @@ struct ThreadUnreadFrontierTests {
         defer { database.remove() }
         let store = try database.open()
         let relay = try Fixture()
+        let reader = try Fixture()
         let peer = try Fixture()
-        let selfKey = try PrivateKey()
-        let selfPubkey = selfKey.publicKey.hex
+        let selfPubkey = reader.pubkey
 
-        let opener = try peer.message("question", in: "room-1", at: 1000)
+        let opener = try reader.message("question", in: "room-1", at: 1000)
         _ = try await store.ingest(batch: [
             try meta(relay, "room-1", name: "One"),
             opener,
@@ -81,11 +81,11 @@ struct ThreadUnreadFrontierTests {
         defer { database.remove() }
         let store = try database.open()
         let relay = try Fixture()
+        let reader = try Fixture()
         let peer = try Fixture()
-        let selfKey = try PrivateKey()
-        let selfPubkey = selfKey.publicKey.hex
+        let selfPubkey = reader.pubkey
 
-        let opener = try peer.message("question", in: "room-1", at: 1000)
+        let opener = try reader.message("question", in: "room-1", at: 1000)
         _ = try await store.ingest(batch: [
             try meta(relay, "room-1", name: "One"),
             try meta(relay, "room-2", name: "Two"),
