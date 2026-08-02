@@ -410,6 +410,12 @@ private extension ChannelTimelineView {
             messageRow(row, continuesGroup: continuesGroup)
         case let .notice(marker):
             SystemNoticeRowView(notice: marker.notice, alsoJoined: marker.alsoJoined, date: marker.date)
+        case .gap:
+            // Scrolling into the seam is the request for what is missing there — the
+            // mirror of the top sentinel, which is what `onReachedTop` already is for the
+            // other end. The model's guard makes a repeated appearance across one load ask
+            // once. See ``ConversationGapRow``.
+            ConversationGapRow { Task { await model.closeGap() } }
         }
     }
 

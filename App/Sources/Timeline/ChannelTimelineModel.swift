@@ -186,8 +186,13 @@ final class ChannelTimelineModel {
     /// Observable, unlike ``earliest``, because the grouping reads it to place the seam.
     private(set) var gapFrontier: TimelineCursor?
     /// Whether a forward page is in flight, so the seam appearing repeatedly across one
-    /// load asks once. The mirror of ``isLoadingOlder``.
-    private(set) var isClosingGap = false
+    /// load asks once.
+    ///
+    /// Not observable, unlike ``isLoadingOlder``: nothing renders it, and nothing can —
+    /// ``closeGap()`` has no suspension point, so it is set and cleared inside one
+    /// MainActor turn and no frame is ever drawn while it is `true`. It is a re-entrancy
+    /// guard and nothing else. Same treatment, for the same reason, as ``awaitingOwnSend``.
+    @ObservationIgnored private var isClosingGap = false
 
     /// Whether ``primeIfNeeded()`` has already read page one. Not observable: nothing
     /// reads it, and it is written from inside a `body`.
@@ -499,7 +504,7 @@ final class ChannelTimelineModel {
         // equal or not — so an arrival held behind the freeze, which renders exactly what
         // was already rendered, would still invalidate the list it was held back from.
         if rows != split.rendered { rows = split.rendered }
-        let grouped = ConversationGrouping.items(for: split.rendered)
+        let grouped = ConversationGrouping.items(for: split.rendered, gapAfter: gapFrontier?.id)
         if items != grouped {
             // Which of the two revisions this is: ``[ConversationItem]/isStructuralChange(to:)``.
             let isStructural = items.isStructuralChange(to: grouped)

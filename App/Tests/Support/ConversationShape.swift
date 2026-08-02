@@ -2,7 +2,8 @@ import BuzzKit
 @testable import Hive
 
 /// A rendered conversation as a flat list of strings: `"day"` for a separator,
-/// `"notice"` for a relay notice, and the message's content for a row.
+/// `"notice"` for a relay notice, `"gap"` for the seam where history is missing, and
+/// the message's content for a row.
 ///
 /// Day separators are *items* in the rendered list rather than headers on a row, so
 /// what a grouping test needs to assert is the shape of that list — where the
@@ -15,6 +16,7 @@ func shape(_ items: [ConversationItem]) -> [String] {
         case .day: "day"
         case let .message(row, _): row.content
         case .notice: "notice"
+        case .gap: "gap"
         }
     }
 }
@@ -32,6 +34,7 @@ func groupedShape(_ items: [ConversationItem]) -> [String] {
         case .day: "day"
         case let .message(row, continuesGroup): (continuesGroup ? "+" : "") + row.content
         case .notice: "notice"
+        case .gap: "gap"
         }
     }
 }

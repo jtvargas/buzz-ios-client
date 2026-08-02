@@ -102,6 +102,28 @@ struct ChannelTimelineWindowTests {
         #expect(model.rows.map(\.content) == (45 ..< 200).map { "m\($0)" })
     }
 
+    /// The seam is what makes the hole honest, so where it sits is part of the contract:
+    /// directly after the window's newest row, and gone the moment the gap closes.
+    @Test("the seam is rendered after the window's newest row, and only while there is a gap")
+    func seamSitsAtTheFrontier() async throws {
+        let temp = TempStore()
+        defer { temp.remove() }
+        let store = try temp.open()
+        _ = try await store.ingest(batch: try seed(200), phase: .backfill)
+
+        let model = model(store, pageSize: 20)
+        model.primeIfNeeded()
+        #expect(!model.items.contains { $0.isGap }, "a contiguous timeline has no seam")
+
+        #expect(model.loadWindow(around: try #require(idOf("m50", in: store)), above: 5, below: 8))
+        let seamIndex = try #require(model.items.firstIndex { $0.isGap })
+        #expect(model.items[seamIndex - 1].message?.content == "m58", "the seam follows the newest window row")
+        #expect(model.items.filter(\.isGap).count == 1)
+
+        while model.gapFrontier != nil { await model.closeGap() }
+        #expect(!model.items.contains { $0.isGap }, "closing the gap removes the seam")
+    }
+
     @Test("closing an already-closed gap does nothing")
     func closeGapIsIdempotentWhenClosed() async throws {
         let temp = TempStore()
@@ -178,5 +200,12 @@ struct ChannelTimelineWindowTests {
     /// The id of a seeded message, read back through the same store the model reads.
     private func idOf(_ content: String, in store: BuzzEventStore) -> String? {
         try? store.timeline(channel: "room-1", limit: 500).first { $0.content == content }?.id
+    }
+}
+
+private extension ConversationItem {
+    var isGap: Bool {
+        if case .gap = self { return true }
+        return false
     }
 }

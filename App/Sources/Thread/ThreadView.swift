@@ -247,6 +247,12 @@ struct ThreadView: View {
             DaySeparatorView(date: marker.date)
         case let .message(row, continuesGroup):
             messageRow(row, continuesGroup: continuesGroup)
+        // A thread is read whole by `store.thread(root:)` — it has no cursor, no pages and
+        // so no way to acquire a hole. Unreachable rather than unhandled, and stated here
+        // because the exhaustive switch is what would otherwise make this file's silence
+        // look like an oversight.
+        case .gap:
+            EmptyView()
         case let .notice(marker):
             // A thread's rows are all kind-9 replies, so this is unreachable today.
             // Rendered rather than skipped so that a notice which ever does reach a
