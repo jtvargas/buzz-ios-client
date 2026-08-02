@@ -84,6 +84,9 @@ struct ThreadUnseenTimestampTests {
         _ = try await store.ingest(batch: [
             try meta(relay, "room-1", name: "One"),
             opener,
+            // The reader is already part of the thread; this reply is behind the frontier
+            // and must not change which peer reply is judged as new.
+            try reply(reader, "already participated", to: opener, at: 1500),
             try reply(peer, "theirs", to: opener, at: 2000),
         ], phase: .backfill)
         #expect(try store.unreadThreads(selfPubkey: reader.pubkey).count == 1)

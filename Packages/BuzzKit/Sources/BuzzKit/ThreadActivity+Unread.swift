@@ -72,7 +72,8 @@ extension BuzzEventStore {
     private static let unreadThreadsSQL = """
         WITH \(threadFrontierCTE),
         \(threadCandidateCTE),
-        \(threadRepliesForCandidatesCTE)
+        \(threadRepliesForCandidatesCTE),
+        \(threadParticipantRootsCTE)
         SELECT r.root_id           AS root_id,
                MAX(r.created_at)   AS latest_reply_at,
                MAX(CASE
@@ -90,6 +91,7 @@ extension BuzzEventStore {
         WHERE root2.kind = :kind
           AND root2.h IS NOT NULL
           AND NOT \(deletionApplies(target: "root2.id", author: "root2.pubkey", owner: "reo.owner_pubkey"))
+          AND \(threadParticipationPredicate(rootID: "r.root_id", rootAuthor: "root2.pubkey"))
         GROUP BY r.root_id
         HAVING new_count > 0
         ORDER BY latest_reply_at DESC, root_id DESC

@@ -147,9 +147,10 @@ struct ThreadActivityPartialHoldTests {
         let store = try database.open()
         let relay = try Fixture()
         let peer = try Fixture()
-        let selfPubkey = try PrivateKey().publicKey.hex
+        let reader = try Fixture()
+        let selfPubkey = reader.pubkey
 
-        let opener = try peer.message("the question", in: Self.channel, at: 1_000)
+        let opener = try reader.message("the question", in: Self.channel, at: 1_000)
         _ = try await store.ingest(batch: [
             try meta(relay),
             opener,
@@ -178,9 +179,10 @@ struct ThreadActivityPartialHoldTests {
         let store = try database.open()
         let relay = try Fixture()
         let peer = try Fixture()
-        let selfPubkey = try PrivateKey().publicKey.hex
+        let reader = try Fixture()
+        let selfPubkey = reader.pubkey
 
-        let opener = try peer.message("the question", in: Self.channel, at: 1_000)
+        let opener = try reader.message("the question", in: Self.channel, at: 1_000)
         _ = try await store.ingest(batch: [
             try meta(relay),
             opener,
@@ -207,9 +209,10 @@ struct ThreadActivityPartialHoldTests {
         let store = try database.open()
         let relay = try Fixture()
         let peer = try Fixture()
-        let selfPubkey = try PrivateKey().publicKey.hex
+        let reader = try Fixture()
+        let selfPubkey = reader.pubkey
 
-        let opener = try peer.message("the question", in: Self.channel, at: 1_000)
+        let opener = try reader.message("the question", in: Self.channel, at: 1_000)
         _ = try await store.ingest(batch: [
             try meta(relay),
             opener,
@@ -237,9 +240,10 @@ struct ThreadActivityPartialHoldTests {
         let store = try database.open()
         let relay = try Fixture()
         let peer = try Fixture()
-        let selfPubkey = try PrivateKey().publicKey.hex
+        let reader = try Fixture()
+        let selfPubkey = reader.pubkey
 
-        let opener = try peer.message("the question", in: Self.channel, at: 1_000)
+        let opener = try reader.message("the question", in: Self.channel, at: 1_000)
         _ = try await store.ingest(batch: [
             try meta(relay),
             opener,
