@@ -54,12 +54,19 @@ enum ReminderDueLabel {
 
     /// `25 minutes`, `3 hours`, `2 days` — one unit, because the second one is noise on a
     /// line whose job is to be read at a glance.
+    ///
+    /// Rounded to the nearest minute *before* it is spelled, and before the unit is chosen.
+    /// `DateComponentsFormatter` truncates, and a due time is stored as a whole second while
+    /// the moment it was chosen was not — so picking **In 30 minutes** hands this 1799.6 and
+    /// an untruncated formatter answers `29 minutes`, immediately, on the row you just made.
+    /// The same fraction turns a three-hour reminder into `2 hours`.
     private static func spell(_ interval: TimeInterval) -> String {
+        let rounded = (interval / minimumUnit).rounded() * minimumUnit
         let formatter = DateComponentsFormatter()
         formatter.unitsStyle = .full
-        formatter.allowedUnits = interval < 3600 ? [.minute] : [.day, .hour]
+        formatter.allowedUnits = rounded < 3600 ? [.minute] : [.day, .hour]
         formatter.maximumUnitCount = 1
-        guard let spelled = formatter.string(from: interval), !spelled.isEmpty else {
+        guard let spelled = formatter.string(from: rounded), !spelled.isEmpty else {
             // Unreachable with the units above, and cheaper than an optional every caller
             // would have to answer for.
             return "a moment"

@@ -53,9 +53,17 @@ struct LaterTests {
     func overdueAtTheBoundary() {
         let now = Date()
 
+        // Both of these are the number the owner picked from the sheet, and both are the
+        // case that caught the formatter truncating: `notBefore` is a whole second while
+        // `now` is not, so the row is asked to spell 1799.6 seconds a moment after it is
+        // made. It has to say what he chose.
         let waiting = ReminderDueLabel.label(for: reminder(dueIn: 30 * 60, from: now), now: now)
         #expect(!waiting.isOverdue)
         #expect(waiting.text == "In 30 minutes")
+
+        let hours = ReminderDueLabel.label(for: reminder(dueIn: 3 * 3600, from: now), now: now)
+        #expect(!hours.isOverdue)
+        #expect(hours.text == "In 3 hours")
 
         // Under a minute out still counts down: rounded up to the smallest unit there is a
         // word for, rather than the formatter's own `0 minutes`.
