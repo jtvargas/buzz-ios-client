@@ -232,7 +232,7 @@ struct ProfileAvatarEditorView: View {
             // search, the pinned headings and the 44pt targets, and an avatar picker that
             // drifted from the reaction picker would be two grids of the same glyphs
             // behaving differently.
-            EmojiPickerView { model.select(emoji: $0) }
+            EmojiPickerView(searchPlacement: .bottomBar) { model.select(emoji: $0) }
         }
     }
 
