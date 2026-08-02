@@ -67,6 +67,26 @@ struct InviteLinkTests {
         #expect(link.relayURLString == "ws://localhost:3004")
     }
 
+    /// The spelling somebody produces when they know a community by its relay address and
+    /// paste the code onto the end of it. It was refused, and the reader was told their invite
+    /// was not an invite — while the *other* field on the same flow read the same text as a
+    /// relay address and opened a websocket to a web page.
+    @Test("the socket spelling of an invite is the same invite")
+    func socketSpellingOfAWebLink() throws {
+        let secure = try #require(
+            InviteLink.parse("wss://buzzdir.communities.buzz.xyz/invite/v2.abc")
+        )
+        #expect(secure.relayURLString == "wss://buzzdir.communities.buzz.xyz")
+        #expect(secure.code == "v2.abc")
+
+        // `ws` is the plaintext half either way round, and stays subject to the same rule.
+        let plaintext = try #require(
+            InviteLink.parse("ws://localhost:3004/invite/abc", allowInsecureLocalRelay: true)
+        )
+        #expect(plaintext.relayURLString == "ws://localhost:3004")
+        #expect(InviteLink.parse("ws://relay.example/invite/abc", allowInsecureLocalRelay: true) == nil)
+    }
+
     // MARK: - The shapes that are not
 
     @Test(

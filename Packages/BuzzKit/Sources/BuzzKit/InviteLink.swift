@@ -57,7 +57,15 @@ public struct InviteLink: Equatable, Sendable {
     ///
     /// - `https://<host>/invite/<code>` → `wss://<host>`
     /// - `http://<host>/invite/<code>` → `ws://<host>`
+    /// - `wss://<host>/invite/<code>` → `wss://<host>`, and `ws` likewise
     /// - `buzz://join?relay=<ws(s) URL>&code=<code>[&policy_receipt=<receipt>]`
+    ///
+    /// The socket spellings are here because they are what somebody hands you when they know
+    /// a community by its relay address and paste the code onto the end of it — the invite
+    /// itself is unambiguous either way, since `/invite/<code>` is not a thing a websocket
+    /// origin has. Refusing them meant the reader was told the link was not an invite, which
+    /// was false, and the alternative reading is worse: taken as a *relay* address, that same
+    /// text opens a socket to a web page.
     ///
     /// Everything else is refused, including credentials, fragments, and any path that is
     /// not exactly one non-empty code segment under `/invite`. A link is untrusted input
@@ -85,7 +93,7 @@ public struct InviteLink: Equatable, Sendable {
         switch scheme {
         case "buzz":
             return parseHandoff(components, allowInsecureLocalRelay: allowInsecureLocalRelay)
-        case "https", "http":
+        case "https", "http", "wss", "ws":
             return parseWebLink(components, scheme: scheme, allowInsecureLocalRelay: allowInsecureLocalRelay)
         default:
             return nil
@@ -118,7 +126,8 @@ public struct InviteLink: Equatable, Sendable {
         )
     }
 
-    /// `https://<host>/invite/<code>` — the canonical shareable link.
+    /// `https://<host>/invite/<code>` — the canonical shareable link, and the socket
+    /// spellings of the same thing.
     private static func parseWebLink(
         _ components: URLComponents,
         scheme: String,
@@ -127,7 +136,10 @@ public struct InviteLink: Equatable, Sendable {
         let segments = components.path.split(separator: "/", omittingEmptySubsequences: true)
         guard segments.count == 2, segments[0] == "invite", !segments[1].isEmpty else { return nil }
         guard let host = components.host, !host.isEmpty else { return nil }
-        let relayScheme = scheme == "https" ? "wss" : "ws"
+        // The TLS half of the pair maps to the secure socket either way round, so `https` and
+        // `wss` land on `wss` and `http` and `ws` on `ws`. What the reader typed decides
+        // whether this is plaintext, not which of the two families they happened to write it in.
+        let relayScheme = (scheme == "https" || scheme == "wss") ? "wss" : "ws"
         let port = components.port.map { ":\($0)" } ?? ""
         guard let relayURLString = normalisedRelay(
             "\(relayScheme)://\(host)\(port)",

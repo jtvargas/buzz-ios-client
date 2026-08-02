@@ -107,10 +107,24 @@ enum JoinHarness {
     static func model(
         _ environment: AppEnvironment,
         transport: ScriptedTransport,
-        initialLink: InviteLink? = nil
+        initialLink: InviteLink? = nil,
+        lookup: CommunityLookup = CommunityLookup(debounce: .zero) { _ in nil }
     ) -> JoinCommunityModel {
-        JoinCommunityModel(environment: environment, initialLink: initialLink) { relay in
+        JoinCommunityModel(environment: environment, initialLink: initialLink, lookup: lookup) { relay in
             InviteClient(relayURLString: relay, transport: transport)
+        }
+    }
+
+    /// A lookup that answers from a script instead of reaching a host.
+    ///
+    /// Its own factory because the default one is a **live** `URLSession` fetch: every model
+    /// built without this would put a real request to whatever host a fixture link names on
+    /// the wire, from a unit test, on every CI run.
+    /// - Parameter debounce: `.zero` unless the test is *about* the wait, so a suite does not
+    ///   spend a third of a second per lookup sleeping.
+    static func lookup(_ info: RelayInfo?, debounce: Duration = .zero) -> CommunityLookup {
+        CommunityLookup(debounce: debounce) { relay in
+            RelayInfoClient(relayURLString: relay, transport: ScriptedRelayInfoTransport(info: info))
         }
     }
 
@@ -122,5 +136,45 @@ enum JoinHarness {
             try await Task.sleep(for: .milliseconds(5))
         }
         Issue.record("the join policy never resolved")
+    }
+
+    /// Waits for a community lookup to answer, the same way and for the same reason.
+    static func settle(_ lookup: CommunityLookup) async throws {
+        for _ in 0 ..< 200 {
+            if !lookup.isChecking { return }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        Issue.record("the community lookup never resolved")
+    }
+}
+
+/// Answers a relay information request with one fixed document, or refuses.
+/// Records every host actually asked, so a test can assert that one was **not**.
+actor RecordingRelayInfoTransport: InviteTransport {
+    private(set) var hosts: [String] = []
+
+    func get(from url: URL, headers _: [String: String]) async throws -> (Data, Int) {
+        hosts.append(url.host() ?? "")
+        return (Data("{\"software\":\"\(RelayInfo.buzzSoftware)\"}".utf8), 200)
+    }
+
+    func post(body _: Data, to _: URL, headers _: [String: String]) async throws -> (Data, Int) {
+        (Data(), 405)
+    }
+}
+
+struct ScriptedRelayInfoTransport: InviteTransport {
+    let info: RelayInfo?
+
+    func get(from _: URL, headers _: [String: String]) async throws -> (Data, Int) {
+        guard let info else { throw TransportError.requestFailed("no such host") }
+        var fields: [String] = []
+        if let software = info.software { fields.append("\"software\":\"\(software)\"") }
+        if let icon = info.icon { fields.append("\"icon\":\"\(icon)\"") }
+        return (Data("{\(fields.joined(separator: ","))}".utf8), 200)
+    }
+
+    func post(body _: Data, to _: URL, headers _: [String: String]) async throws -> (Data, Int) {
+        (Data(), 405)
     }
 }

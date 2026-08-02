@@ -1,46 +1,91 @@
+import BuzzKit
 import Foundation
 @testable import Hive
 import Testing
 
 /// What "Add a relay" will take, and what it says when it will not.
 ///
-/// The defect these exist for was never in ``RelayEndpoint``: its converter has taken an
-/// `https://` address all along (`RelayEndpointTests.normalisesAnyRelayForm`). It was that
-/// the screen asked a *different* question — `websocketURL(from:)`, which takes sockets only
-/// — so a relay copied out of a browser's address bar left every button on the screen
-/// disabled with nothing saying why. A dead control that will not explain itself is worse
-/// than a refusal, because there is no next thing to try.
+/// Two defects, one shape. The first was never in ``RelayEndpoint``: its converter has taken
+/// an `https://` address all along (`RelayEndpointTests.normalisesAnyRelayForm`) — the screen
+/// asked a *different* question, `websocketURL(from:)`, which takes sockets only, so a relay
+/// copied out of a browser's address bar left every button disabled with nothing saying why.
 ///
-/// So these assert the rule the screen asks and the two identity paths behind it, rather
-/// than the converter they all end up in.
+/// The second was the opposite failure on the same field: an **invite link** pasted into it
+/// was accepted as a relay address, path and all, so Hive opened a websocket to a web page and
+/// sat there. Reported as "it never reached the relay to get the channels", which is exactly
+/// what that looks like from outside.
+///
+/// Both are now read by one rule (§ ``CommunityAddress``), so these assert that rule and the
+/// identity paths behind it rather than the converter they all end up in.
 @MainActor
 @Suite(.serialized)
 struct AddCommunityRelayTests {
     // MARK: - The rule the screen asks
 
     @Test func theRelayFieldTakesBothFormsARelayIsWrittenIn() {
-        #expect(OnboardingView.relayIsUsable("wss://tech.communities.buzz.xyz"))
-        #expect(OnboardingView.relayIsUsable("https://tech.communities.buzz.xyz"))
-        #expect(OnboardingView.relayIsUsable("ws://10.0.0.2:3004"))
-        #expect(OnboardingView.relayIsUsable("http://10.0.0.2:3004"))
+        #expect(CommunityAddress("wss://tech.communities.buzz.xyz") == .relay("wss://tech.communities.buzz.xyz"))
+        // The `https` spelling is taken *and reduced*: what comes back is the socket form,
+        // because that is what identifies a community.
+        #expect(CommunityAddress("https://tech.communities.buzz.xyz") == .relay("wss://tech.communities.buzz.xyz"))
+        #expect(CommunityAddress("ws://10.0.0.2:3004") == .relay("ws://10.0.0.2:3004"))
+        #expect(CommunityAddress("http://10.0.0.2:3004") == .relay("ws://10.0.0.2:3004"))
         // The rule the screen used to ask, on the same address, so the disagreement that
         // produced a permanently disabled button is written down rather than remembered.
         #expect(RelayEndpoint.websocketURL(from: "https://tech.communities.buzz.xyz") == nil)
     }
 
     @Test func textThatDoesNotNameARelayIsStillRefused() {
-        #expect(!OnboardingView.relayIsUsable(""))
+        #expect(CommunityAddress("") == .nothingYet)
         // No scheme: a bare host is ambiguous about how to reach it, and guessing is how a
         // client silently downgrades somebody's connection.
-        #expect(!OnboardingView.relayIsUsable("tech.communities.buzz.xyz"))
-        #expect(!OnboardingView.relayIsUsable("ftp://relay.example"))
+        #expect(CommunityAddress("tech.communities.buzz.xyz") == .unusable(.notAnAddress))
+        #expect(CommunityAddress("ftp://relay.example") == .unusable(.notAnAddress))
     }
 
-    /// The note under a refused field names both forms that work. Asserted because the whole
-    /// point of this change is that the reader is told what to type next.
+    /// The reported bug, from the failing side: this text used to reduce to a relay whose
+    /// address had a **web page** on the end of it, and the screen connected to it.
+    @Test func anInviteLinkInTheRelayFieldIsReadAsAnInvitation() throws {
+        let pasted = "https://buzzdir.communities.buzz.xyz/invite/v2.umQGOlbNHvzs5fDVgxWCcU1N6ZmKr_3QAqPiuM4AgV4"
+
+        guard case let .invitation(link) = CommunityAddress(pasted) else {
+            Issue.record("An invite link in the relay field must be read as an invitation")
+            return
+        }
+        #expect(link.relayURLString == "wss://buzzdir.communities.buzz.xyz")
+        #expect(link.code == "v2.umQGOlbNHvzs5fDVgxWCcU1N6ZmKr_3QAqPiuM4AgV4")
+
+        // What the old rule did with the very same text: a socket URL pointing at a page.
+        let asARelay = try #require(RelayEndpoint.websocketURLString(fromAnyRelay: pasted))
+        #expect(asARelay.hasSuffix("/invite/v2.umQGOlbNHvzs5fDVgxWCcU1N6ZmKr_3QAqPiuM4AgV4"))
+    }
+
+    /// The socket spelling of the same link — the one that was actually pasted first. It is
+    /// unambiguous, because a websocket origin has no `/invite/<code>` under it.
+    @Test func aSocketSpellingOfAnInviteIsAnInvitationToo() {
+        guard case let .invitation(link) = CommunityAddress("wss://buzzdir.communities.buzz.xyz/invite/v2.abc") else {
+            Issue.record("wss://…/invite/<code> must be read as an invitation")
+            return
+        }
+        #expect(link.relayURLString == "wss://buzzdir.communities.buzz.xyz")
+        #expect(link.code == "v2.abc")
+    }
+
+    /// A URL with a page under it that is *not* an invite is refused rather than connected to.
+    @Test func aRelayAddressWithAPageUnderItIsRefused() {
+        #expect(CommunityAddress("https://buzzdir.communities.buzz.xyz/channels") == .unusable(.hasAPageUnderIt))
+        #expect(CommunityAddress("wss://relay.example/?token=1") == .unusable(.hasAPageUnderIt))
+        // A trailing slash is the same origin, not a page, and is reduced away.
+        #expect(CommunityAddress("https://relay.example/") == .relay("wss://relay.example"))
+    }
+
+    /// Every state of the field says something, and each says something different. The dead
+    /// end being fixed is a control that refuses without a next thing to try.
     @Test func theRefusalNamesAWayForward() {
         #expect(OnboardingView.relayRefusedNote.contains("wss://"))
         #expect(OnboardingView.relayRefusedNote.contains("https://"))
+        #expect(OnboardingView.relayHasAPageNote.contains("just"))
+        #expect(OnboardingView.inviteNote.contains("invite link"))
+        #expect(OnboardingView.relayHasAPageNote != OnboardingView.relayRefusedNote)
         #expect(IdentityGateError.invalidRelayURL.message.contains("wss://"))
     }
 

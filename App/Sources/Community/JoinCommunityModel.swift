@@ -79,6 +79,14 @@ final class JoinCommunityModel {
     var identity: Identity = .new
     /// The `nsec` for ``Identity/existing``. Held only until it is handed to the signer.
     var nsec = ""
+    /// What this community should call the reader.
+    ///
+    /// Optional, and never blocks the join: a relay admits a key, not a name. But a fresh
+    /// identity has no profile at all, so without this the first thing everyone in the
+    /// community sees of a new member is a 63-character `npub` — and the moment to fix that
+    /// is the one moment the reader is already filling a form in. Published as an ordinary
+    /// kind-0 after the community is open (§ ``announceDisplayName()``).
+    var displayName = ""
     /// The reader's own answer to a relay that requires an age attestation. Never set by
     /// this app on their behalf — the relay refuses a receipt without it, and that refusal
     /// is the correct outcome of not ticking the box.
@@ -96,6 +104,10 @@ final class JoinCommunityModel {
     /// then not the operation — opening is.
     private(set) var alreadyJoined: Community?
     private(set) var error: String?
+    /// The community behind this link, as far as its own relay will say — the card at the top
+    /// of the screen. Driven from the link, so it fills in the moment one parses and before
+    /// any identity exists.
+    let lookup: CommunityLookup
 
     private let environment: AppEnvironment
     private let makeClient: @Sendable (String) -> InviteClient?
@@ -111,11 +123,13 @@ final class JoinCommunityModel {
     init(
         environment: AppEnvironment,
         initialLink: InviteLink? = nil,
+        lookup: CommunityLookup = CommunityLookup(),
         makeClient: @escaping @Sendable (String) -> InviteClient? = { relay in
             InviteClient(relayURLString: relay, transport: URLSessionHTTPTransport())
         }
     ) {
         self.environment = environment
+        self.lookup = lookup
         self.makeClient = makeClient
         if let initialLink {
             linkText = initialLink.absoluteText
@@ -154,6 +168,7 @@ final class JoinCommunityModel {
         // relay with one to a community they are already in would otherwise be left looking
         // at terms loading for a question nobody is going to answer.
         isReadingPolicy = false
+        lookup.look(at: parsed?.relayURLString)
         guard let parsed else {
             step = .needsLink
             return
@@ -189,21 +204,40 @@ final class JoinCommunityModel {
 
     // MARK: - Whether the button can be pressed
 
-    /// Whether everything this join needs has been supplied.
-    var canJoin: Bool {
-        guard step == .reviewing, link != nil else { return false }
-        if alreadyJoined != nil { return true }
+    /// What the join is still waiting for, or `nil` when it is waiting for the tap.
+    ///
+    /// Written as the *reason* rather than as a boolean because the screen has to say it. A
+    /// Join button that is grey with nothing on screen explaining it is a state a reader
+    /// cannot get out of — it was reported as "it stays disabled", twice, about two different
+    /// causes on two different screens, which is exactly what an unexplained control looks
+    /// like from outside.
+    var blocked: Blocker? {
+        guard step == .reviewing, link != nil else { return .needsLink }
+        // Already a member: nothing else on the screen is being asked for, because the
+        // operation is opening rather than joining.
+        if alreadyJoined != nil { return nil }
         if identity == .existing, (try? PrivateKey(nsec: nsec.trimmingCharacters(in: .whitespacesAndNewlines))) == nil {
-            return false
+            return .needsValidKey
         }
         // An attestation the relay requires is the reader's to make, so the button waits
         // for it rather than the relay refusing after the fact — but only when the terms
         // have not already been accepted elsewhere. A handoff carrying a receipt has been
         // through this screen's equivalent in a browser.
         if link?.policyReceipt == nil, policy?.ageAttestationRequired == true, !ageConfirmed {
-            return false
+            return .needsAgeAttestation
         }
-        return true
+        return nil
+    }
+
+    /// Whether everything this join needs has been supplied.
+    var canJoin: Bool { blocked == nil }
+
+    /// The things a join can be waiting for. One case per control on the screen, so the
+    /// sentence under the button can point at the one that is not answered yet.
+    enum Blocker: Equatable {
+        case needsLink
+        case needsValidKey
+        case needsAgeAttestation
     }
 
     /// What the button says. Named here rather than in the view because the *operation*
@@ -266,7 +300,36 @@ final class JoinCommunityModel {
         // the identity gate reports.
         if let failure = await environment.joinCommunity(relayURLString: link.relayURLString, key: key) {
             error = failure.message
+            return
         }
+        await announceDisplayName()
+    }
+
+    /// Publishes the name the reader gave, once the community they gave it to is open.
+    ///
+    /// Deliberately after the join and not part of it. It goes through the ordinary outbox,
+    /// so it is durable and retried like any other send, and a failure here is **not** shown:
+    /// the reader is already in, on the screen they asked for, and a red line about a profile
+    /// would report the join as having gone wrong. The name is theirs to correct from the
+    /// account screen either way, which is the same editor this writes through.
+    private func announceDisplayName() async {
+        let name = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, let sender = environment.engine else { return }
+        let content = ProfileMetadataContent(
+            name: name,
+            displayName: name,
+            about: nil,
+            picture: nil,
+            nip05: nil,
+            lud16: nil
+        )
+        _ = try? await sender.enqueue(
+            kind: .metadata,
+            content: content.jsonString(),
+            in: "",
+            tags: [],
+            maxContentBytes: OutboxPolicy.maxContentBytes
+        )
     }
 
     /// The acceptance to present with the claim: the one the link already carries, or one
@@ -292,74 +355,6 @@ final class JoinCommunityModel {
             return try? PrivateKey(nsec: nsec.trimmingCharacters(in: .whitespacesAndNewlines))
         }
     }
-
-    // MARK: - Saying what happened
-
-    /// Turns a refusal into a sentence naming what the reader can do about it.
-    ///
-    /// The relay's own strings are never shown. `invite_exhausted` tells someone who cannot
-    /// mint an invite nothing they can act on; "ask whoever invited you for a new link"
-    /// does.
-    static func message(for error: InviteError) -> String {
-        invitationMessage(for: error) ?? exchangeMessage(for: error)
-    }
-
-    /// The invitation itself is no good. Every one of these ends in the same place — this
-    /// link will not work again, ask for another — so they are grouped.
-    private static func invitationMessage(for error: InviteError) -> String? {
-        switch error {
-        case .expired:
-            "This invite has expired. Ask whoever invited you for a new link."
-        case .exhausted:
-            "This invite has already been used as many times as it allows. Ask for a new link."
-        case .invalidCode:
-            "This relay doesn't recognise that invite."
-        case .policyRequired:
-            "This community's terms have to be accepted before joining, and this link's "
-                + "acceptance is no longer current. Open the invite link again."
-        case .policyNotAccepted:
-            "This community's terms changed while you were reading them. Open the invite "
-                + "link again."
-        case .noPolicyConfigured:
-            "This community has no terms to accept."
-        default:
-            nil
-        }
-    }
-
-    /// The invitation may be perfectly good; the conversation with the relay is what did
-    /// not complete. These are the ones where trying again is the right advice.
-    private static func exchangeMessage(for error: InviteError) -> String {
-        switch error {
-        case .rateLimited:
-            "Too many attempts. Wait a minute and try again."
-        case .unreachable:
-            "Couldn't reach that relay. Check your connection and try again."
-        case .invalidRelayURL:
-            "That link doesn't name a relay Hive can connect to."
-        case let .httpStatus(status):
-            "The relay refused the invite (HTTP \(status))."
-        default:
-            "The relay's answer wasn't something Hive could read."
-        }
-    }
-
-    // MARK: - Copy
-
-    static let blurb =
-        "An invite link is how you get into a community that doesn't already know you. "
-            + "Paste one here, or open it from your browser."
-
-    /// The one thing a reader has to understand before a fresh key is created for them —
-    /// the same warning the Flutter client gives at the same moment
-    /// (`invite_join_sheet.dart:82`).
-    static let newIdentityWarning =
-        "A new key is created for this community, and this phone is the only copy of it. "
-            + "Back it up from your account screen once you're in."
-
-    static let existingIdentityBlurb =
-        "The community will see this key's public identity. Use a new one if you'd rather "
-            + "it not be linked to where else you use it."
 }
 
 extension InviteLink {
