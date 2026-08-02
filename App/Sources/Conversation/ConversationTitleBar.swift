@@ -119,6 +119,13 @@ struct ConversationTitleBar: ViewModifier {
     /// person and their presence dot, so a button offering to list the two of you is a
     /// control that can only tell you what you are looking at.
     var peopleAction: (() -> Void)?
+    /// How visible the heading is, for a surface that is being covered by something else.
+    ///
+    /// One `Double` rather than a `Bool`, because the only caller that spends it is the
+    /// sidebar's communities panel, and there the heading has to leave *at the speed of the
+    /// finger* — a heading that vanished the moment a drag began would be the jump the owner
+    /// asked me to remove. Defaults to fully visible, which is every other surface.
+    var opacity: Double = 1
 
     /// The bound on the text column, kept in step with the surface's width so the pill can
     /// be as wide as the bar allows in landscape without risking the overflow menu in
@@ -157,10 +164,20 @@ struct ConversationTitleBar: ViewModifier {
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button(action: action) { label }
-                        .allowsHitTesting(!isInert)
+                        // Faded out rather than removed: a toolbar item that leaves the
+                        // hierarchy takes the bar's layout with it, and the neighbours slide.
+                        .opacity(opacity)
+                        .allowsHitTesting(!isInert && opacity > 0.5)
+                        .accessibilityHidden(opacity < 0.5)
                         .accessibilityLabel(accessibilityLabel)
                         .accessibilityHint(actionHint ?? "")
                 }
+                // The glass capsule behind the heading is the bar's, not the button's, so
+                // `.opacity` on the label never touched it — it stayed as an empty grey pill
+                // sitting on top of the panel. This is the only control over it, and it is a
+                // `Visibility` rather than a number: the shape goes the moment the heading
+                // starts to leave, while the heading itself still fades with the finger.
+                .sharedBackgroundVisibility(opacity < 1 ? .hidden : .automatic)
                 // Keeps the heading a capsule of its own at the leading edge rather than
                 // letting the bar centre or stretch it, and is the seam anything added at
                 // the trailing edge later would sit the other side of.
@@ -366,6 +383,7 @@ extension View {
         title: String,
         subtitle: ConversationTitleBar.Subtitle? = nil,
         actionHint: String? = nil,
+        opacity: Double = 1,
         action: @escaping () -> Void,
         peopleAction: (() -> Void)? = nil
     ) -> some View {
@@ -375,7 +393,8 @@ extension View {
             subtitle: subtitle,
             action: action,
             actionHint: actionHint,
-            peopleAction: peopleAction
+            peopleAction: peopleAction,
+            opacity: opacity
         ))
     }
 
