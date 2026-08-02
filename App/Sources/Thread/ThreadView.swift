@@ -281,13 +281,13 @@ struct ThreadView: View {
             // starts on the same line as the header pill and the day separators above it.
             .padding(.horizontal, MessageRowMetrics.rowLeading)
 
-            // Set the opener apart from its replies. Padded, because the inter-message
-            // spacing now belongs to the enclosing stack and would otherwise leave the
-            // rule sitting against the opener it separates.
+            // Set the opener apart from its replies, and furnish that rule — see
+            // ``ThreadOpenerDivider``. The row in hand *is* the opener, by this branch.
             if row.id == model.root {
-                Divider()
-                    .padding(.horizontal, MessageRowMetrics.rowLeading)
-                    .padding(.top, MessageRowMetrics.betweenMessages)
+                ThreadOpenerDivider(
+                    replyCount: model.replyCount,
+                    onOpenActions: { messageActions = MessageActionTarget(row: row, isOwn: model.isOwn(row)) }
+                )
             }
         }
     }
