@@ -187,7 +187,7 @@ final class ChannelTimelineModel {
         typing: any EphemeralPublishing = NoopEphemeralPublisher(),
         readStateMarking: (any ReadStateMarking)? = nil,
         drafts: ComposerDrafts? = nil,
-        uploader: (any MediaUploading)? = nil,
+        uploader: @escaping MediaUploaderProvider = { nil },
         selfPubkey: String? = nil,
         pageSize: Int = 50,
         typingThrottle: Duration = .seconds(3),

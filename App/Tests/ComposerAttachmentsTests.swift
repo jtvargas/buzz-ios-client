@@ -13,6 +13,11 @@ import UIKit
 @MainActor
 @Suite("Composer attachments", .timeLimit(.minutes(1)))
 struct ComposerAttachmentsTests {
+    @MainActor
+    private final class UploaderSlot {
+        var value: (any MediaUploading)?
+    }
+
     /// Spins until `condition` holds or the deadline passes, so a test never waits
     /// on a fixed sleep for work that crosses actors.
     static func waitUntil(
@@ -34,7 +39,7 @@ struct ComposerAttachmentsTests {
     @Test("a picked photo uploads and becomes an attachment")
     func pickUploadsAndLands() async throws {
         let uploader = StubUploader()
-        let model = ComposerAttachmentsModel(uploader: uploader)
+        let model = ComposerAttachmentsModel(uploader: { uploader })
 
         model.add([Self.item()])
 
@@ -59,7 +64,7 @@ struct ComposerAttachmentsTests {
     @Test("the in-flight window opens on the pick and closes on the answer")
     func attachingWindow() async throws {
         let uploader = StubUploader()
-        let model = ComposerAttachmentsModel(uploader: uploader)
+        let model = ComposerAttachmentsModel(uploader: { uploader })
 
         model.add([Self.item()])
         #expect(model.isAttaching)
@@ -77,7 +82,7 @@ struct ComposerAttachmentsTests {
     @Test("an uploaded picture alone is enough to send")
     func pictureAloneIsSendable() async throws {
         let uploader = StubUploader()
-        let model = ComposerAttachmentsModel(uploader: uploader)
+        let model = ComposerAttachmentsModel(uploader: { uploader })
 
         model.add([Self.item()])
         await Self.waitUntil { await uploader.parkedCount == 1 }
@@ -92,7 +97,7 @@ struct ComposerAttachmentsTests {
     @Test("a tile removed mid-upload does not come back when the upload lands")
     func removalDuringUploadSticks() async throws {
         let uploader = StubUploader()
-        let model = ComposerAttachmentsModel(uploader: uploader)
+        let model = ComposerAttachmentsModel(uploader: { uploader })
 
         model.add([Self.item()])
         let id = try #require(model.attachments.first?.id)
@@ -111,7 +116,7 @@ struct ComposerAttachmentsTests {
     @Test("a refused upload leaves no tile and says why")
     func refusedUploadSurfaces() async throws {
         let uploader = StubUploader()
-        let model = ComposerAttachmentsModel(uploader: uploader)
+        let model = ComposerAttachmentsModel(uploader: { uploader })
 
         model.add([Self.item()])
         await Self.waitUntil { await uploader.parkedCount == 1 }
@@ -125,7 +130,7 @@ struct ComposerAttachmentsTests {
     @Test("a pick that yields no bytes never reaches the uploader")
     func failedLoadNeverUploads() async throws {
         let uploader = StubUploader()
-        let model = ComposerAttachmentsModel(uploader: uploader)
+        let model = ComposerAttachmentsModel(uploader: { uploader })
 
         model.add([StubPickedItem(data: Data(), failsToLoad: true)])
         await Self.waitUntil { model.uploadError != nil }
@@ -140,7 +145,7 @@ struct ComposerAttachmentsTests {
     @Test("something that is not a picture is refused before it is uploaded")
     func notAPictureIsRefusedLocally() async throws {
         let uploader = StubUploader()
-        let model = ComposerAttachmentsModel(uploader: uploader)
+        let model = ComposerAttachmentsModel(uploader: { uploader })
 
         model.add([StubPickedItem(data: Data("%PDF-1.7 not a picture".utf8))])
         await Self.waitUntil { model.uploadError != nil }
@@ -156,7 +161,7 @@ struct ComposerAttachmentsTests {
     @Test("no more than three uploads run at once")
     func concurrencyIsCapped() async throws {
         let uploader = StubUploader()
-        let model = ComposerAttachmentsModel(uploader: uploader)
+        let model = ComposerAttachmentsModel(uploader: { uploader })
         let picked = ComposerAttachmentsModel.selectionLimit
 
         model.add((0 ..< picked).map { _ in Self.item() })
@@ -181,7 +186,7 @@ struct ComposerAttachmentsTests {
     @Test("taking attachments for a send empties the composer")
     func takeForSendEmpties() async throws {
         let uploader = StubUploader()
-        let model = ComposerAttachmentsModel(uploader: uploader)
+        let model = ComposerAttachmentsModel(uploader: { uploader })
 
         model.add([Self.item(), Self.item()])
         while model.isAttaching {
@@ -202,7 +207,7 @@ struct ComposerAttachmentsTests {
     /// the pictures back too, or an over-ceiling message loses them silently.
     @Test("a refused send puts the pictures back")
     func restoreAfterRefusal() async throws {
-        let model = ComposerAttachmentsModel(uploader: StubUploader())
+        let model = ComposerAttachmentsModel(uploader: { StubUploader() })
         let descriptor = StubUploader.descriptor(key: "one", mimeType: "image/png", size: 10)
 
         model.restore([descriptor])
@@ -211,22 +216,44 @@ struct ComposerAttachmentsTests {
         #expect(!model.isAttaching)
     }
 
-    @Test("with no relay configured, a pick says so rather than doing nothing")
+    @Test("with no session mounted, a pick says so rather than doing nothing")
     func noUploaderIsReported() async throws {
-        let model = ComposerAttachmentsModel(uploader: nil)
+        let model = ComposerAttachmentsModel(uploader: { nil })
 
         model.add([Self.item()])
         await Self.waitUntil { model.uploadError != nil }
 
         #expect(model.attachments.isEmpty)
-        #expect(model.uploadError == "Not connected to a relay yet.")
+        #expect(model.uploadError == "No session is mounted yet.")
+    }
+
+    /// The conversation model is allowed to exist before the session finishes mounting.
+    /// The provider must therefore be read when the author picks, not when the screen is
+    /// constructed — this is the regression seam for the stale-uploader defect.
+    @Test("a screen built before its session mounts can attach once the uploader exists")
+    func uploaderIsResolvedAtPickTime() async throws {
+        let slot = UploaderSlot()
+        let model = ComposerAttachmentsModel(uploader: { slot.value })
+
+        #expect(slot.value == nil)
+
+        let uploader = StubUploader()
+        slot.value = uploader
+        model.add([Self.item()])
+
+        await Self.waitUntil { await uploader.parkedCount == 1 }
+        await uploader.releaseAll()
+        await Self.waitUntil { !model.isAttaching }
+
+        #expect(model.hasSendableContent)
+        #expect(model.uploadError == nil)
     }
 
     // MARK: - The cap
 
     @Test("more pictures than the cap keeps the first five and says so")
     func capIsEnforcedOnAdd() async throws {
-        let model = ComposerAttachmentsModel(uploader: StubUploader())
+        let model = ComposerAttachmentsModel(uploader: { StubUploader() })
 
         model.add((0 ..< 8).map { _ in Self.item() })
 
@@ -239,7 +266,7 @@ struct ComposerAttachmentsTests {
     /// on the bar. A paste comes through the same door and would otherwise walk past five.
     @Test("the cap counts what is already attached, not one visit to the picker")
     func capSpansSeparateAdds() async throws {
-        let model = ComposerAttachmentsModel(uploader: StubUploader())
+        let model = ComposerAttachmentsModel(uploader: { StubUploader() })
 
         model.add((0 ..< 3).map { _ in Self.item() })
         model.add((0 ..< 3).map { _ in Self.item() })
@@ -250,7 +277,7 @@ struct ComposerAttachmentsTests {
 
     @Test("a composer with room takes everything offered and says nothing")
     func underTheCapIsSilent() async throws {
-        let model = ComposerAttachmentsModel(uploader: StubUploader())
+        let model = ComposerAttachmentsModel(uploader: { StubUploader() })
 
         model.add((0 ..< 4).map { _ in Self.item() })
 
@@ -270,7 +297,7 @@ struct ComposerAttachmentsTests {
     @Test("a source that never answers gives up instead of spinning for ever")
     func sourceDeadlineFires() async throws {
         let model = ComposerAttachmentsModel(
-            uploader: StubUploader(),
+            uploader: { StubUploader() },
             sourceDeadline: .milliseconds(40)
         )
 
@@ -290,7 +317,7 @@ struct ComposerAttachmentsTests {
     func uploadDeadlineFires() async throws {
         let uploader = StubUploader()
         let model = ComposerAttachmentsModel(
-            uploader: uploader,
+            uploader: { uploader },
             uploadDeadline: .milliseconds(40)
         )
 
@@ -323,7 +350,7 @@ struct ComposerAttachmentsTests {
     @Test("an upload that lands inside the deadline is unaffected")
     func deadlineDoesNotFireOnASuccess() async throws {
         let uploader = StubUploader()
-        let model = ComposerAttachmentsModel(uploader: uploader, uploadDeadline: .seconds(30))
+        let model = ComposerAttachmentsModel(uploader: { uploader }, uploadDeadline: .seconds(30))
 
         model.add([Self.item()])
         await Self.waitUntil { await uploader.parkedCount == 1 }
@@ -342,7 +369,7 @@ struct ComposerAttachmentsTests {
     @Test("the bar declares a height change on the first picture and on the last, never in between")
     func barRevisionFollowsTheBarsHeight() async throws {
         let uploader = StubUploader()
-        let model = ComposerAttachmentsModel(uploader: uploader)
+        let model = ComposerAttachmentsModel(uploader: { uploader })
         let resting = model.barRevision
 
         model.add([Self.item()])
@@ -365,7 +392,7 @@ struct ComposerAttachmentsTests {
     /// list empty at both ends.
     @Test("a failed upload declares its own height change")
     func barRevisionCoversTheErrorLine() async throws {
-        let model = ComposerAttachmentsModel(uploader: nil)
+        let model = ComposerAttachmentsModel(uploader: { nil })
         let resting = model.barRevision
 
         model.add([Self.item()])

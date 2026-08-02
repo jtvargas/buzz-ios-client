@@ -77,7 +77,7 @@ struct ComposerPasteboardTests {
     /// on the picker.
     @Test("a paste is bounded by the same five-picture cap as a pick")
     func pasteObeysTheCap() async throws {
-        let model = ComposerAttachmentsModel(uploader: StubUploader())
+        let model = ComposerAttachmentsModel(uploader: { StubUploader() })
         let pasted = (0 ..< 7).map { _ in PastedPicture(data: TestPicture.png()) }
 
         model.add(pasted)

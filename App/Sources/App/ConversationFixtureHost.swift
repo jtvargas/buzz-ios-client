@@ -101,7 +101,7 @@ struct ConversationFixtureHost: View {
                 sender: prepared.sender,
                 opener: opener,
                 presence: presence,
-                uploader: uploader,
+                uploader: { uploader },
                 selfPubkey: nil
             )
         case .channel:
@@ -113,7 +113,7 @@ struct ConversationFixtureHost: View {
                 readStateMarking: nil,
                 opener: opener,
                 presence: presence,
-                uploader: uploader,
+                uploader: { uploader },
                 selfPubkey: nil
             )
         }
