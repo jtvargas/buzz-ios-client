@@ -118,8 +118,9 @@ struct ThreadsView: View {
                     selfPubkey: selfPubkey,
                     names: names,
                     isUnseen: isUnseen(activity),
-                    onOpen: { open(activity, at: .opener) },
-                    onReply: { open(activity, at: .latestReply) },
+                    onOpen: { open(activity, at: .opener, focusesComposer: false) },
+                    onOpenLatest: { open(activity, at: .latestReply, focusesComposer: false) },
+                    onReply: { open(activity, at: .latestReply, focusesComposer: true) },
                     onMarkAsRead: { markAsRead(activity) },
                     onOpenProfile: { profilePeer = ProfilePeer(pubkey: $0) }
                 )
@@ -164,11 +165,16 @@ struct ThreadsView: View {
         }
     }
 
-    private func open(_ activity: ThreadActivity, at anchor: ThreadLanding) {
+    private func open(
+        _ activity: ThreadActivity,
+        at anchor: ThreadLanding,
+        focusesComposer: Bool
+    ) {
         openedThread = ThreadRoute(
             root: activity.rootID,
             channel: activity.channelID,
-            anchor: anchor
+            anchor: anchor,
+            focusesComposer: focusesComposer
         )
     }
 

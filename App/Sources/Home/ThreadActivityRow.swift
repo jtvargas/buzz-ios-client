@@ -18,6 +18,9 @@ struct ThreadActivityRow: View {
     /// Whether this thread holds replies the reader has not seen.
     let isUnseen: Bool
     let onOpen: () -> Void
+    /// Opens the newest reply for reading, without taking the composer focus.
+    let onOpenLatest: () -> Void
+    /// Opens the newest reply with the composer focused for an immediate reply.
     let onReply: () -> Void
     /// Clears ``isUnseen`` in place, without opening the thread.
     let onMarkAsRead: () -> Void
@@ -78,7 +81,7 @@ struct ThreadActivityRow: View {
                     mentions: replyMentions,
                     selfPubkey: selfPubkey,
                     onRetry: { _ in },
-                    onOpenThread: onReply,
+                    onOpenThread: onOpenLatest,
                     onOpenProfile: onOpenProfile,
                     conversation: conversation,
                     contentLineLimit: Self.messageLineLimit

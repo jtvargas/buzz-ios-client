@@ -16,8 +16,10 @@ struct ThreadRoute: Hashable, Identifiable {
     /// reached from a message in its own channel should open — the reader is already
     /// looking at the opener.
     var anchor: ThreadLanding = .latestReply
-    /// Whether the reply composer takes the keyboard once the thread has settled. Set only
-    /// by the actions sheet's "Reply in thread", which is a request to write.
+    /// Whether the reply composer takes the keyboard once the thread has settled. Set by the
+    /// two arrivals that are a request to *write* — the actions sheet's "Reply in thread"
+    /// and the Threads screen's **Reply** — and by neither of the arrivals that are a request
+    /// to read. Opening a thread to catch up must not take the keyboard.
     var focusesComposer: Bool = false
 
     /// Deliberately the root alone, and neither the anchor nor the focus with it. A thread is

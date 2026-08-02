@@ -107,6 +107,9 @@ struct TokenTextView: UIViewRepresentable {
         // anything and without telling anyone. Applying focus then is how the two
         // states start disagreeing, so nothing is applied until there is a window.
         guard view.window != nil else { return }
+        if coordinator.consumeFocusLossOutsideReconciliation() {
+            return
+        }
         if !isEditable, view.isFirstResponder {
             coordinator.reconcilingFocus { _ = view.resignFirstResponder() }
         } else if isEditable, isFocused, !view.isFirstResponder {
@@ -160,6 +163,11 @@ struct TokenTextView: UIViewRepresentable {
         private var pendingNativeDocument: MentionDraft?
         /// True only while a SwiftUI-requested responder change is being applied.
         private var isReconcilingFocus = false
+        /// UIKit can end editing while SwiftUI is still applying the transaction that
+        /// requested focus. Keep that loss authoritative for the next update pass: the
+        /// bound flag is cleared immediately, and the stale pass must not raise the
+        /// responder again before SwiftUI publishes the new value.
+        private var focusWasLostOutsideReconciliation = false
         /// True only while ``render`` is replacing the text view's contents.
         private var isRendering = false
 
@@ -180,6 +188,11 @@ struct TokenTextView: UIViewRepresentable {
             var transaction = Transaction()
             transaction.disablesAnimations = true
             withTransaction(transaction, body)
+        }
+
+        func consumeFocusLossOutsideReconciliation() -> Bool {
+            defer { focusWasLostOutsideReconciliation = false }
+            return focusWasLostOutsideReconciliation
         }
 
         func textView(
@@ -255,12 +268,14 @@ struct TokenTextView: UIViewRepresentable {
 
         func textViewDidBeginEditing(_: UITextView) {
             guard !isReconcilingFocus else { return }
+            focusWasLostOutsideReconciliation = false
             parent.isFocused = true
         }
 
         func textViewDidEndEditing(_: UITextView) {
             guard !isReconcilingFocus else { return }
             parent.isFocused = false
+            focusWasLostOutsideReconciliation = true
         }
 
         func render(_ document: MentionDraft, in view: UITextView, selection: Int) {
