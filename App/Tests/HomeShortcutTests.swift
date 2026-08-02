@@ -227,7 +227,6 @@ struct HomeShortcutTests {
         defer { temp.remove() }
         let store = try temp.open()
         let relay = try Fixture()
-        let asker = try Fixture()
         let answerer = try Fixture()
         let reader = try Fixture()
 
@@ -235,7 +234,7 @@ struct HomeShortcutTests {
         let run = Task { await model.run() }
         defer { run.cancel() }
 
-        let opener = try asker.event(
+        let opener = try reader.event(
             .channelMessage, "what do we do about @reader",
             tags: [["h", "general"], ["p", reader.pubkey]], at: 1_000
         )
@@ -265,7 +264,7 @@ struct HomeShortcutTests {
 
         // The people in the thread: whoever opened it, then whoever replied — the opener
         // first and exactly once, however many times each of them spoke.
-        #expect(model.people(in: thread) == [asker.pubkey, answerer.pubkey])
+        #expect(model.people(in: thread) == [reader.pubkey, answerer.pubkey])
     }
 
     @Test("someone who opened a thread and then replied in it is one person, once")

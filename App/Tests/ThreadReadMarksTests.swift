@@ -128,7 +128,6 @@ struct ThreadReadMarksTests {
         defer { temp.remove() }
         let store = try temp.open()
         let relay = try Fixture()
-        let asker = try Fixture()
         let answerer = try Fixture()
         let reader = try Fixture()
 
@@ -141,7 +140,7 @@ struct ThreadReadMarksTests {
         let run = Task { await model.run() }
         defer { run.cancel() }
 
-        let opener = try asker.message("question", in: "general", at: 1_000)
+        let opener = try reader.message("question", in: "general", at: 1_000)
         _ = try await store.ingest(batch: [
             try relay.channelMetadata("general", name: "General", at: 500),
             opener,

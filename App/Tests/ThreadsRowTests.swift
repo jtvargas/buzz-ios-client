@@ -97,7 +97,7 @@ struct ThreadsRowTests {
         // Two messages, each mentioning somebody different. Before the row drew the reply,
         // only the opener's ids went into the batched read — so a reply's `@`-token had no
         // ref to resolve against and rendered as a tinted key prefix or as nothing at all.
-        let opener = try asker.event(
+        let opener = try reader.event(
             .channelMessage, "what do we do about @reader",
             tags: [["h", "general"], ["p", reader.pubkey]], at: 1_000
         )
