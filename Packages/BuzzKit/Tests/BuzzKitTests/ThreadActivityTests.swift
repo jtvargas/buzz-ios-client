@@ -27,6 +27,34 @@ struct ThreadActivityTests {
 
     // MARK: - Shape
 
+    @Test("threads include only roots or replies written by the reader")
+    func filtersToReaderParticipation() async throws {
+        let database = TempDatabase()
+        defer { database.remove() }
+        let store = try database.open()
+        let relay = try Fixture()
+        let reader = try Fixture()
+        let peer = try Fixture()
+        let other = try Fixture()
+
+        let readerOpened = try reader.message("my question", in: "room-1", at: 1000)
+        let replyOpened = try peer.message("their question", in: "room-1", at: 1100)
+        let otherOpened = try peer.message("someone else's question", in: "room-1", at: 1200)
+        _ = try await store.ingest(batch: [
+            try meta(relay, "room-1", name: "One"),
+            readerOpened,
+            try reply(peer, "their answer", to: readerOpened, at: 2000),
+            replyOpened,
+            try reply(reader, "my answer", to: replyOpened, at: 3000),
+            otherOpened,
+            try reply(other, "another answer", to: otherOpened, at: 4000),
+        ], phase: .backfill)
+
+        let activity = try store.threadActivity(selfPubkey: reader.pubkey, limit: 10)
+        #expect(activity.count == 2)
+        #expect(Set(activity.map(\.rootID)) == Set([readerOpened.id, replyOpened.id]))
+    }
+
     @Test("a thread carries its opener, its newest reply, and what is between them")
     func activityShape() async throws {
         let database = TempDatabase()

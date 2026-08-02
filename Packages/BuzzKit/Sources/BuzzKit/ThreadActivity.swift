@@ -3,7 +3,9 @@ import GRDB
 import NostrCore
 
 /// One thread as a "what has been happening" list needs it: the message that opened it,
-/// the newest reply to it, and how much sits between them.
+/// the newest reply to it, and how much sits between them. When a local identity is
+/// available, the read contains only threads whose root or surviving replies that identity
+/// authored; a missing identity keeps the keyless, all-authors fallback.
 ///
 /// Both messages are ordinary ``TimelineRow``s, resolved through the same read the
 /// timeline and a thread use — so the text here is the text there, with the newest
@@ -149,8 +151,9 @@ public extension BuzzEventStore {
     /// `ValueObservation` can track the tables behind it.
     ///
     /// - Parameters:
-    ///   - selfPubkey: the local identity, so your own replies are not "new" to you.
-    ///     `nil` counts every author, the same keyless fallback the unread count takes.
+    ///   - selfPubkey: the local identity, so your own replies are not "new" to you and the
+    ///     Threads screen can keep only threads you participated in. `nil` counts every
+    ///     author, the same keyless fallback the unread count takes.
     ///   - limit: how many threads to return. No default: the number belongs to the
     ///     surface that decides how far its list reaches.
     nonisolated func threadActivity(selfPubkey: String?, limit: Int) throws -> [ThreadActivity] {
@@ -398,6 +401,19 @@ extension BuzzEventStore {
           AND root.h IS NOT NULL
           -- A thread whose opener was deleted is not one anybody can usefully be sent to.
           AND NOT \(deletionApplies(target: "root.id", author: "root.pubkey", owner: "reo.owner_pubkey"))
+          -- With an identity, Threads is a participation list: the reader wrote the root
+          -- or at least one surviving reply. A nil identity is the library's keyless
+          -- fallback and deliberately remains unfiltered.
+          AND (
+                :selfPubkey IS NULL
+                OR root.pubkey = :selfPubkey
+                OR EXISTS (
+                    SELECT 1
+                    FROM reply participant
+                    WHERE participant.root_id = tally.root_id
+                      AND participant.pubkey = :selfPubkey
+                )
+              )
         ORDER BY latest_reply_at DESC, latest_reply_id DESC
         LIMIT :limit
         """

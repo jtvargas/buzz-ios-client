@@ -130,11 +130,11 @@ struct ThreadUnreadFrontierTests {
         let store = try database.open()
         let relay = try Fixture()
         let peer = try Fixture()
-        let selfKey = try PrivateKey()
-        let selfPubkey = selfKey.publicKey.hex
+        let reader = try Fixture()
+        let selfPubkey = reader.pubkey
 
-        let doomed = try peer.message("answered twice", in: "room-1", at: 1000)
-        let live = try peer.message("answered once", in: "room-1", at: 1100)
+        let doomed = try reader.message("answered twice", in: "room-1", at: 1000)
+        let live = try reader.message("answered once", in: "room-1", at: 1100)
         let doomedReply = try reply(peer, "about to go", to: doomed, at: 2000)
         _ = try await store.ingest(batch: [
             try meta(relay, "room-1", name: "One"),
