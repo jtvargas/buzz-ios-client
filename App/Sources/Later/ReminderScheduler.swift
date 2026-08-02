@@ -127,10 +127,13 @@ extension ReminderScheduler {
     /// The owner's wording, kept verbatim.
     static let title = "You asked me to remind you"
 
-    /// How much of the message rides in the alert. The owner's number.
-    static let previewLimit = 40
+    /// How much of the message rides in the alert. The owner's number — 40 at first, then
+    /// 100 once he had read a few real ones. It stays under ``Reminders/previewLimit``,
+    /// which is what the stored payload actually holds, so raising it spends text that is
+    /// already there rather than needing the message back.
+    static let previewLimit = 100
 
-    /// `@Name: the first forty characters`.
+    /// `@Name: the first hundred characters`.
     ///
     /// The name is the *message author's*, so a reminder about someone else's message says
     /// whose it was. The owner's example read `@Jarvis:` because the message he saved was

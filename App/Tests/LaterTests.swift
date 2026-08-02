@@ -94,14 +94,17 @@ struct LaterTests {
 
     // MARK: - The alert
 
-    /// The owner's wording, and the owner's number, both kept verbatim.
-    @Test("the alert names the author and clips the message at forty characters")
+    /// The owner's wording, and the owner's number, both kept verbatim. The number is the
+    /// one he raised it to after reading real alerts, and it has to stay under the stored
+    /// payload's own limit or the alert would promise text the reminder does not carry.
+    @Test("the alert names the author and clips the message at a hundred characters")
     func alertCopy() {
         #expect(ReminderScheduler.title == "You asked me to remind you")
-        #expect(ReminderScheduler.previewLimit == 40)
+        #expect(ReminderScheduler.previewLimit == 100)
+        #expect(ReminderScheduler.previewLimit <= Reminders.previewLimit)
 
-        let long = String(repeating: "a", count: 60)
-        let clipped = String(repeating: "a", count: 40)
+        let long = String(repeating: "a", count: 130)
+        let clipped = String(repeating: "a", count: 100)
         #expect(ReminderScheduler.body(authorName: "Jarvis", preview: long) == "@Jarvis: \(clipped)")
         #expect(ReminderScheduler.body(authorName: "Bumble", preview: "  short  ") == "@Bumble: short")
     }
