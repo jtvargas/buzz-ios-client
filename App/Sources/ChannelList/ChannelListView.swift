@@ -83,6 +83,10 @@ struct ChannelListView: View {
     @State private var path: [ConversationRoute] = []
     /// Where the reader last was, for the leftward drag that takes them back to it.
     @State private var resume = ConversationResume()
+    /// How far the communities panel is out — 0 closed, 1 over the sidebar. Held here rather
+    /// than inside the panel because three things move it: the rightward drag, the heading's
+    /// tap, and the panel's own strip.
+    @State private var workspacePanel = WorkspacePanelState()
 
     // Expansion persists across launches, one `UserDefaults` flag per section. The keys
     // come from ``SidebarSection/expansionStorageKey`` so the view and the tests that
@@ -148,12 +152,25 @@ struct ChannelListView: View {
                     title: environment.communities.active?.name ?? CommunityIdentity.name(),
                     actionHint: "Double tap to switch community"
                 ) {
-                    environment.communitySheet = .switcher
+                    // The same panel the rightward drag brings, arriving under its own
+                    // animation rather than a finger's — a heading that opened something
+                    // *else* would make the two ways in two different features.
+                    workspacePanel.setOpen(true)
                 }
+                // The communities, over the sidebar. Both layers are declared here, in this
+                // order, so the panel is above the darkness it casts.
+                .overlay { WorkspacePanelScrim(state: workspacePanel) }
+                .overlay(alignment: .leading) { workspacePanelOverlay }
+                .workspacePanelDrag(workspacePanel, isAvailable: path.isEmpty && openedThread == nil)
                 // Drag left anywhere here to reopen the conversation just left — the
                 // system's back swipe, mirrored. Declared inside the stack because the
                 // transition it drives is that stack's own push.
-                .sidebarForwardSwipe(reopening: resumable) { route in
+                //
+                // Refused outright while the panel is out: leftward is how the panel is
+                // pushed back, and two recognisers that both claim simultaneity with pans
+                // would otherwise both run — closing the panel *and* opening a conversation
+                // behind it on the same drag.
+                .sidebarForwardSwipe(reopening: workspacePanel.isOpen ? nil : resumable) { route in
                     path = route.pushed(onto: path)
                 } close: {
                     path = []
@@ -215,7 +232,16 @@ struct ChannelListView: View {
         }
         // Declared here on the stack and by nothing below it — ``ChannelListTabBar`` holds
         // the measurements that put it here rather than on the pushed views.
-        .toolbar(ChannelListTabBar.visibility(conversations: path, openedThread: openedThread), for: .tabBar)
+        //
+        // Hidden outright while the communities panel is out, because that panel is
+        // full-height: a tab bar drawn over its bottom edge would put Home and Activity on
+        // top of **Add a relay**, and the reference the owner gave has nothing there.
+        .toolbar(
+            workspacePanel.isOpen
+                ? .hidden
+                : ChannelListTabBar.visibility(conversations: path, openedThread: openedThread),
+            for: .tabBar
+        )
         // The five app-wide values, injected once here for the reason in this view's own
         // documentation: a value injected *inside* the destination never reaches the pushed
         // view. So every surface names an identity identically (§4), ages its timestamps off
@@ -477,6 +503,26 @@ private extension ChannelListView {
         HomeShortcutCards(count: count(for:), isCalling: isCalling(_:), press: press(_:))
             .listRowInsets(Self.cardsInsets)
             .listRowSeparator(.hidden)
+    }
+
+    /// The communities panel, sized against the real screen.
+    ///
+    /// A `GeometryReader` rather than a constant, because the drag's arithmetic and what is
+    /// drawn have to agree on one number: 85% of a guess is a panel that arrives before or
+    /// after the finger does, and the mismatch is exactly the thing a hand notices.
+    ///
+    /// Inert until it is out. At rest the panel sits off the leading edge with its strip
+    /// lying over the left of the sidebar, and a strip that could be tapped there would be an
+    /// invisible control over the channel rows.
+    var workspacePanelOverlay: some View {
+        GeometryReader { proxy in
+            WorkspacePanel(
+                state: workspacePanel,
+                width: WorkspacePanelGeometry.width(inScreenOf: proxy.size.width)
+            )
+        }
+        .ignoresSafeArea()
+        .allowsHitTesting(workspacePanel.isOpen)
     }
 
     /// The Later screen. Lifted out of the stack's builder because that builder is already
