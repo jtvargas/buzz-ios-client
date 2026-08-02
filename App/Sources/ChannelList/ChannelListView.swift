@@ -258,6 +258,13 @@ struct ChannelListView: View {
                 : ChannelListTabBar.visibility(conversations: path, openedThread: openedThread),
             for: .tabBar
         )
+        // And the navigation bar's own material with it, though the bar itself stays.
+        //
+        // The bar draws *over* the panel — the panel is content inside this stack — so its
+        // blur was landing on the panel's own heading and haloing it. Hiding the background
+        // rather than the bar is deliberate: hiding the bar would reclaim its height and
+        // shift the sidebar underneath, which is visible in the strip beside the panel.
+        .toolbarBackgroundVisibility(workspacePanel.isOpen ? .hidden : .automatic, for: .navigationBar)
         // The five app-wide values, injected once here for the reason in this view's own
         // documentation: a value injected *inside* the destination never reaches the pushed
         // view. So every surface names an identity identically (§4), ages its timestamps off

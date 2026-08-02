@@ -72,7 +72,7 @@ struct WorkspacePanel: View {
                 .font(.hive(.title3, weight: .bold))
                 .padding(.horizontal, Self.inset)
                 .padding(.top, Self.headingTop)
-                .padding(.bottom, 12)
+                .padding(.bottom, Self.underHeading)
 
             ScrollView {
                 LazyVStack(spacing: 2) {
@@ -82,6 +82,12 @@ struct WorkspacePanel: View {
                 }
                 .padding(.horizontal, Self.rowInset)
             }
+            // iOS 26 draws a soft dark band where a scroll view's content meets its top
+            // edge. On a list that begins directly under a heading it reads as a shadow the
+            // heading is casting onto the first row, which is what the owner saw. There is
+            // nothing above this list for content to disappear under, so the effect has
+            // nothing to explain.
+            .scrollEdgeEffectHidden(true, for: .top)
 
             Divider()
             actions
@@ -208,7 +214,11 @@ struct WorkspacePanel: View {
     /// The rows sit a little further out than the heading, because each carries its own
     /// selected background and that background's edge is what has to line up.
     private static let rowInset: CGFloat = 10
-    private static let headingTop: CGFloat = 64
+    private static let headingTop: CGFloat = 72
+    /// Between the heading and the first community. The rows carry their own selected
+    /// background, so a tight gap put that background's top edge against the heading's
+    /// baseline and the two read as one block.
+    private static let underHeading: CGFloat = 22
     private static let actionsBottom: CGFloat = 44
     private static let corner: CGFloat = 18
 }
