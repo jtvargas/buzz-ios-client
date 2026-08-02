@@ -81,9 +81,13 @@ struct EmojiPickerView: View {
 
     /// The search field, drawn rather than asked for.
     ///
-    /// `.searchable` cannot go here — it places itself, and every placement it offers is in
-    /// a bar at the top. So this is a plain field in the shape the platform draws one, on
-    /// the same `.bar` material the pinned section headings use.
+    /// `.searchable` cannot go here — it places itself, and every placement it offers is a
+    /// bar at the top. Drawing it by hand means drawing back what the system field gave for
+    /// free, and the part that matters is the **glass**: the shell is
+    /// ``glassEffect(_:in:)`` on a capsule, floating clear of the grid with nothing opaque
+    /// behind it, so glyphs scrolling underneath refract instead of being hidden by a slab.
+    /// That is ``MessageComposerView``'s shape — the app's other hand-built field over
+    /// scrolling content — down to the 12/8 float.
     private var bottomSearchBar: some View {
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass")
@@ -106,12 +110,15 @@ struct EmojiPickerView: View {
                 .accessibilityLabel("Clear search")
             }
         }
+        .padding(.horizontal, 14)
+        // The platform minimum, and what makes this read as a search bar rather than as a
+        // text field someone put at the bottom.
+        .frame(minHeight: 44)
+        // `.interactive()` because this one is tapped: the glass answers the finger the way
+        // every other control in the app does.
+        .glassEffect(.regular.interactive(), in: .capsule)
         .padding(.horizontal, 12)
-        .frame(minHeight: 40)
-        .background(Capsule().fill(Color(.tertiarySystemFill)))
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .background(.bar)
+        .padding(.vertical, 8)
         .animation(.snappy(duration: 0.2), value: query.isEmpty)
     }
 
