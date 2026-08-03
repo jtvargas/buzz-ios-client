@@ -1,0 +1,91 @@
+import SwiftUI
+
+/// A named ground-and-accent pair the reader can choose in Settings.
+///
+/// # Where these come from
+///
+/// The backgrounds are taken verbatim from the mobile Buzz client's theme catalogue
+/// (`mobile/lib/shared/theme/theme_catalog.dart`), which carries 60 Shiki syntax themes as
+/// `bg`/`fg`/`comment` triples and calls one dark when its background luminance is under 0.5.
+/// Forty-three of them are dark; these are the ones with the most recognisable names and the
+/// most distinct backgrounds, so the picker reads as a set of real themes rather than a row of
+/// near-identical greys.
+///
+/// # Why the accents are not from that catalogue
+///
+/// Upstream keeps the accent on a *separate* axis: nine fixed accents in `accent_colors.dart`
+/// (Blue, Cyan, … Black), chosen independently of the theme, defaulting to Black — which in a
+/// dark scheme resolves to the foreground, i.e. off-white. Faithful, and useless for a proof of
+/// concept about accent colour, since every theme would look the same.
+///
+/// So each theme here carries its own palette's signature colour instead — Catppuccin's mauve,
+/// Gruvbox's orange, Nord's frost blue. Those are the canonical accents those palettes are known
+/// by, not values extracted from upstream's file. It is the one place this deliberately diverges,
+/// and it is what makes choosing a theme visibly change two things rather than one.
+struct HiveTheme: Identifiable, Equatable, Sendable {
+    /// The upstream catalogue's own name, and the persisted value. Stable across releases:
+    /// changing one silently resets the reader's choice to the default.
+    let id: String
+    /// What Settings calls it.
+    let name: String
+    /// The screen ground — upstream's `bg`, unmodified.
+    let background: Color
+    /// The palette's signature colour, drawn wherever the app draws "its" colour.
+    let accent: Color
+
+    static func == (lhs: HiveTheme, rhs: HiveTheme) -> Bool { lhs.id == rhs.id }
+}
+
+extension HiveTheme {
+    /// Hive's own colours, unchanged — `hiveNight` and the honey amber in the asset catalogue.
+    /// First in the list and the default, so an install that has never opened Settings looks
+    /// exactly as it did before this existed.
+    static let hive = HiveTheme(
+        id: "hive",
+        name: "Hive",
+        background: Color.hiveNight,
+        accent: Color(HiveAccent.assetName, bundle: .main)
+    )
+
+    /// The twelve alternatives, ordered light-to-dark by background so the picker reads as a
+    /// gradient rather than an arbitrary list.
+    static let all: [HiveTheme] = [
+        .hive,
+        HiveTheme(id: "vitesse-black", name: "Vitesse Black", background: .hex(0x000000), accent: .hex(0x4D9375)),
+        HiveTheme(id: "night-owl", name: "Night Owl", background: .hex(0x011627), accent: .hex(0x82AAFF)),
+        HiveTheme(id: "github-dark-default", name: "GitHub Dark", background: .hex(0x0D1117), accent: .hex(0x58A6FF)),
+        HiveTheme(id: "rose-pine", name: "Rosé Pine", background: .hex(0x191724), accent: .hex(0xC4A7E7)),
+        HiveTheme(id: "tokyo-night", name: "Tokyo Night", background: .hex(0x1A1B26), accent: .hex(0x7AA2F7)),
+        HiveTheme(id: "catppuccin-mocha", name: "Catppuccin Mocha", background: .hex(0x1E1E2E), accent: .hex(0xCBA6F7)),
+        HiveTheme(id: "solarized-dark", name: "Solarized Dark", background: .hex(0x002B36), accent: .hex(0x2AA198)),
+        HiveTheme(id: "monokai", name: "Monokai", background: .hex(0x272822), accent: .hex(0xA6E22E)),
+        HiveTheme(id: "gruvbox-dark-medium", name: "Gruvbox Dark", background: .hex(0x282828), accent: .hex(0xFE8019)),
+        HiveTheme(id: "dracula", name: "Dracula", background: .hex(0x282A36), accent: .hex(0xBD93F9)),
+        HiveTheme(id: "one-dark-pro", name: "One Dark Pro", background: .hex(0x282C34), accent: .hex(0x61AFEF)),
+        HiveTheme(id: "nord", name: "Nord", background: .hex(0x2E3440), accent: .hex(0x88C0D0)),
+    ]
+
+    /// The theme a stored id names, or ``hive`` when it names nothing — an id written by a later
+    /// version, or by a hand-edited defaults file, must not leave the app with no ground at all.
+    static func named(_ id: String?) -> HiveTheme {
+        guard let id, let match = all.first(where: { $0.id == id }) else { return .hive }
+        return match
+    }
+}
+
+extension Color {
+    /// A theme's colour as the catalogue writes it: `0xRRGGBB`, fully opaque.
+    ///
+    /// `Color(red:green:blue:)` takes sRGB components, which is the space the upstream catalogue
+    /// records and the space `Color(0x…)` would be read in anyway — so the conversion is exact
+    /// rather than passing through a display-P3 widening.
+    static func hex(_ value: UInt32) -> Color {
+        Color(
+            .sRGB,
+            red: Double((value >> 16) & 0xFF) / 255,
+            green: Double((value >> 8) & 0xFF) / 255,
+            blue: Double(value & 0xFF) / 255,
+            opacity: 1
+        )
+    }
+}

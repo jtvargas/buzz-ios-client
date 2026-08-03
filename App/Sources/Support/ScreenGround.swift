@@ -1,5 +1,14 @@
 import SwiftUI
 
+extension EnvironmentValues {
+    /// The ground-and-accent pair the reader chose in Settings.
+    ///
+    /// Read by ``SwiftUI/View/hiveScreenGround()`` and by the call sites that draw the app's own
+    /// colour. Defaults to ``HiveTheme/hive``, so anything hosted outside the app's root — a
+    /// preview, a UI-test fixture — looks the way it always did rather than losing its ground.
+    @Entry var hiveTheme: HiveTheme = .hive
+}
+
 extension View {
     /// **The app's one dark, under a screen that would otherwise take the system's.**
     ///
@@ -20,9 +29,15 @@ extension View {
     /// its rows. A row is not the list, and one given no background of its own falls back to
     /// `systemBackground` — so the ground shows in the gaps and every row is an opaque black
     /// band over it. That has to be said at the row, which is why it is not folded in here.
+    /// The colour is now the chosen theme's background rather than a constant. ``HiveTheme/hive``
+    /// *is* `hiveNight`, so an install that never opens the picker is unchanged.
+    ///
+    /// **The sheet ground below is deliberately not themed.** It resolves
+    /// `systemGroupedBackground` through the UIKit trait environment, which is what steps a modal
+    /// one level lighter than the screen behind it; a themed constant there would flatten every
+    /// sheet in the app — exactly the #124 regression this file's own doc comment records.
     func hiveScreenGround() -> some View {
-        scrollContentBackground(.hidden)
-            .background(Color.hiveNight)
+        modifier(HiveScreenGround())
     }
 
     /// **The ground under a surface that is presented rather than entered** — for the ones
@@ -56,5 +71,22 @@ extension View {
     func hiveSheetGround() -> some View {
         scrollContentBackground(.hidden)
             .background(Color(.systemGroupedBackground))
+    }
+}
+
+/// The themed half of ``SwiftUI/View/hiveScreenGround()``, as a modifier because only a view can
+/// read the environment — a `View` extension cannot.
+///
+/// The colour animates rather than cutting: a ground is the largest surface on screen, and
+/// swapping it instantly reads as a flash. `animation(_:value:)` is scoped to the theme alone, so
+/// the crossfade cannot leak onto anything else the ground happens to be redrawn beside.
+private struct HiveScreenGround: ViewModifier {
+    @Environment(\.hiveTheme) private var theme
+
+    func body(content: Content) -> some View {
+        content
+            .scrollContentBackground(.hidden)
+            .background(theme.background)
+            .animation(.easeInOut(duration: 0.35), value: theme)
     }
 }
