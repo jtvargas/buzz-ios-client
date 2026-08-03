@@ -1,18 +1,19 @@
 import BuzzKit
 
 /// One pushed conversation: the row its timeline renders, and — when the push came from
-/// opening a direct message — the peer the relay said it is with.
+/// opening a direct message — the people the relay said it is with.
 ///
 /// A route type rather than the bare ``BuzzKit/ChannelListRow`` the sidebar pushes,
 /// because the two ways into a conversation know different things about it. From the
 /// sidebar the roster is already read, so the row is the whole story. From a profile
-/// sheet's Message action the channel is seconds old and its roster is still in flight, so
-/// the peer travels with the push (see ``OpenedConversation``).
+/// sheet's Message action, or from the new-direct-message sheet, the channel is seconds old
+/// and its roster is still in flight, so the people travel with the push (see
+/// ``OpenedConversation``).
 struct ConversationRoute: Hashable {
     let channel: ChannelListRow
-    /// The peer this conversation was just opened with, or `nil` when the roster is the
-    /// only thing that should name it.
-    var knownPeer: String?
+    /// The people this conversation was just opened with, or empty when the roster is the
+    /// only thing that should name it. One of them is a one-to-one; more is a group.
+    var knownPeers: [String] = []
     /// Whether the composer takes the keyboard once the conversation has settled. Set only
     /// by the Drafts screen, which is a request to finish writing something — the same
     /// meaning ``ThreadRoute/focusesComposer`` carries.

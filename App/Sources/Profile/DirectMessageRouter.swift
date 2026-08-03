@@ -12,10 +12,39 @@ import SwiftUI
 /// conform to a globally isolated protocol. An `async` requirement is satisfied from
 /// either isolation, which is all the router needs.
 protocol DirectMessageOpening: Sendable {
-    /// Opens the existing direct message with `peer`, or creates it, returning the
+    /// Opens the existing direct message with `peers`, or creates it, returning the
     /// channel id either way.
+    ///
+    /// An array and not one person, because the relay's open command takes up to eight `p`
+    /// tags: one person is a one-to-one and more is a group, and both are the same call.
+    /// The author is never among them — the relay merges the authenticated key in itself.
+    func openDirectMessage(with peers: [String]) async throws -> String
+
+    /// **Temporary**, and the only reason it is still here: today's ``BuzzKit/SyncEngine``
+    /// opens a direct message with exactly one person. See the default below.
     func openDirectMessage(with peer: String) async throws -> String
 }
+
+/// **Temporary.** Answers the array-shaped call against an engine that can only open a
+/// one-to-one, so the app side of the picker could be built against the API it will use
+/// rather than the one that exists — two workstreams that have no reason to be serialised.
+///
+/// It heals itself: a `SyncEngine` that declares `openDirectMessage(with peers: [String])`
+/// satisfies the requirement directly, and this default stops being reached with no call site
+/// touched. **Delete this extension** — and the single-peer requirement above — once that has
+/// landed.
+extension DirectMessageOpening {
+    func openDirectMessage(with peers: [String]) async throws -> String {
+        guard peers.count == 1, let peer = peers.first else {
+            throw GroupDirectMessageUnsupported()
+        }
+        return try await openDirectMessage(with: peer)
+    }
+}
+
+/// What a group open fails with while the engine underneath can only open a one-to-one.
+/// Deleted with the default implementation above.
+struct GroupDirectMessageUnsupported: Error {}
 
 extension SyncEngine: DirectMessageOpening {}
 
@@ -39,13 +68,18 @@ final class DirectMessageRouter {
     /// The conversation to navigate to, once. Whoever consumes it clears it — leaving it
     /// set would re-push the same conversation on the next unrelated body pass.
     var pendingConversation: OpenedConversation?
-    /// The peers whose opens are in flight, so a sheet or row can show progress and a
-    /// second tap on the *same* person is ignored rather than queued.
+    /// The opens in flight, keyed by their whole **participant set**, so a sheet or row can
+    /// show progress and a second tap on the *same* conversation is ignored rather than
+    /// queued.
     ///
-    /// A set and not one peer: the guard's job is to stop a double tap becoming two
+    /// A set and not one slot: the guard's job is to stop a double tap becoming two
     /// navigations, and a single slot made every *other* person's Message action dead
     /// until the first open answered — silently, because the sheet has already dismissed
     /// by then, and for as long as a slow relay took to reply.
+    ///
+    /// The whole set and not one peer, for the same reason one slot was wrong: two different
+    /// groups that happen to share a person are two different conversations, and keying on a
+    /// person would have the first of them block the second.
     private(set) var openingPeers: Set<String> = []
     /// A failed open, for the surface that shows it. Cleared when acknowledged, and on the
     /// next success.
@@ -61,28 +95,48 @@ final class DirectMessageRouter {
     var isOpening: Bool { !openingPeers.isEmpty }
 
     /// Whether `peer`'s own open is in flight, which is what a per-person control asks.
-    func isOpening(_ peer: String) -> Bool { openingPeers.contains(peer) }
+    func isOpening(_ peer: String) -> Bool { isOpening([peer]) }
+
+    /// Whether this exact set of people has an open in flight.
+    func isOpening(_ peers: [String]) -> Bool { openingPeers.contains(Self.key(for: peers)) }
+
+    /// Starts the open with one person — a profile sheet's Message action.
+    func open(with peer: String) { open(with: [peer]) }
 
     /// Starts the open. Fire-and-forget by design: the caller is a button in a sheet
     /// that is already dismissing, so there is nothing left to await it.
-    func open(with peer: String) {
-        guard openingPeers.insert(peer).inserted else { return }
+    func open(with peers: [String]) {
+        let key = Self.key(for: peers)
+        guard !peers.isEmpty, openingPeers.insert(key).inserted else { return }
         Task { [weak self] in
             guard let self else { return }
             do {
-                let channelID = try await opener.openDirectMessage(with: peer)
-                openingPeers.remove(peer)
+                let channelID = try await opener.openDirectMessage(with: peers)
+                openingPeers.remove(key)
                 // Cleared on success, not only when acknowledged: an unacknowledged
                 // failure from an earlier attempt otherwise keeps asking to be presented,
                 // and would surface as an alert on whatever surface happened to be up
                 // when the navigation that succeeded landed.
                 failure = nil
-                pendingConversation = OpenedConversation(channelID: channelID, peer: peer)
+                pendingConversation = OpenedConversation(channelID: channelID, peers: peers)
             } catch {
-                openingPeers.remove(peer)
+                openingPeers.remove(key)
                 failure = Self.message(for: error)
             }
         }
+    }
+
+    /// One participant set, as one string: lower-cased, de-duplicated, and ordered, so the
+    /// same people named in a different order are the same in-flight open.
+    ///
+    /// Case-folding is not full canonicalisation — `npub1…` and hex for one person are still
+    /// two keys here. No caller mixes the two forms (the picker hands lowercase hex straight
+    /// out of ``BuzzKit/DirectoryEntity``), but resting a correctness property on a survey of
+    /// today's callers is not the same as it being true.
+    // TODO: key through `SyncEngine.normalizedPubkey` once it is public, so the guard key and
+    // the wire key are canonicalised by one function and cannot disagree by construction.
+    static func key(for peers: [String]) -> String {
+        Set(peers.map { $0.lowercased() }).sorted().joined(separator: ",")
     }
 
     /// The reader-facing sentence for a failed open.
@@ -91,6 +145,11 @@ final class DirectMessageRouter {
     /// the UI can say something true about *why*, and "restricted" in particular is not
     /// a transient failure the reader should retry into.
     static func message(for error: any Error) -> String {
+        // Deleted with ``GroupDirectMessageUnsupported`` itself. Said plainly rather than
+        // folded into the generic sentence, because "try again" is not true of it.
+        if error is GroupDirectMessageUnsupported {
+            return "This build cannot start a group conversation yet. Pick one person."
+        }
         guard let error = error as? DirectMessageError else {
             return "Could not start the conversation. Try again."
         }
@@ -116,19 +175,24 @@ final class DirectMessageRouter {
     }
 }
 
-/// A conversation the relay has just opened, and the person it is with.
+/// A conversation the relay has just opened, and the people it is with.
 ///
-/// The peer is carried beside the id because the relay answers with the channel *before*
+/// The peers are carried beside the id because the relay answers with the channel *before*
 /// its roster is readable: the open command commits the channel and publishes its
 /// membership afterwards, and the projection the app reads rosters from may legitimately
-/// have nothing yet. Without the peer the pushed conversation classifies as a channel with
-/// no metadata name and titles itself `Untitled conversation` — for a DM whose peer the
+/// have nothing yet. Without them the pushed conversation classifies as a channel with
+/// no metadata name and titles itself `Untitled conversation` — for a DM whose people the
 /// tap that opened it named explicitly. It is a hint with a lifetime: whatever the roster
 /// says once it lands wins.
+///
+/// An array rather than one peer because a group DM has no single person to name it by, and
+/// the gap before its roster lands is exactly where a placeholder would be seen. See
+/// ``EntityNames/conversation(for:knownPeers:)`` for what is drawn in that gap — the same
+/// join the roster would produce, so nothing changes on screen when the roster arrives.
 struct OpenedConversation: Equatable, Hashable {
     let channelID: String
-    /// The peer this conversation was opened with, hex.
-    let peer: String
+    /// The people this conversation was opened with, hex, never including you.
+    let peers: [String]
 }
 
 extension EnvironmentValues {

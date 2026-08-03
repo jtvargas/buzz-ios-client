@@ -50,9 +50,9 @@ struct SidebarSectionHeader: View {
     /// How many conversations the section holds.
     let count: Int
     @Binding var isExpanded: Bool
-    /// What the `+` does, or `nil` for a section nothing can be added to. Only Channels
-    /// has one: a direct message is started from a person, an agent is not something this
-    /// app makes, and Starred is a view of the other three.
+    /// What the `+` does, or `nil` for a section nothing can be added to. Channels and Direct
+    /// Messages have one; an agent is not something this app makes, and Starred is a view of
+    /// the other three.
     var create: (() -> Void)?
 
     var body: some View {

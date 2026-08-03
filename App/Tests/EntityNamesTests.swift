@@ -269,7 +269,7 @@ struct EntityNamesTests {
         #expect(resolver.conversation(for: row).kind == .channel)
         #expect(resolver.conversation(for: row).title == EntityNames.untitledChannel)
 
-        let hinted = resolver.conversation(for: row, knownPeer: peer)
+        let hinted = resolver.conversation(for: row, knownPeers: [peer])
         #expect(hinted.kind == .direct)
         #expect(hinted.title == "Ada")
         #expect(hinted.peer == peer)
@@ -285,10 +285,10 @@ struct EntityNamesTests {
             channels: [row],
             selfPubkey: me
         )
-        #expect(projected.conversation(for: row, knownPeer: peer).kind == .channel)
+        #expect(projected.conversation(for: row, knownPeers: [peer]).kind == .channel)
         // Nor does the hint survive a keyless session, which has no "other" member.
         #expect(names(entities: entities, channels: [row])
-            .conversation(for: row, knownPeer: peer).kind == .channel)
+            .conversation(for: row, knownPeers: [peer]).kind == .channel)
     }
 
     @Test("secondary labels prefer NIP-05 and name an agent otherwise")

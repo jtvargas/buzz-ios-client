@@ -5,9 +5,13 @@ import NostrCore
 import Testing
 
 /// The states around opening a direct message: in flight, navigable, failed — the one rule
-/// that matters for correctness, which is that a second tap on the *same person* while
-/// their open is in flight does not send a second one, and what the navigation surface then
+/// that matters for correctness, which is that a second tap on the *same conversation* while
+/// its open is in flight does not send a second one, and what the navigation surface then
 /// does with the result.
+///
+/// "The same conversation" is a whole participant set and not one person: two groups that
+/// share somebody are two conversations, and a guard keyed on a person would have the first
+/// of them silently swallow the second.
 @MainActor
 @Suite("Direct message router", .timeLimit(.minutes(1)))
 struct DirectMessageRouterTests {
@@ -15,19 +19,26 @@ struct DirectMessageRouterTests {
     /// a test can observe the in-flight state rather than racing it.
     private final class StubOpener: DirectMessageOpening, @unchecked Sendable {
         private let lock = NSLock()
-        private var _peers: [String] = []
+        private var _opens: [[String]] = []
         private var _result: Result<String, any Error>?
 
-        var peers: [String] {
-            lock.withLock { _peers }
+        /// Every open the router actually sent, in the order the stub received them.
+        var opens: [[String]] {
+            lock.withLock { _opens }
         }
 
         func answer(_ result: Result<String, any Error>) {
             lock.withLock { _result = result }
         }
 
+        /// Temporary, and deleted with the requirement it satisfies — the router only ever
+        /// calls the array form. See ``DirectMessageOpening``.
         func openDirectMessage(with peer: String) async throws -> String {
-            lock.withLock { _peers.append(peer) }
+            try await openDirectMessage(with: [peer])
+        }
+
+        func openDirectMessage(with peers: [String]) async throws -> String {
+            lock.withLock { _opens.append(peers) }
             while true {
                 if let result = lock.withLock({ _result }) {
                     return try result.get()
@@ -62,9 +73,9 @@ struct DirectMessageRouterTests {
         #expect(!router.isOpening)
         // The peer travels with the id: the pushed conversation names itself from it until
         // the roster the relay commits afterwards is readable.
-        #expect(router.pendingConversation == OpenedConversation(channelID: "channel-9", peer: "peer-1"))
+        #expect(router.pendingConversation == OpenedConversation(channelID: "channel-9", peers: ["peer-1"]))
         #expect(router.failure == nil)
-        #expect(opener.peers == ["peer-1"])
+        #expect(opener.opens == [["peer-1"]])
 
         // The consumer clears it; nothing re-publishes it afterwards.
         router.pendingConversation = nil
@@ -94,9 +105,79 @@ struct DirectMessageRouterTests {
         // dead app-wide for as long as an unrelated open took to answer. Asserted as a set
         // because two in-flight opens reach the stub on the concurrent executor, so which
         // records itself first is not this test's claim.
-        #expect(Set(opener.peers) == ["peer-1", "peer-2"])
-        #expect(opener.peers.count == 2)
+        #expect(Set(opener.opens) == [["peer-1"], ["peer-2"]])
+        #expect(opener.opens.count == 2)
         #expect(router.pendingConversation?.channelID == "channel-9")
+    }
+
+    @Test("two groups that share a person do not block each other")
+    func overlappingGroupsBothOpen() async {
+        let opener = StubOpener()
+        let router = DirectMessageRouter(opener: opener)
+
+        router.open(with: ["ada", "bo"])
+        router.open(with: ["ada", "cy"])
+        // And the one that *is* the same conversation, still dropped.
+        router.open(with: ["ada", "bo"])
+
+        #expect(router.isOpening(["ada", "bo"]))
+        #expect(router.isOpening(["ada", "cy"]))
+        // Neither group is "Ada's open": a person is not a conversation, and a one-to-one
+        // with Ada is a third, still untouched.
+        #expect(router.isOpening("ada") == false)
+
+        opener.answer(.success("channel-9"))
+        await settle()
+
+        #expect(Set(opener.opens) == [["ada", "bo"], ["ada", "cy"]])
+        #expect(opener.opens.count == 2)
+    }
+
+    @Test("the same people named in another order, or another case, are one open")
+    func participantSetIsOrderAndCaseInsensitive() async {
+        let opener = StubOpener()
+        let router = DirectMessageRouter(opener: opener)
+
+        router.open(with: ["ada", "bo", "cy"])
+        router.open(with: ["CY", "Ada", "BO"])
+
+        #expect(router.isOpening(["cy", "bo", "ada"]))
+        opener.answer(.success("channel-9"))
+        await settle()
+
+        // One request on the wire. The guard key is the set, not the spelling of it — the
+        // relay answers the same channel either way, so two would be two navigations to it.
+        #expect(opener.opens == [["ada", "bo", "cy"]])
+    }
+
+    @Test("a group carries all of its people into the conversation to navigate to")
+    func groupOpenCarriesEveryPeer() async {
+        let opener = StubOpener()
+        let router = DirectMessageRouter(opener: opener)
+
+        router.open(with: ["ada", "bo", "cy"])
+        opener.answer(.success("gdm-1"))
+        await settle()
+
+        // All three, in the order they were picked: they are what titles the conversation
+        // until its roster lands (see ``EntityNames/conversation(for:knownPeers:)``), and a
+        // group has no single person to name it by.
+        #expect(router.pendingConversation == OpenedConversation(
+            channelID: "gdm-1",
+            peers: ["ada", "bo", "cy"]
+        ))
+    }
+
+    @Test("an open with nobody in it is not sent")
+    func emptyOpenIsRefused() async {
+        let opener = StubOpener()
+        let router = DirectMessageRouter(opener: opener)
+
+        router.open(with: [])
+        await settle()
+
+        #expect(!router.isOpening)
+        #expect(opener.opens.isEmpty)
     }
 
     @Test("a failure surfaces a sentence and leaves nothing to navigate to")
@@ -143,7 +224,7 @@ struct DirectMessageRouterTests {
 
     @Test("opening a conversation leaves exactly one instance of it, on top")
     func conversationRouteDedupesTheStack() {
-        let dm = ConversationRoute(channel: Self.row("dm-1"), knownPeer: "peer-1")
+        let dm = ConversationRoute(channel: Self.row("dm-1"), knownPeers: ["peer-1"])
         let room = ConversationRoute(channel: Self.row("room-1"))
 
         #expect(dm.pushed(onto: []).map(\.channel.id) == ["dm-1"])

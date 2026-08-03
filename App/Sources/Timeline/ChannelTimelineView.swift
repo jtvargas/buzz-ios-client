@@ -47,10 +47,10 @@ struct ChannelTimelineView: View {
     /// Whether the composer takes the keyboard once this conversation has settled. Set
     /// only by the Drafts screen — see ``SwiftUI/View/focusesComposerOnArrival(_:focus:)``.
     private let focusesComposer: Bool
-    /// The peer this conversation was opened with, when it was reached by opening a direct
+    /// The people this conversation was opened with, when it was reached by opening a direct
     /// message rather than from the sidebar. Only ever consulted while the roster has
-    /// nothing to say — see ``EntityNames/conversation(for:knownPeer:)``.
-    private let knownPeer: String?
+    /// nothing to say — see ``EntityNames/conversation(for:knownPeers:)``.
+    private let knownPeers: [String]
 
     /// Reserved for the top-of-history sentinel. Constant, and present whenever an
     /// older page may exist: a spinner that appears and disappears is itself a content
@@ -66,7 +66,7 @@ struct ChannelTimelineView: View {
         drafts: ComposerDrafts? = nil,
         uploader: @escaping MediaUploaderProvider,
         selfPubkey: String?,
-        knownPeer: String? = nil,
+        knownPeers: [String] = [],
         focusingComposer focusesComposer: Bool = false
     ) {
         self.init(
@@ -81,7 +81,7 @@ struct ChannelTimelineView: View {
             drafts: drafts,
             uploader: uploader,
             selfPubkey: selfPubkey,
-            knownPeer: knownPeer,
+            knownPeers: knownPeers,
             lifecycleEngine: engine,
             focusingComposer: focusesComposer
         )
@@ -109,7 +109,7 @@ struct ChannelTimelineView: View {
         drafts: ComposerDrafts? = nil,
         uploader: @escaping MediaUploaderProvider,
         selfPubkey: String?,
-        knownPeer: String? = nil,
+        knownPeers: [String] = [],
         lifecycleEngine: SyncEngine? = nil,
         focusingComposer focusesComposer: Bool = false
     ) {
@@ -124,7 +124,7 @@ struct ChannelTimelineView: View {
         self.uploader = uploader
         self.lifecycleEngine = lifecycleEngine
         self.selfPubkey = selfPubkey
-        self.knownPeer = knownPeer
+        self.knownPeers = knownPeers
         _model = State(initialValue: ChannelTimelineModel(
             channel: channel.id,
             store: store,
@@ -268,11 +268,11 @@ struct ChannelTimelineView: View {
     /// resolver arrives from the environment — and because capturing it there is what let
     /// a DM read as its group name and an unnamed channel render its whole group id (§4).
     ///
-    /// `knownPeer` covers exactly one gap: a DM opened seconds ago whose membership has not
+    /// `knownPeers` covers exactly one gap: a DM opened seconds ago whose membership has not
     /// been projected yet, where the roster cannot classify the conversation and the header
     /// would otherwise read `Untitled conversation`. The roster wins the moment it lands.
     private var conversation: ConversationIdentity {
-        names.conversation(for: channel, knownPeer: knownPeer)
+        names.conversation(for: channel, knownPeers: knownPeers)
     }
 
     // MARK: - List
