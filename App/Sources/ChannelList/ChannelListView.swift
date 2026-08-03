@@ -509,6 +509,7 @@ private extension ChannelListView {
                     )
                     .listRowInsets(Self.headerInsets)
                     .listRowSeparator(.hidden)
+                    .listRowBackground(Color.clear)
                     if expansion(for: section.section).wrappedValue {
                         if section.rows.isEmpty {
                             emptySectionRow(section.section)
@@ -546,6 +547,7 @@ private extension ChannelListView {
         HomeShortcutCards(count: count(for:), isCalling: isCalling(_:), press: press(_:))
             .listRowInsets(Self.cardsInsets)
             .listRowSeparator(.hidden)
+            .listRowBackground(Color.clear)
     }
 
     /// The communities panel, sized against the real screen.
@@ -673,6 +675,10 @@ private extension ChannelListView {
     ///
     /// Inset from the row's own bounds so it reads as a marked row rather than a full-width
     /// band, and rounded to match the glyph beside it.
+    /// `Color.clear` and not nothing when there is no mark: this is a row's *whole*
+    /// background, and a `List` row that is given none falls back to `systemBackground` —
+    /// opaque black, over the ground the sidebar draws. Every row in this list says clear
+    /// for that reason.
     @ViewBuilder
     func resumeMark(isResumable: Bool) -> some View {
         if isResumable {
@@ -680,6 +686,8 @@ private extension ChannelListView {
                 .fill(Color.hiveAccent.opacity(0.14))
                 .padding(.horizontal, 8)
                 .padding(.vertical, 1)
+        } else {
+            Color.clear
         }
     }
 
@@ -734,6 +742,7 @@ private extension ChannelListView {
             .padding(.vertical, 6)
             .listRowInsets(Self.rowInsets)
             .listRowSeparator(.hidden)
+            .listRowBackground(Color.clear)
             .accessibilityIdentifier("sidebar-section-empty-\(section.rawValue)")
     }
 

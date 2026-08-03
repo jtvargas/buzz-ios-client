@@ -35,9 +35,16 @@ struct DraftsView: View {
         List(selection: $selection) {
             ForEach(model.summaries) { summary in
                 row(summary)
+                    // Here rather than inside ``row(_:)``, which has two branches — a row
+                    // that kept the default in one of them would be an opaque black band
+                    // that appears only while selecting.
+                    .listRowBackground(Color.clear)
             }
         }
         .listStyle(.plain)
+        // See ``ThreadsView`` for why both of these are needed rather than either alone.
+        .scrollContentBackground(.hidden)
+        .background(Color.hiveNight)
         .environment(\.editMode, .constant(isSelecting ? .active : .inactive))
         .navigationTitle("Drafts")
         .navigationBarTitleDisplayMode(.inline)
