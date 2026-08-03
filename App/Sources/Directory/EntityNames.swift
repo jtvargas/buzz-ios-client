@@ -159,6 +159,17 @@ struct EntityNames: Equatable, Sendable {
         id: String,
         knownPeers: [String] = []
     ) -> ConversationIdentity {
+        // The directory's own row wins; a caller's is a *stand-in* for a channel the
+        // directory has not got yet.
+        //
+        // ``ChannelListView/conversationRow(for:)`` fabricates one — no name, and no
+        // `t=dm` — for a channel the relay has just answered with but that has not reached
+        // the live list, and ``ConversationRoute`` then holds that value for the whole life
+        // of the push. Without this line the conversation asks forever about a row that
+        // never learns it is a direct message, while taking its *title* from the live one:
+        // the classification came from the stand-in and the string from the directory, and
+        // a group opened from the picker read `Group DM (4)`.
+        let row = channelsByID[id] ?? row
         let members = snapshot.members(of: id)
         let hint = knownPeers.count == 1 ? knownPeers.first : nil
         if let peer = directPeer(in: id) ?? unprojectedPeer(in: id, hint: hint) {
@@ -341,8 +352,20 @@ struct EntityNames: Equatable, Sendable {
     /// four places, most visibly for a DM group another client created with no metadata
     /// name. The deliberate display of a group id lives in the details sheet's Developer
     /// section, labelled for what it is.
+    /// A direct message's relay-given name never survives this. `DM`, `Group DM (4)` — the
+    /// relay writes those, nobody chose them, and they name none of the people in the room.
+    /// ``groupTitle(for:id:)`` has always rejected them; this is the same rejection on the
+    /// other door into the same string, for the conversations that reach here instead: a DM
+    /// whose roster has not arrived, so there is nobody to list yet. `Untitled conversation`
+    /// says that honestly. The gate is ``BuzzKit/ChannelListRow/isDirectMessage`` and not
+    /// the shape of the name, because a channel somebody deliberately called `Group DM (4)`
+    /// chose that name and nothing here is entitled to overrule it.
     func channelName(for channel: String) -> String {
-        let name = channelsByID[channel]?.name?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let row = channelsByID[channel]
+        let name = row?.name?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if row?.isDirectMessage == true, Self.isGenericDirectMessageName(name) {
+            return Self.untitledChannel
+        }
         if let name, !name.isEmpty { return name }
         return Self.untitledChannel
     }

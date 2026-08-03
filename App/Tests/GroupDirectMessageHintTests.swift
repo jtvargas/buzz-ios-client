@@ -88,4 +88,75 @@ extension GroupDirectMessageTests {
         #expect(hinted.isOneToOne)
         #expect(hinted.title == "Ada")
     }
+
+    // MARK: - After the roster lands, through the row the push carried
+
+    /// The state JT hit, reproduced from what the relay and store actually hold.
+    ///
+    /// A probe against homelab opened a four-person DM through the app's own
+    /// `openOrCreateDirectMessage(with:)` and read the store back: the projected row is
+    /// `name: "Group DM (4)", channelType: "dm"` and the roster is **4 immediately** — not
+    /// late, not missing. So every ingredient for the right title is present.
+    ///
+    /// What is not present is `t=dm` on the row the *push* carried. `ChannelListView`
+    /// fabricates a stand-in when the channel has not reached its live list yet, and
+    /// `ConversationRoute.channel` is a `let` — so the title bar keeps asking about a row
+    /// that will never learn it is a DM, while reading its title from the live one. The
+    /// group branch is decided from the stand-in and the string comes from the directory:
+    /// that split is the defect, and it is why the sidebar row was right and the title
+    /// wrong on the same conversation at the same moment.
+    @Test("a conversation pushed with a stand-in row is still titled by its people")
+    func standInRowStillNamesTheGroup() {
+        let resolver = names(rosters: ["gdm": [me, ada, bo, cy]], channels: [groupRow()])
+        let pushed = resolver.conversation(for: unprojectedRow(), knownPeers: [ada, bo, cy])
+
+        #expect(pushed.title == "Ada, Bo, Cy")
+        #expect(pushed.kind == .group)
+        #expect(pushed.memberCount == 4)
+    }
+
+    /// The same conversation re-entered from the sidebar, which supplies no hint at all
+    /// (`SidebarSections` calls the overload without one). The fix cannot depend on the
+    /// picker having handed peers forward.
+    @Test("a stand-in row with nobody hinted is titled by the roster too")
+    func standInRowWithNoHint() {
+        let resolver = names(rosters: ["gdm": [me, ada, bo, cy]], channels: [groupRow()])
+
+        #expect(resolver.conversation(for: unprojectedRow()).title == "Ada, Bo, Cy")
+        #expect(resolver.conversation(for: unprojectedRow()).kind == .group)
+    }
+
+    /// The residual window, and the second half of "never `Group DM (N)`": a DM the
+    /// directory knows is a DM, whose roster has genuinely not arrived, and with nobody
+    /// hinted. Nothing can name it — but the relay's placeholder names nobody either, and
+    /// handing it through is what put that string on screen.
+    @Test("a direct message with no roster is never titled by the relay's placeholder")
+    func rosterlessDirectMessageIsNotThePlaceholder() {
+        let conversation = names(rosters: [:], channels: [groupRow()]).conversation(for: groupRow())
+
+        #expect(conversation.title != "Group DM (4)")
+        #expect(conversation.title == EntityNames.untitledChannel)
+    }
+
+    /// The guard on that rejection: it is about *direct messages*, whose names the relay
+    /// writes. A channel somebody deliberately called `Group DM (4)` chose that name, and
+    /// nothing here is entitled to overrule it.
+    @Test("a channel somebody really named Group DM keeps the name they chose")
+    func channelKeepsAPlaceholderLookingNameItChose() {
+        let row = ChannelListRow(
+            id: "room",
+            name: "Group DM (4)",
+            about: nil,
+            picture: nil,
+            isPrivate: false,
+            lastMessageAt: nil,
+            lastMessageSnippet: nil,
+            lastMessageAuthor: nil,
+            channelType: "stream"
+        )
+        let resolver = names(rosters: ["room": [me, ada, bo, cy]], channels: [row])
+
+        #expect(resolver.conversation(for: row).kind == .channel)
+        #expect(resolver.conversation(for: row).title == "Group DM (4)")
+    }
 }
