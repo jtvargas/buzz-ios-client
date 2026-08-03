@@ -323,3 +323,186 @@ struct SyncEngineDirectMessageTests {
         await harness.engine.stop()
     }
 }
+
+// MARK: - Several people at once
+
+/// The same command with a longer participant set. What is tested here is the set the
+/// client sends: one `p` tag per person, what it drops before counting, and the two
+/// refusals it makes without a round trip.
+@Suite("SyncEngine.openDirectMessage(with peers:)", .timeLimit(.minutes(1)))
+struct SyncEngineGroupDirectMessageTests {
+    /// Distinct peers, lowercase 64-hex, stable within a call.
+    private func peers(_ count: Int) throws -> [String] {
+        try (0 ..< count).map { _ in try PrivateKey().publicKey.hex }
+    }
+
+    @Test("every peer gets its own `p` tag, in the order given, and the nonce comes last")
+    func tagPerPeerInOrder() async throws {
+        let (harness, socket) = try await startedEngine("group-shape")
+        defer { harness.remove() }
+
+        let people = try peers(3)
+        let open = Task { try await harness.engine.openDirectMessage(with: people) }
+
+        let command = await awaitPublishedEvent(on: socket)
+        #expect(command.kind == .directMessageOpen)
+        #expect(command.allValues(forTag: "p") == people)
+        // Self is merged in relay-side; tagging it would spend one of the eight slots.
+        #expect(!command.allValues(forTag: "p").contains(harness.selfPubkey))
+        #expect(command.tags.compactMap(\.first) == ["p", "p", "p", "nonce"])
+        #expect(command.addressableIdentifier == nil)
+
+        await socket.enqueue(
+            EngineFrames.okEncoding(command.id, true, openResponse(channelID: "dm-group", created: true))
+        )
+        await answerReadBack(on: socket, channel: "dm-group")
+        #expect(try await open.value == "dm-group")
+
+        await harness.engine.stop()
+    }
+
+    @Test("hex and `npub1…` may be mixed in one call and both land as lowercase hex")
+    func mixedIdentifierFormsNormalize() async throws {
+        let (harness, socket) = try await startedEngine("group-npub")
+        defer { harness.remove() }
+
+        let first = try PrivateKey().publicKey
+        let second = try PrivateKey().publicKey
+        let open = Task {
+            try await harness.engine.openDirectMessage(with: [first.hex.uppercased(), second.npub])
+        }
+
+        let command = await awaitPublishedEvent(on: socket)
+        #expect(command.allValues(forTag: "p") == [first.hex, second.hex])
+
+        await socket.enqueue(
+            EngineFrames.okEncoding(command.id, true, openResponse(channelID: "dm-npub", created: true))
+        )
+        await answerReadBack(on: socket, channel: "dm-npub")
+        #expect(try await open.value == "dm-npub")
+
+        await harness.engine.stop()
+    }
+
+    @Test("a repeated person is sent once, keeping the position they were first given")
+    func repeatsAreDropped() async throws {
+        let (harness, socket) = try await startedEngine("group-dupe-peer")
+        defer { harness.remove() }
+
+        let people = try peers(2)
+        let open = Task {
+            // The same person three ways: as given, upper-cased, and with whitespace.
+            try await harness.engine.openDirectMessage(
+                with: [people[0], people[1], people[0].uppercased(), " \(people[0]) "]
+            )
+        }
+
+        let command = await awaitPublishedEvent(on: socket)
+        #expect(command.allValues(forTag: "p") == people)
+
+        await socket.enqueue(
+            EngineFrames.okEncoding(command.id, true, openResponse(channelID: "dm-dedupe", created: true))
+        )
+        await answerReadBack(on: socket, channel: "dm-dedupe")
+        #expect(try await open.value == "dm-dedupe")
+
+        await harness.engine.stop()
+    }
+
+    @Test("this identity is dropped from the set rather than spending a slot")
+    func selfIsDropped() async throws {
+        let (harness, socket) = try await startedEngine("group-self")
+        defer { harness.remove() }
+
+        let people = try peers(2)
+        let open = Task {
+            try await harness.engine.openDirectMessage(with: [people[0], harness.selfPubkey, people[1]])
+        }
+
+        let command = await awaitPublishedEvent(on: socket)
+        #expect(command.allValues(forTag: "p") == people)
+
+        await socket.enqueue(
+            EngineFrames.okEncoding(command.id, true, openResponse(channelID: "dm-self", created: true))
+        )
+        await answerReadBack(on: socket, channel: "dm-self")
+        #expect(try await open.value == "dm-self")
+
+        await harness.engine.stop()
+    }
+
+    @Test("the cap counts distinct other people, so it is reached only after deduping")
+    func capIsCheckedAfterDeduping() async throws {
+        let (harness, socket) = try await startedEngine("group-cap-dedupe")
+        defer { harness.remove() }
+
+        // Nine identifiers, eight distinct people: over the cap as written, at it as
+        // counted. The relay would refuse this list on length; the client must not.
+        let people = try peers(SyncEngine.maxDirectMessagePeers)
+        let open = Task { try await harness.engine.openDirectMessage(with: people + [people[0]]) }
+
+        let command = await awaitPublishedEvent(on: socket)
+        #expect(command.allValues(forTag: "p").count == SyncEngine.maxDirectMessagePeers)
+
+        await socket.enqueue(
+            EngineFrames.okEncoding(command.id, true, openResponse(channelID: "dm-cap", created: true))
+        )
+        await answerReadBack(on: socket, channel: "dm-cap")
+        #expect(try await open.value == "dm-cap")
+
+        await harness.engine.stop()
+    }
+
+    @Test("a ninth distinct person is refused here, without a round trip")
+    func overCapNeverPublishes() async throws {
+        let (harness, socket) = try await startedEngine("group-over-cap")
+        defer { harness.remove() }
+
+        let limit = SyncEngine.maxDirectMessagePeers
+        let people = try peers(limit + 1)
+        // The relay's own words for this, verified live: `pubkeys may contain at most 8
+        // other participants (9 total)`. Caught before the wire so a picker never has to
+        // show it.
+        await #expect(throws: DirectMessageError.tooManyPeers(count: limit + 1, limit: limit)) {
+            _ = try await harness.engine.openDirectMessage(with: people)
+        }
+        await settle()
+        #expect(await publishedEvents(on: socket).isEmpty)
+
+        await harness.engine.stop()
+    }
+
+    @Test("an empty set, or one naming only this identity, is `noPeers` and never published")
+    func emptySetNeverPublishes() async throws {
+        let (harness, socket) = try await startedEngine("group-empty")
+        defer { harness.remove() }
+
+        await #expect(throws: DirectMessageError.noPeers) {
+            _ = try await harness.engine.openDirectMessage(with: [])
+        }
+        // Well-formed input naming nobody else: not `invalidPeerPubkey`, because there
+        // is nothing wrong with the identifier.
+        await #expect(throws: DirectMessageError.noPeers) {
+            _ = try await harness.engine.openDirectMessage(with: [harness.selfPubkey])
+        }
+        await settle()
+        #expect(await publishedEvents(on: socket).isEmpty)
+
+        await harness.engine.stop()
+    }
+
+    @Test("one bad identifier fails the whole call, even beside good ones")
+    func oneBadIdentifierFailsTheCall() async throws {
+        let (harness, socket) = try await startedEngine("group-bad-peer")
+        defer { harness.remove() }
+
+        let good = try PrivateKey().publicKey.hex
+        await #expect(throws: DirectMessageError.invalidPeerPubkey("not-a-pubkey")) {
+            _ = try await harness.engine.openDirectMessage(with: [good, "not-a-pubkey"])
+        }
+        await settle()
+        #expect(await publishedEvents(on: socket).isEmpty)
+
+        await harness.engine.stop()
+    }
+}
