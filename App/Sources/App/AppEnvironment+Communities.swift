@@ -363,7 +363,7 @@ extension AppEnvironment {
             notice = nil
             return nil
         } catch {
-            let failure = IdentityGateError.couldNotStart(String(describing: error))
+            let failure = Self.gateAnswer(for: error)
             await teardownSession()
             await returnToCommunity(previousID, after: community.id)
             // Only worth saying out here if the reader was put back somewhere: the gate
@@ -372,6 +372,18 @@ extension AppEnvironment {
                 notice = AppNotice(title: "Couldn't open that community", message: failure.message)
             }
             return failure
+        }
+    }
+
+    /// The sentence a failed start is worth to the person who caused it.
+    ///
+    /// Only the failures a reader can act on differently are named; everything else keeps
+    /// its `String(describing:)`, which is deliberately a developer's description because
+    /// the alternative is inventing advice for a failure nobody has diagnosed yet.
+    private static func gateAnswer(for error: any Error) -> IdentityGateError {
+        switch error {
+        case CompositionError.relayMembershipRequired: .needsInvitation
+        default: .couldNotStart(String(describing: error))
         }
     }
 

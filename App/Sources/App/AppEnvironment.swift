@@ -319,6 +319,14 @@ final class AppEnvironment {
             // a relay URL that cannot be reached is their own typing to correct — so here
             // the engine's start *is* awaited, and its failure is the gate's answer.
             try await engine.start()
+            // `start()` completes the first directory attempt but does not throw on it:
+            // a refusal is a cached fallback, which is right for a workspace already up
+            // and wrong here. A closed relay that will not have this key answers every
+            // route 403, so letting this through would sign the reader in to a community
+            // that can never load — the failure they reported as "it never connects".
+            if await engine.directoryRefusedMembership {
+                throw CompositionError.relayMembershipRequired
+            }
             phase = .running
             heartbeat?.startForeground()
             return
@@ -419,5 +427,9 @@ final class AppEnvironment {
 
     enum CompositionError: Error {
         case invalidRelayURL
+        /// The relay is closed and this key is not a member of it. Only ever thrown on the
+        /// gate's path, where the alternative is presenting an empty workspace that will
+        /// say "connecting" until the reader gives up.
+        case relayMembershipRequired
     }
 }
