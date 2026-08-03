@@ -23,7 +23,8 @@ import SwiftUI
 /// Both, because either alone loses half the state. A checkmark says whether the row under
 /// the finger is picked; it cannot say who else is, because the filter that found the second
 /// person has hidden the first. The chips are the standing answer to "who is in this
-/// message so far", and tapping one takes that person back out.
+/// message so far", and tapping one takes that person back out — the only way to unpick
+/// somebody the filter has scrolled out of reach.
 struct NewDirectMessageSheet: View {
     /// Called with the chosen pubkeys, lowercase hex, in the order they were picked —
     /// immediately before this dismisses.
@@ -55,9 +56,16 @@ struct NewDirectMessageSheet: View {
         NavigationStack {
             list
                 .listStyle(.plain)
-                // Above the rows and outside the scroll, because it is the answer to a
-                // question the rows cannot answer once a filter is on them.
-                .safeAreaInset(edge: .top, spacing: 0) { selected }
+                // Below the rows, not above them. As a top inset this pushed the whole roster
+                // down the moment anybody was picked — the reader tapped a name and the list
+                // they were reading moved. At the bottom the rows keep their place and pass
+                // under the bar instead.
+                //
+                // `safeAreaInset` rather than `overlay`: an inset also grows the list's
+                // content inset, so the last row still scrolls clear of the bar, and the bar
+                // is a sibling of the list rather than a view sitting on top of it claiming
+                // touches — see ``row(_:)`` for what that has cost this app before.
+                .safeAreaInset(edge: .bottom, spacing: 0) { selected }
                 .searchable(
                     text: $picker.query,
                     placement: .navigationBarDrawer(displayMode: .always),
@@ -78,9 +86,12 @@ struct NewDirectMessageSheet: View {
                 }
         }
         // On the stack rather than on the `List`, so the ground reaches the search drawer and
-        // the chips strip as well as the rows — a sheet otherwise draws `systemBackground`
+        // the bottom bar as well as the rows — a sheet otherwise draws `systemBackground`
         // behind everything the list is not.
-        .hiveScreenGround()
+        //
+        // The *sheet* ground, not the screen one: this is presented, and a modal wearing
+        // ``ShapeStyle/hiveNight`` is the same near-black as the sidebar behind it.
+        .hiveSheetGround()
     }
 
     // MARK: - The roster
@@ -162,8 +173,12 @@ struct NewDirectMessageSheet: View {
 
     // MARK: - Who is picked
 
-    /// The chips, and the count under them. Absent entirely until somebody is picked — an
-    /// empty strip above the list would be a permanent gap explaining nothing.
+    /// The chips, and the count under them — a bar floating at the bottom over the roster.
+    /// Absent entirely until somebody is picked, so an empty sheet is all list.
+    ///
+    /// Inset from all three edges and drawn on a material, which is what makes it read as
+    /// something resting *over* the rows rather than as the last row of them: the list stays
+    /// visible down both sides of it and blurred through it.
     @ViewBuilder
     private var selected: some View {
         if !picker.chips.isEmpty {
@@ -172,17 +187,23 @@ struct NewDirectMessageSheet: View {
                     HStack(spacing: 8) {
                         ForEach(picker.chips) { person in chip(person) }
                     }
-                    .padding(.horizontal, 16)
+                    .padding(.horizontal, 14)
                 }
                 .scrollIndicators(.hidden)
                 Text(countLabel)
                     .font(.hive(.footnote))
                     .foregroundStyle(.secondary)
-                    .padding(.horizontal, 16)
+                    .padding(.horizontal, 14)
             }
-            .padding(.vertical, 10)
-            // Opaque, because the list scrolls underneath this rather than beside it.
-            .background(Color.hiveNight)
+            .padding(.vertical, 12)
+            .background(.regularMaterial, in: .rect(cornerRadius: Self.barRadius))
+            .overlay {
+                RoundedRectangle(cornerRadius: Self.barRadius)
+                    .strokeBorder(Color.primary.opacity(Self.barEdge))
+            }
+            .shadow(color: .black.opacity(Self.barShadow), radius: 12, y: 3)
+            .padding(.horizontal, 12)
+            .padding(.bottom, 10)
             .animation(.snappy(duration: 0.2), value: picker.selection)
         }
     }
@@ -230,6 +251,10 @@ struct NewDirectMessageSheet: View {
     /// able to see who they would have to unpick somebody for.
     private static let refusedOpacity: CGFloat = 0.4
     private static let chipOpacity: CGFloat = 0.22
+    private static let barRadius: CGFloat = 20
+    /// A hairline, so the material has an edge where it meets a row of similar weight.
+    private static let barEdge: CGFloat = 0.12
+    private static let barShadow: CGFloat = 0.35
 }
 
 // MARK: - Presentation

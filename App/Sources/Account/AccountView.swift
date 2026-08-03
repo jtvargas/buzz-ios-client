@@ -49,7 +49,7 @@ struct AccountView: View {
                 .padding(.top, 8)
                 .padding(.bottom, 32)
             }
-            .hiveScreenGround()
+            .hiveSheetGround()
             .navigationTitle("Account")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -118,13 +118,18 @@ struct AccountView: View {
     private var editBadge: some View {
         Image(systemName: "pencil")
             .font(.hiveSymbol(.footnote, weight: .semibold))
-            .foregroundStyle(Color.hiveNight)
+            .foregroundStyle(Color(.systemBackground))
             .frame(width: 34, height: 34)
             .background(Circle().fill(.tint))
             // A ring in the page's own colour, so the badge reads as sitting on top of the
             // avatar rather than punched out of it — the same treatment the connection dot
             // gets in ``AccountAvatarButton``.
-            .overlay(Circle().strokeBorder(Color.hiveNight, lineWidth: 3))
+            //
+            // Which means it follows ``View/hiveSheetGround()`` and is dynamic with it. A
+            // fixed ``ShapeStyle/hiveNight`` here would be a dark ring drawn on a grey page:
+            // #124 moved the ground and this together, and moving the ground back has to
+            // move this back with it.
+            .overlay(Circle().strokeBorder(Color(.systemGroupedBackground), lineWidth: 3))
             .accessibilityHidden(true)
     }
 

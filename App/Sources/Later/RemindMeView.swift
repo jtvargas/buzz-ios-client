@@ -24,9 +24,13 @@ struct RemindMeView: View {
             }
         }
         .listStyle(.insetGrouped)
-        // The page behind the grouped cards. The cards keep their own surface — this is the
-        // colour they sit on, which is what was the system's grey.
-        .hiveScreenGround()
+        // No ground modifier, deliberately, and none before #124 either — which matters more
+        // here than anywhere, because this view is pushed onto *two* stacks at two different
+        // elevations: the Later tab, and ``MessageActionsSheet``'s own stack inside a modal.
+        // The `List` resolves its page and its cards against whichever one it lands in, so
+        // one view is right in both without either presenter having to say so. A colour named
+        // out here would have to pick one of them and be wrong in the other.
+        // See ``View/hiveSheetGround()``.
         .navigationTitle("Remind me")
         .navigationBarTitleDisplayMode(.inline)
     }
