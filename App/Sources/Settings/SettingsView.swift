@@ -40,7 +40,7 @@ struct SettingsView: View {
                 .padding(.top, 8)
                 .padding(.bottom, 32)
             }
-            .hiveScreenGround()
+            .hiveSheetGround()
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
