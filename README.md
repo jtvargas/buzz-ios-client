@@ -67,7 +67,8 @@ This section describes the app as it is on `main`, not as planned. Anything not 
 - Compose multiline drafts with mention autocomplete, durable optimistic sending, retry/discard handling, and relay rejection reasons.
 - Attach pictures from Photos or the pasteboard, up to five per message; uploads start when the picture is picked or pasted, and still images are re-rendered and scrubbed of metadata before they leave the device.
 - React with quick reactions or the emoji picker; save or share pictures others post.
-- Apply message edits and deletions authored elsewhere.
+- Edit messages you authored or own through an agent, delete those messages, and delete others' messages when your channel role allows moderation; incoming edits and deletions authored elsewhere render too.
+- Mute a conversation from Channel Details; mutes are encrypted `kind:30078` user state and merge across this identity's devices.
 
 **Presence and position**
 
@@ -90,9 +91,8 @@ These exist upstream, or are on the roadmap, and are honestly absent here:
 - **Push notifications.** There is no APNs registration; you see activity when the app is open.
 - **In-app search.** There is no cross-channel search screen.
 - **Video, files, and camera capture.** Pictures can be attached from Photos or the pasteboard, but video is only marked, files are not attachable, and Camera currently opens a work-in-progress alert.
-- **Authoring an edit or a deletion.** Both render when they arrive from elsewhere; Hive can only discard one of its own messages that has not left the outbox.
 - **A profile from the sidebar or the channel roster.** The sheet is reached from a message today, so someone who has not posted in the open conversation has no entry point.
-- **Forum, Pulse, creating or sending invites, custom emoji, and channel mutes.** Hive can redeem invite links and `buzz://join` handoffs, but cannot mint an invitation. A conversation can be starred, but the star stays on the device rather than syncing.
+- **Forum, Pulse, creating or sending invites, and custom emoji.** Hive can redeem invite links and `buzz://join` handoffs, but cannot mint an invitation. A conversation can be starred, but the star stays on the device rather than syncing.
 - **Editing a roster.** A channel can be made here and a direct message opened, but membership is read rather than changed: nobody can be added to a channel or removed from one.
 - **An iPad layout.** The app installs and runs on iPad, but nothing is laid out for it.
 - **Widgets, share extension, App Intents, Live Activities.**
