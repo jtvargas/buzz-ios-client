@@ -192,7 +192,7 @@ final class MentionAutocompleteModel {
             return
         }
         if activeRange != mention.range { activeRange = mention.range }
-        let query = Self.normalized(mention.query)
+        let query = NameMatch.normalized(mention.query)
         let index = mention.kind == .user ? userIndex : channelIndex
         let matches = bestMatches(in: index, for: query, limit: 8)
         if matches != suggestions { suggestions = matches }
@@ -223,11 +223,6 @@ final class MentionAutocompleteModel {
         return best.map(\.suggestion)
     }
 
-    nonisolated fileprivate static func normalized(_ value: String) -> String {
-        value.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
-            .lowercased()
-    }
-
     /// How deep the recency signal reaches. Comfortably past the eight rows the panel
     /// draws, so the ordering among the people an author actually works with is real
     /// rather than truncated — and short enough that the store read stays a small one.
@@ -242,10 +237,9 @@ final class MentionAutocompleteModel {
 /// actor that has to draw the next frame.
 private struct IndexedSuggestion: Sendable {
     let suggestion: MentionSuggestion
-    let name: String
-    let secondary: String
-    let words: [String]
-    let identifier: String
+    /// The folded strings and the ranking itself, shared with the new-direct-message
+    /// picker so the two surfaces cannot disagree about the same name.
+    let match: NameMatch
     let group: Int
     /// How recently this identity was last `@`-named, `0` being the most recent, and
     /// `Int.max` for someone who never has been — so "never mentioned" sorts after every
@@ -255,10 +249,11 @@ private struct IndexedSuggestion: Sendable {
 
     init(_ suggestion: MentionSuggestion, originalOrder: Int, recent: RecentMentions) {
         self.suggestion = suggestion
-        name = MentionAutocompleteModel.normalized(suggestion.label)
-        secondary = MentionAutocompleteModel.normalized(suggestion.matchSecondary)
-        words = name.split { $0.isWhitespace || $0 == "-" || $0 == "_" }.map(String.init)
-        identifier = suggestion.matchIdentifier.lowercased()
+        match = NameMatch(
+            name: suggestion.label,
+            secondary: suggestion.matchSecondary,
+            identifier: suggestion.matchIdentifier
+        )
         group = suggestion.rankingGroup
         // Channels are never ranked by recency: a `#` token completes against its own
         // index, which this signal says nothing about.
@@ -271,15 +266,11 @@ private struct IndexedSuggestion: Sendable {
     /// Lower is better. Exact name, then name prefix, then a whole interior word,
     /// then an interior word's prefix, then the raw identifier — the Phase-4 ranking,
     /// now applied to channels as well as people.
-    func score(for query: String) -> Int? {
-        guard !query.isEmpty else { return 0 }
-        if name == query || secondary == query { return 0 }
-        if name.hasPrefix(query) || secondary.hasPrefix(query) { return 1 }
-        if words.contains(query) { return 2 }
-        if words.contains(where: { $0.hasPrefix(query) }) { return 3 }
-        if !identifier.isEmpty, identifier.hasPrefix(query) { return 4 }
-        return nil
-    }
+    ///
+    /// The substring tier ``NameMatch`` can offer is deliberately left off: mid-sentence,
+    /// a match the author did not aim at is noise they have to steer around. The picker
+    /// asks for it because a roster is browsed rather than typed through.
+    func score(for query: String) -> Int? { match.score(for: query) }
 }
 
 private struct RankedSuggestion {

@@ -31,11 +31,22 @@ struct ConversationMark: View {
     var body: some View {
         switch conversation.kind {
         case .channel:
-            tile {
-                Image(systemName: symbol ?? (conversation.isPrivate ? "lock.fill" : "number"))
-                    .font(.hiveSymbol(.subheadline, weight: .semibold))
-                    .foregroundStyle(glyphTint)
-            }
+            // The glyph on its own, on the list's ground — no tile behind it. The tile was
+            // a filled rounded square per row, which in a column of faces read as a second
+            // kind of avatar and gave a `#` more visual weight than the people beside it.
+            // A channel's mark is one character; drawn bare it says the same thing and
+            // stops competing.
+            //
+            // Still laid out in the `size` box the tile occupied, so the names to its right
+            // stay on the one leading edge they share with every avatar in the list.
+            Image(systemName: symbol ?? (conversation.isPrivate ? "lock.fill" : "number"))
+                // A step up from the tiled `.subheadline`: inside a filled square the glyph
+                // borrowed the square's presence, and at that size on bare ground it reads
+                // as a smaller mark than the 30-point faces it sits in a column with.
+                .font(.hiveSymbol(.title3, weight: .semibold))
+                .foregroundStyle(glyphTint)
+                .frame(width: size, height: size)
+                .accessibilityHidden(true)
         case .group:
             // How many people are in it, where a one-to-one draws a face. A lock here
             // would say only "private", which every direct message is; the number is the
@@ -57,8 +68,12 @@ struct ConversationMark: View {
         }
     }
 
-    /// The rounded square both symbol marks are drawn on, so a `#` and a count cannot
-    /// drift a corner radius apart.
+    /// The rounded square the group count is drawn on.
+    ///
+    /// The channel glyph used to share it, and no longer does — see above. The count keeps
+    /// it because a bare numeral is not a mark: unlike `#`, which is a symbol wherever it
+    /// is drawn, `3` on open ground reads as text that lost its label. The tile is what
+    /// makes it an object beside the faces rather than a stray digit in front of a name.
     private func tile(@ViewBuilder _ content: () -> some View) -> some View {
         RoundedRectangle(cornerRadius: AvatarShape.roundedSquare.cornerRadius(for: size))
             .fill(Color.secondary.opacity(Self.tileOpacity))

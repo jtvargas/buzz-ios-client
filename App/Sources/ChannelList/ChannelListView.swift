@@ -54,6 +54,8 @@ struct ChannelListView: View {
     @State private var showAccount = false
     /// Whether the new-channel sheet is up.
     @State private var showsCreateChannel = false
+    /// Whether the new-direct-message sheet is up.
+    @State private var showsNewDirectMessage = false
     /// The Threads screen, when it is pushed. A value rather than a `Bool` so it goes
     /// through `navigationDestination(item:)` like every other push in the app.
     @State private var showsThreads: ThreadsRoute?
@@ -198,7 +200,7 @@ struct ChannelListView: View {
                         drafts: environment.drafts,
                         uploader: { environment.mediaUploader },
                         selfPubkey: environment.selfPubkeyHex,
-                        knownPeer: route.knownPeer,
+                        knownPeers: route.knownPeers,
                         focusingComposer: route.focusesComposer
                     )
                 }
@@ -228,6 +230,19 @@ struct ChannelListView: View {
                 .createChannelSheet(isPresented: $showsCreateChannel, engine: engine) { channelID in
                     path = ConversationRoute(channel: conversationRow(for: channelID)).pushed(onto: path)
                 }
+                // From the Direct Messages heading's `+`. The people are mapped in the
+                // closure rather than passed as a value, so the whole directory is walked
+                // when the sheet opens rather than on every pass of this body — which
+                // re-evaluates on an arriving message, a heartbeat, a row being read.
+                //
+                // The open is asked for once the sheet is gone, and the push it produces
+                // arrives through the same `pendingConversation` change every other DM does.
+                .newDirectMessageSheet(
+                    isPresented: $showsNewDirectMessage,
+                    people: { directMessagePeople(names: names) },
+                    maxSelection: SyncEngine.maxDirectMessagePeers,
+                    open: { router.open(with: $0) }
+                )
                 .navigationDestination(item: $showsDrafts) { _ in
                     DraftsView(model: draftsModel, open: openDraft)
                 }
@@ -323,9 +338,9 @@ struct ChannelListView: View {
             router.pendingConversation = nil
             let route = ConversationRoute(
                 channel: conversationRow(for: opened.channelID),
-                // The peer the relay named, carried only until the roster lands: it is what
-                // lets a never-synced DM show the person's name, not the untitled placeholder.
-                knownPeer: opened.peer
+                // The people the tap named, carried only until the roster lands: it is what
+                // lets a never-synced DM show their names, not the untitled placeholder.
+                knownPeers: opened.peers
             )
             path = route.pushed(onto: path)
         }
@@ -502,10 +517,10 @@ private extension ChannelListView {
                         section: section.section,
                         count: section.count,
                         isExpanded: expansion(for: section.section),
-                        // Only Channels can be added to from here. A `+` on Starred would
-                        // be a second way to spell a star, and neither a direct message
-                        // (which starts from a person) nor an agent is made on the phone.
-                        create: section.section == .channels ? { showsCreateChannel = true } : nil
+                        // Channels and Direct Messages are the two things this app makes. A
+                        // `+` on Starred would be a second way to spell a star, and an agent
+                        // is not something made on the phone at all.
+                        create: create(for: section.section)
                     )
                     .listRowInsets(Self.headerInsets)
                     .listRowSeparator(.hidden)
@@ -521,6 +536,40 @@ private extension ChannelListView {
             }
             .listStyle(.plain)
             .refreshable { await engine.refresh() }
+        }
+    }
+
+    /// What a section's `+` does, or `nil` for a section that nothing is added to from here.
+    func create(for section: SidebarSection) -> (() -> Void)? {
+        switch section {
+        case .channels: { showsCreateChannel = true }
+        case .directMessages: { showsNewDirectMessage = true }
+        case .starred, .agents: nil
+        }
+    }
+
+    /// The people the new-direct-message sheet offers: every identity the directory knows,
+    /// resolved to plain values here and not inside the sheet.
+    ///
+    /// This is the one place that knows how an identity is *named*, which is where that
+    /// knowledge already lives — and keeping it here is what leaves the sheet a view over an
+    /// array, testable and previewable without a store or an engine.
+    ///
+    /// You are left out. BuzzKit drops your own key from an open command anyway (the relay
+    /// merges the author in), so a row for yourself would be one that silently did nothing.
+    func directMessagePeople(names: EntityNames) -> [DirectMessagePerson] {
+        let me = environment.selfPubkeyHex?.lowercased()
+        return names.identities.compactMap { pubkey in
+            guard pubkey != me else { return nil }
+            return DirectMessagePerson(
+                pubkey: pubkey,
+                name: names.name(for: pubkey),
+                secondary: names.secondaryLabel(for: pubkey),
+                picture: names.picture(for: pubkey),
+                initials: names.initials(for: pubkey),
+                isAgent: names.isAgent(pubkey),
+                isNamed: names.humanName(for: pubkey) != nil
+            )
         }
     }
 

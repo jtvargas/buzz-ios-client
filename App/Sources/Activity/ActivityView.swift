@@ -95,7 +95,7 @@ struct ActivityView: View {
                         drafts: environment.drafts,
                         uploader: { environment.mediaUploader },
                         selfPubkey: selfPubkey,
-                        knownPeer: route.knownPeer,
+                        knownPeers: route.knownPeers,
                         focusingComposer: route.focusesComposer
                     )
                 }
@@ -141,7 +141,7 @@ struct ActivityView: View {
             router.pendingConversation = nil
             let route = ConversationRoute(
                 channel: channelRow(for: opened.channelID),
-                knownPeer: opened.peer
+                knownPeers: opened.peers
             )
             path = route.pushed(onto: path)
         }

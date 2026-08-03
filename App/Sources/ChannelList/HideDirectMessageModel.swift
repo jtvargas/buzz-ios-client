@@ -89,9 +89,10 @@ final class HideDirectMessageModel {
             return message(for: reason)
         case .publishFailed:
             return "No connection to the relay. Try again once it reconnects."
-        case .invalidPeerPubkey, .duplicateEventIDUnresolved, .malformedResponse:
-            // Reachable only through the open command, which parses a payload and
-            // normalises a pubkey; a hide does neither.
+        case .invalidPeerPubkey, .duplicateEventIDUnresolved, .malformedResponse,
+             .noPeers, .tooManyPeers:
+            // Reachable only through the open command, which parses a payload and shapes a
+            // participant set; a hide names one channel that already exists and does neither.
             return "Could not hide the conversation. Try again."
         }
     }

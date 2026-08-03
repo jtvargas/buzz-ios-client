@@ -33,6 +33,15 @@ public enum DirectMessageError: Error, Equatable, Sendable {
     /// The peer identifier was not a 32-byte hex pubkey or an `npub1…`. Caught
     /// before the wire; the relay would only answer `invalid:`.
     case invalidPeerPubkey(String)
+    /// Nobody was left to open with once the participants were normalized — an empty
+    /// list, or one naming only this identity. Distinct from ``invalidPeerPubkey(_:)``
+    /// because every identifier given may have been perfectly well formed: there is
+    /// nothing to fix about the input, there is simply no second person in it.
+    case noPeers
+    /// More participants than this deployment accepts. Carries what was asked for and
+    /// what is allowed, so a caller can say "eight at most" without hardcoding the
+    /// number a second time. See ``SyncEngine/maxDirectMessagePeers``.
+    case tooManyPeers(count: Int, limit: Int)
     /// The relay refused the command, carrying its classified reason. Terminal:
     /// `invalid:` (malformed input, too many peers, stale timestamp), `restricted:`
     /// (the deployment's membership gate), or an `error:` that survived its one
@@ -64,34 +73,73 @@ public enum DirectMessageError: Error, Equatable, Sendable {
 /// device has never synced. Publishing the command unconditionally is the only
 /// correct shape: the relay either creates the channel or hands back the one that
 /// already exists, and says which it did.
+///
+/// # One person or several
+///
+/// The same command opens a two-person DM and a group: the participant set is just
+/// longer. The array form is the real one and the single-peer form delegates to it,
+/// so there is one path to the wire and a group cannot drift from a pair.
 public extension SyncEngine {
-    /// Opens the direct message with `peer`, creating it if the relay does not
+    /// The most participants one direct message may carry, **excluding this
+    /// identity** — so eight other people, and nine in the room.
+    ///
+    /// The relay is the authority and enforces it in its own words: a ninth peer comes
+    /// back as ``DirectMessageError/rejected(_:)`` carrying
+    /// `invalid: pubkeys may contain at most 8 other participants (9 total)`, observed
+    /// live against homelab on 2026-08-03. It is checked here as well so a picker can
+    /// disable the ninth row rather than let someone choose it and then be refused, and
+    /// so the refusal costs no round trip.
+    static let maxDirectMessagePeers = 8
+
+    /// Opens the direct message with `peers`, creating it if the relay does not
     /// already have one, and returns its channel id — what a UI navigates to.
     ///
-    /// - Parameter peer: The peer's pubkey as lowercase or uppercase 64-hex, or a
-    ///   NIP-19 `npub1…`. This identity is *not* included by the caller; the relay
-    ///   merges and dedupes it into the participant set.
+    /// - Parameter peers: Each participant's pubkey as lowercase or uppercase 64-hex,
+    ///   or a NIP-19 `npub1…`; the two forms may be mixed in one call. Order is
+    ///   preserved and repeats are dropped. This identity is *not* included by the
+    ///   caller — the relay merges and dedupes it into the participant set — and is
+    ///   removed here if it is passed anyway, so it never spends one of the
+    ///   ``maxDirectMessagePeers`` slots.
     /// - Returns: The DM channel's id. By the time this returns, the channel's
     ///   relay-signed state has been read back and ingested and its live
     ///   subscription is open, so the channel exists locally.
+    /// - Throws: ``DirectMessageError/noPeers`` if nobody is left after that
+    ///   normalization, or ``DirectMessageError/tooManyPeers(count:limit:)`` if more
+    ///   than ``maxDirectMessagePeers`` are. Neither reaches the wire.
     @discardableResult
-    func openDirectMessage(with peer: String) async throws -> String {
-        try await openOrCreateDirectMessage(with: peer).channelID
+    func openDirectMessage(with peers: [String]) async throws -> String {
+        try await openOrCreateDirectMessage(with: peers).channelID
     }
 
-    /// Opens the direct message with `peer` as ``openDirectMessage(with:)`` does,
-    /// additionally reporting whether this call was the one that created it.
-    func openOrCreateDirectMessage(with peer: String) async throws -> DirectMessageOpen {
-        let peerHex = try Self.normalizedPubkey(peer)
-        let opened = try await runOpenDirectMessageCommand(peerHex: peerHex)
+    /// Opens the direct message with `peers` as ``openDirectMessage(with:)-([String])``
+    /// does, additionally reporting whether this call was the one that created it.
+    func openOrCreateDirectMessage(with peers: [String]) async throws -> DirectMessageOpen {
+        let peerHexes = try normalizedPeerSet(peers)
+        let opened = try await runOpenDirectMessageCommand(peerHexes: peerHexes)
         Self.directMessageLog.notice(
             """
-            DM open resolved to channel \(opened.channelID, privacy: .public) \
+            DM open with \(peerHexes.count, privacy: .public) peer(s) resolved to channel \
+            \(opened.channelID, privacy: .public) \
             (created: \(opened.wasCreated, privacy: .public))
             """
         )
         await adoptOpenedChannel(opened.channelID)
         return opened
+    }
+
+    /// Opens the two-person direct message with `peer`.
+    ///
+    /// Delegates to the array form; kept because most callers have exactly one person
+    /// and a one-element array reads worse at the call site.
+    @discardableResult
+    func openDirectMessage(with peer: String) async throws -> String {
+        try await openOrCreateDirectMessage(with: [peer]).channelID
+    }
+
+    /// Opens the direct message with `peer` as ``openDirectMessage(with:)-(String)``
+    /// does, additionally reporting whether this call was the one that created it.
+    func openOrCreateDirectMessage(with peer: String) async throws -> DirectMessageOpen {
+        try await openOrCreateDirectMessage(with: [peer])
     }
 }
 
@@ -137,12 +185,12 @@ extension SyncEngine {
     ///   is the wrong place to sit on a backoff schedule: the caller can act on the
     ///   typed reason (fix the input, tell the user the deployment refused, offer to
     ///   try again) far better than this loop can.
-    func runOpenDirectMessageCommand(peerHex: String) async throws -> DirectMessageOpen {
+    func runOpenDirectMessageCommand(peerHexes: [String]) async throws -> DirectMessageOpen {
         var nonceResigns = 0
         var retriedInternalError = false
 
         while true {
-            let event = try await signOpenCommand(peerHex: peerHex)
+            let event = try await signOpenCommand(peerHexes: peerHexes)
 
             switch try await sendOpenCommand(event) {
             case let .opened(result):
@@ -213,15 +261,19 @@ extension SyncEngine {
     /// it would activate NIP-33 replace semantics and the relay would answer
     /// `Duplicate` with no payload. No `p` tag for this identity: the relay merges
     /// and dedupes the authenticated author into the participant set, so tagging self
-    /// would only spend one of the eight allowed slots.
+    /// would only spend one of the ``SyncEngine/maxDirectMessagePeers`` slots.
+    ///
+    /// One `p` tag per participant, in the order the caller gave them, then the nonce.
+    /// The relay hashes the set rather than the sequence, so the order is for the
+    /// reader of a wire log, not for correctness.
     ///
     /// Stamped from the engine's injected clock, which the relay's ingest gate
     /// requires to sit within ±15 minutes of its own time.
-    private func signOpenCommand(peerHex: String) async throws -> NostrEvent {
+    private func signOpenCommand(peerHexes: [String]) async throws -> NostrEvent {
         try await signer.sign(
             kind: .directMessageOpen,
             content: "",
-            tags: [["p", peerHex], ["nonce", UUID().uuidString]],
+            tags: peerHexes.map { ["p", $0] } + [["nonce", UUID().uuidString]],
             createdAt: now()
         )
     }
@@ -237,7 +289,14 @@ extension SyncEngine {
     /// will see both. Anything else is refused before the wire: the relay answers a
     /// malformed key with `invalid:`, and a round trip is a poor way to learn a string
     /// was never a pubkey.
-    static func normalizedPubkey(_ raw: String) throws -> String {
+    ///
+    /// Public because this is the **canonical form callers should key on**, not merely
+    /// a wire helper. Anything outside BuzzKit that identifies a person — an in-flight
+    /// guard keyed on a participant set, a cache, a comparison against a roster — has
+    /// to canonicalise the way the wire does. A second, hand-rolled spelling agrees in
+    /// every test and disagrees exactly once, in production, the first time a caller
+    /// passes an `npub1…` where its neighbours pass hex.
+    public static func normalizedPubkey(_ raw: String) throws -> String {
         let lowered = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         if lowered.hasPrefix("npub1"), let key = try? PublicKey(npub: lowered) {
             return key.hex
@@ -246,6 +305,41 @@ extension SyncEngine {
             throw DirectMessageError.invalidPeerPubkey(raw)
         }
         return lowered
+    }
+
+    /// The participant set as it goes on the wire: every identifier canonicalised,
+    /// repeats dropped, this identity removed, order preserved.
+    ///
+    /// # Why each step is here rather than left to the relay
+    ///
+    /// The relay does normalize and dedupe, but it does so *after* counting. A list
+    /// that names one person twice, or that includes this identity, would therefore be
+    /// refused for length while holding fewer than
+    /// ``SyncEngine/maxDirectMessagePeers`` distinct other people — a refusal the
+    /// sender could do nothing about and would not understand. Deduping first means the
+    /// count that is checked is the count that matters.
+    ///
+    /// Order is preserved rather than sorted: the relay hashes the set, so order
+    /// changes nothing on the wire, and a wire log that lists people in the order they
+    /// were picked is easier to read back against a screenshot than one in hex order.
+    ///
+    /// Not `static`, because dropping self needs the engine's authenticated identity.
+    /// Before ``start()`` resolves it there is nothing to drop, and a self pubkey the
+    /// caller passed would survive — harmless, since the relay dedupes it away, and
+    /// unreachable from a UI that cannot pick a person before it has signed in.
+    func normalizedPeerSet(_ peers: [String]) throws -> [String] {
+        var seen: Set<String> = []
+        var ordered: [String] = []
+        for peer in peers {
+            let hex = try Self.normalizedPubkey(peer)
+            guard hex != selfPubkeyHex, seen.insert(hex).inserted else { continue }
+            ordered.append(hex)
+        }
+        guard !ordered.isEmpty else { throw DirectMessageError.noPeers }
+        guard ordered.count <= Self.maxDirectMessagePeers else {
+            throw DirectMessageError.tooManyPeers(count: ordered.count, limit: Self.maxDirectMessagePeers)
+        }
+        return ordered
     }
 
     /// Decodes the relay's command answer: the literal `response:` prefix followed by

@@ -71,9 +71,11 @@ struct ChannelDetailsView: View {
                     }
                 }
             }
-            // The page behind the grouped cards. The cards keep their own surface — this is
-            // the colour they sit on, which was the system's grey.
-            .hiveScreenGround()
+            // No ground modifier, deliberately, and none before #124 either. This `List`
+            // draws its own page and the cards on it, and resolves both against the trait
+            // environment it is hosted in — so a sheet gets the elevated grey and its cards
+            // step up with it, which is precisely what naming a colour out here cannot do.
+            // See ``View/hiveSheetGround()``.
             .navigationTitle(conversation.title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

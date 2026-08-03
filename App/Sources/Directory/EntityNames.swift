@@ -55,6 +55,18 @@ struct EntityNames: Equatable, Sendable {
         snapshot.entity(pubkey)
     }
 
+    /// Every identity the directory holds — the rosters of every channel this account is in,
+    /// plus the agent directory. Unordered.
+    ///
+    /// The only enumeration this type offers, and it exists for one caller: the
+    /// new-direct-message sheet has to *offer* people before anybody has named one, which
+    /// every other accessor here assumes has already happened. Unordered because the sort
+    /// belongs to the surface — ``DirectMessagePicker`` puts people before agents and named
+    /// before merely identified, which is a rule about that list rather than about identity.
+    var identities: [String] {
+        Array(snapshot.entities.keys)
+    }
+
     /// The name to render for `pubkey` — never empty, never a full key.
     func name(for pubkey: String) -> String {
         humanName(for: pubkey) ?? shortIdentifier(for: pubkey)
@@ -127,24 +139,40 @@ struct EntityNames: Equatable, Sendable {
     /// legitimately be empty (`SyncEngineDirectMessageTests` documents that read-back).
     /// ``directPeer(in:)`` then finds no two-member roster, the conversation classifies as
     /// a channel, and — having no metadata name either — titles itself
-    /// ``untitledChannel``: a placeholder standing where the name of a person the tap
+    /// ``untitledChannel``: a placeholder standing where the name of the people the tap
     /// explicitly named should be.
     ///
     /// The hint is consulted *after* the roster and only when the roster is silent, so it
     /// can never override the product rule — it fills the gap before the rule has anything
     /// to say. It also stays a caller's fact rather than a second derivation: the only
     /// thing allowed to produce a peer is ``directPeer(in:)`` or an answer from the relay.
-    func conversation(for row: ChannelListRow, knownPeer: String?) -> ConversationIdentity {
-        conversation(for: row, id: row.id, knownPeer: knownPeer)
+    ///
+    /// Several hinted people are a group, and it is titled by ``title(joining:)`` — the same
+    /// function ``groupTitle(for:id:)`` uses once the roster lands. So the title before and
+    /// after are the same string, and nothing flashes as the membership arrives.
+    func conversation(for row: ChannelListRow, knownPeers: [String]) -> ConversationIdentity {
+        conversation(for: row, id: row.id, knownPeers: knownPeers)
     }
 
     private func conversation(
         for row: ChannelListRow?,
         id: String,
-        knownPeer: String? = nil
+        knownPeers: [String] = []
     ) -> ConversationIdentity {
+        // The directory's own row wins; a caller's is a *stand-in* for a channel the
+        // directory has not got yet.
+        //
+        // ``ChannelListView/conversationRow(for:)`` fabricates one — no name, and no
+        // `t=dm` — for a channel the relay has just answered with but that has not reached
+        // the live list, and ``ConversationRoute`` then holds that value for the whole life
+        // of the push. Without this line the conversation asks forever about a row that
+        // never learns it is a direct message, while taking its *title* from the live one:
+        // the classification came from the stand-in and the string from the directory, and
+        // a group opened from the picker read `Group DM (4)`.
+        let row = channelsByID[id] ?? row
         let members = snapshot.members(of: id)
-        if let peer = directPeer(in: id) ?? unprojectedPeer(in: id, hint: knownPeer) {
+        let hint = knownPeers.count == 1 ? knownPeers.first : nil
+        if let peer = directPeer(in: id) ?? unprojectedPeer(in: id, hint: hint) {
             return ConversationIdentity(
                 channelID: id,
                 kind: isAgent(peer) ? .agent : .direct,
@@ -170,6 +198,25 @@ struct EntityNames: Equatable, Sendable {
                 initials: Self.initials(from: row?.name),
                 isPrivate: row?.isPrivate ?? true,
                 memberCount: members.count
+            )
+        }
+        // The same gap ``unprojectedPeer(in:hint:)`` fills, for a group: a conversation the
+        // relay opened seconds ago whose membership has not been projected yet. Titled by the
+        // people the tap named, which is the string the roster will produce — so this is the
+        // conversation appearing already named rather than a placeholder being replaced.
+        if let hinted = unprojectedGroup(in: id, hints: knownPeers) {
+            return ConversationIdentity(
+                channelID: id,
+                kind: .group,
+                title: title(joining: hinted),
+                peer: nil,
+                picture: nil,
+                initials: Self.initials(from: row?.name),
+                isPrivate: row?.isPrivate ?? true,
+                // The people named, plus you — which is what the roster will hold once it
+                // lands. A count that grew by one at that moment would be the mark changing
+                // under a reader already looking at it.
+                memberCount: hinted.count + 1
             )
         }
         return ConversationIdentity(
@@ -200,7 +247,20 @@ struct EntityNames: Equatable, Sendable {
         if let given, !Self.isGenericDirectMessageName(given) { return given }
         let others = snapshot.members(of: id).filter { $0 != selfPubkey }
         guard !others.isEmpty else { return channelName(for: id) }
-        return others
+        return title(joining: others)
+    }
+
+    /// A set of people as one title: their names, in order, comma-separated.
+    ///
+    /// Lifted out of ``groupTitle(for:id:)`` so there is exactly one spelling of "how a group
+    /// is named" — the roster's answer once it lands, and the hint's answer before it does
+    /// (see ``unprojectedGroup(in:hints:)``). Two spellings would mean the title changing at
+    /// the moment the membership arrived, which is the flash this hint exists to prevent.
+    ///
+    /// Ordered by the rendered name and then by key, because a roster is a `Set`: without a
+    /// total order the same conversation would list its people differently on each pass.
+    private func title(joining peers: some Collection<String>) -> String {
+        peers
             .map { (pubkey: $0, label: name(for: $0)) }
             .sorted { lhs, rhs in
                 let comparison = lhs.label.localizedCaseInsensitiveCompare(rhs.label)
@@ -255,6 +315,23 @@ struct EntityNames: Equatable, Sendable {
         return hint.lowercased()
     }
 
+    /// The same hint, for a group: the people a caller named, while the roster still cannot
+    /// answer for itself. `nil` once it can, or when fewer than two people are left — one is
+    /// a one-to-one and ``unprojectedPeer(in:hint:)`` has already answered it.
+    ///
+    /// De-duplicated and with the local identity dropped, in the order the caller named them
+    /// — which is the same shaping the relay applies to the `p` tags, so the count here and
+    /// the count the roster lands with agree.
+    private func unprojectedGroup(in channel: String, hints: [String]) -> [String]? {
+        guard let selfPubkey, snapshot.members(of: channel).count < 2 else { return nil }
+        var seen: Set<String> = [selfPubkey]
+        var others: [String] = []
+        for hint in hints.map({ $0.lowercased() }) where seen.insert(hint).inserted {
+            others.append(hint)
+        }
+        return others.count > 1 ? others : nil
+    }
+
     /// The other member of a two-person roster that includes the local identity —
     /// the product rule for "this is a DM": a direct message *is* a channel whose
     /// roster is exactly the two people in it. Any other roster size, an unknown
@@ -275,8 +352,20 @@ struct EntityNames: Equatable, Sendable {
     /// four places, most visibly for a DM group another client created with no metadata
     /// name. The deliberate display of a group id lives in the details sheet's Developer
     /// section, labelled for what it is.
+    /// A direct message's relay-given name never survives this. `DM`, `Group DM (4)` — the
+    /// relay writes those, nobody chose them, and they name none of the people in the room.
+    /// ``groupTitle(for:id:)`` has always rejected them; this is the same rejection on the
+    /// other door into the same string, for the conversations that reach here instead: a DM
+    /// whose roster has not arrived, so there is nobody to list yet. `Untitled conversation`
+    /// says that honestly. The gate is ``BuzzKit/ChannelListRow/isDirectMessage`` and not
+    /// the shape of the name, because a channel somebody deliberately called `Group DM (4)`
+    /// chose that name and nothing here is entitled to overrule it.
     func channelName(for channel: String) -> String {
-        let name = channelsByID[channel]?.name?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let row = channelsByID[channel]
+        let name = row?.name?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if row?.isDirectMessage == true, Self.isGenericDirectMessageName(name) {
+            return Self.untitledChannel
+        }
         if let name, !name.isEmpty { return name }
         return Self.untitledChannel
     }
