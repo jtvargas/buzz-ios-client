@@ -85,7 +85,7 @@ struct ChannelRowView: View {
             Circle()
                 .fill(Color.green)
                 .frame(width: 9, height: 9)
-                .overlay(Circle().strokeBorder(Color(.systemBackground), lineWidth: 1.5))
+                .overlay(Circle().strokeBorder(Color.hiveNight, lineWidth: 1.5))
                 .accessibilityHidden(true)
         }
     }

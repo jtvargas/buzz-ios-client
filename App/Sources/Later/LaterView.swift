@@ -24,6 +24,9 @@ struct LaterView: View {
             tabs
             list
         }
+        // On the whole screen rather than on ``rowList``: the segmented strip above the list
+        // and the three empty states that replace it are outside that view.
+        .hiveScreenGround()
         .navigationTitle("Later")
         .navigationBarTitleDisplayMode(.inline)
         .navigationDestination(item: $rescheduling) { row in
@@ -104,9 +107,6 @@ struct LaterView: View {
             }
         }
         .listStyle(.plain)
-        // See ``ThreadsView`` for why both of these are needed rather than either alone.
-        .scrollContentBackground(.hidden)
-        .background(Color.hiveNight)
     }
 
     /// The air above and below a row. Enough that a row reads as an entry with a message in

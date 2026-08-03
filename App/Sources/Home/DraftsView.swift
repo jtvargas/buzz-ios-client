@@ -42,9 +42,7 @@ struct DraftsView: View {
             }
         }
         .listStyle(.plain)
-        // See ``ThreadsView`` for why both of these are needed rather than either alone.
-        .scrollContentBackground(.hidden)
-        .background(Color.hiveNight)
+        .hiveScreenGround()
         .environment(\.editMode, .constant(isSelecting ? .active : .inactive))
         .navigationTitle("Drafts")
         .navigationBarTitleDisplayMode(.inline)

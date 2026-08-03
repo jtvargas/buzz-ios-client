@@ -135,7 +135,7 @@ struct ChannelListView: View {
                 // surfaces — the placeholder bars, the two `ContentUnavailableView`s and the
                 // list itself — and a ground applied to only the last of them would flash
                 // black for as long as the relay takes to answer.
-                .background(Color.hiveNight)
+                .hiveScreenGround()
                 .overlay(alignment: .top) {
                     // Gated on the surface and not on having rows: an identity the relay
                     // confirmed is in *nothing* still needs to be told when a later refresh
@@ -520,10 +520,6 @@ private extension ChannelListView {
                 }
             }
             .listStyle(.plain)
-            // Lets the ground declared on the container in `body` show through. Without it
-            // the list paints `systemBackground` over the whole scrolling area and only the
-            // safe-area edges take the new colour.
-            .scrollContentBackground(.hidden)
             .refreshable { await engine.refresh() }
         }
     }

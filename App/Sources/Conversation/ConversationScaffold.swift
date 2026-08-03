@@ -178,6 +178,10 @@ struct ConversationScaffold<Content: View, Bar: View, Accessory: View>: View {
                 apply(place.composerRoomDidChange(isAtBottom: isAtBottom), using: proxy)
             }
         }
+        // The app's one dark, the same one the sidebar this was pushed from draws. Both
+        // conversation surfaces come through here, so the channel and a thread take it
+        // together — see ``View/hiveScreenGround()``.
+        .hiveScreenGround()
         // The bar's own height, so the list and the composer are one drag surface: a
         // downward drag takes the keyboard from the moment it reaches the composer,
         // rather than only once it reaches the keyboard.

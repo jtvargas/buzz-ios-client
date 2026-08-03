@@ -133,12 +133,7 @@ struct ThreadsView: View {
             }
         }
         .listStyle(.plain)
-        // The app's one dark, the same way the sidebar this screen is opened from takes it
-        // (``ChannelListView``). Both modifiers are needed: hiding the scroll background
-        // clears the list's own surface, and a row given no background of its own falls
-        // back to `systemBackground` — opaque black — over whatever is behind it.
-        .scrollContentBackground(.hidden)
-        .background(Color.hiveNight)
+        .hiveScreenGround()
         // The same pull the sidebar offers, for the same reason — see
         // ``ChannelListView/sidebar(names:)``. This screen summarises every channel's
         // threads, so a stale one is exactly as misleading here as there.
