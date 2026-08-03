@@ -79,7 +79,7 @@ body:
       label: Relay
       placeholder: e.g. relay.example.com
     validations:
-      required: true
+      required: false
 
   - type: textarea
     id: logs
