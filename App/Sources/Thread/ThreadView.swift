@@ -201,16 +201,12 @@ struct ThreadView: View {
             isReadOnly: !access.isWritable,
             onRemind: { row, due in
                 Task {
-                    guard let engine = appEnvironment.engine else { return }
                     await ReminderCreation.set(
                         row,
                         channelID: channelID,
                         due: due,
-                        engine: engine,
                         authorName: names.name(for: row.pubkey),
-                        scheduler: ReminderScheduler(
-                            notificationsEnabled: { appEnvironment.settings.notificationsEnabled }
-                        )
+                        in: appEnvironment
                     )
                 }
             }
