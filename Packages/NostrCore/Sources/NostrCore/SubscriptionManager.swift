@@ -103,6 +103,18 @@ public actor SubscriptionManager {
     /// every live subscription must be re-`REQ`ed onto exactly once.
     var readyEpoch = 0
 
+    /// The subscription to re-`REQ` first when the connection returns to `ready`.
+    ///
+    /// Re-arming walks every live subscription, and until this existed it walked them
+    /// in `Dictionary`'s order — so the conversation a reader is actually looking at
+    /// could be restored last, and its channel stayed silent for the whole replay. A
+    /// consumer that knows which subscription is on screen names it here.
+    ///
+    /// Advisory, never load-bearing. A stale id — its subscription unsubscribed, or
+    /// closed by the relay — is skipped and the remaining order is unchanged, so no
+    /// caller has to clear it to keep re-arming correct.
+    var prioritySubscriptionID: SubscriptionID?
+
     /// The authenticated identity's hex pubkey, resolved from the signer once and
     /// cached — only pubkey-gated filters need it, and only the first time.
     var cachedPubkeyHex: String?
@@ -164,6 +176,19 @@ public actor SubscriptionManager {
         subscriptions.removeAll()
         connectionIsReady = false
         started = false
+        prioritySubscriptionID = nil
+    }
+
+    // MARK: - Re-arm priority
+
+    /// Names the subscription to re-`REQ` first on the next return to `ready` — the
+    /// one whose events a reader is waiting on. `nil` drops the preference.
+    ///
+    /// Ordering only. It arms nothing by itself, and it changes neither what a
+    /// subscription asks for nor what it receives, so naming a subscription that is
+    /// gone, or naming none, costs only the ordering it asked for.
+    public func prioritise(_ id: SubscriptionID?) {
+        prioritySubscriptionID = id
     }
 
     // MARK: - Registration

@@ -238,6 +238,15 @@ public actor SyncEngine {
     /// only in ``stop()``.
     var channelContentSubscriptions: [String: SubscriptionID] = [:]
 
+    /// The channel the reader has on screen, as last reported by the app through
+    /// ``setActiveChannel(_:)``.
+    ///
+    /// Held rather than just forwarded so that a channel opened *before* its standing
+    /// subscription exists still becomes the re-arm priority the moment
+    /// ``subscribeChannelContent(_:)`` registers one. Ordering only — see
+    /// ``setActiveChannel(_:)``.
+    var activeChannel: String?
+
     // MARK: - Tasks
 
     private var stateObserverTask: Task<Void, Never>?
@@ -454,6 +463,9 @@ public actor SyncEngine {
         // content-subscription ids so a later reopen re-registers cleanly rather than
         // believing a channel is still subscribed.
         channelContentSubscriptions.removeAll()
+        // Named an id in the table just cleared; a later session re-reports whatever
+        // is on screen then.
+        activeChannel = nil
         state = .stopped
     }
 
