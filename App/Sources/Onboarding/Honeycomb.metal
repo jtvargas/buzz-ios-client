@@ -183,9 +183,9 @@ inline float hiveLane(float2 id,
     // the glow are both zero, `amount` is zero, and the final `mix` returns `currentColor`
     // unchanged, which is what is returned here.
     //
-    // This is not a micro-optimisation. Full-screen at 120 Hz, the version without it starved
-    // the main thread badly enough that an unrelated `@MainActor` test in the app's own test
-    // host stopped being able to make progress inside sixty seconds.
+    // It matters more since the lanes landed than it did before them: what a non-line pixel
+    // would skip is now `kLanes` times the hash-and-`exp` work, on the ninety-odd per cent of
+    // a full screen at 120 Hz that cannot show a light in the first place.
     if (stroke <= 0.0) {
         return currentColor;
     }
