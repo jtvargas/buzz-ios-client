@@ -133,7 +133,35 @@ extension SyncEngine {
             return winner
         }
         channelContentSubscriptions[channel] = id
+        // A conversation can be on screen before discovery has registered its channel —
+        // opening one is itself a route into this method. Claim the re-arm priority now
+        // rather than waiting for the next ``setActiveChannel(_:)``, which for a channel
+        // already open would never come.
+        if channel == activeChannel {
+            await subscriptions.prioritise(id)
+        }
         return id
+    }
+
+    // MARK: - Re-arm priority
+
+    /// Reports which channel the reader has on screen, so a reconnect restores that
+    /// channel's live traffic before every other channel's.
+    ///
+    /// A reconnect re-`REQ`s every standing subscription and the engine keeps one per
+    /// joined channel, so without a stated preference the open conversation took its
+    /// turn in an arbitrary order — on a busy account, potentially last. This names it,
+    /// and the ``SubscriptionManager`` arms it first.
+    ///
+    /// Ordering only: membership, filters and delivery are all untouched, and a value
+    /// that is stale or names a channel with no subscription is skipped. So it is safe
+    /// to call before the channel is subscribed — ``subscribeChannelContent(_:)`` picks
+    /// the priority up when it registers one — and there is no obligation to clear it
+    /// when the conversation closes. Leaving the last-read channel prioritised is the
+    /// better resting state anyway: it is where the reader most likely returns.
+    public func setActiveChannel(_ channel: String?) async {
+        activeChannel = channel
+        await subscriptions.prioritise(channel.flatMap { channelContentSubscriptions[$0] })
     }
 
     /// Drops the standing content subscription for `channel` with a `CLOSE`. A no-op

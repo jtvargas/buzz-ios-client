@@ -18,9 +18,24 @@ extension SubscriptionManager {
         let epoch = readyEpoch
         // Snapshot the ids: `armSubscription` awaits a send, during which a
         // reentrant register or unsubscribe may mutate the table.
-        for id in Array(subscriptions.keys) {
+        for id in armOrder() {
             await armSubscription(id, epoch: epoch, resetCloseRetry: true)
         }
+    }
+
+    /// Every registered subscription id, with ``SubscriptionManager/prioritySubscriptionID``
+    /// first when it still names a live one.
+    ///
+    /// The rest keep `Dictionary`'s order. That order is arbitrary, and for them it is
+    /// also of no consequence — what mattered was that the subscription a reader is
+    /// watching was somewhere in it, taking its chances against every other channel's
+    /// re-`REQ`.
+    private func armOrder() -> [SubscriptionID] {
+        let ids = Array(subscriptions.keys)
+        guard let priority = prioritySubscriptionID, subscriptions[priority] != nil else {
+            return ids
+        }
+        return [priority] + ids.filter { $0 != priority }
     }
 
     /// Sends the `REQ` for a subscription under a readiness epoch, at most once

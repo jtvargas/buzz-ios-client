@@ -224,6 +224,70 @@ struct SubscriptionManagerTests {
         await connection.stop()
     }
 
+    @Test("The prioritised subscription is re-REQed before the others on reconnect", .timeLimit(.minutes(1)))
+    func prioritisedSubscriptionReArmsFirst() async throws {
+        let signer = try InMemorySigner()
+        let first = FakeRelay()
+        let second = FakeRelay()
+        let transports = TransportQueue([first, second])
+        let connection = makeInertConnection(signer: signer, transports: transports)
+        let manager = SubscriptionManager(connection: connection, signer: signer)
+
+        try await connection.connect()
+        try await driveAuthToReady(connection, first, authSendIndex: 0)
+
+        // Three subscriptions, so the assertion cannot pass on a coin flip: only one of
+        // the six possible orders puts the *last* registered one first.
+        var ids: [SubscriptionID] = []
+        for kind in [EventKind.channelMessage, .richMessage, .reaction] {
+            ids.append(try await manager.register(filters: [Filter(kinds: [kind])], sink: RecordingSink()))
+            _ = await first.awaitSend(index: ids.count) // initial REQ on the first socket
+        }
+        let last = try #require(ids.last)
+        await manager.prioritise(last)
+
+        await first.enqueueFailure(.connectionClosed)
+        try await driveAuthToReady(connection, second, authSendIndex: 0)
+
+        let firstReArmed = await second.awaitSend(index: 1)
+        #expect(try reqSubscriptionID(from: firstReArmed) == last.rawValue)
+
+        await manager.shutdown()
+        await connection.stop()
+    }
+
+    @Test("A priority naming a subscription that is gone leaves re-arming intact", .timeLimit(.minutes(1)))
+    func stalePriorityDoesNotStrandReArming() async throws {
+        let signer = try InMemorySigner()
+        let first = FakeRelay()
+        let second = FakeRelay()
+        let transports = TransportQueue([first, second])
+        let connection = makeInertConnection(signer: signer, transports: transports)
+        let manager = SubscriptionManager(connection: connection, signer: signer)
+
+        try await connection.connect()
+        try await driveAuthToReady(connection, first, authSendIndex: 0)
+        let survivor = try await manager.register(filters: [Filter(kinds: [.channelMessage])], sink: RecordingSink())
+        _ = await first.awaitSend(index: 1)
+        let doomed = try await manager.register(filters: [Filter(kinds: [.richMessage])], sink: RecordingSink())
+        _ = await first.awaitSend(index: 2)
+
+        // Prioritise, then unsubscribe the very subscription named. The stale id must be
+        // skipped rather than consume the first slot or abort the walk.
+        await manager.prioritise(doomed)
+        await manager.unsubscribe(doomed)
+        _ = await first.awaitSend(index: 3) // CLOSE
+
+        await first.enqueueFailure(.connectionClosed)
+        try await driveAuthToReady(connection, second, authSendIndex: 0)
+
+        let reArmed = await second.awaitSend(index: 1)
+        #expect(try reqSubscriptionID(from: reArmed) == survivor.rawValue)
+
+        await manager.shutdown()
+        await connection.stop()
+    }
+
     // MARK: - Unsubscribe
 
     @Test("Unsubscribe sends CLOSE and drops later frames for the dead subscription", .timeLimit(.minutes(1)))
