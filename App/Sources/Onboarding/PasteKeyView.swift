@@ -76,11 +76,13 @@ struct PasteKeyView: View {
         .toolbar {
             if step != .relay {
                 ToolbarItem(placement: .topBarLeading) {
+                    // Live while connecting, for the reason given in ``CreateIdentityView``:
+                    // with the system's back button hidden this is the only way off the screen,
+                    // and `submitIdentity` waits on a relay that can hang.
                     Button("Back") {
                         focused = nil
                         stepBack()
                     }
-                    .disabled(step == .working)
                 }
             }
             ToolbarItemGroup(placement: .keyboard) {
@@ -208,8 +210,11 @@ struct PasteKeyView: View {
         }
     }
 
+    /// From `working` too — the connection is happening *on* the key step, not somewhere else,
+    /// so back from it is back to the relay. The task carries on; it just no longer owns where
+    /// the reader is.
     private func stepBack() {
-        guard step == .key else { return }
+        guard step != .relay else { return }
         withAnimation(.snappy) { step = .relay }
     }
 
@@ -224,7 +229,10 @@ struct PasteKeyView: View {
             error = failure
             if failure == nil {
                 nsec = ""
-            } else {
+            } else if step == .working {
+                // Only if the reader is still watching this run — they can walk back out of
+                // `working` while it is in flight, and yanking them forward onto a step they
+                // deliberately left is worse than letting the error wait for them there.
                 step = .key
             }
         }

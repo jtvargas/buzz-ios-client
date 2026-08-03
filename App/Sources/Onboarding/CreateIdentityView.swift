@@ -86,11 +86,16 @@ struct CreateIdentityView: View {
         .toolbar {
             if step != .relay {
                 ToolbarItem(placement: .topBarLeading) {
+                    // Live while the key is being minted, on purpose. The system's own back
+                    // button is hidden from the second step on, so this is the *only* way off
+                    // this screen — and `createIdentity` waits on a relay coming up, which can
+                    // hang. Disabling it here would trap the reader behind a spinner with the
+                    // navigation control they would normally reach for taken away. The walk
+                    // that was replaced could always be popped mid-submit; so can this one.
                     Button("Back") {
                         focused = nil
                         stepBack()
                     }
-                    .disabled(step == .working)
                 }
             }
             // The button that hands the keyboard back. The plain `.keyboard` placement, which is
@@ -247,7 +252,10 @@ struct CreateIdentityView: View {
             let failure = await environment.createIdentity(relayURLString: relay)
             if let failure {
                 error = failure
-                step = .key
+                // Only if the reader is still watching this run. They can walk back out of
+                // `working` while it is in flight, and yanking them forward onto a step they
+                // deliberately left is worse than letting the error wait for them there.
+                if step == .working { step = .key }
                 return
             }
             // Safe here in a way it is not on the paste route: this key was minted a moment ago
@@ -267,8 +275,10 @@ struct CreateIdentityView: View {
     private func stepBack() {
         switch step {
         case .profile: withAnimation(.snappy) { step = .relay }
-        case .key: withAnimation(.snappy) { step = .profile }
-        case .relay, .working: return
+        // From `working` it is the key step that is behind you — the mint is *on* that step, not
+        // a place of its own. The task carries on; it just no longer owns where the reader is.
+        case .key, .working: withAnimation(.snappy) { step = .profile }
+        case .relay: return
         }
     }
 }
