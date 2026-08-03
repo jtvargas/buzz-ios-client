@@ -12,10 +12,12 @@ import Foundation
 /// the top of it. Same thresholds, opposite signs — a hand that has learned one has learned
 /// the other.
 enum WorkspacePanelGeometry {
-    /// How much of the screen the panel covers. The owner's number, and Slack's: the strip
-    /// left over is what you tap to go back, so it has to stay wide enough to be a target
-    /// and narrow enough to read as the screen behind rather than as a column.
-    static let widthFraction: CGFloat = 0.85
+    /// How much of the screen the panel covers. The owner's number, chosen on a device on
+    /// 2026-08-03: `0.85` originally, tried at `0.70`, settled at `0.75`. The strip left over
+    /// is what you tap to go back, so it has to stay wide enough to be a target — a quarter of
+    /// the screen here, against the sliver `0.85` left. That is his trade, made by looking at
+    /// all three — do not quietly tune it back toward Slack's.
+    static let widthFraction: CGFloat = 0.75
     /// How dark the sidebar goes under the open panel.
     static let scrimOpacity: CGFloat = 0.28
     /// The share of the panel's width a slow drag has to cross to leave it open.
