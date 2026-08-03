@@ -20,7 +20,6 @@ Hive is a native iOS client for [Buzz](https://github.com/block/buzz), the Nostr
 
 - [Why](#why)
 - [Features & support](#features--support)
-- [Screenshots](#screenshots)
 - [Build from source](#build-from-source)
 - [Contributing](#contributing)
 - [Architecture](#architecture)
@@ -75,7 +74,7 @@ This section describes the app as it is on `main`, not as planned. Anything not 
 - Show live presence dots beside names, on DM rows, and in DM headings.
 - Show typing indicators scoped to the current conversation or thread.
 - Sync cross-device read state with NIP-RS.
-- Hold new arrivals while reading history, expose `N new messages` and `↓ Latest`, and support interactive keyboard dismissal.
+- Hold new arrivals while reading history, expose an `N new messages` pill that lands on the first one you have not seen, and support interactive keyboard dismissal.
 
 **Identity everywhere**
 
@@ -98,10 +97,6 @@ These exist upstream, or are on the roadmap, and are honestly absent here:
 - **Widgets, share extension, App Intents, Live Activities.**
 
 [PARITY.md](PARITY.md) tracks the same picture against upstream's module list.
-
-## Screenshots
-
-The hero image above is the only screenshot asset currently in the repository: [`docs/assets/hero.png`](docs/assets/hero.png).
 
 ## Build from source
 
