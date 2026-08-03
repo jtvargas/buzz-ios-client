@@ -10,7 +10,8 @@ import SwiftUI
 /// its entire content every frame.
 struct HoneycombBackground: View {
     /// Hexagon width in points. Large enough that the lattice reads as a pattern rather than a
-    /// texture at arm's length, small enough that a travelling wave crosses several cells.
+    /// texture at arm's length, and large enough that a light running round one cell's outline
+    /// is a stroke a reader can follow rather than a speck.
     var cellSize: CGFloat = 56
 
     /// The flat colour under the lattice. The pattern composites over it inside the shader.
@@ -24,9 +25,10 @@ struct HoneycombBackground: View {
     /// has about two seconds of precision, which quantises the whole animation into a stutter.
     @State private var start = Date()
 
-    /// Reduce Motion gets the same lattice, frozen mid-wave. Not a blank background: the
-    /// pattern is the screen's identity, and the setting asks for less movement, not less
-    /// design. The constant is picked so a few cells sit lit rather than all or none.
+    /// Reduce Motion gets the same lattice with the pulses frozen part-way round. Not a blank
+    /// background: the pattern is the screen's identity, and the setting asks for less
+    /// movement, not less design. The constant is picked so a few cells sit lit rather than
+    /// all or none.
     private static let stillTime: Double = 4.2
 
     private var isPaused: Bool {
@@ -66,8 +68,8 @@ extension ShapeStyle where Self == Color {
     /// white. The one screen in the app that owns its own background.
     static var hiveNight: Color { Color(red: 0.055, green: 0.067, blue: 0.075) }
 
-    /// What a lattice cell reaches at the crest of a wave: the accent pushed toward white so
-    /// the wave reads as light passing through rather than as a second colour.
+    /// What the head of a travelling pulse reaches: the accent pushed toward white so the
+    /// light reads as passing *through* the line rather than as a second colour painted on it.
     static var hiveHoneyGlow: Color { Color(red: 1.0, green: 0.855, blue: 0.55) }
 }
 

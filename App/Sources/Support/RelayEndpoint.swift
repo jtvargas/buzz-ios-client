@@ -7,23 +7,23 @@ import Foundation
 /// and persisted in `UserDefaults`; it is not a secret, so `UserDefaults` is the
 /// right home. The key never touches this — it lives only in the Keychain.
 enum RelayEndpoint {
-    /// The prefilled relay: the owner's Pi over Tailscale, reached through the TLS
-    /// endpoint Tailscale serves.
-    ///
-    /// It is `wss://…ts.net` and not the plain `ws://<tailnet-ip>:3004` it used to be,
-    /// because that address no longer connects at all — measured 2026-07-26, the plaintext
-    /// port refuses the WebSocket handshake outright (`NSURLErrorDomain -1011`), and NIP-42
-    /// rejects it separately because the URL the client authenticates against has to match
-    /// the one the relay advertises. A prefill that cannot connect is worse than no
-    /// prefill: the URL is only editable during onboarding, so a fresh install that
-    /// accepted the default had no way back out of it.
-    static let defaultURLString = "wss://homelab.tail4bc643.ts.net"
-
     private static let storageKey = "relay.websocketURL"
 
-    /// The persisted websocket URL string, defaulting to the prefill.
+    /// The persisted websocket URL string, empty until this device has been pointed at a
+    /// relay.
+    ///
+    /// **Nothing is prefilled, deliberately.** A relay address belongs to whoever runs the
+    /// relay, and the constant that used to sit here named one particular person's tailnet
+    /// host — which every fresh install then showed on its first screen, in the relay row and
+    /// in the community card above it, as though it were the client's own home. The two
+    /// routes a reader is most likely to take carry their relay with them anyway: a desktop
+    /// pairing QR supplies it, and so does an invite link.
+    ///
+    /// An empty value is a *state*, not a failure. ``OnboardingView`` opens the relay editor
+    /// whenever the address is not usable, so an empty default lands the reader in an open
+    /// field rather than behind a collapsed one.
     static var storedURLString: String {
-        get { UserDefaults.standard.string(forKey: storageKey) ?? defaultURLString }
+        get { UserDefaults.standard.string(forKey: storageKey) ?? "" }
         set { UserDefaults.standard.set(newValue, forKey: storageKey) }
     }
 

@@ -29,7 +29,7 @@ import Foundation
 /// phone that called it one thing while the laptop beside it called it another would be
 /// reporting a disagreement that does not exist. So the rule is copied character for
 /// character, including where it is crude — an IP-address relay yields its first octet, and
-/// `homelab.tail4bc643.ts.net` reads as the lowercase `homelab` Desktop shows — because
+/// `hive.example.ts.net` reads as the lowercase `relay` Desktop shows — because
 /// agreeing with the screen next to it beats being cleverer on its own. Title-casing the
 /// label was tried and removed for exactly that reason: it is a nicer heading and it is a
 /// visible disagreement, which is the one thing this is here to avoid.
@@ -51,7 +51,7 @@ enum CommunityIdentity {
         // Lowercased before anything is matched against it, because that is what Desktop
         // compares: WHATWG `URL.hostname` lowercases the host during parsing, Foundation's
         // `URL.host()` hands it back as typed. Without this, an owner who typed
-        // `wss://Homelab.tail4bc643.ts.net` gets `Homelab` on the phone and `homelab` on the
+        // `wss://Relay.example.ts.net` gets `Relay` on the phone and `relay` on the
         // laptop, and `ws://LOCALHOST:3004` misses the local-host set here while matching it
         // there. Hostnames are case-insensitive, so this loses nothing.
         return sanitised(derivedName(fromHost: host.lowercased())) ?? defaultName

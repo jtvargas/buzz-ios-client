@@ -92,12 +92,12 @@ struct CommunityStorageTests {
             forget(suite)
             RelayEndpoint.storedURLString = previousRelay
         }
-        RelayEndpoint.storedURLString = "wss://homelab.tail4bc643.ts.net"
+        RelayEndpoint.storedURLString = "wss://hive.example.ts.net"
 
         let directory = storage.loadAdoptingLegacyInstall(hasLegacyIdentity: true)
         #expect(directory.communities.count == 1)
         let adopted = try #require(directory.active)
-        #expect(adopted.relayURLString == "wss://homelab.tail4bc643.ts.net")
+        #expect(adopted.relayURLString == "wss://hive.example.ts.net")
         // Nothing moved: the key stays where the signer already looks and the history stays
         // in the file the store already has open.
         #expect(adopted.keychainAccount == Community.legacyKeychainAccount)
@@ -111,7 +111,7 @@ struct CommunityStorageTests {
             forget(suite)
             RelayEndpoint.storedURLString = previousRelay
         }
-        RelayEndpoint.storedURLString = "wss://homelab.tail4bc643.ts.net"
+        RelayEndpoint.storedURLString = "wss://hive.example.ts.net"
 
         let first = storage.loadAdoptingLegacyInstall(hasLegacyIdentity: true)
         let second = storage.loadAdoptingLegacyInstall(hasLegacyIdentity: true)
@@ -184,7 +184,7 @@ struct CommunityStorageTests {
             forget(suite)
             RelayEndpoint.storedURLString = previousRelay
         }
-        RelayEndpoint.storedURLString = "wss://homelab.tail4bc643.ts.net"
+        RelayEndpoint.storedURLString = "wss://hive.example.ts.net"
 
         var directory = CommunityDirectory()
         directory.add(Community.new(relayURLString: "wss://a.example", name: "Alpha"))

@@ -1,12 +1,17 @@
 import SwiftUI
 
-/// The app mark at the top of onboarding: a filled hexagon inside a wider stroked one, lit from
-/// behind.
+/// The app mark at the top of onboarding: the app icon itself, lit from behind.
 ///
-/// Three layers rather than one glyph because a single flat `hexagon.fill` sitting on the
-/// animated lattice reads as one more cell of it. The ring separates the mark from the pattern,
-/// and the glow behind it is what the honeycomb's radial falloff is aimed at — the lattice
-/// appears to be radiating out of the mark rather than merely being behind it.
+/// It draws `HiveMark` from the asset catalog rather than an SF Symbol hexagon. The symbol was
+/// a stand-in and it read as one: a bare `hexagon.fill` sitting on a hexagonal lattice looks
+/// like one more cell of the pattern, where the icon — bee inside the comb — is the thing a
+/// reader already has on their home screen. The art is the same layer the icon is built from
+/// (`hive-buzz-app.icon/Assets/Group 2678.png`), copied into the catalog because the `.icon`
+/// wrapper is compiled by `actool` for the launcher and its layers are not addressable by name
+/// at runtime.
+///
+/// The glow behind it stays, quietly. It is what the honeycomb's radial falloff is aimed at, so
+/// the lattice appears to radiate out of the mark rather than merely sit behind it.
 struct HiveMark: View {
     var size: CGFloat = 68
 
@@ -15,32 +20,24 @@ struct HiveMark: View {
             Circle()
                 .fill(
                     RadialGradient(
-                        colors: [.hiveAccent.opacity(0.34), .hiveAccent.opacity(0.06), .clear],
+                        colors: [.hiveAccent.opacity(0.14), .clear],
                         center: .center,
                         startRadius: 0,
-                        endRadius: size * 1.5
+                        endRadius: size * 1.2
                     )
                 )
-                .frame(width: size * 3, height: size * 3)
-                .blur(radius: size * 0.18)
+                .frame(width: size * 2.4, height: size * 2.4)
+                .blur(radius: size * 0.22)
 
-            Image(systemName: "hexagon")
-                .font(.hiveSymbol(fixedSize: size * 1.62, weight: .light))
-                .foregroundStyle(.hiveAccent.opacity(0.22))
-
-            Image(systemName: "hexagon.fill")
-                .font(.hiveSymbol(fixedSize: size))
-                .foregroundStyle(
-                    LinearGradient(
-                        colors: [.hiveHoneyGlow, .hiveAccent],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                )
-                .shadow(color: .hiveAccent.opacity(0.55), radius: size * 0.32)
+            // The icon carries its own transparent margin, so it is drawn larger than `size`
+            // to land on the same optical width the symbol had.
+            Image("HiveMark")
+                .resizable()
+                .scaledToFit()
+                .frame(width: size * 1.5, height: size * 1.5)
         }
-        // The glow is three times the mark; without this it pushes everything below it down
-        // the screen by a hundred points of empty air.
+        // The glow is wider than the mark; without this it pushes everything below it down the
+        // screen by a hundred points of empty air.
         .frame(width: size * 1.7, height: size * 1.7)
         .accessibilityHidden(true)
     }

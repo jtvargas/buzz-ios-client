@@ -43,14 +43,14 @@ import Testing
 
     @Test func theAdoptedInstallKeepsTheStorageItAlreadyHas() {
         let adopted = Community.adoptingLegacyInstall(
-            relayURLString: "wss://homelab.tail4bc643.ts.net",
+            relayURLString: "wss://hive.example.ts.net",
             ownerPubkeyHex: "abc"
         )
         #expect(adopted.keychainAccount == Community.legacyKeychainAccount)
         #expect(adopted.storeFilename == Community.legacyStoreFilename)
         #expect(adopted.ownerPubkeyHex == "abc")
         // Named the way every Buzz client names it — the host, lowercased.
-        #expect(adopted.name == "homelab")
+        #expect(adopted.name == "hive")
     }
 }
 
