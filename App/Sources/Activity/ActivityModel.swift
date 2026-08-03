@@ -26,6 +26,10 @@ final class ActivityModel {
     /// The users each shown message mentions, so an `@`-token in a row's preview renders
     /// as the pill it is in the conversation rather than as raw text.
     private(set) var mentionRefs: [String: MentionRefList] = [:]
+    /// Identities and rosters, for the ``EntityNames`` this tab injects into its own stack.
+    private(set) var directory: DirectorySnapshot = .empty
+    /// The workspace's channels, for the same resolver and for the `#channel` map.
+    private(set) var channels: [ChannelListRow] = []
     /// True once the first snapshot lands, so the view can tell "nothing addressed to you"
     /// from "not read yet". Without it the empty state flashes on every cold open.
     private(set) var hasLoaded = false
@@ -61,7 +65,14 @@ final class ActivityModel {
                 // the timeline and the Threads screen both use. A hundred rows is one `IN`
                 // clause, not a hundred trips to the reader while the list is scrolling.
                 let mentions = (try? store.mentions(for: feed.map(\.latest.id))) ?? [:]
-                await apply(feed, mentions: mentions)
+                // The resolvers this tab has to inject into its own navigation stack, read
+                // *here* rather than by two more models. See ``ActivityView`` for why this
+                // tab needs them at all; the point of folding them into this observation is
+                // that it already re-runs on every relevant commit, so these cost two reads
+                // rather than two more `ValueObservation`s over the same tables.
+                let directory = (try? store.directorySnapshot()) ?? .empty
+                let channels = (try? store.channelList(selfPubkey: selfPubkey)) ?? []
+                await apply(feed, mentions: mentions, directory: directory, channels: channels)
             }
         } catch {
             // Ends on cancellation or teardown; the last snapshot stays on screen.
@@ -88,12 +99,27 @@ final class ActivityModel {
         entries.lazy.filter { filter.matches($0) && $0.isUnread }.count
     }
 
-    private func apply(_ feed: [ActivityEntry], mentions: [String: MentionRefList]) {
+    private func apply(
+        _ feed: [ActivityEntry],
+        mentions: [String: MentionRefList],
+        directory: DirectorySnapshot,
+        channels: [ChannelListRow]
+    ) {
         // Equal values are not written back — the observation re-fires on every committed
         // transaction, and an `@Observable` setter notifies whether or not the value moved.
-        guard feed != entries || mentions != mentionRefs || !hasLoaded else { return }
+        // The directory is the one most worth guarding: a reaction landing anywhere in the
+        // workspace fires this, and re-assigning an equal snapshot would invalidate every
+        // view reading `EntityNames` beneath this tab.
+        guard feed != entries
+            || mentions != mentionRefs
+            || directory != self.directory
+            || channels != self.channels
+            || !hasLoaded
+        else { return }
         entries = feed
         mentionRefs = mentions
+        self.directory = directory
+        self.channels = channels
         hasLoaded = true
     }
 }

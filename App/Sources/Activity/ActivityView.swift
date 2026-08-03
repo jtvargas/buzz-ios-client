@@ -13,23 +13,31 @@ import SwiftUI
 /// (`desktop/src/features/home/lib/inbox.ts`, `buildInboxItems`), and so does this: nine
 /// replies cost one row, one glance, and one tap.
 ///
-/// # Its own stack, and what that costs
+/// # Its own stack, and the resolvers that has to carry
 ///
 /// This tab owns a `NavigationStack` separate from the sidebar's, so a conversation opened
 /// from here backs out to *here* rather than to the channel list. That is the whole point of
-/// an activity screen — you came to clear a list and you want to return to it — but it means
-/// the app-wide values ``ChannelListView`` injects into *its* stack do not reach this one.
+/// an activity screen — you came to clear a list and you want to return to it.
 ///
-/// Only one of them is actually needed, and it is cheap: ``RelativeTimeTicker``, so the "7m"
-/// on a row ages while the screen is open. This screen deliberately does **not** stand up a
-/// second ``EntityDirectoryModel`` for names — the feed read resolves author names and
-/// avatars in SQL and hands the channel's name over with each row, and a direct message is
-/// titled by the person who wrote to you, who by construction is the only other person in
-/// it. A second directory observation over the same tables to re-derive what the read
-/// already knows would be a real cost for no visible difference.
+/// The cost is that the app-wide values ``ChannelListView`` injects into *its* stack do not
+/// reach this one, and a value attached inside a `navigationDestination` never reaches the
+/// pushed view. The Activity **rows** genuinely do not need them — the feed read resolves
+/// author names and avatars in SQL — but everything a row *pushes* does:
+/// ``ChannelTimelineView``, ``ThreadView`` and ``TimelineRowView`` all read `entityNames`,
+/// and `TimelineRowView` also reads `channelNameMap` and `openConversation`. Without them a
+/// conversation opened from here would draw every author as a short key and render its
+/// `#channel` and `@mention` pills dead — while the identical screen reached from the
+/// sidebar worked. So the same five are injected here.
 ///
-/// If a third tab ever needs these, the answer is to hoist the resolvers above the
-/// `TabView` in ``RootView``, not to build a third copy here.
+/// They are read inside ``ActivityModel``'s existing observation rather than by standing up
+/// a second ``EntityDirectoryModel`` and ``ChannelListModel``: that observation already
+/// re-runs on every relevant commit, so this costs two more reads instead of two more
+/// observations over the same tables. `openConversation` cannot be shared in any case — it
+/// pushes onto *this* stack, and a shared one would push onto the sidebar's.
+///
+/// The tidier end state is to hoist the shared models above the `TabView` in ``RootView``
+/// and leave only the per-stack actions here. Not done in this change: the sidebar owns
+/// those models today and it is a screen with four just-shipped features on it.
 struct ActivityView: View {
     @Environment(AppEnvironment.self) private var environment
 
@@ -47,6 +55,12 @@ struct ActivityView: View {
     /// reason it is hoisted in the sidebar — the stack has to see every push that takes the
     /// tab bar down.
     @State private var openedThread: ThreadRoute?
+    /// This device's per-thread read marks. Its own instance rather than the sidebar's:
+    /// ``ThreadReadMarks`` persists to `UserDefaults`, so both tabs read and write the same
+    /// storage and a thread read in one is read in the other on the next pass.
+    @State private var threadReads = ThreadReadMarks()
+    /// Opens a direct message from a profile sheet presented inside this stack.
+    @State private var router: DirectMessageRouter
 
     private let store: BuzzEventStore
     private let engine: SyncEngine
@@ -57,6 +71,13 @@ struct ActivityView: View {
         self.engine = engine
         self.selfPubkey = selfPubkey
         _model = State(initialValue: ActivityModel(store: store, selfPubkey: selfPubkey))
+        _router = State(initialValue: DirectMessageRouter(opener: engine))
+    }
+
+    /// The name/avatar/conversation resolver for everything beneath this tab, rebuilt only
+    /// when the directory or the channel set moves — ``ActivityModel`` guards both.
+    private var entityNames: EntityNames {
+        EntityNames(snapshot: model.directory, channels: model.channels, selfPubkey: selfPubkey)
     }
 
     var body: some View {
@@ -100,8 +121,30 @@ struct ActivityView: View {
         )
         // Injected on the stack rather than inside it, because a value attached below
         // `navigationDestination` never reaches the pushed view — the trap
-        // ``ChannelListView`` documents at length.
+        // ``ChannelListView`` documents at length, and the one that would otherwise leave a
+        // conversation opened from this tab drawing every author as a bare key.
+        .environment(\.entityNames, entityNames)
+        .environment(\.channelNameMap, ChannelNameMap(channels: model.channels))
         .environment(\.relativeTimeTicker, ticker)
+        .environment(\.threadReadMarks, threadReads)
+        .environment(\.directMessageRouter, router)
+        // Pushes onto *this* stack, which is why this one cannot be shared with the sidebar
+        // however the others are resolved: pressing a `#channel` pill inside a conversation
+        // opened from Activity must open it here, not behind the Home tab.
+        .environment(\.openConversation, OpenConversationAction { channelID in
+            path = ConversationRoute(channel: channelRow(for: channelID)).pushed(onto: path)
+        })
+        // The router hands back an opened conversation once; clearing it is what stops an
+        // unrelated body pass re-pushing. Same contract as the sidebar's.
+        .onChange(of: router.pendingConversation) { _, opened in
+            guard let opened else { return }
+            router.pendingConversation = nil
+            let route = ConversationRoute(
+                channel: channelRow(for: opened.channelID),
+                knownPeer: opened.peer
+            )
+            path = route.pushed(onto: path)
+        }
         .task { await model.run() }
         .task { await ticker.run() }
     }
@@ -168,37 +211,36 @@ struct ActivityView: View {
                 anchor: entry.isUnread ? .latestReply : .opener
             )
         } else {
-            path = ConversationRoute(channel: conversationRow(for: entry)).pushed(onto: path)
+            let row = channelRow(for: channelID, fallback: entry)
+            path = ConversationRoute(channel: row).pushed(onto: path)
         }
     }
 
-    /// The channel a row opens, built from what the feed already read back.
+    /// The channel a row opens.
     ///
-    /// ``ConversationRoute`` needs a ``BuzzKit/ChannelListRow`` and this screen does not
-    /// hold the sidebar's list of them, so it builds the row from the feed's own columns —
-    /// the same fallback ``ChannelListView/conversationRow(for:)`` uses for a channel it has
-    /// not cached. The timeline re-reads everything it needs from the store on arrival, so
-    /// the route only has to carry enough to name the destination correctly for the frame
-    /// before that read lands.
-    ///
-    /// `channelType` is the one field here that is load-bearing rather than cosmetic: it is
-    /// what ``BuzzKit/ChannelListRow/isDirectMessage`` answers from, so omitting it would
-    /// open a direct message titled as though it were a channel and then correct itself a
-    /// frame later. The unread counts are deliberately left at zero — the timeline does not
-    /// read them off the route, and a stale count carried in from a list is worse than none.
-    private func conversationRow(for entry: ActivityEntry) -> ChannelListRow {
-        ChannelListRow(
-            id: entry.channelID ?? "",
-            name: entry.channelName.isEmpty ? nil : entry.channelName,
+    /// The real cached row when the workspace has one — which, now that this screen reads
+    /// the channel list for its resolvers, is the ordinary case. The fallback is the same
+    /// shape ``ChannelListView/conversationRow(for:)`` builds for an uncached channel; it
+    /// exists because the feed can legitimately surface a channel the list read has not
+    /// caught up to yet, and pushing nothing would be worse than pushing a thin row the
+    /// timeline immediately fills in from the store.
+    private func channelRow(for channelID: String, fallback entry: ActivityEntry? = nil) -> ChannelListRow {
+        if let cached = model.channels.first(where: { $0.id == channelID }) { return cached }
+        return ChannelListRow(
+            id: channelID,
+            name: entry.map { $0.channelName.isEmpty ? nil : $0.channelName } ?? nil,
             about: nil,
             picture: nil,
             isPrivate: true,
-            lastMessageAt: entry.latest.createdAt,
-            lastMessageID: entry.latest.id,
-            lastMessageSnippet: entry.latest.content,
-            lastMessageAuthor: entry.latest.authorName,
-            lastMessageAuthorPubkey: entry.latest.pubkey,
-            channelType: entry.isDirectMessage ? "dm" : nil
+            lastMessageAt: entry?.latest.createdAt,
+            lastMessageID: entry?.latest.id,
+            lastMessageSnippet: entry?.latest.content,
+            lastMessageAuthor: entry?.latest.authorName,
+            lastMessageAuthorPubkey: entry?.latest.pubkey,
+            // Load-bearing rather than cosmetic: ``BuzzKit/ChannelListRow/isDirectMessage``
+            // answers from it, so omitting it opens a direct message titled as a channel and
+            // then corrects itself a frame later.
+            channelType: (entry?.isDirectMessage ?? false) ? "dm" : nil
         )
     }
 
