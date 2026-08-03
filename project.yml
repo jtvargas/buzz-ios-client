@@ -48,6 +48,12 @@ targets:
       path: App/Info.plist
       properties:
         CFBundleDisplayName: Hive
+        # ProMotion. Without this key iOS clamps every animation in the app to 60 Hz on a
+        # 120 Hz phone — the cap is opt-out, not opt-in, and it applies to Core Animation and
+        # to SwiftUI's `TimelineView(.animation)` alike. The onboarding honeycomb is a
+        # per-frame Metal shader (`Honeycomb.metal`) and is the reason this is here; every
+        # other animation in the app gets the higher rate with it.
+        CADisableMinimumFrameDurationOnPhone: true
         # A branded launch background (honey-tinted, light/dark) so the first frame is
         # not a bare white/black flash. The colour asset lives in the app's catalog.
         UILaunchScreen:
