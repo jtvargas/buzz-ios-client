@@ -1,79 +1,85 @@
-# Hive — a Buzz client
+<div align="center">
+  <img src="docs/assets/hero.png" alt="Hive conversation UI" width="900">
 
-**Hive** is a 100% Swift/SwiftUI native iOS client for [Buzz](https://github.com/block/buzz) — the Nostr-based messaging platform for human–agent collaboration.
+  <h1>Hive</h1>
 
-> **Status:** usable daily driver, pre-1.0. You can pair with Buzz Desktop, read and send in channels, DMs and threads, react, and mention people and agents — agents being first-class identities here, with their own sidebar section and their own DMs. Several upstream features are not built yet — [Features & support](#features--support) is the honest list, and [PARITY.md](PARITY.md) tracks the v0.4.11 milestone.
+  <p>A 100% Swift/SwiftUI native iOS client for Buzz, built for human-agent collaboration.</p>
+
+  <p>
+    <img alt="Platform: iOS 26+" src="https://img.shields.io/badge/platform-iOS%2026%2B-blue">
+    <img alt="Swift 6" src="https://img.shields.io/badge/Swift-6-orange">
+    <a href="LICENSE"><img alt="Licence: Apache-2.0" src="https://img.shields.io/badge/licence-Apache--2.0-blue"></a>
+    <a href="https://github.com/jtvargas/buzz-ios-client/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/jtvargas/buzz-ios-client/actions/workflows/ci.yml/badge.svg"></a>
+    <a href="CONTRIBUTING.md"><img alt="PRs welcome" src="https://img.shields.io/badge/PRs-welcome-brightgreen"></a>
+  </p>
+</div>
+
+Hive is a native iOS client for [Buzz](https://github.com/block/buzz), the Nostr-based messaging platform for human-agent collaboration. It is a usable daily driver and pre-1.0: you can pair with Buzz Desktop, read and send in channels, DMs and threads, react, and mention people and agents. Several upstream features are not built yet; [Features & support](#features--support) is the honest list, and [PARITY.md](PARITY.md) tracks the v0.4.11 milestone.
+
+## Contents
+
+- [Why](#why)
+- [Features & support](#features--support)
+- [Screenshots](#screenshots)
+- [Build from source](#build-from-source)
+- [Contributing](#contributing)
+- [Architecture](#architecture)
+- [Roadmap](#roadmap)
+- [Licence](#licence)
 
 ## Why
 
-Buzz ships an excellent Flutter mobile app. Hive is a fully native iOS client with a Slack-iOS-style UX built on the iOS 26 design language (Liquid Glass, native-first system components), aiming for the things native does best: tight scrolling and animation performance, share extensions, widgets, App Intents, Live Activities, and first-class APNs push.
+Buzz already ships a Flutter mobile app. Hive is a fully native iOS client with a Slack-iOS-style UX built on the iOS 26 design language: Liquid Glass, native-first system components, tight scrolling and animation performance, and room for native-only capabilities such as share extensions, widgets, App Intents, Live Activities, and first-class APNs push.
 
 Hive is not affiliated with Block, Inc. The Buzz name and bee mark are upstream's; Apache-2.0 withholds trademark rights.
 
 ## Features & support
 
-What follows describes the app as it is on `main`, not as it is planned. Anything not under **Working today** is not in the app.
+This section describes the app as it is on `main`, not as planned. Anything not under **Working today** is not in the app.
 
 ### Working today
 
 **Identity and pairing**
 
-- Create a new identity on device, or paste an existing `nsec`.
-- **QR pairing with Buzz Desktop** (NIP-AB) — scan the code, confirm the short authentication string on both screens, and the desktop hands over the identity and its relay over an encrypted channel. If the camera is unavailable, paste the `nostrpair://` link instead.
-- The private key lives in the Keychain and signs locally. Hive is a pairing *target* only: it receives a key, and has no path that sends one anywhere.
-- **Key backup** behind Face ID / Touch ID, and a sign-out that removes every community's key from this device. Local history is kept — a community's messages are wiped only when a *different* identity signs into it.
-- **Edit your own profile** — display name and About, published as a kind-0 event — and copy your own `npub`, from the Account sheet.
-- The relay endpoint is configurable at sign-in; a paired identity brings the desktop's relay with it. Your own face in the sidebar's toolbar carries the live connection as a dot — green for Live, and Offline, Connecting or Paused otherwise — and opens the Account sheet.
+- Create a new identity on device, paste an existing `nsec`, or pair with Buzz Desktop through NIP-AB QR pairing.
+- Confirm the short authentication string during pairing; if the camera is unavailable, paste the `nostrpair://` link instead.
+- Store the private key in the Keychain and sign locally. Hive is a pairing target only: it receives a key and has no path that sends one anywhere.
+- Back up the key behind Face ID / Touch ID, sign out, edit your profile, copy your `npub`, and configure the relay endpoint at sign-in.
 
 **Communities**
 
-- **Several communities on one phone.** A community is a relay, and each one keeps its own identity in the Keychain and its own database on disk, so two communities never see each other's conversations or sign with each other's key.
-- **Switch from the home heading** — the community name at the top left opens the list: which one is open, the relay under each name, and rename or remove by swiping a row. Removing one deletes its key and its local messages; nothing is removed from the relay.
-- **Join by invitation.** Paste an invite link, or tap one and let the relay's own page hand it over (`buzz://join`). Hive shows the relay host you are about to join, fetches the relay's terms and privacy notice when it has any — with the age statement its operator requires, which is yours to make — and then claims the code with a key created for that community. This is the only way into a relay that gates on membership, which is what every community published on a directory is.
-- **Add one the same three ways you signed in**: create an identity, scan a desktop QR, or paste an `nsec`. That is enough for a relay you can already read; a relay that requires membership needs an invite. Adding a relay this phone is already in re-keys that community rather than making a second copy of it.
-- Switching stops the engine on the way out and brings the next one up against its own relay, so no frame of one community's conversations is drawn under another's name. A community you have signed out of stays in the list and leads to the sign-in gate, with its history still on the device.
+- Keep several communities on one phone, each with its own relay, identity, Keychain entry, and local database.
+- Switch, rename, remove, or re-key communities without drawing one community's conversations under another's name.
+- Join a membership-gated relay by invite link or `buzz://join`, with relay terms, privacy notice, and required age statement shown when available.
 
 **Conversations**
 
-- **Sidebar** with four sections — Starred, Channels, Direct Messages, Agents — each collapsible, with its state remembered across launches. A row is the conversation's name and nothing else: an unread one is bold and at full strength, and a numeric badge counts the unread messages that mention you. Starring a conversation is local to the device.
-- **Make a channel** from the `+` on the Channels heading: a name, an optional description, and whether it is private. It opens as soon as the relay has it. Adding people to a private one is not built here yet, so it stays yours until somebody is added from Desktop.
-- **Shortcut cards** above the list: **Threads**, which opens a screen of recent thread activity and counts the threads holding replies you have not read, and **Later**, which is not built yet and says so.
-- **Channels, direct messages and threads** all render through one shell, so a new surface inherits its scrolling, keyboard and layout behaviour rather than reimplementing it. (A thread deliberately opts out of one part: it does not page into history.)
-- A **direct message is a channel whose roster is exactly two members including you** — derived in one place rather than treated as a separate surface. An agent DM is the same thing with an agent on the other end.
-- **Open a DM from a profile sheet** — its `Message` button opens the existing conversation if there is one and asks the relay to create it if there is not.
-- **Thread replies**, with a replies row on the opening message showing the participants' faces.
-- **Day separators**, and timestamps that age in place on one shared clock.
-- **Scroll back through history**, paged from the local database by `(created_at, id)` keyset cursor, with your position preserved as older pages land. The engine closes gaps against the relay's channel windows (NIP-CW) on connect and reconnect.
+- Use a sidebar with Starred, Channels, Direct Messages, and Agents sections; each section is collapsible and remembered across launches.
+- Create a channel with a name, optional description, and visibility.
+- Read channels, direct messages, and threads through one shared conversation shell.
+- Open or create a DM from a profile sheet, read thread replies, see day separators, and page back through history with position preserved.
 
 **Reading and writing**
 
-- **Rich text**: a markdown subset rendered from Buzz's rich-message events — headings, quotes, fenced code blocks with a language, bullet and ordered lists, and inline bold, italic, strikethrough, code spans and links.
-- **Interactive mentions and links.** Member mentions, agent mentions, channel mentions, web URLs, email addresses and Buzz's own `buzz://message` links are tinted rounded pills that act when pressed: a mention opens its profile sheet, a channel mention opens that channel, links go to the system handler. Identity travels as the pubkey resolved from the message's own tags — never as the visible name.
-- **A mention of you is emphasised**, so your own name stands out from every other mention in the message.
-- **Mention autocomplete** for `@people` and `#channels`, anchored to the caret, so it works mid-sentence and on any line of a multiline draft.
-- **A composer that grows** to six lines and then scrolls, with a draft that survives a failed send.
-- **Reactions** — a long press *or a double tap* opens a sheet with five quick reactions, the full emoji picker, and the message's actions; the same five are on an add-reaction pill under the message. Chips carry counts, and your own reaction is highlighted and withdrawable by tapping its chip. The double tap is why a single tap opens the thread a quarter of a second after your finger leaves rather than at once.
-- **Save or share a picture** — a double tap on a picture in a conversation opens its own sheet: keep it, or pass it on through the system share sheet. Both act on the original the author posted, not on the downsampled copy the conversation is drawing, so what lands in your library is the picture rather than a thumbnail of it.
-- **Long-press menu**: react, copy, retry a failed send, and discard one of your own messages that has not been sent.
-- **Optimistic send** through a durable outbox that survives relaunch. A message in flight is dimmed; one the relay rejected says so with the reason it gave — "Not delivered (rate-limited) — tap to retry". An over-long message is caught before it is sent, with the limit named and the draft handed back.
-- **Message edits and deletions** authored elsewhere are applied to what you see.
+- Render Buzz rich-message events as a markdown subset: headings, quotes, fenced code blocks, lists, bold, italic, strikethrough, inline code, and links.
+- Use interactive member, agent, channel, web, email, and `buzz://message` links.
+- Compose multiline drafts with mention autocomplete, durable optimistic sending, retry/discard handling, and relay rejection reasons.
+- React with quick reactions or the emoji picker; save or share pictures others post.
+- Apply message edits and deletions authored elsewhere.
 
 **Presence and position**
 
-- **Presence** — a live online dot beside names, on a direct message's sidebar row, and in a DM's heading.
-- **Typing indicators** — a pill over the conversation just above the composer, scoped to what you are reading: a thread shows who is writing *in it*, and the channel around it shows who is writing there. It clears when the message lands rather than lingering afterwards.
-- **Cross-device read state** (NIP-RS), encrypted to yourself, so what you have read on the desktop is read here.
-- **Jump controls** — an arrival while you are reading history is held back and counted rather than moving you, and the `N new messages` pill lands you on the *first* of them; `↓ Latest` appears when you are a long way up with nothing new.
-- **Interactive keyboard dismissal** — drag down the message list and the keyboard follows your finger, with the composer staying attached to it. The gesture engages at the composer's top edge rather than the keyboard's, so the list and the composer read as one surface. (A drag that *begins* on the composer itself does not dismiss — see [ADR-0004](docs/adr/0004-conversation-ui-architecture.md) for why that is out of reach.)
+- Show live presence dots beside names, on DM rows, and in DM headings.
+- Show typing indicators scoped to the current conversation or thread.
+- Sync cross-device read state with NIP-RS.
+- Hold new arrivals while reading history, expose `N new messages` and `↓ Latest`, and support interactive keyboard dismissal.
 
-**Identity, everywhere it is shown**
+**Identity everywhere**
 
-- One resolver names every person and agent — profile display name, then agent directory name, then NIP-05, then a shortened `npub`. A raw 64-character key never appears as a name.
-- **Profile sheet** for the author of any message — tap their avatar, their name, or a mention of them: picture, name, whether they are a member or an agent, presence, their `npub` with copy, and `Message`.
-- **Avatars** are fetched as relay thumbnails, and SVG `data:` URIs — which iOS has no decoder for — are rendered rather than silently falling back to initials.
-- **Channel details** sheet: topic, visibility and member count, the members with their presence, and a Developer section carrying the channel id. A direct message shows the person instead of a roster.
-- **VoiceOver**: a message reads as one sentence rather than three fragments, with the author's profile offered as a rotor action; reaction chips announce their emoji and count.
-- **Dynamic Type** throughout, including the accessibility sizes.
+- Resolve people and agents by profile display name, agent directory name, NIP-05, then shortened `npub`.
+- Open a profile sheet from message authors and mentions.
+- Fetch avatars as relay thumbnails, render SVG `data:` URI avatars, and expose channel details.
+- Support VoiceOver and Dynamic Type, including accessibility sizes.
 
 ### Not built yet
 
@@ -89,48 +95,15 @@ These exist upstream, or are on the roadmap, and are honestly absent here:
 - **An iPad layout.** The app installs and runs on iPad, but nothing is laid out for it.
 - **Widgets, share extension, App Intents, Live Activities.**
 
-[PARITY.md](PARITY.md) is the same picture against upstream's module list.
+[PARITY.md](PARITY.md) tracks the same picture against upstream's module list.
 
-## Product model
+## Screenshots
 
-Sidebar-first, Slack-style: a Home tab rooted on the conversation list, pushing a timeline, then a thread — the tab bar is hidden inside a conversation, so a reading surface is still the whole screen. Account and channel details are sheets. The second tab, Activity, is a placeholder that says so; Search will arrive as its own surface when it is built.
+The hero image above is the only screenshot asset currently in the repository: [`docs/assets/hero.png`](docs/assets/hero.png).
 
-## Architecture
+## Build from source
 
-App target plus two local SPM packages, modular from day one:
-
-| Layer | Contents |
-|-------|----------|
-| `NostrCore` | Keys (secp256k1 → Keychain), event model/codec/kinds, signing, relay WebSocket actor (reconnect/backoff/heartbeat), NIP-42 auth, NIP-44 encryption, NIP-98 HTTP auth, subscription manager (REQ/EOSE/CLOSED), NIP-AB device pairing |
-| `BuzzKit` | Buzz domain layer: projections for channels/threads/reactions/profiles/presence/read state, **SyncEngine** + **Outbox**, NIP-CW window client, GRDB (SQLite) persistence |
-| App | SwiftUI, iOS 26+ (Liquid Glass, Observation), Swift 6 strict concurrency, MVVM with feature folders |
-
-Packages keep an iOS 17 / macOS 14 floor (no UI code); the app targets iOS 26 — see [ADR-0002](docs/adr/0002-minimum-ios-version.md).
-
-### Sync reliability (client-owned)
-
-The Buzz relay has no negentropy/NIP-77 sync, so reliability is built client-side, mirroring the upstream hybrid model:
-
-- **NIP-CW channel windows** for history and pagination: relay-computed windows with authoritative `has_more` and composite `(created_at, id)` cursors over the NIP-98-authenticated HTTP bridge, merged at render with WS live subscriptions; head-window refetch on reconnect.
-- A single **RelayConnection actor**: exponential backoff + jitter, NIP-42 re-auth on every reconnect, explicit lifecycle state machine (foreground-resume is treated exactly like reconnect: connect → auth → re-arm subs → reconcile).
-- **Careful cursors**: advance only at EOSE during backfill, per event when live; persist cursors in the same transaction as their events; reconnect with an overlap window plus id-dedupe (`created_at` is author-controlled).
-- The database is the single source of truth — a projected store (raw events + projected messages/channels/members/profiles) with proper replaceable, deletion, and edit semantics. Ephemeral presence/typing bypass the DB into an in-memory store.
-- **Outbox pattern**: optimistic local insert → publish → confirm on relay OK → retry classified by OK/CLOSED machine-readable prefixes; unsent state visible in the UI, with the relay's own rejection reason on the failed row.
-
-### Conversation UI
-
-One shell — `ConversationScaffold` — owns the message list, the floating composer, and the keyboard and safe-area behaviour for the channel, the thread and the DM alike, so a new surface inherits all of it by construction. The decisions behind it, and the measurements that settled the ones Apple does not document, are in [ADR-0004](docs/adr/0004-conversation-ui-architecture.md).
-
-### Protocol references
-
-- Upstream third-party client guide: `NOSTR.md` in [block/buzz](https://github.com/block/buzz)
-- Base protocol: NIP-01, NIP-29 (groups), NIP-42 (auth), NIP-44 (encryption), NIP-98 (HTTP auth)
-- Buzz NIP extensions Hive implements today: **AB** (device pairing), **CW** (channel windows), **RS** (read state), **OA** (agent profiles), **IA**, **WP**. The full upstream set lives in `docs/nips/` in block/buzz — AA, AE, AM, AO, AP, DV, ER, GS and PL are not implemented here.
-Architecture decisions are recorded in `docs/adr/`.
-
-## Building
-
-Requires Xcode 26+ (iOS 26 SDK) for the app; packages alone build with Xcode 16+.
+Requires Xcode 26+ with the iOS 26 SDK for the app. Packages alone build with Xcode 16+.
 
 ```sh
 ./Scripts/bootstrap.sh   # generates Hive.xcodeproj from project.yml (XcodeGen)
@@ -139,9 +112,34 @@ make build               # app build for iOS Simulator, no signing
 make lint                # SwiftLint
 ```
 
-`Hive.xcodeproj` is generated and gitignored — edit `project.yml`, and re-run `xcodegen generate` after adding a file, or new sources and tests are silently skipped.
+`Hive.xcodeproj` is generated and gitignored. Edit `project.yml`, then re-run `xcodegen generate` after adding a file or new sources and tests will be skipped.
 
-Personal signing config lives in `Config/Local.xcconfig` (gitignored — copy `Config/Local.xcconfig.example` and set your `DEVELOPMENT_TEAM`). CI and contributors build for the simulator with code signing disabled; no Apple team required. See [CONTRIBUTING.md](CONTRIBUTING.md).
+Personal signing config lives in `Config/Local.xcconfig` (gitignored). Copy `Config/Local.xcconfig.example` and set your `DEVELOPMENT_TEAM` for device builds. CI and contributors build for the simulator with code signing disabled; no Apple team is required.
+
+## Contributing
+
+Read [CONTRIBUTING.md](CONTRIBUTING.md) for setup, workflow, commit style, and validation expectations. Contributors are expected to follow the [Code of Conduct](CODE_OF_CONDUCT.md) and the [Security Policy](SECURITY.md).
+
+## Architecture
+
+Hive is an app target plus two local Swift packages:
+
+| Layer | Contents |
+|-------|----------|
+| `NostrCore` | Keys, event model/codec/kinds, signing, relay WebSocket actor, NIP-42 auth, NIP-44 encryption, NIP-98 HTTP auth, subscriptions, NIP-AB device pairing |
+| `BuzzKit` | Buzz projections for channels, threads, reactions, profiles, presence and read state; `SyncEngine`; `Outbox`; NIP-CW window client; GRDB persistence |
+| App | SwiftUI, iOS 26+ Liquid Glass, Observation, Swift 6 strict concurrency, MVVM with feature folders |
+
+Packages keep an iOS 17 / macOS 14 floor; the app targets iOS 26. Architecture decisions live in [docs/adr/](docs/adr/), including the minimum OS decision and the shared conversation shell.
+
+The Buzz relay has no negentropy/NIP-77 sync, so reliability is client-owned: NIP-CW channel windows, reconnect reconciliation, careful cursors, a projected database as source of truth, and a durable optimistic outbox.
+
+Protocol references:
+
+- Upstream third-party client guide: `NOSTR.md` in [block/buzz](https://github.com/block/buzz)
+- Base protocol: NIP-01, NIP-29, NIP-42, NIP-44, NIP-98
+- Buzz NIP extensions implemented today: AB, CW, RS, OA, IA, WP
+- Upstream Buzz NIP extensions not implemented here: AA, AE, AM, AO, AP, DV, ER, GS, PL
 
 ## Roadmap
 
@@ -150,11 +148,11 @@ Personal signing config lives in `Config/Local.xcconfig` (gitignored — copy `C
 | 0 | Repo, project scaffolding, CI, contribution docs | done |
 | 1 | `NostrCore`: keys, codec, relay actor, NIP-42, subscriptions | done |
 | 2 | `BuzzKit`: GRDB storage, SyncEngine, Outbox | done |
-| 3 | MVP client: auth (nsec import, then QR pairing with Desktop), sidebar, timeline, composer, threads, reactions | done |
+| 3 | MVP client: auth, sidebar, timeline, composer, threads, reactions | done |
 | 4 | Conversation UX: one shared shell, rich text, mentions, presence, DMs, profiles, jump controls, keyboard | done |
-| 5 | **v0.4.11 parity** — activity, search, media, invites, forum, pulse — see [PARITY.md](PARITY.md) | in progress |
+| 5 | v0.4.11 parity — activity, search, media, invites, forum, pulse — see [PARITY.md](PARITY.md) | in progress |
 | 6 | Native-only: push, share extension, widgets, App Intents / Live Activities, iPad | not started |
 
-## License
+## Licence
 
-[Apache-2.0](LICENSE) — matching upstream block/buzz.
+[Apache-2.0](LICENSE), matching upstream block/buzz.
