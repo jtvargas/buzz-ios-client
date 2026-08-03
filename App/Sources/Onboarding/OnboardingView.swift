@@ -235,15 +235,23 @@ struct OnboardingView: View {
                     )
                     .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(.glassProminent)
+                .buttonStyle(.glass)
             } else {
                 // The lead route: the only one that needs nothing typed, and the one a reader
                 // with Buzz already open on their desktop is here to take.
+                //
+                // Glass rather than `.glassProminent`, and *the same* glass as the route under
+                // it. Prominent fills the capsule with flat accent, and a solid amber slab over
+                // a lit amber lattice is the one shape on this screen that stops the pattern
+                // dead — it reads as a sticker on the artwork rather than as a control sitting
+                // in it. A tinted glass was tried in between and is the same objection in a
+                // paler shade. Rank now comes from order and from the glyph, which is what it
+                // comes from everywhere else in the app.
                 NavigationLink(value: OnboardingRoute.scan) {
                     Label("Scan QR from Desktop", systemImage: "qrcode.viewfinder")
                         .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(.glassProminent)
+                .buttonStyle(.glass)
 
                 // The only route that works on a relay you are not already a member of, and
                 // the one an invite link is for (§ ``JoinCommunityModel``).

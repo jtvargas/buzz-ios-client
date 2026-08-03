@@ -48,16 +48,28 @@ final class JoinCommunityModel {
     /// they have not agreed to rent.
     ///
     /// So the split is along the decision, not down the middle of the form: ``community`` is
-    /// *which community, and on what terms*, ``identity`` is *who you will be there*. Desktop
-    /// draws the same line — its spotlight step redeems the invite and says `Next`
-    /// (`InviteRedeemForm.tsx:317`), and the profile and key steps come after
-    /// (`CommunityOnboardingFlow.tsx`).
+    /// *which community, and on what terms*, ``profile`` is *who you will be there*, and
+    /// ``identity`` is *which key signs for you*. Desktop draws the same three — its spotlight
+    /// step redeems the invite and says `Next` (`InviteRedeemForm.tsx:317`), and the profile
+    /// and key steps follow it separately (`CommunityOnboardingFlow.tsx`).
+    ///
+    /// # Why the profile is its own step and not a section
+    ///
+    /// It was a name field at the top of the key step. That put the two least similar questions
+    /// on the screen in one place: *what should this community call you* is a warm question
+    /// anybody can answer in four seconds, and *which cryptographic key owns this community* is
+    /// a question with a paste field and a warning under it. Stacked together the second sets
+    /// the tone for both, and the name — the field that decides whether everyone here sees a
+    /// person or a 63-character `npub` — gets skipped as part of the paperwork. Given a screen
+    /// of its own, with a face on it, it gets answered.
     enum Step: Equatable {
         /// No usable link yet.
         case needsLink
         /// A link, and whatever the relay says it wants of a joiner. The decision point.
         case community
-        /// Who the reader will be in it: their name here, and the key that owns it.
+        /// How this community will see the reader: their name here, and their picture.
+        case profile
+        /// The key that owns this community.
         case identity
         /// Talking to the relay.
         case joining
@@ -103,6 +115,21 @@ final class JoinCommunityModel {
     /// is the one moment the reader is already filling a form in. Published as an ordinary
     /// kind-0 after the community is open (§ ``announceDisplayName()``).
     var displayName = ""
+    /// The glyph on the reader's picture, or `nil` while they have not picked one.
+    ///
+    /// `nil` rather than a default emoji, on purpose. A default gives every member of a
+    /// community the same face on the day they joined, which is worse than no face at all: the
+    /// app already draws a stable per-key monogram where there is no picture, and that at least
+    /// differs between people. So a picture is published only if one was actually chosen.
+    ///
+    /// Emoji only, where the account screen's editor also takes a photo — because a photo has
+    /// to be uploaded to the community's media server, and at this point in the flow there is
+    /// no community, no key committed, and no engine to upload through. An emoji avatar is a
+    /// `data:` URI (§ ``EmojiAvatar``) needing nothing but the two values beside it, which is
+    /// why Buzz's own clients store the workspace owner's avatar as one.
+    var avatarEmoji: String?
+    /// The background behind ``avatarEmoji``, as an uppercase `#RRGGBB` string.
+    var avatarColor = EmojiAvatar.defaultColor
     /// The reader's own answer to a relay that requires an age attestation. Never set by
     /// this app on their behalf — the relay refuses a receipt without it, and that refusal
     /// is the correct outcome of not ticking the box.
@@ -253,23 +280,29 @@ final class JoinCommunityModel {
         case .needsLink, .joining:
             return
         case .community:
-            // A community already on this phone has no second step: there is no identity to
-            // choose, because the one it is already signed in with is the answer.
+            // A community already on this phone has no further steps: there is no identity to
+            // choose, because the one it is already signed in with is the answer — and no name
+            // or picture to ask for either, since the profile it has is already published.
             if alreadyJoined != nil {
                 await submit()
             } else {
-                step = .identity
+                step = .profile
             }
+        case .profile:
+            step = .identity
         case .identity:
             await submit()
         }
     }
 
-    /// Back to the community and its terms. Keeps everything the reader has typed: this is a
-    /// step back to re-read something, not a cancellation.
+    /// One step back. Keeps everything the reader has typed: this is a step back to re-read or
+    /// re-answer something, not a cancellation.
     func goBack() {
-        guard step == .identity else { return }
-        step = .community
+        switch step {
+        case .identity: step = .profile
+        case .profile: step = .community
+        case .needsLink, .community, .joining: return
+        }
     }
 
     // MARK: - Doing it
@@ -331,24 +364,30 @@ final class JoinCommunityModel {
             error = failure.message
             return
         }
-        await announceDisplayName()
+        await announceProfile()
     }
 
-    /// Publishes the name the reader gave, once the community they gave it to is open.
+    /// Publishes the name and picture the reader gave, once the community they gave them to is
+    /// open.
     ///
     /// Deliberately after the join and not part of it. It goes through the ordinary outbox,
     /// so it is durable and retried like any other send, and a failure here is **not** shown:
     /// the reader is already in, on the screen they asked for, and a red line about a profile
-    /// would report the join as having gone wrong. The name is theirs to correct from the
-    /// account screen either way, which is the same editor this writes through.
-    private func announceDisplayName() async {
+    /// would report the join as having gone wrong. Both are theirs to correct from the account
+    /// screen either way, which is the same editor this writes through.
+    ///
+    /// Sent when *either* was answered, and each field carries only what was: a reader who
+    /// picked a picture and skipped the name gets a kind-0 with a `picture` and no `name`,
+    /// rather than nothing at all.
+    private func announceProfile() async {
         let name = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !name.isEmpty, let sender = environment.engine else { return }
+        let picture = avatarEmoji.map { EmojiAvatar(emoji: $0, color: avatarColor).dataURL() }
+        guard !name.isEmpty || picture != nil, let sender = environment.engine else { return }
         let content = ProfileMetadataContent(
-            name: name,
-            displayName: name,
+            name: name.isEmpty ? nil : name,
+            displayName: name.isEmpty ? nil : name,
             about: nil,
-            picture: nil,
+            picture: picture,
             nip05: nil,
             lud16: nil
         )

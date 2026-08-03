@@ -57,7 +57,8 @@ extension JoinCommunityModel {
     var stepTitle: String {
         switch step {
         case .needsLink, .community: alreadyJoined != nil ? "Already here" : "The community"
-        case .identity, .joining: "Who you'll be here"
+        case .profile: "Who you'll be here"
+        case .identity, .joining: "The key that signs for you"
         }
     }
 
@@ -70,9 +71,12 @@ extension JoinCommunityModel {
                 ? "This relay is already one of your communities on this phone."
                 : "Check where you're going, and what this community asks of you. Nothing is "
                 + "claimed until the next screen."
+        case .profile:
+            "Your name and picture in this community. Both are only for this one, and both "
+                + "can be changed later."
         case .identity, .joining:
-            "How this community sees you, and which key signs for you in it. Both are only "
-                + "for this community."
+            "Every message you send here is signed by a key. This is the one that will sign "
+                + "yours, and it is only for this community."
         }
     }
 

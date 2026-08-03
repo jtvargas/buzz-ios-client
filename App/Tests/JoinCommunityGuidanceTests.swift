@@ -80,7 +80,10 @@ struct JoinCommunityGuidanceTests {
         #expect(model.blocked == nil)
         #expect(model.blockedNote == nil)
 
-        // And the control on the *second* step that can hold it there.
+        // And the control on the *last* step that can hold it there. The profile step in
+        // between holds nobody up — its two questions are both optional.
+        await model.primaryAction()
+        #expect(model.blocked == nil)
         await model.primaryAction()
         model.identity = .existing
         #expect(model.blocked == .needsValidKey)
