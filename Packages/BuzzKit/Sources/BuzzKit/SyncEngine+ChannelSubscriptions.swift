@@ -64,6 +64,13 @@ extension SyncEngine {
             kinds: [
                 .channelMessage, .richMessage, .messageEdit, .systemMessage,
                 .reaction, .deletion, .groupDeleteEvent, .typing, .threadSummary,
+                // The two things that can ask a human for a decision. Added for the
+                // Activity tab's Action chip, which listed them in its read while nothing
+                // ever fetched them — so the chip could not fill, rather than merely having
+                // nothing to show. Both are channel-scoped in the relay's own feed query
+                // (`crates/buzz-db/src/feed.rs:191`) and both ride stream subscriptions in
+                // the ACP harness, so they belong on this filter beside kind 9.
+                .workflowApprovalRequested, .streamReminder,
             ],
             since: Int64(now().timeIntervalSince1970) - Int64(config.liveSinceWindow),
             tagQueries: ["h": [channel]]

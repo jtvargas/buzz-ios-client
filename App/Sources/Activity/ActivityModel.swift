@@ -23,9 +23,6 @@ import Observation
 final class ActivityModel {
     /// Conversations with something addressed to you, most recent first.
     private(set) var entries: [ActivityEntry] = []
-    /// The users each shown message mentions, so an `@`-token in a row's preview renders
-    /// as the pill it is in the conversation rather than as raw text.
-    private(set) var mentionRefs: [String: MentionRefList] = [:]
     /// Identities and rosters, for the ``EntityNames`` this tab injects into its own stack.
     private(set) var directory: DirectorySnapshot = .empty
     /// The workspace's channels, for the same resolver and for the `#channel` map.
@@ -61,10 +58,6 @@ final class ActivityModel {
                     selfPubkey: selfPubkey,
                     limit: Self.limit
                 )) ?? []
-                // One batched read over the whole page rather than one per row — the shape
-                // the timeline and the Threads screen both use. A hundred rows is one `IN`
-                // clause, not a hundred trips to the reader while the list is scrolling.
-                let mentions = (try? store.mentions(for: feed.map(\.latest.id))) ?? [:]
                 // The resolvers this tab has to inject into its own navigation stack, read
                 // *here* rather than by two more models. See ``ActivityView`` for why this
                 // tab needs them at all; the point of folding them into this observation is
@@ -72,16 +65,11 @@ final class ActivityModel {
                 // rather than two more `ValueObservation`s over the same tables.
                 let directory = (try? store.directorySnapshot()) ?? .empty
                 let channels = (try? store.channelList(selfPubkey: selfPubkey)) ?? []
-                await apply(feed, mentions: mentions, directory: directory, channels: channels)
+                await apply(feed, directory: directory, channels: channels)
             }
         } catch {
             // Ends on cancellation or teardown; the last snapshot stays on screen.
         }
-    }
-
-    /// The users a message mentions, empty when it mentions none.
-    func mentions(for id: String) -> [MentionRef] {
-        mentionRefs[id].map { Array($0) } ?? []
     }
 
     /// The rows under a chip, in feed order.
@@ -89,19 +77,15 @@ final class ActivityModel {
         entries.filter(filter.matches)
     }
 
-    /// How many *unread* conversations sit under a chip — the number the chip wears.
-    ///
-    /// Conversations rather than events, so the badge counts the same things the list below
-    /// it does. A chip reading 9 over a list of two rows is the Flutter client's bug stated
-    /// in a different place, and it is the one number on this screen that has to agree with
-    /// what is under it.
-    func unreadCount(matching filter: ActivityFilter) -> Int {
-        entries.lazy.filter { filter.matches($0) && $0.isUnread }.count
-    }
+    // The chip's unread count deliberately does **not** live here, though it is the obvious
+    // place for it. It has to fold in this device's own thread read marks, which are
+    // `UserDefaults`-backed view state this model cannot see — see
+    // ``ActivityView/unreadCount(for:)`` for why the store's count alone never clears on a
+    // threaded row. A convenience method here that answered without them would be a second,
+    // wrong answer to the same question, and the badge would disagree with the rows under it.
 
     private func apply(
         _ feed: [ActivityEntry],
-        mentions: [String: MentionRefList],
         directory: DirectorySnapshot,
         channels: [ChannelListRow]
     ) {
@@ -111,13 +95,11 @@ final class ActivityModel {
         // workspace fires this, and re-assigning an equal snapshot would invalidate every
         // view reading `EntityNames` beneath this tab.
         guard feed != entries
-            || mentions != mentionRefs
             || directory != self.directory
             || channels != self.channels
             || !hasLoaded
         else { return }
         entries = feed
-        mentionRefs = mentions
         self.directory = directory
         self.channels = channels
         hasLoaded = true

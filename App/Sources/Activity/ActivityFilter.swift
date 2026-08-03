@@ -57,9 +57,14 @@ enum ActivityFilter: String, CaseIterable, Hashable, Identifiable {
     /// Whether a row belongs under this chip.
     ///
     /// Asked of *every* category on the row rather than only its loudest
-    /// (``BuzzKit/ActivityEntry/matches(_:)``), so an approval request that also names you
-    /// is under both Action and Mentions. A row that appeared under only its loudest
-    /// category is the failure mode people report as "my mention disappeared".
+    /// (``BuzzKit/ActivityEntry/matches(_:)``), so an agent that `@`-names you is under both
+    /// Mentions and Agents. A row that appeared under only its loudest category is the
+    /// failure mode people report as "my mention disappeared".
+    ///
+    /// An approval request is **not** also a mention, though it always carries a `p` tag —
+    /// that tag addresses it rather than mentioning you, and the relay draws the same line
+    /// (`crates/buzz-db/src/feed.rs:106` vs `:191`). See
+    /// ``BuzzKit/ActivityFeedRead/Candidate/categories``.
     ///
     /// # Why `all` is unconditional
     ///

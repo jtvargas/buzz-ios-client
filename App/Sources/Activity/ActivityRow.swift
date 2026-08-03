@@ -20,7 +20,18 @@ import SwiftUI
 /// truncates.
 struct ActivityRow: View {
     let entry: ActivityEntry
+    /// How much here is unseen, passed in rather than read off ``entry``.
+    ///
+    /// The store counts against the channel's read frontier, which nothing advances for a
+    /// thread — so `entry.unreadCount` alone never clears on a threaded row. The screen
+    /// folds in this device's own thread marks before handing the number down; see
+    /// ``ActivityView/unreadCount(for:)``. Taking it as a parameter rather than reaching for
+    /// the marks here keeps one answer to "is this unread" for the row and the chip above it.
+    let unreadCount: Int
     let onOpen: () -> Void
+
+    /// Whether anything here is unseen — the bolded name, and the pill.
+    private var isUnread: Bool { unreadCount > 0 }
 
     /// The gutter, matched to every message row in the app so a face here sits on the same
     /// vertical line as a face in a conversation. `@ScaledMetric` for the reason
@@ -61,7 +72,7 @@ struct ActivityRow: View {
     private var headline: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             categoryChip
-            if entry.unreadCount > 0 {
+            if isUnread {
                 unreadPill
             }
             Spacer(minLength: 4)
@@ -90,14 +101,14 @@ struct ActivityRow: View {
     /// implied by the bolded name below, and on a grouped row the number is the thing worth
     /// knowing — "3 unread" and "40 unread" are different amounts of evening.
     private var unreadPill: some View {
-        Text(entry.unreadCount, format: .number)
+        Text(unreadCount, format: .number)
             .font(.hive(.caption2, weight: .semibold))
             .monospacedDigit()
             .foregroundStyle(.white)
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
             .background(Color.accentColor, in: .capsule)
-            .accessibilityLabel("\(entry.unreadCount) unread")
+            .accessibilityLabel("\(unreadCount) unread")
     }
 
     /// Where this happened, and how much of it there is.
@@ -133,7 +144,7 @@ struct ActivityRow: View {
     private func body(of event: ActivityEvent) -> some View {
         VStack(alignment: .leading, spacing: 1) {
             Text(event.authorName)
-                .font(.hive(.subheadline, weight: entry.isUnread ? .semibold : .medium))
+                .font(.hive(.subheadline, weight: isUnread ? .semibold : .medium))
                 .lineLimit(1)
             Text(event.content)
                 .font(.hive(.subheadline))
@@ -209,7 +220,8 @@ private func previewEntry(
                 category: .mention,
                 event: previewEvent("JT", "@Jarvis check latest mobile and desktop buzz official client"),
                 unreadCount: 1
-            )
+            ),
+            unreadCount: 1
         ) {}
         // The row this whole screen exists for: one conversation, forty events behind it.
         ActivityRow(
@@ -220,7 +232,8 @@ private func previewEntry(
                 eventCount: 6,
                 unreadCount: 4,
                 rootID: "root"
-            )
+            ),
+            unreadCount: 4
         ) {}
         // An agent job report, wearing its specific headline rather than "Agent".
         ActivityRow(
@@ -231,7 +244,8 @@ private func previewEntry(
                     kind: 43006, minutesAgo: 95
                 ),
                 unreadCount: 1
-            )
+            ),
+            unreadCount: 1
         ) {}
         // A direct message: titled by the person, not by whatever the relay called the room.
         ActivityRow(
@@ -242,7 +256,8 @@ private func previewEntry(
                 event: previewEvent("Duncan", "are you around for a few minutes?", minutesAgo: 3),
                 eventCount: 3,
                 unreadCount: 3
-            )
+            ),
+            unreadCount: 3
         ) {}
         // Fully read: no pill, no bold. Still listed — it happened.
         ActivityRow(
@@ -252,7 +267,8 @@ private func previewEntry(
                     "Sentry", "Approval requested for deploy to production",
                     kind: 46010, minutesAgo: 1440
                 )
-            )
+            ),
+            unreadCount: 0
         ) {}
     }
     .listStyle(.plain)

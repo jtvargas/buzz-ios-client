@@ -153,10 +153,10 @@ struct ActivityView: View {
     private var content: some View {
         let rows = model.entries(matching: filter)
         VStack(spacing: 0) {
-            ActivityFilterRail(selection: $filter, unreadCount: model.unreadCount)
+            ActivityFilterRail(selection: $filter, unreadCount: unreadConversations)
             List {
                 ForEach(rows) { entry in
-                    ActivityRow(entry: entry) { open(entry) }
+                    ActivityRow(entry: entry, unreadCount: unreadCount(for: entry)) { open(entry) }
                         .listRowInsets(Self.rowInsets)
                         // No rule between rows — the space separates them, the same call
                         // ``ThreadsView`` makes. A hairline under every row turns a list of
@@ -192,6 +192,50 @@ struct ActivityView: View {
         }
     }
 
+    /// What a row should actually show as unread, after this device's own thread marks.
+    ///
+    /// # Why the store's count is not the answer on its own
+    ///
+    /// ``BuzzKit/ActivityEntry/unreadCount`` counts against the channel's NIP-RS read
+    /// frontier, and **nothing in this app advances that frontier for a thread**. The only
+    /// writer is ``ChannelTimelineModel/markReadIfNeeded()``; ``ThreadView`` deliberately
+    /// writes only a device-local mark instead, because NIP-RS keys read state by channel
+    /// and advancing it there would mark every other message in the channel read along with
+    /// the thread (see ``ThreadReadMarks``).
+    ///
+    /// So without this, tapping a threaded row, reading it, and coming back left the pill
+    /// and the chip badge exactly as they were — permanently. The same thread read as
+    /// *read* on the Threads screen, which already consults these marks
+    /// (``ThreadsView/isUnseen(_:)``), and *3 unread* here. Threaded rows are the common
+    /// case on this workspace, so the counts JT asked for would have been wrong for most of
+    /// the list, in the one way a reader cannot dismiss.
+    ///
+    /// `entry.latest.createdAt` is the right thing to compare because this feed excludes
+    /// your own events — so the newest event in the conversation is by definition the newest
+    /// one *by somebody else*, which is exactly what
+    /// ``ThreadReadMarks/hasUnseen(_:latestReplyByOthersAt:)`` asks for.
+    ///
+    /// Known and deliberate on the other side: a non-threaded row opens the channel, whose
+    /// frontier *does* advance, so reading one mention marks every top-level row in that
+    /// channel read at once. That is how channel read state works everywhere in this app —
+    /// the sidebar's badge included — and making Activity disagree with it would be a
+    /// second answer to the same question.
+    private func unreadCount(for entry: ActivityEntry) -> Int {
+        guard entry.unreadCount > 0 else { return 0 }
+        guard let rootID = entry.rootID else { return entry.unreadCount }
+        return threadReads.hasUnseen(rootID, latestReplyByOthersAt: entry.latest.createdAt)
+            ? entry.unreadCount
+            : 0
+    }
+
+    /// How many conversations under a chip still hold something unseen — the number the chip
+    /// wears. Computed here rather than on the model because only this layer can see the
+    /// device-local thread marks; a badge counted without them would disagree with the rows
+    /// directly beneath it.
+    private func unreadConversations(matching filter: ActivityFilter) -> Int {
+        model.entries.lazy.filter { filter.matches($0) && unreadCount(for: $0) > 0 }.count
+    }
+
     /// Open what a row is about.
     ///
     /// A threaded row opens its thread; anything else opens the channel it happened in. The
@@ -208,7 +252,9 @@ struct ActivityView: View {
             openedThread = ThreadRoute(
                 root: rootID,
                 channel: channelID,
-                anchor: entry.isUnread ? .latestReply : .opener
+                // The effective count, not the store's — a thread already read on this
+                // device should open at what it is about, not at its end.
+                anchor: unreadCount(for: entry) > 0 ? .latestReply : .opener
             )
         } else {
             let row = channelRow(for: channelID, fallback: entry)

@@ -52,10 +52,27 @@ enum ActivityFeedRead {
     /// Larger than the row limit on purpose, and this is the number that matters: a busy
     /// thread can contribute forty events to one row, so a scan bounded at the row count
     /// would return forty rows' worth of one conversation and drop the other thirty-nine
-    /// conversations entirely. Four hundred is roughly a fortnight of a noisy workspace,
-    /// and it is a bound on a read that re-runs per commit, so it does not grow with the
-    /// log.
-    static let scanLimit = 400
+    /// conversations entirely.
+    ///
+    /// **Four hundred was wrong, and the reasoning behind it was wrong twice over.** It was
+    /// called "roughly a fortnight of a noisy workspace"; measured against the live relay it
+    /// is about **26 hours** — this channel alone produced 149 qualifying events in 9 hours,
+    /// and JT is in thirteen. Past the window conversations vanish with no indication, and
+    /// the survivors' `eventCount` and `unreadCount` silently *undercount*, so "+8 more" and
+    /// every chip badge would be wrong rather than merely truncated.
+    ///
+    /// It was also called "a bound on a read that re-runs per commit, so it does not grow
+    /// with the log". That was false until `v11.activity-feed`: `EXPLAIN QUERY PLAN` showed
+    /// `SCAN e` plus `USE TEMP B-TREE FOR ORDER BY`, so the whole log was evaluated and
+    /// sorted *before* the limit applied — 125 ms over 50k events, 471 ms over 200k, on
+    /// every committed transaction. With `event(kind, created_at DESC)` the planner walks
+    /// newest-first and stops, which is what finally makes this number a bound rather than a
+    /// decoration, and what makes raising it affordable.
+    ///
+    /// Three thousand is about a week of thirteen busy channels. Still finite, still a
+    /// silent truncation at the edge — see ``BuzzEventStore/activityFeed(selfPubkey:limit:)``
+    /// — but past the point where a normal day can reach it.
+    static let scanLimit = 3000
 
     /// Roots the reader has replied in — the same definition
     /// ``BuzzEventStore/threadActivity(selfPubkey:limit:)`` uses, so "a thread I am in"
@@ -139,6 +156,31 @@ enum ActivityFeedRead {
     /// pubkey went through NIP-01's strictly-lowercase hex decode. Missing a mention
     /// because another client upper-cased a key is the worse failure; paying `NOCASE` on
     /// `event.pubkey` is the difference between 2 ms and 63 ms.
+    /// How far back the candidate scan reaches, in seconds. Thirty days.
+    ///
+    /// The index alone does not finish the job. `kind IN (…)` gives the planner one range
+    /// per kind, and merging nine ranges into one `created_at` order still costs
+    /// `USE TEMP B-TREE FOR ORDER BY` over *every* qualifying row before `LIMIT` applies —
+    /// so without a floor the sort input is still the whole log. This bounds that input to a
+    /// window instead, which is what makes ``scanLimit`` a real ceiling rather than a
+    /// second-order one.
+    ///
+    /// Thirty days because this is an inbox: something that has sat unread for a month is
+    /// not going to be actioned from a bell icon, and the conversation is still in its
+    /// channel. Long enough that a quiet workspace's month-old mention survives.
+    static let window: Int64 = 30 * 24 * 60 * 60
+
+    /// The floor, relative to the newest qualifying event rather than to the wall clock.
+    ///
+    /// Self-relative on purpose. A `now()`-based floor would make this read depend on the
+    /// clock, which makes it untestable against fixtures with fixed timestamps and — worse —
+    /// would empty the screen on a device whose clock is wrong or which has been offline
+    /// past the window. Anchoring to the newest thing the log actually holds means the
+    /// window is always thirty days of *this workspace's* activity.
+    private static let floor = """
+    COALESCE((SELECT MAX(created_at) FROM event WHERE kind IN (\(kindList))), 0) - \(window)
+    """
+
     static let candidateSQL = """
     WITH \(participantCTE)
     SELECT e.id             AS id,
@@ -168,6 +210,8 @@ enum ActivityFeedRead {
           AND names_me.name = 'p'
           AND names_me.value = :selfPubkey COLLATE NOCASE
     WHERE e.kind IN (\(kindList))
+      -- Bounds what the ORDER BY has to sort. See ``window``.
+      AND e.created_at >= \(floor)
       -- Your own messages are not news to you. Binary `=`, so the `event_author` index
       -- serves it; see ``RecentMentions``.
       AND e.pubkey <> :selfPubkey
@@ -238,19 +282,29 @@ enum ActivityFeedRead {
         }
 
         /// Which categories this event lands in — plural, because one event genuinely is
-        /// more than one thing.
+        /// more than one thing, on three independent axes.
         ///
-        /// Kind decides first and alone: an approval request or a job report is what it is
-        /// wherever it arrived and whoever sent it.
+        /// **A kind that carries its own category wins outright**, and its `p` tag is not a
+        /// mention. This is the subtle one, and it was worth checking against the relay
+        /// rather than deciding: an approval request is *addressed* by its `p` tag — that is
+        /// how it reaches the person who must approve it, so **every** approval and **every**
+        /// job report carries one. Counting those as mentions would file all of them under
+        /// Mentions, which is the one chip JT actually asked for, and drown it.
         ///
-        /// A plain message is classified on two independent axes, and this is the part that
-        /// was wrong in the first cut. *Does it name me* gives mention, else activity —
-        /// which by the `WHERE` clause means it reached the feed by the DM or
-        /// thread-participation route. *Was it written by an agent* additionally gives
-        /// agentActivity. They are independent: an agent that `@`-names you produces
-        /// `[.mention, .agentActivity]`, so the row reads as a **Mention** (mention outranks
-        /// agentActivity in ``ActivityCategory``'s order) and still appears under the Agents
-        /// chip. Collapsing that to one category is what made Agents an empty screen.
+        /// The relay draws exactly this line and it is the parity target: `query_mentions`
+        /// and `query_needs_action` join the *same* `event_mentions` p-tag table, and the
+        /// mention query's kind list deliberately excludes 46010 and 40007
+        /// (`crates/buzz-db/src/feed.rs:106` vs `:191`). So a p-tag on those kinds is
+        /// addressing on both clients.
+        ///
+        /// A review flagged the early return as a bug — an approval naming you having
+        /// `matches(.mention) == false` while three doc comments claimed otherwise. The
+        /// inconsistency was real; the claims were what was wrong, not this. They are fixed.
+        ///
+        /// For a plain message the `p` tag *is* social, and there the axes are genuinely
+        /// independent: an agent that names you gives `[.mention, .agentActivity]`, so the
+        /// row reads as a **Mention** and still answers the Agents chip. Collapsing that pair
+        /// is what left Agents permanently empty in the first cut.
         var categories: Set<ActivityCategory> {
             if let byKind = ActivityKinds.category(forKind: event.kind) { return [byKind] }
             var present: Set<ActivityCategory> = [namesMe ? .mention : .activity]
@@ -306,9 +360,9 @@ enum ActivityFeedRead {
         return order.prefix(limit).compactMap { key -> ActivityEntry? in
             guard let candidate = latest[key] else { return nil }
             // Loudest first. The row wears the first one and matches any of them, so an
-            // approval that also names you is filed under Action and still appears under
-            // Mentions — the behaviour desktop gets from carrying a `categories` array on
-            // every inbox item rather than a single category.
+            // agent that names you is filed under Mention and still appears under Agents —
+            // the behaviour desktop gets from carrying a `categories` array on every inbox
+            // item rather than a single category.
             let present = (categories[key] ?? candidate.categories)
                 .sorted { $0.priority < $1.priority }
             return ActivityEntry(

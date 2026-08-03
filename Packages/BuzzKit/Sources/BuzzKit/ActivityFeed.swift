@@ -127,7 +127,7 @@ public struct ActivityEntry: Sendable, Hashable, Identifiable {
     }
 
     /// Whether this row matches a category filter — asked of every category present, not
-    /// only the loudest, so an approval that also names you appears under Mentions.
+    /// only the loudest, so an agent that `@`-names you appears under Mentions and Agents.
     public func matches(_ category: ActivityCategory) -> Bool {
         categories.contains(category)
     }
@@ -193,24 +193,51 @@ public struct ActivityEvent: Sendable, Hashable, Identifiable {
 /// left out silently — adding the screen is what should add the kind.
 public enum ActivityKinds {
     /// Kinds where a `p` tag naming you is a mention.
+    ///
+    /// One entry, and the shortness is the point. The first cut listed five, copied from
+    /// the relay's feed SQL rather than from what this client actually subscribes to
+    /// (`SyncEngine/contentFilter(forChannel:)`), and four of them were wrong:
+    ///
+    /// - **40002 is not "channel message v2"** — it is `EventKind.richMessage`
+    ///   (`EventKind.swift:91`), an *overlay* on an existing kind-9 message that
+    ///   `BuzzProjector` routes to `rich_content(target_id, …)`. Including it would have
+    ///   produced a **second** Activity row for a message that already has one, drawing the
+    ///   overlay's raw payload as the body. The most damaging entry on the list, and the
+    ///   only one that was unreached rather than unreachable.
+    /// - **1, 45001, 45003** (text note, forum post, forum comment) are on no subscription
+    ///   this client opens, so no such event is ever in the log to match.
     public static let mention: Set<Int> = [
         9, // channel message
-        40002, // channel message v2
-        1, // text note
-        45001, // forum post
-        45003, // forum comment
     ]
 
     /// Kinds that are asking you for something, when tagged with your pubkey.
+    ///
+    /// Both are real relay kinds and both are channel-scoped — the relay's own needs-action
+    /// query filters them by `e.channel_id` against the accessible set
+    /// (`crates/buzz-db/src/feed.rs:191`) — so both can ride this client's per-channel
+    /// subscription. Neither used to: they were listed here while
+    /// ``SyncEngine/contentFilter(forChannel:)`` never asked for them, which made the Action
+    /// chip structurally unfillable rather than merely empty. The filter now carries them.
+    ///
+    /// `40007` is the relay's **stream reminder**, not this client's own. Hive's reminders
+    /// are NIP-ER `EventKind.reminder = 30300` (`EventKind.swift:149`), self-authored and
+    /// owned by the Later screen; they are excluded from this feed by `e.pubkey <> :self`
+    /// and belong there rather than here. The two are different things that a shared word
+    /// makes look identical — worth the sentence, because deleting this entry as "the wrong
+    /// kind" is a mistake I already made once in this file.
     public static let needsAction: Set<Int> = [
         46010, // workflow approval requested
-        40007, // relay-held reminder
+        40007, // relay-held stream reminder — NOT NIP-ER 30300, see above
     ]
 
-    /// Agent job lifecycle, when tagged with your pubkey. The relay's feed SQL lists only
-    /// request/progress/result; the three terminal kinds are included here because an
-    /// agent's job *failing* is the update most worth surfacing, and leaving it out is
-    /// what makes a job look like it is still running forever.
+    /// Agent job lifecycle, when tagged with your pubkey.
+    ///
+    /// **Not what makes the Agents chip work** — that is the author being an agent, see
+    /// ``ActivityFeedRead/authorIsAgent``. None of these kinds is on any subscription this
+    /// client opens, so none is in the log today; they are kept because they are the
+    /// NIP-defined job kinds and an agent runtime that starts emitting them should classify
+    /// correctly without another change. They match nothing until then, which the index on
+    /// `(kind, created_at)` makes free.
     public static let agentActivity: Set<Int> = [
         43001, // job request
         43002, // job accepted

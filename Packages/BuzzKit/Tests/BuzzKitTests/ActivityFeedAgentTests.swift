@@ -1,5 +1,6 @@
 @testable import BuzzKit
 import Foundation
+import GRDB
 import NostrCore
 import Testing
 
@@ -99,5 +100,85 @@ struct ActivityFeedAgentTests {
         #expect(row.matches(.agentActivity))
         #expect(row.matches(.mention), "the opener named me, and the row carries every category in it")
         #expect(row.latest.content == "done")
+    }
+}
+
+/// The classification axes, and the query plan they run on.
+@Suite("Activity feed classification axes", .timeLimit(.minutes(1)))
+struct ActivityFeedAxisTests {
+    @Test("an approval's p tag addresses you rather than mentioning you")
+    func approvalNamingYouIsNotAMention() async throws {
+        let database = TempDatabase()
+        defer { database.remove() }
+        let me = try Fixture().pubkey
+        let store = try await ActivityFixtures.openStore(database, identity: me, channels: ["room-1"])
+        let relay = try Fixture()
+        let bot = try Fixture()
+
+        _ = try await store.ingest(batch: [
+            try ActivityFixtures.meta(relay, "room-1", name: "Room", at: 500),
+            try ActivityFixtures.members(relay, "room-1", people: [me], bots: [bot.pubkey], at: 501),
+            try bot.event(
+                EventKind(rawValue: 46010), "approve the deploy?",
+                tags: [["h", "room-1"], ["p", me]], at: 1000
+            ),
+        ], phase: .backfill)
+
+        let row = try #require(try store.activityFeed(selfPubkey: me, limit: 50).first)
+        // All three axes at once, and the regression this pins: `categories` used to
+        // early-return `[byKind]` the moment a kind matched, so an approval that named you
+        // was NOT under Mentions — while three doc comments and a message to JT said it was.
+        #expect(row.category == .needsAction)
+        #expect(row.matches(.needsAction))
+        // The line the relay draws, and the reason: EVERY approval carries a `p` tag naming
+        // whoever must approve it — that is how it is addressed. Counting those as mentions
+        // would put every approval and every job report into Mentions, which is the one chip
+        // JT asked for. `query_mentions` excludes these kinds while `query_needs_action`
+        // includes them, joining the same p-tag table (`feed.rs:106` vs `:191`).
+        #expect(!row.matches(.mention), "addressed, not mentioned")
+        #expect(!row.matches(.agentActivity), "its kind already says what it is")
+    }
+
+    @Test("the activity read seeks its index instead of scanning and sorting the log")
+    func readUsesTheKindRecentIndex() async throws {
+        let database = TempDatabase()
+        defer { database.remove() }
+        let store = try database.open()
+
+        let plan = try await store.reader.read { db in
+            try Row.fetchAll(
+                db,
+                sql: "EXPLAIN QUERY PLAN " + ActivityFeedRead.candidateSQL,
+                arguments: ["selfPubkey": String(repeating: "a", count: 64), "scan": 3000]
+            ).map { ($0["detail"] as String?) ?? "" }
+        }
+        let text = plan.joined(separator: "\n")
+
+        // The two findings that made this read linear in the whole event log, pinned so a
+        // later edit to the SQL cannot quietly reintroduce either. Both cost ~125 ms per
+        // committed transaction at 50k events before `v11.activity-feed`.
+        #expect(
+            text.contains("event_kind_recent"),
+            "the candidate scan must seek (kind, created_at DESC), not SCAN e:\n\(text)"
+        )
+        // The seek must carry the `created_at` bound, not just `kind`. That is the whole
+        // point of the window: `kind IN (…)` gives the planner one range per kind and
+        // merging nine ranges into one `created_at` order needs a sort no index can remove,
+        // so `USE TEMP B-TREE FOR ORDER BY` stays in this plan and is fine. What matters is
+        // what feeds it — with the bound the sort input is thirty days of qualifying events,
+        // without it the whole log. Asserting the absence of the sort would have been
+        // asserting the wrong thing.
+        #expect(
+            text.contains("event_kind_recent (kind=? AND created_at>?)"),
+            "the window must narrow the index range, or the sort input is unbounded:\n\(text)"
+        )
+        // `SCAN cm` is not asserted against: on the empty probe database SQLite costs a
+        // scan of a zero-row table below any index seek, so the plan says `SCAN cm`
+        // whatever indexes exist. The index it needs is asserted directly below instead.
+        let indexes = try await store.reader.read { db in
+            try String.fetchAll(db, sql: "SELECT name FROM sqlite_master WHERE type = 'index'")
+        }
+        #expect(indexes.contains("channel_member_pubkey"))
+        #expect(indexes.contains("event_kind_recent"))
     }
 }

@@ -91,6 +91,18 @@ public struct EventKind: RawRepresentable, Hashable, Sendable, ExpressibleByInte
     public static let richMessage: EventKind = 40002
     public static let messageEdit: EventKind = 40003
 
+    /// A workflow asking a human to approve something, and the relay's own held reminder.
+    ///
+    /// Both are channel-scoped: the relay's needs-action feed filters them by
+    /// `e.channel_id` against the accessible set (`crates/buzz-db/src/feed.rs:191`), and the
+    /// ACP harness subscribes to them alongside kind 9 as ordinary stream kinds
+    /// (`crates/buzz-acp/README.md:225`). They ride the per-channel content subscription.
+    ///
+    /// ``streamReminder`` is **not** ``reminder``. That one is NIP-ER 30300, written by you
+    /// and owned by the Later screen; this one is written by the relay and addressed to you.
+    public static let workflowApprovalRequested: EventKind = 46010
+    public static let streamReminder: EventKind = 40007
+
     /// A channel notice the relay narrates itself: somebody joined, was added, left,
     /// or the channel's topic changed.
     ///
