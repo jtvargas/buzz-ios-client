@@ -31,12 +31,6 @@ struct DirectMessageRouterTests {
             lock.withLock { _result = result }
         }
 
-        /// Temporary, and deleted with the requirement it satisfies — the router only ever
-        /// calls the array form. See ``DirectMessageOpening``.
-        func openDirectMessage(with peer: String) async throws -> String {
-            try await openDirectMessage(with: [peer])
-        }
-
         func openDirectMessage(with peers: [String]) async throws -> String {
             lock.withLock { _opens.append(peers) }
             while true {
@@ -148,6 +142,28 @@ struct DirectMessageRouterTests {
         // One request on the wire. The guard key is the set, not the spelling of it — the
         // relay answers the same channel either way, so two would be two navigations to it.
         #expect(opener.opens == [["ada", "bo", "cy"]])
+    }
+
+    /// The property the guard key gets from folding through
+    /// ``BuzzKit/SyncEngine/normalizedPubkey(_:)`` rather than lower-casing: two spellings
+    /// of one identity are one conversation. A hand-rolled fold agrees with the wire in
+    /// every test written against hex and disagrees the first time somebody passes an
+    /// `npub1…` — a double tap that opens the same conversation twice.
+    @Test("hex and npub for the same person are one open, not two")
+    func mixedIdentifierFormsAreOneOpen() async throws {
+        let opener = StubOpener()
+        let router = DirectMessageRouter(opener: opener)
+        let ada = try #require(PublicKey(hex: String(repeating: "11", count: 32)))
+        let bo = try #require(PublicKey(hex: String(repeating: "22", count: 32)))
+
+        router.open(with: [ada.hex, bo.hex])
+        router.open(with: [ada.npub, bo.hex])
+
+        #expect(router.isOpening([bo.npub, ada.hex]))
+        opener.answer(.success("channel-9"))
+        await settle()
+
+        #expect(opener.opens == [[ada.hex, bo.hex]])
     }
 
     @Test("a group carries all of its people into the conversation to navigate to")
@@ -269,11 +285,25 @@ struct DirectMessageRouterTests {
             for: DirectMessageError.publishFailed(.connectionLost)
         )
         let unknown = DirectMessageRouter.message(for: CancellationError())
+        // The two the picker is built to prevent. They still earn their own sentence: the
+        // generic one ends "Try again", and the same list would fail the same way.
+        let nobody = DirectMessageRouter.message(for: DirectMessageError.noPeers)
+        let overCap = DirectMessageRouter.message(
+            for: DirectMessageError.tooManyPeers(
+                count: SyncEngine.maxDirectMessagePeers + 1,
+                limit: SyncEngine.maxDirectMessagePeers
+            )
+        )
 
         // Distinct, so a reader can tell "you are not allowed" from "you are offline".
-        #expect(Set([restricted, invalidKey, malformed, offline, unknown]).count == 5)
+        #expect(
+            Set([restricted, invalidKey, malformed, offline, unknown, nobody, overCap]).count == 7
+        )
         #expect(!restricted.isEmpty)
         // Never leaks a raw error description at the reader.
         #expect(!malformed.contains("{}"))
+        // The cap the relay actually enforces, not a number spelled a second time here.
+        #expect(overCap.contains("\(SyncEngine.maxDirectMessagePeers)"))
+        #expect(!nobody.lowercased().contains("try again"))
     }
 }

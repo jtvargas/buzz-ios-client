@@ -1,4 +1,5 @@
 #if DEBUG
+import BuzzKit
 import Foundation
 import SwiftUI
 
@@ -76,7 +77,7 @@ extension DirectMessagePicker {
     static func preview(_ state: DirectMessagePickerFixture.State) -> DirectMessagePicker {
         var picker = DirectMessagePicker(
             people: DirectMessagePickerFixture.roster,
-            maxSelection: relayPeerLimit
+            maxSelection: SyncEngine.maxDirectMessagePeers
         )
         switch state {
         case .resting:

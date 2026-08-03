@@ -69,7 +69,9 @@ struct DirectMessagePicker: Equatable {
     /// The most people one direct message may be opened with, minus yourself.
     ///
     /// Injected rather than a constant here: the number is the *relay's*, and the picker
-    /// is not the place that gets to know it. See the call site.
+    /// is not the place that gets to know it. The call site passes
+    /// ``BuzzKit/SyncEngine/maxDirectMessagePeers``, which is what keeps this file — and
+    /// therefore its tests — free of BuzzKit entirely.
     let maxSelection: Int
 
     /// What has been typed. Setting it re-filters; there is nothing to await.
@@ -90,20 +92,6 @@ struct DirectMessagePicker: Equatable {
             NameMatch(name: $0.name, secondary: $0.secondary ?? "", identifier: $0.pubkey)
         }
     }
-
-    /// The most people the relay will open one direct message with, **not counting you**.
-    ///
-    /// Three independent sources agree on eight: `buzz dms open --help` documents its
-    /// `--pubkey` as `1-8`, ``BuzzKit/SyncEngine``'s `signOpenCommand` explains that tagging
-    /// yourself "would only spend one of the eight allowed slots", and ``ConversationMark``
-    /// records that a DM caps at nine people because kind 41010 takes eight `p` tags and the
-    /// relay merges the author in.
-    ///
-    /// Spelled here and handed to ``maxSelection`` at the call site rather than read from
-    /// inside the picker, so the sheet stays indifferent to the number — and so there is one
-    /// line to change rather than a search: it becomes BuzzKit's own constant once
-    /// `openDirectMessage(with peers:)` declares one.
-    static let relayPeerLimit = 8
 
     // MARK: - Results
 

@@ -1,4 +1,5 @@
 import BuzzKit
+import NostrCore
 import Observation
 import SwiftUI
 
@@ -15,36 +16,12 @@ protocol DirectMessageOpening: Sendable {
     /// Opens the existing direct message with `peers`, or creates it, returning the
     /// channel id either way.
     ///
-    /// An array and not one person, because the relay's open command takes up to eight `p`
-    /// tags: one person is a one-to-one and more is a group, and both are the same call.
-    /// The author is never among them — the relay merges the authenticated key in itself.
+    /// An array and not one person, because the relay's open command takes up to
+    /// ``BuzzKit/SyncEngine/maxDirectMessagePeers`` `p` tags: one person is a one-to-one
+    /// and more is a group, and both are the same call. The author is never among them —
+    /// the relay merges the authenticated key in itself.
     func openDirectMessage(with peers: [String]) async throws -> String
-
-    /// **Temporary**, and the only reason it is still here: today's ``BuzzKit/SyncEngine``
-    /// opens a direct message with exactly one person. See the default below.
-    func openDirectMessage(with peer: String) async throws -> String
 }
-
-/// **Temporary.** Answers the array-shaped call against an engine that can only open a
-/// one-to-one, so the app side of the picker could be built against the API it will use
-/// rather than the one that exists — two workstreams that have no reason to be serialised.
-///
-/// It heals itself: a `SyncEngine` that declares `openDirectMessage(with peers: [String])`
-/// satisfies the requirement directly, and this default stops being reached with no call site
-/// touched. **Delete this extension** — and the single-peer requirement above — once that has
-/// landed.
-extension DirectMessageOpening {
-    func openDirectMessage(with peers: [String]) async throws -> String {
-        guard peers.count == 1, let peer = peers.first else {
-            throw GroupDirectMessageUnsupported()
-        }
-        return try await openDirectMessage(with: peer)
-    }
-}
-
-/// What a group open fails with while the engine underneath can only open a one-to-one.
-/// Deleted with the default implementation above.
-struct GroupDirectMessageUnsupported: Error {}
 
 extension SyncEngine: DirectMessageOpening {}
 
@@ -129,14 +106,17 @@ final class DirectMessageRouter {
     /// One participant set, as one string: lower-cased, de-duplicated, and ordered, so the
     /// same people named in a different order are the same in-flight open.
     ///
-    /// Case-folding is not full canonicalisation — `npub1…` and hex for one person are still
-    /// two keys here. No caller mixes the two forms (the picker hands lowercase hex straight
-    /// out of ``BuzzKit/DirectoryEntity``), but resting a correctness property on a survey of
-    /// today's callers is not the same as it being true. The fix is to fold through
-    /// `SyncEngine.normalizedPubkey` — the same function that canonicalises the wire key —
-    /// which is `internal` to BuzzKit and so not reachable from here yet.
+    /// Folded through ``BuzzKit/SyncEngine/normalizedPubkey(_:)`` — the same function that
+    /// canonicalises the key that goes on the wire — so `npub1…` and hex for one person are
+    /// one key here rather than two. A hand-rolled second spelling agrees in every test and
+    /// disagrees exactly once, in production, the first time a caller mixes the forms.
+    ///
+    /// An identifier that function refuses is not a person, and the open will fail on it
+    /// regardless; it still needs *some* stable key, or every tap on the same bad input
+    /// would be sent again rather than deduped. Lower-casing it is that key.
     static func key(for peers: [String]) -> String {
-        Set(peers.map { $0.lowercased() }).sorted().joined(separator: ",")
+        let canonical = peers.map { (try? SyncEngine.normalizedPubkey($0)) ?? $0.lowercased() }
+        return Set(canonical).sorted().joined(separator: ",")
     }
 
     /// The reader-facing sentence for a failed open.
@@ -145,32 +125,42 @@ final class DirectMessageRouter {
     /// the UI can say something true about *why*, and "restricted" in particular is not
     /// a transient failure the reader should retry into.
     static func message(for error: any Error) -> String {
-        // Deleted with ``GroupDirectMessageUnsupported`` itself. Said plainly rather than
-        // folded into the generic sentence, because "try again" is not true of it.
-        if error is GroupDirectMessageUnsupported {
-            return "This build cannot start a group conversation yet. Pick one person."
-        }
         guard let error = error as? DirectMessageError else {
             return "Could not start the conversation. Try again."
         }
         switch error {
         case .invalidPeerPubkey:
             return "That identity is not a valid key, so there is nobody to message."
+        // Both of these are backstops rather than paths: the picker refuses to start with
+        // nobody chosen and disables the row past the cap, and the router drops an empty
+        // open before it reaches the engine. They still get their own sentence, because
+        // "Try again" is not true of either — the same list would fail the same way.
+        case .noPeers:
+            return "Pick at least one person to message."
+        case let .tooManyPeers(_, limit):
+            return "A direct message can include at most \(limit) other people."
         case let .rejected(reason):
-            switch reason {
-            case .restricted:
-                return "The relay would not open this conversation for you."
-            case .rateLimited:
-                return "The relay is rate limiting. Wait a moment and try again."
-            default:
-                return "The relay refused to open the conversation."
-            }
+            return message(for: reason)
         case .duplicateEventIDUnresolved:
             return "The conversation could not be opened. Try again."
         case .malformedResponse:
             return "The relay answered in a form this app does not understand."
         case .publishFailed:
             return "No connection to the relay. Try again once it reconnects."
+        }
+    }
+
+    /// The relay's own refusals, split out so the mapping above stays one switch over one
+    /// enum — the shape ``HideDirectMessageModel/message(for:)`` already uses for this
+    /// same pair of types.
+    private static func message(for reason: OKReason) -> String {
+        switch reason {
+        case .restricted:
+            return "The relay would not open this conversation for you."
+        case .rateLimited:
+            return "The relay is rate limiting. Wait a moment and try again."
+        default:
+            return "The relay refused to open the conversation."
         }
     }
 }
