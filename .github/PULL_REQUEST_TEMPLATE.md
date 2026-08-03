@@ -1,3 +1,7 @@
+<!-- This repo squash-merges pull requests: the PR title becomes the commit
+subject, so it must follow Conventional Commits (e.g. `fix(sync): retry on
+relay disconnect`). CI lints the title and will block merge otherwise. -->
+
 ## What
 
 <!-- What does this PR do? Link the issue if one exists. -->

@@ -38,4 +38,43 @@ Package tests run in release configuration on purpose: current toolchains abort 
 
 ## Commit style
 
-Plain, imperative subject lines. No attribution trailers.
+Use [Conventional Commits v1.0.0](https://www.conventionalcommits.org/en/v1.0.0/):
+
+```text
+<type>(scope): <description>
+```
+
+The scope is optional. When it helps, prefer scopes that match this repository's layout and ownership boundaries: `ui`, `app`, `buzzkit`, `nostrcore`, `ci`, `docs`, or `deps`.
+
+| Type | Use for |
+|------|---------|
+| `feat` | User-visible feature work |
+| `fix` | Bug fixes |
+| `docs` | Documentation-only changes |
+| `style` | Formatting-only changes that do not affect behavior |
+| `refactor` | Code restructuring without behavior changes |
+| `perf` | Performance improvements |
+| `test` | Test-only changes |
+| `build` | Build system, project generation, or packaging changes |
+| `ci` | CI workflow changes |
+| `chore` | Maintenance that does not fit another type |
+| `revert` | Reverting a previous change |
+
+Examples:
+
+```text
+docs: update README contribution links
+fix(buzzkit): preserve read state after reconnect
+feat(ui): add channel details sheet
+ci: lint pull request titles
+```
+
+Use imperative, lowercase descriptions with no trailing period. For breaking changes, add `!` before the colon and describe the break in the body or footer:
+
+```text
+feat(nostrcore)!: replace relay connection delegate
+```
+
+PR titles are linted in CI, and this repository squash-merges PRs, so the PR title becomes the final commit subject.
+
+No attribution trailers.

@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Protocol or relay question
+    url: https://github.com/block/buzz
+    about: Questions about the Nostr protocol, NIPs, or relay behavior belong in the upstream block/buzz repo, not here.
+  - name: Report a security vulnerability
+    url: https://github.com/jtvargas/buzz-ios-client/security/policy
+    about: See SECURITY.md. Use private reporting — do not open a public issue for a vulnerability.
