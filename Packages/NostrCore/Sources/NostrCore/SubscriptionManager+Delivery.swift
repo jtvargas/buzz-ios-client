@@ -57,6 +57,9 @@ extension SubscriptionManager {
         // safe moment to arm the high-water mark as a reconnect cursor.
         subscription.cursorArmed = true
         subscription.retriedAfterClose = false
+        // A complete replay is the proof the relay is serving this subscription again, so the
+        // refusals that preceded it are history and must not count against the next one.
+        resetClosedRetry(subscription)
         await subscription.sink.endOfStoredEvents(subscription: id)
     }
 
@@ -69,12 +72,88 @@ extension SubscriptionManager {
             // `auth-required` CLOSED: re-open once. The re-`REQ` rides the
             // connection's own auth gate; a second such close gives up below.
             subscription.retriedAfterClose = true
-            await sendRequest(for: subscription)
+            await sendRequest(for: subscription, epoch: readyEpoch)
+        case .retryable:
+            // Back-pressure, not a verdict on the filter. The subscription stays registered and
+            // re-`REQ`s itself under backoff; only when those run out does the sink hear about
+            // it. Surfacing it immediately is what made one refused channel cost a full
+            // directory refetch and a re-`REQ` of every other channel.
+            await scheduleClosedRetry(subscription, reason: reason)
         default:
-            subscriptions.removeValue(forKey: id)
-            subscription.liveFlushTask?.cancel()
-            await subscription.sink.subscriptionClosed(subscription: id, error: .closedByRelay(reason))
+            await surfaceClose(subscription, reason: reason)
         }
+    }
+
+    // MARK: - Retryable close
+
+    /// Arms the re-`REQ` for a subscription the relay refused with a retryable `CLOSED`, or gives
+    /// up and surfaces the close once ``SubscriptionManagerConfig/maxClosedRetries`` is spent.
+    ///
+    /// A `rate-limited:` refusal also opens the session gate, so every other request — the rest
+    /// of a reconnect replay included — waits behind the same window rather than each discovering
+    /// the budget separately. The delay is then the longer of that window and this
+    /// subscription's own backoff: the gate says when the relay will listen again, the backoff
+    /// says how hard this particular subscription should push.
+    private func scheduleClosedRetry(_ subscription: Subscription, reason: OKReason) async {
+        // One armed retry at a time. A second CLOSED while one is pending is the relay restating
+        // the refusal, not a new one to schedule against.
+        guard subscription.closedRetryTask == nil else { return }
+        guard subscription.closedRetryAttempt < config.maxClosedRetries else {
+            await surfaceClose(subscription, reason: reason)
+            return
+        }
+
+        if case .rateLimited = reason {
+            await rateLimitGate.activate(retryInSeconds: reason.retryAfterSeconds)
+        }
+        subscription.closedRetryAttempt += 1
+        let backoff = config.closedRetryPolicy.delay(
+            forAttempt: subscription.closedRetryAttempt,
+            fraction: jitter()
+        )
+
+        let id = subscription.id
+        let epoch = readyEpoch
+        subscription.closedRetryTask = Task { [weak self] in
+            try? await self?.pacingSleep(backoff)
+            guard !Task.isCancelled else { return }
+            await self?.fireClosedRetry(id, epoch: epoch)
+        }
+    }
+
+    /// Re-`REQ`s a refused subscription, if everything it depended on still holds.
+    ///
+    /// Three things can have changed while the backoff ran: the subscription may have been
+    /// unsubscribed, the socket may have been replaced (a new epoch re-arms everything anyway,
+    /// so this retry would be a duplicate), or the gate may have been extended by a later
+    /// refusal. All three are re-checked here rather than assumed from when the timer was set.
+    private func fireClosedRetry(_ id: SubscriptionID, epoch: Int) async {
+        subscriptions[id]?.closedRetryTask = nil
+        await rateLimitGate.wait()
+        guard let subscription = subscriptions[id], readyEpoch == epoch, connectionIsReady else {
+            return
+        }
+        await sendRequest(for: subscription, epoch: epoch)
+    }
+
+    /// Drops a subscription and tells its sink the relay closed it — the terminal path, and the
+    /// backstop once retries are spent.
+    private func surfaceClose(_ subscription: Subscription, reason: OKReason) async {
+        subscriptions.removeValue(forKey: subscription.id)
+        subscription.liveFlushTask?.cancel()
+        subscription.closedRetryTask?.cancel()
+        subscription.closedRetryTask = nil
+        await subscription.sink.subscriptionClosed(
+            subscription: subscription.id,
+            error: .closedByRelay(reason)
+        )
+    }
+
+    /// Forgets a subscription's refusal history.
+    func resetClosedRetry(_ subscription: Subscription) {
+        subscription.closedRetryAttempt = 0
+        subscription.closedRetryTask?.cancel()
+        subscription.closedRetryTask = nil
     }
 
     // MARK: - High-water mark and flushing

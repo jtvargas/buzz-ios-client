@@ -12,15 +12,54 @@ extension SubscriptionManager {
         // Recorded before the awaits below so a reentrant state change during
         // re-arming cannot mistake this epoch for a new one.
         connectionIsReady = nowReady
-        guard transitionedToReady else { return }
+        guard transitionedToReady else {
+            // The socket went away. Every pending re-`REQ` was scheduled against a connection
+            // that no longer exists, and the budget that refused them belonged to it too — a
+            // fresh socket is not over budget until it says so itself. The next `.ready` re-arms
+            // everything from scratch.
+            if !nowReady { await resetForDisconnect() }
+            return
+        }
 
         readyEpoch += 1
         let epoch = readyEpoch
-        // Snapshot the ids: `armSubscription` awaits a send, during which a
-        // reentrant register or unsubscribe may mutate the table.
-        for id in armOrder() {
-            await armSubscription(id, epoch: epoch, resetCloseRetry: true)
+        await replay(armOrder(), epoch: epoch)
+    }
+
+    /// Re-`REQ`s a reconnect's subscriptions in bounded batches, pausing between them.
+    ///
+    /// A relay budgets requests, and this client holds one subscription per joined channel: sent
+    /// as one burst, a large workspace exceeds the budget and the relay refuses the tail of its
+    /// own replay. Batching keeps the burst under it. The gate is consulted before every batch
+    /// rather than once at the top, because a refusal *during* the replay must slow the batches
+    /// still to come — that is the whole difference between pacing and merely starting slowly.
+    private func replay(_ ids: [SubscriptionID], epoch: Int) async {
+        var index = 0
+        while index < ids.count {
+            await rateLimitGate.wait()
+            // Re-checked after every suspension: a new socket supersedes this replay entirely,
+            // and its own `.ready` will re-arm from the top.
+            guard readyEpoch == epoch else { return }
+
+            let end = min(index + config.replayBatchSize, ids.count)
+            for id in ids[index ..< end] {
+                await armSubscription(id, epoch: epoch, resetCloseRetry: true)
+            }
+            index = end
+
+            if index < ids.count {
+                try? await pacingSleep(config.replayInterBatchDelay)
+                guard readyEpoch == epoch else { return }
+            }
         }
+    }
+
+    /// Clears every refusal the dead connection produced.
+    private func resetForDisconnect() async {
+        for subscription in subscriptions.values {
+            resetClosedRetry(subscription)
+        }
+        await rateLimitGate.reset()
     }
 
     /// Every registered subscription id, with ``SubscriptionManager/prioritySubscriptionID``
@@ -45,15 +84,28 @@ extension SubscriptionManager {
     func armSubscription(_ id: SubscriptionID, epoch: Int, resetCloseRetry: Bool) async {
         guard let subscription = subscriptions[id], subscription.armedEpoch != epoch else { return }
         subscription.armedEpoch = epoch
-        if resetCloseRetry { subscription.retriedAfterClose = false }
-        await sendRequest(for: subscription)
+        if resetCloseRetry {
+            subscription.retriedAfterClose = false
+            // A fresh socket is a fresh start: the refusals were the old connection's.
+            resetClosedRetry(subscription)
+        }
+        await sendRequest(for: subscription, epoch: epoch)
     }
 
     /// Resets a subscription to a fresh backfill and puts its `REQ` on the wire,
     /// choosing the filter by cursor state. A send that fails for lack of a live
     /// socket is expected churn, not an error: the subscription stays registered
     /// and the next `ready` re-arms it.
-    func sendRequest(for subscription: Subscription) async {
+    func sendRequest(for subscription: Subscription, epoch: Int) async {
+        // The single choke point every `REQ` passes through, so the session's rate-limit window
+        // is honoured by registration, replay and retry alike rather than by each of them
+        // separately. Waiting here suspends this task but not the actor, so frames keep routing.
+        await rateLimitGate.wait()
+        // Both re-checked after that suspension, which a long window can stretch to minutes: the
+        // subscription may have been unsubscribed, and a new socket makes this `REQ` a duplicate
+        // of one the new epoch's replay already sent.
+        guard subscriptions[subscription.id] === subscription, readyEpoch == epoch else { return }
+
         subscription.phase = .backfill
         subscription.backfillBuffer.removeAll(keepingCapacity: true)
         subscription.liveBuffer.removeAll(keepingCapacity: true)

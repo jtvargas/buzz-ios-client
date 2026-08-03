@@ -26,14 +26,50 @@ public struct SubscriptionManagerConfig: Sendable {
     /// few redundant events, never a duplicate write.
     public var replayOverlap: Duration
 
+    /// How many subscriptions a reconnect re-`REQ`s before pausing for
+    /// ``replayInterBatchDelay``.
+    ///
+    /// A Buzz relay budgets requests — 50 `REQ` per 5 seconds at the time of writing — and a
+    /// client holding one subscription per joined channel can exceed that in a single reconnect
+    /// once it is in enough channels. Sending the replay in batches keeps a large workspace under
+    /// the budget instead of being refused for the last of them. Eight is upstream's value
+    /// (`block/buzz#3053`).
+    public var replayBatchSize: Int
+
+    /// The pause between reconnect replay batches.
+    public var replayInterBatchDelay: Duration
+
+    /// The backoff schedule for re-`REQ`ing a subscription the relay refused with a retryable
+    /// `CLOSED`. Reuses the connection's policy shape — exponential with full jitter — because
+    /// the jitter is what stops several subscriptions refused by the same burst from retrying in
+    /// the same instant and reproducing it.
+    public var closedRetryPolicy: ReconnectPolicy
+
+    /// How many times a refused subscription retries itself before giving up and telling its
+    /// sink.
+    ///
+    /// Upstream retries indefinitely under a capped delay. Hive stops, because unlike upstream it
+    /// *has* somewhere to fall back to: surfacing the close runs the engine's directory-refresh
+    /// recovery, which re-registers the channel from authoritative membership. Retrying forever
+    /// would keep that backstop from ever running.
+    public var maxClosedRetries: Int
+
     public init(
         batchSize: Int = 256,
         liveFlushInterval: Duration = .milliseconds(50),
-        replayOverlap: Duration = .seconds(5)
+        replayOverlap: Duration = .seconds(5),
+        replayBatchSize: Int = 8,
+        replayInterBatchDelay: Duration = .milliseconds(50),
+        closedRetryPolicy: ReconnectPolicy = .default,
+        maxClosedRetries: Int = 5
     ) {
         self.batchSize = batchSize
         self.liveFlushInterval = liveFlushInterval
         self.replayOverlap = replayOverlap
+        self.replayBatchSize = replayBatchSize
+        self.replayInterBatchDelay = replayInterBatchDelay
+        self.closedRetryPolicy = closedRetryPolicy
+        self.maxClosedRetries = maxClosedRetries
     }
 
     public static let `default` = SubscriptionManagerConfig()
