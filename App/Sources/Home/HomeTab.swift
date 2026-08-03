@@ -10,7 +10,8 @@ import SwiftUI
 enum HomeTab: String, CaseIterable, Hashable, Identifiable {
     /// Channels, direct messages, and the shortcuts above them.
     case home
-    /// Reactions, mentions and replies addressed to you. Not built yet.
+    /// Mentions, replies, approvals and agent updates addressed to you, grouped by
+    /// conversation.
     case activity
 
     var id: String { rawValue }

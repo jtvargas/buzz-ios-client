@@ -37,6 +37,35 @@ enum DatabaseSignal {
     /// is an opaque token; callers re-read through BuzzKit's public API in
     /// response, they do not consume it.
     static func changes(in reader: any DatabaseReader) -> AsyncValueObservation<Int> {
+        tracked.values(in: reader)
+    }
+
+    /// The same signal, keeping only the **newest** pending token instead of every one.
+    ///
+    /// For a consumer whose read is expensive enough that it wants to coalesce a burst
+    /// rather than serve each commit in it. `values(in:)` defaults to
+    /// `.unbounded` (`GRDB/ValueObservation/ValueObservation.swift:353`), which means a slow
+    /// consumer does not shed load — it queues, and then works through every intermediate
+    /// token after the fact. Sleeping inside such a loop delays the work without reducing
+    /// it, which is the trap this exists to avoid.
+    ///
+    /// With `.bufferingNewest(1)`, everything that lands while the consumer is busy or
+    /// waiting collapses into one token. Pair it with a wait after each read — the wait is
+    /// what creates the window for the collapse; the policy is what makes the collapse
+    /// happen instead of a queue.
+    ///
+    /// **Deliberately not the default.** The timeline reads this same signal
+    /// (``ChannelTimelineModel+Live``), and an optimistic send is an `outbox` write inside
+    /// the tracked region — so coalescing globally would put a delay between pressing send
+    /// and seeing your own message, which is the one latency in a chat app anybody notices.
+    /// Surfaces that summarise (``ActivityModel``) can afford it; surfaces you are typing
+    /// into cannot.
+    static func coalescedChanges(in reader: any DatabaseReader) -> AsyncValueObservation<Int> {
+        tracked.values(in: reader, bufferingPolicy: .bufferingNewest(1))
+    }
+
+    /// The tracked region, shared by both entry points so they cannot drift.
+    private static var tracked: ValueObservation<ValueReducers.Fetch<Int>> {
         ValueObservation
             .tracking { db in
                 // `event` is append-only: every message, edit, deletion, reaction,
@@ -106,7 +135,6 @@ enum DatabaseSignal {
                 }
                 return token
             }
-            .values(in: reader)
     }
 
     /// A change signal over `composer_draft` alone.

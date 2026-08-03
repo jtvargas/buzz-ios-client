@@ -105,7 +105,11 @@ struct RootView: View {
                 label(for: .home)
             }
             Tab(value: HomeTab.activity) {
-                ActivityView()
+                ActivityView(
+                    store: store,
+                    engine: engine,
+                    selfPubkey: environment.selfPubkeyHex
+                )
             } label: {
                 label(for: .activity)
             }

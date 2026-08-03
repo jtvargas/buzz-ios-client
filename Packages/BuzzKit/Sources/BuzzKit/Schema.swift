@@ -56,7 +56,15 @@ enum Schema {
     /// writes both as tags on every kind:39000 — and this projection kept only
     /// `about`, which is the *description*. The rebuild reads them out of the metadata
     /// already in the log, so an existing store gains both without a resync.
-    static let projectionVersion = 8
+    ///
+    /// Version 9 adds `channel_member_pubkey`. Nothing about the projection's *shape*
+    /// changed — this is a pure index addition, which is normally a migration
+    /// (`v4.event-author` is the precedent). It has to be a bump instead because
+    /// `channel_member` is a projection table: the rebuild drops it and recreates it from
+    /// `createProjectionTables`, so an index created in a migration is silently discarded at
+    /// the next bump. The index it installs is what stops the Activity feed's "is this
+    /// author a bot" test scanning the roster once per candidate row.
+    static let projectionVersion = 9
 
     /// The `meta` key under which the applied projection version is recorded.
     static let projectionVersionKey = "projection_version"
@@ -329,6 +337,29 @@ enum Schema {
             """)
         }
 
+        // The Activity feed's two hot paths. Both are pure index additions — no table or
+        // column changes — and both were found by `EXPLAIN QUERY PLAN` on the shipping
+        // schema rather than by reasoning about it.
+        migrator.registerMigration("v11.activity-feed") { db in
+            // Without this the activity read is `SCAN e` plus `USE TEMP B-TREE FOR ORDER
+            // BY`: no existing index leads with `kind` or `created_at` (`event_author` is
+            // `(pubkey, kind, …)`, `event_timeline` is `(h, kind, …)`), so every event of a
+            // qualifying kind in the whole log is evaluated — each one paying the deletion,
+            // participation and agent subqueries — and the entire result is sorted before
+            // `LIMIT 400` discards nearly all of it. That is linear in the log on a read
+            // that re-runs on every committed transaction: measured at 125 ms over 50k
+            // events and 471 ms over 200k.
+            //
+            // `created_at DESC` matches the read's own `ORDER BY` so the planner can walk
+            // the index newest-first and stop once the limit is met, which is what makes
+            // the scan bound actually be a bound.
+            try db.execute(sql: "CREATE INDEX event_kind_recent ON event(kind, created_at DESC)")
+            // The companion index on `channel_member(pubkey)` is NOT here: that is a
+            // projection table, rebuilt from `createProjectionTables` on a
+            // ``projectionVersion`` bump, which would drop an index created here. It is
+            // declared there, and this bump to version 9 is what installs it.
+        }
+
         return migrator
     }
 
@@ -483,6 +514,16 @@ enum Schema {
             PRIMARY KEY (channel_id, pubkey)
         )
         """)
+        // "Is this author a bot anywhere" — the Activity feed's agent test — is a
+        // pubkey-only lookup, which the `(channel_id, pubkey)` primary key cannot seek, so
+        // the planner scans this table once per candidate row.
+        //
+        // Declared here rather than in a migration because this is a projection table: the
+        // ``projectionVersion`` rebuild drops it and recreates it from this function, so an
+        // index added in a migration survives only until the next bump and then vanishes
+        // silently. That is exactly how the first attempt at this index disappeared, and the
+        // plan test below is what caught it.
+        try db.execute(sql: "CREATE INDEX channel_member_pubkey ON channel_member(pubkey)")
 
         // Relay-authored owner/admin roster (kind 39001). Kept separate from the
         // membership roster because a relay may omit roles from kind 39002.

@@ -25,6 +25,11 @@ struct ChannelSubscriptionTests {
     private static let contentKinds: [EventKind] = [
         .channelMessage, .richMessage, .messageEdit, .systemMessage,
         .reaction, .deletion, .groupDeleteEvent, .typing, .threadSummary,
+        // The two decision-asking kinds, added for the Activity tab's Action chip. Both are
+        // `#h`-scoped in the relay's own feed query (`crates/buzz-db/src/feed.rs:191`), so
+        // they belong on this filter rather than the global one — the scoping invariant in
+        // ``SyncEngine/globalFilter()`` applies to them exactly as it does to kind 9.
+        .workflowApprovalRequested, .streamReminder,
     ]
 
     // MARK: - Filter shapes
