@@ -75,6 +75,22 @@ public struct ActivityEntry: Sendable, Hashable, Identifiable {
     /// rather than by channel.
     public let isDirectMessage: Bool
     /// The newest event in the conversation — what the row draws.
+    ///
+    /// # Where this diverges from desktop, and why
+    ///
+    /// Desktop's representative is the **oldest unread**, falling back to the newest only
+    /// when a conversation is fully read (`desktop/src/features/home/lib/inbox.ts:614-629`,
+    /// `unreadItems[0] ?? latestItem`). It draws that event *and* lands on it, which is one
+    /// good idea and one bad one wearing the same field. Landing on the oldest unread is
+    /// right — you want to resume where you stopped. Drawing it is not: these rows are
+    /// sorted by newest activity, so a row showing text from four hours ago would sit above
+    /// fresher rows with a timestamp that disagrees with its own body.
+    ///
+    /// So Hive draws the newest, and takes the landing question separately — see
+    /// ``isUnread``, which is what the screen uses to choose where a thread opens. Landing
+    /// on a *specific* older message is not offered here because the app cannot do it yet:
+    /// that is the parked message-deep-link work (`parked/message-deeplink`), and a field
+    /// carrying an event nothing can navigate to would be a promise this type cannot keep.
     public let latest: ActivityEvent
     /// How many events in this conversation are behind this row. `1` for a row that
     /// collapsed nothing, and the row draws no count in that case.
@@ -116,7 +132,9 @@ public struct ActivityEntry: Sendable, Hashable, Identifiable {
         categories.contains(category)
     }
 
-    /// True when anything here has not been seen.
+    /// True when anything here has not been seen — and, on a threaded row, what decides
+    /// whether opening it lands on the newest reply or on the message that started it.
+    /// See ``latest``.
     public var isUnread: Bool { unreadCount > 0 }
 }
 
@@ -219,23 +237,29 @@ public enum ActivityKinds {
         return nil
     }
 
-    /// The headline an agent or workflow event wears in place of a category label, matching
-    /// the Flutter client's `FeedItem.headline`
-    /// (`mobile/lib/features/activity/feed_item.dart`). `nil` for kinds whose category
-    /// label already says everything.
+    /// What each kind is called on a row, in place of a bare category label.
+    ///
+    /// A table rather than a `switch` so the mapping is data — the ten arms were a
+    /// cyclomatic-complexity violation, and a lookup is also the shape that can be compared
+    /// against the other clients' maps at a glance. Matches desktop's `feedHeadline`
+    /// (`desktop/src/features/home/lib/inbox.ts:162-203`) kind for kind, so the same event
+    /// is called the same thing wherever it is read.
+    static let headlines: [Int: String] = [
+        43001: "Job requested",
+        43002: "Job accepted",
+        43003: "Progress update",
+        43004: "Job result",
+        43005: "Job cancelled",
+        43006: "Job failed",
+        46010: "Approval requested",
+        40007: "Reminder",
+        45001: "Forum post",
+        45003: "Forum reply",
+    ]
+
+    /// The headline an agent or workflow event wears in place of a category label. `nil` for
+    /// a plain message, whose category label already says everything there is to say.
     public static func headline(forKind kind: Int) -> String? {
-        switch kind {
-        case 43001: "Job requested"
-        case 43002: "Job accepted"
-        case 43003: "Progress update"
-        case 43004: "Job result"
-        case 43005: "Job cancelled"
-        case 43006: "Job failed"
-        case 46010: "Approval requested"
-        case 40007: "Reminder"
-        case 45001: "Forum post"
-        case 45003: "Forum reply"
-        default: nil
-        }
+        headlines[kind]
     }
 }
