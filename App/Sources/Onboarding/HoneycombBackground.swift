@@ -17,6 +17,15 @@ struct HoneycombBackground: View {
     /// The flat colour under the lattice. The pattern composites over it inside the shader.
     var base: Color = .hiveNight
 
+    /// Whether this instance is on screen at all.
+    ///
+    /// The hero is the screen, so it defaults to true and never passes anything else. A
+    /// caller that keeps the comb mounted behind something closed — the workspace panel sits
+    /// off the leading edge until it is dragged out — has to say so: a `TimelineView` does not
+    /// care that it is off-screen, and an unseen one would run the shader at 120 Hz for the
+    /// life of the sidebar.
+    var isAnimating = true
+
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
 
@@ -32,7 +41,7 @@ struct HoneycombBackground: View {
     private static let stillTime: Double = 4.2
 
     private var isPaused: Bool {
-        reduceMotion || scenePhase != .active
+        !isAnimating || reduceMotion || scenePhase != .active
     }
 
     var body: some View {
