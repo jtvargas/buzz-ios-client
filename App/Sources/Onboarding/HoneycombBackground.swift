@@ -77,6 +77,19 @@ extension ShapeStyle where Self == Color {
     /// white. The one screen in the app that owns its own background.
     static var hiveNight: Color { Color(red: 0.055, green: 0.067, blue: 0.075) }
 
+    /// The same night with the light taken out of it, for the comb behind the communities panel.
+    ///
+    /// The hero is a whole screen and can afford a ground that reads as a dark grey. The panel
+    /// is a drawer standing next to the sidebar, and the sidebar in dark mode is very close to
+    /// black — at ``hiveNight`` the drawer read as the lighter of the two, which is backwards
+    /// for the thing in front. Same hue, same ratio between the channels, a little over a third
+    /// of the brightness.
+    ///
+    /// Not black itself: the panel's leading edge is what tells a reader it is a surface that
+    /// arrived over the sidebar rather than part of it, and against pure black that edge is
+    /// carried by the drop shadow alone.
+    static var hiveMidnight: Color { Color(red: 0.021, green: 0.025, blue: 0.029) }
+
     /// What the head of a travelling pulse reaches: the accent pushed toward white so the
     /// light reads as passing *through* the line rather than as a second colour painted on it.
     static var hiveHoneyGlow: Color { Color(red: 1.0, green: 0.855, blue: 0.55) }

@@ -114,8 +114,13 @@ struct WorkspacePanel: View {
     /// near the top and settles it toward the bottom. That happens to be the right way round
     /// here: the heading is at the top and the two actions are at the bottom, over the calm
     /// end of the pattern.
+    ///
+    /// The ground under it is *not* the hero's, by the owner's call: on a ``hiveNight`` panel
+    /// standing against a near-black sidebar, the drawer was the lighter of the two. See
+    /// ``ShapeStyle/hiveMidnight``. The lattice is left alone — it is three per cent of the
+    /// pixels, so what a reader reads as the panel's darkness is this colour.
     private var background: some View {
-        HoneycombBackground(isAnimating: state.isOpen)
+        HoneycombBackground(base: .hiveMidnight, isAnimating: state.isOpen)
     }
 
     /// The two ways to gain a community, at the bottom because that is where the owner asked
