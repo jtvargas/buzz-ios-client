@@ -132,9 +132,9 @@ final class DirectMessageRouter {
     /// Case-folding is not full canonicalisation — `npub1…` and hex for one person are still
     /// two keys here. No caller mixes the two forms (the picker hands lowercase hex straight
     /// out of ``BuzzKit/DirectoryEntity``), but resting a correctness property on a survey of
-    /// today's callers is not the same as it being true.
-    // TODO: key through `SyncEngine.normalizedPubkey` once it is public, so the guard key and
-    // the wire key are canonicalised by one function and cannot disagree by construction.
+    /// today's callers is not the same as it being true. The fix is to fold through
+    /// `SyncEngine.normalizedPubkey` — the same function that canonicalises the wire key —
+    /// which is `internal` to BuzzKit and so not reachable from here yet.
     static func key(for peers: [String]) -> String {
         Set(peers.map { $0.lowercased() }).sorted().joined(separator: ",")
     }

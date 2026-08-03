@@ -240,10 +240,9 @@ struct ChannelListView: View {
                 .newDirectMessageSheet(
                     isPresented: $showsNewDirectMessage,
                     people: { directMessagePeople(names: names) },
-                    maxSelection: DirectMessagePicker.relayPeerLimit
-                ) { peers in
-                    router.open(with: peers)
-                }
+                    maxSelection: DirectMessagePicker.relayPeerLimit,
+                    open: { router.open(with: $0) }
+                )
                 .navigationDestination(item: $showsDrafts) { _ in
                     DraftsView(model: draftsModel, open: openDraft)
                 }

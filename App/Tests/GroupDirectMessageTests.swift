@@ -16,13 +16,15 @@ struct GroupDirectMessageTests {
         String(repeating: String(format: "%02x", byte), count: 32)
     }
 
-    private let me = key(0x11)
-    private let ada = key(0x22)
-    private let bo = key(0x33)
-    private let cy = key(0x44)
+    // Internal rather than private only so ``GroupDirectMessageHintTests`` — the same suite,
+    // in the file beside this one — builds its resolvers the same way this one does.
+    let me = key(0x11)
+    let ada = key(0x22)
+    let bo = key(0x33)
+    let cy = key(0x44)
     private let nameless = key(0x55)
 
-    private func names(
+    func names(
         rosters: [String: Set<String>],
         channels: [ChannelListRow],
         entities: [DirectoryEntity]? = nil,
@@ -44,7 +46,7 @@ struct GroupDirectMessageTests {
         )
     }
 
-    private func groupRow(
+    func groupRow(
         _ id: String = "gdm",
         name: String? = "Group DM (4)"
     ) -> ChannelListRow {

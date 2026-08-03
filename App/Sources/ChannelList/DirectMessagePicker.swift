@@ -101,8 +101,8 @@ struct DirectMessagePicker: Equatable {
     ///
     /// Spelled here and handed to ``maxSelection`` at the call site rather than read from
     /// inside the picker, so the sheet stays indifferent to the number — and so there is one
-    /// line to change rather than a search.
-    // TODO: point at BuzzKit's own constant once `openDirectMessage(with peers:)` lands.
+    /// line to change rather than a search: it becomes BuzzKit's own constant once
+    /// `openDirectMessage(with peers:)` declares one.
     static let relayPeerLimit = 8
 
     // MARK: - Results
