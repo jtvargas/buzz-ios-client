@@ -131,9 +131,15 @@ extension SyncEngine {
             }
 
             let visible = (try? await store.activeChannelIDs(identity: identity)) ?? previousVisible
+            directoryContext?.refusedMembership = false
             setDirectoryStatus(.authoritative)
             return ChannelDirectoryRefreshResult(channels: visible, status: .authoritative)
         } catch {
+            // Recorded rather than thrown. Every failure still ends in the same cached
+            // fallback, because a running workspace that dropped its sidebar over one
+            // refusal would be worse than one showing what it last knew — this only
+            // remembers *which* failure it was, for the identity gate to ask about.
+            directoryContext?.refusedMembership = (error as? ChannelDirectoryError) == .membershipRequired
             setDirectoryStatus(.cachedFallback)
             return ChannelDirectoryRefreshResult(channels: previousVisible, status: .cachedFallback)
         }

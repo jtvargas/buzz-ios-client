@@ -22,8 +22,17 @@ struct PairingFlowView: View {
                 ProgressView()
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // The comb, on the one onboarding route that was still a black screen. The camera is
+        // clipped to its square (§ ``scanning(_:)``), so the lattice is what fills the rest —
+        // which is the owner's ask, and also what makes the viewfinder read as a window cut
+        // into the screen rather than as the screen itself.
+        .background { HoneycombBackground() }
         .navigationTitle("Scan to Pair")
         .navigationBarTitleDisplayMode(.inline)
+        // Otherwise the bar's own material lays a grey band across the top of the lattice —
+        // the same call ``IdentityWizardScaffold`` makes for the same reason.
+        .toolbarBackgroundVisibility(.hidden, for: .navigationBar)
         .task {
             if model == nil { model = makeModel() }
             cameraAuthorized = await QRScannerView.requestAccess()

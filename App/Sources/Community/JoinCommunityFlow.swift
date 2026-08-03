@@ -40,6 +40,11 @@ extension JoinCommunityModel {
             }
             if publishesDocuments, !termsAccepted { return .needsTermsAccepted }
             return nil
+        case .profile:
+            // Nothing. A name is optional and a picture is optional, and a step that can hold
+            // the reader up over either would be asking for something the relay does not
+            // require and the app can supply a default for.
+            return nil
         case .identity:
             if identity == .existing,
                (try? PrivateKey(nsec: nsec.trimmingCharacters(in: .whitespacesAndNewlines))) == nil {
@@ -77,12 +82,27 @@ extension JoinCommunityModel {
     var actionTitle: String {
         if alreadyJoined != nil { return "Open" }
         switch step {
-        case .needsLink, .community: return "Next"
+        case .needsLink, .community, .profile: return "Next"
         case .identity: return "Join"
         case .joining: return "Joining…"
         }
     }
 
     /// Whether there is a screen behind this one to go back to.
-    var canGoBack: Bool { step == .identity }
+    var canGoBack: Bool { step == .profile || step == .identity }
+
+    /// Which of the numbered steps this is, and how many there are — the dots along the top.
+    ///
+    /// Only the steps a reader is *walked through* are counted. ``JoinCommunityModel/Step/needsLink``
+    /// is the first one before it has an answer rather than a step of its own, and
+    /// ``JoinCommunityModel/Step/joining`` is the last one working rather than a fourth place to
+    /// be; numbering either would make the row jump while the screen in front of it did not
+    /// change.
+    var stepNumber: (index: Int, count: Int) {
+        switch step {
+        case .needsLink, .community: (0, 3)
+        case .profile: (1, 3)
+        case .identity, .joining: (2, 3)
+        }
+    }
 }

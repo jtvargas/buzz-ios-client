@@ -24,6 +24,9 @@ struct RemindMeView: View {
             }
         }
         .listStyle(.insetGrouped)
+        // The page behind the grouped cards. The cards keep their own surface — this is the
+        // colour they sit on, which is what was the system's grey.
+        .hiveScreenGround()
         .navigationTitle("Remind me")
         .navigationBarTitleDisplayMode(.inline)
     }

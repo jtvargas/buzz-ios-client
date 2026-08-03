@@ -131,7 +131,7 @@ extension TimelineRowView {
         return Circle()
             .fill(Color.green)
             .frame(width: badge.diameter, height: badge.diameter)
-            .overlay(Circle().strokeBorder(Color(.systemBackground), lineWidth: badge.ring))
+            .overlay(Circle().strokeBorder(Color.hiveNight, lineWidth: badge.ring))
     }
 
     /// Name in bold with the time immediately beside it, Slack's arrangement — the

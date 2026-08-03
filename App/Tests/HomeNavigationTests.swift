@@ -113,13 +113,13 @@ struct HomeNavigationTests {
     @Test("the community name is derived from the relay host exactly as Buzz Desktop derives it")
     func derivedNameMatchesDesktop() {
         let cases: [(relay: String, name: String)] = [
-            // The prefilled tailnet relay: the first label, left lowercase. `Homelab` is the
-            // nicer heading and was removed anyway — it is a difference the owner can see
-            // between the phone in their hand and the laptop in front of them.
-            ("wss://homelab.tail4bc643.ts.net", "homelab"),
+            // A tailnet relay: the first label, left lowercase. `Hive` is the nicer heading and
+            // was removed anyway — it is a difference the owner can see between the phone in
+            // their hand and the laptop in front of them.
+            ("wss://hive.example.ts.net", "hive"),
             // Hosts are case-insensitive and WHATWG lowercases while parsing, where
             // Foundation hands the host back as typed. Normalised, so capitals still agree.
-            ("wss://Homelab.Tail4bc643.TS.NET", "homelab"),
+            ("wss://Hive.Example.TS.NET", "hive"),
             // `relay` names the machine rather than the community, so the label after it is
             // the one an operator actually chose.
             ("wss://relay.acme.com", "acme"),

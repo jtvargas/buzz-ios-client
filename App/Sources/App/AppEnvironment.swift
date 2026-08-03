@@ -78,6 +78,15 @@ final class AppEnvironment {
     /// be torn off mid-flow — taking a half-finished pairing, or the error explaining why a
     /// community could not be opened, with it.
     var communitySheet: CommunitySheet?
+    /// Whether the app's settings are up.
+    ///
+    /// Deliberately *not* a `CommunitySheet` case. That type is documented as the doors onto
+    /// the community list, and everything on it is about one community; these preferences are
+    /// the opposite — they are what holds whichever community is open. Presented from the same
+    /// place for the same reason, though: it is opened from the workspace panel, which closes
+    /// itself on the way, so a sheet owned down there would be presented by a view that is
+    /// already sliding off.
+    var showsSettings = false
     /// Something the app has to say that no surface is left standing to say itself.
     ///
     /// A join that fails, or a key that would not delete, both end with the workspace
@@ -123,6 +132,14 @@ final class AppEnvironment {
     /// below it is not — the alert names a reminder, and the screen that opens finds it or
     /// does not.
     let reminderAlerts = ReminderAlerts()
+
+    /// The preferences that hold across every community on this phone.
+    ///
+    /// Owned here rather than by the workspace for the same reason ``reminderAlerts`` is: the
+    /// object graph below is rebuilt on every community switch, and a preference that reset
+    /// itself when somebody changed community would not be an app-wide preference. See
+    /// ``AppSettings``.
+    let settings = AppSettings()
 
     /// The community a pairing session has just committed a key into, held between the
     /// import and ``completePairing()``.
@@ -319,6 +336,14 @@ final class AppEnvironment {
             // a relay URL that cannot be reached is their own typing to correct — so here
             // the engine's start *is* awaited, and its failure is the gate's answer.
             try await engine.start()
+            // `start()` completes the first directory attempt but does not throw on it:
+            // a refusal is a cached fallback, which is right for a workspace already up
+            // and wrong here. A closed relay that will not have this key answers every
+            // route 403, so letting this through would sign the reader in to a community
+            // that can never load — the failure they reported as "it never connects".
+            if await engine.directoryRefusedMembership {
+                throw CompositionError.relayMembershipRequired
+            }
             phase = .running
             heartbeat?.startForeground()
             return
@@ -419,5 +444,9 @@ final class AppEnvironment {
 
     enum CompositionError: Error {
         case invalidRelayURL
+        /// The relay is closed and this key is not a member of it. Only ever thrown on the
+        /// gate's path, where the alternative is presenting an empty workspace that will
+        /// say "connecting" until the reader gives up.
+        case relayMembershipRequired
     }
 }

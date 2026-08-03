@@ -129,9 +129,11 @@ struct ThreadsView: View {
                 // through a list of summaries reads as a form, and JT asked for the rows to
                 // stand further apart, which a line between them works against.
                 .listRowSeparator(.hidden)
+                .listRowBackground(Color.clear)
             }
         }
         .listStyle(.plain)
+        .hiveScreenGround()
         // The same pull the sidebar offers, for the same reason — see
         // ``ChannelListView/sidebar(names:)``. This screen summarises every channel's
         // threads, so a stale one is exactly as misleading here as there.

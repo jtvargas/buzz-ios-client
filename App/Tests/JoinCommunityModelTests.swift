@@ -167,8 +167,8 @@ struct JoinCommunityModelTests {
         #expect(model.canContinue)
     }
 
-    /// And the key is asked for on the *second* step, so a reader on the first is never held
-    /// up by something they have not been shown yet.
+    /// And the key is asked for on the *last* step, so a reader on either of the ones before it
+    /// is never held up by something they have not been shown yet.
     @Test func anExistingKeyHasToBeAKeyBeforeItCanBeUsed() async throws {
         let (environment, suite) = JoinHarness.harness()
         defer { JoinHarness.forget(suite, environment) }
@@ -181,6 +181,11 @@ struct JoinCommunityModelTests {
         #expect(model.canContinue)
 
         await model.primaryAction()
+        // And step two is the name and picture, which hold nobody up either.
+        #expect(model.step == .profile)
+        #expect(model.canContinue)
+
+        await model.primaryAction()
         #expect(model.step == .identity)
 
         #expect(model.blocked == .needsValidKey)
@@ -190,9 +195,9 @@ struct JoinCommunityModelTests {
         #expect(model.canContinue)
     }
 
-    // MARK: - Moving between the two steps
+    // MARK: - Moving between the three steps
 
-    @Test func theFirstStepEndsOnNextAndTheSecondOnJoin() async throws {
+    @Test func onlyTheLastStepEndsOnJoin() async throws {
         let (environment, suite) = JoinHarness.harness()
         defer { JoinHarness.forget(suite, environment) }
         let transport = ScriptedTransport(answers: JoinHarness.openRelay)
@@ -204,13 +209,25 @@ struct JoinCommunityModelTests {
         #expect(model.step == .community)
         #expect(model.actionTitle == "Next")
         #expect(!model.canGoBack)
+        #expect(model.stepNumber.index == 0)
+        #expect(model.stepNumber.count == 3)
+
+        await model.primaryAction()
+
+        #expect(model.step == .profile)
+        #expect(model.actionTitle == "Next")
+        #expect(model.canGoBack)
+        #expect(model.stepNumber.index == 1)
+        #expect(model.stepNumber.count == 3)
 
         await model.primaryAction()
 
         #expect(model.step == .identity)
         #expect(model.actionTitle == "Join")
         #expect(model.canGoBack)
-        // Reaching the second step claims nothing: the relay has been asked for its terms
+        #expect(model.stepNumber.index == 2)
+        #expect(model.stepNumber.count == 3)
+        // Reaching the last step claims nothing: the relay has been asked for its terms
         // and for nothing else.
         #expect(await transport.callCount(for: JoinHarness.claimPath) == 0)
     }
@@ -225,12 +242,23 @@ struct JoinCommunityModelTests {
         try await JoinHarness.settle(model)
         await model.primaryAction()
         model.displayName = "Jay"
+        model.avatarEmoji = "🐝"
+        await model.primaryAction()
+        #expect(model.step == .identity)
+
+        // One step at a time, and nothing typed is thrown away on the way.
+        model.goBack()
+        #expect(model.step == .profile)
+        #expect(model.displayName == "Jay")
+        #expect(model.avatarEmoji == "🐝")
 
         model.goBack()
-
         #expect(model.step == .community)
         #expect(model.displayName == "Jay")
+
         // And forward again, without having to re-agree to anything.
+        await model.primaryAction()
+        #expect(model.step == .profile)
         await model.primaryAction()
         #expect(model.step == .identity)
     }
@@ -248,6 +276,7 @@ struct JoinCommunityModelTests {
         try await JoinHarness.settle(model)
         model.ageConfirmed = true
         model.termsAccepted = true
+        await model.primaryAction()
         await model.primaryAction()
         #expect(model.step == .identity)
 

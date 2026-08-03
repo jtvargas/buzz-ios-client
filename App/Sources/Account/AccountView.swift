@@ -49,7 +49,7 @@ struct AccountView: View {
                 .padding(.top, 8)
                 .padding(.bottom, 32)
             }
-            .background(Color(.systemGroupedBackground))
+            .hiveScreenGround()
             .navigationTitle("Account")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -118,13 +118,13 @@ struct AccountView: View {
     private var editBadge: some View {
         Image(systemName: "pencil")
             .font(.hiveSymbol(.footnote, weight: .semibold))
-            .foregroundStyle(Color(.systemBackground))
+            .foregroundStyle(Color.hiveNight)
             .frame(width: 34, height: 34)
             .background(Circle().fill(.tint))
             // A ring in the page's own colour, so the badge reads as sitting on top of the
             // avatar rather than punched out of it — the same treatment the connection dot
             // gets in ``AccountAvatarButton``.
-            .overlay(Circle().strokeBorder(Color(.systemGroupedBackground), lineWidth: 3))
+            .overlay(Circle().strokeBorder(Color.hiveNight, lineWidth: 3))
             .accessibilityHidden(true)
     }
 

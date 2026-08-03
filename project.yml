@@ -48,10 +48,25 @@ targets:
       path: App/Info.plist
       properties:
         CFBundleDisplayName: Hive
+        # ProMotion. Without this key iOS clamps every animation in the app to 60 Hz on a
+        # 120 Hz phone — the cap is opt-out, not opt-in, and it applies to Core Animation and
+        # to SwiftUI's `TimelineView(.animation)` alike. The onboarding honeycomb is a
+        # per-frame Metal shader (`Honeycomb.metal`) and is the reason this is here; every
+        # other animation in the app gets the higher rate with it.
+        CADisableMinimumFrameDurationOnPhone: true
         # A branded launch background (honey-tinted, light/dark) so the first frame is
         # not a bare white/black flash. The colour asset lives in the app's catalog.
         UILaunchScreen:
           UIColorName: LaunchBackground
+        # Hive is a dark app and has no light-mode design. This is the UIKit half of
+        # that decision: it fixes the style of every window, of the surfaces UIKit
+        # presents on our behalf (the share sheet, the photo picker, the keyboard,
+        # system alerts) and of the launch screen — none of which a SwiftUI
+        # `preferredColorScheme` reaches. The SwiftUI half is on the window group in
+        # `HiveApp`. It belongs here rather than in `App/Info.plist`, which xcodegen
+        # regenerates from this block: a key written straight into that file survives
+        # until the next `make generate` and then silently disappears.
+        UIUserInterfaceStyle: Dark
         # The mobile client's Inter body and GeistMono code families, both under SIL
         # Open Font License 1.1 — which requires its text to travel with the fonts, so
         # `Inter-LICENSE.txt` and `GeistMono-LICENSE.txt` ship beside them. Their

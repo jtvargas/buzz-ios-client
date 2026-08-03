@@ -27,6 +27,12 @@ final class ChannelDirectoryContext: @unchecked Sendable {
     var status: ChannelDirectoryStatus = .checking
     var isForeground = true
     var backstopGeneration = 0
+    /// Whether the last completed attempt was refused because this key is not a member of
+    /// a closed relay. Separate from ``status`` because the two answer different
+    /// questions: `status` says whether what is mounted is authoritative, and a running
+    /// workspace treats every failure alike so its sidebar survives one. This says *why*,
+    /// and only the identity gate asks — see ``SyncEngine/directoryRefusedMembership``.
+    var refusedMembership = false
 
     init(client: any ChannelDirectoryFetching) {
         self.client = client
@@ -141,6 +147,17 @@ public actor SyncEngine {
     /// principle so a test drives the sweep by hand rather than by the wall clock.
     let sleepFor: @Sendable (Duration) async throws -> Void
     var directoryClient: (any ChannelDirectoryFetching)? { directoryContext?.client }
+
+    /// Whether the relay has refused this identity outright: it is closed and this key is
+    /// not a member of it.
+    ///
+    /// Meaningful only once a directory attempt has completed, which after ``start()``
+    /// returns it always has — `start()` awaits the first one. Read by the identity gate,
+    /// where somebody is watching a form they just filled in and "connecting…" for ever is
+    /// the wrong answer to give them; a *running* workspace ignores it and keeps its last
+    /// good sidebar, which is what ``ChannelDirectoryStatus/cachedFallback`` is for.
+    public var directoryRefusedMembership: Bool { directoryContext?.refusedMembership ?? false }
+
     var directoryRefreshGeneration: Int {
         get { directoryContext?.refreshGeneration ?? 0 }
         set { directoryContext?.refreshGeneration = newValue }

@@ -1,26 +1,40 @@
 import BuzzKit
 import SwiftUI
 
-/// The launch onboarding hub — three clean paths onto Hive: create a brand-new
-/// identity, scan a pairing QR from the desktop, or paste an existing `nsec`. The
-/// relay field is shared by Create and Paste; the Scan path takes its relay from
-/// the QR instead.
+/// The launch onboarding hub — four ways onto Hive, ranked. Scan a pairing QR from the desktop,
+/// join with an invite, create a brand-new identity, or paste an existing `nsec`. The relay
+/// field is shared by Create and Paste; the Scan path takes its relay from the QR instead.
+///
+/// ## Why the screen is shaped this way
+///
+/// The routes have not changed and neither has anything they do — this is presentation. What
+/// changed is that the old screen presented all four as equals under a relay field that was the
+/// largest thing on it, so the first decision a reader made was about a URL they had usually
+/// already been given. Now:
+///
+/// - **Scanning leads**, because a reader on a phone with Buzz open on their desktop is the
+///   common arrival, and it is the one route that needs no relay typed at all;
+/// - **the relay collapses** to a line once it holds something usable, and opens itself back up
+///   the moment it does not — the field is still there, it just is not the headline;
+/// - **create and paste stay in reach** as a text row rather than a fourth and fifth slab. They
+///   are the routes for a reader who already has a relay of their own, which is not most people
+///   opening this screen for the first time.
 struct OnboardingView: View {
     @Environment(AppEnvironment.self) private var environment
     @Environment(\.dismiss) private var dismiss
 
     /// Whether this is a reader joining *another* community rather than arriving on Hive.
     ///
-    /// The same three paths either way, which is the point — a community is a relay and an
+    /// The same four paths either way, which is the point — a community is a relay and an
     /// identity, and there is no third way to come by one. Flutter reuses its pairing page
     /// the same way (`PairingPage(addingCommunity: true)`). What changes is the framing: the
     /// welcome becomes a title that says what will happen, and there is a way out.
     let isAddingCommunity: Bool
 
     @State private var relayURLString: String
-    @State private var error: IdentityGateError?
-    @State private var isBusy = false
     @State private var lookup = CommunityLookup()
+    /// Whether the relay editor is open. See ``relaySection`` for when it opens itself.
+    @State private var relayExpanded: Bool
     @FocusState private var relayFocused: Bool
 
     /// - Parameter isAddingCommunity: see the property. The relay field starts empty in that
@@ -28,7 +42,18 @@ struct OnboardingView: View {
     ///   to "add" the one the reader is standing in.
     init(isAddingCommunity: Bool = false) {
         self.isAddingCommunity = isAddingCommunity
-        _relayURLString = State(initialValue: isAddingCommunity ? "" : RelayEndpoint.storedURLString)
+        let initialRelay = isAddingCommunity ? "" : RelayEndpoint.storedURLString
+        _relayURLString = State(initialValue: initialRelay)
+        // Open on arrival unless the stored relay is already usable. A reader who has to tap
+        // once to reach an empty required field has been given a puzzle, not a tidy screen.
+        _relayExpanded = State(initialValue: !Self.isUsableRelay(initialRelay))
+    }
+
+    /// Whether a string reduces to a relay Hive can connect to. Static so ``init`` can ask
+    /// before `self` exists.
+    private static func isUsableRelay(_ string: String) -> Bool {
+        if case .relay = CommunityAddress(string) { return true }
+        return false
     }
 
     /// Whether this gate is standing in front of a phone that has other communities on it.
@@ -56,8 +81,8 @@ struct OnboardingView: View {
         return nil
     }
 
-    /// Whether the two identity buttons can act. An invite in the field disables them on
-    /// purpose: `Create New Identity` against a relay you have an invite to would mint a
+    /// Whether the two identity routes can act. An invite in the field disables them on
+    /// purpose: `Create new identity` against a relay you have an invite to would mint a
     /// stranger and connect it to a relay that has never heard of it — which is the empty
     /// sidebar this whole screen keeps producing.
     private var relayIsValid: Bool {
@@ -85,32 +110,33 @@ struct OnboardingView: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(spacing: 28) {
-                    header
-                    if address.relayURLString != nil {
-                        CommunityCard(
-                            name: lookup.name,
-                            icon: lookup.icon,
-                            isChecking: lookup.isChecking,
-                            isVerified: lookup.isVerified
-                        )
+            // The two spacers are what compose the screen: they share whatever height is left
+            // over, so the hero settles into the upper third and the actions sit against the
+            // bottom on every phone, instead of both stacking under the navigation bar with a
+            // third of the display left blank underneath. `minHeight` rather than `height`, so
+            // Dynamic Type and the keyboard scroll rather than clip.
+            GeometryReader { proxy in
+                ScrollView {
+                    VStack(spacing: 0) {
+                        Spacer(minLength: isAddingCommunity ? 4 : 20)
+                        hero
+                        Spacer(minLength: 36)
+                        controls
                     }
-                    relaySection
-                    actions
-                    if let error {
-                        Text(error.message)
-                            .font(.hive(.footnote))
-                            .foregroundStyle(.red)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .accessibilityLabel("Error: \(error.message)")
-                    }
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 28)
+                    // An onboarding screen stretched edge to edge on an iPad is a hero mark
+                    // with three feet of nothing on either side of it.
+                    .frame(maxWidth: 520)
+                    .frame(maxWidth: .infinity)
+                    .frame(minHeight: proxy.size.height, alignment: .top)
                 }
-                .padding()
+                .scrollBounceBehavior(.basedOnSize)
+                .scrollDismissesKeyboard(.interactively)
             }
-            .scrollBounceBehavior(.basedOnSize)
-            .navigationTitle(isAddingCommunity ? "Add community" : "Welcome to Hive")
-            .navigationBarTitleDisplayMode(isAddingCommunity ? .inline : .large)
+            .background { HoneycombBackground() }
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackgroundVisibility(.hidden, for: .navigationBar)
             .toolbar {
                 if isAddingCommunity {
                     ToolbarItem(placement: .topBarLeading) {
@@ -133,54 +159,55 @@ struct OnboardingView: View {
             .onChange(of: address.relayURLString, initial: true) { _, relay in
                 lookup.look(at: relay)
             }
-            .overlay {
-                if isBusy { ProgressView().controlSize(.large) }
+            // A field that stops holding a usable relay opens itself, so the reason the
+            // routes below went quiet is on screen rather than folded away behind a chevron.
+            .onChange(of: relayIsValid) { _, isValid in
+                if !isValid { relayExpanded = true }
             }
-            .animation(.default, value: error)
-            .disabled(isBusy)
         }
+        // The hero owns its appearance: an amber lattice glowing out of near-black is the
+        // screen, and its light-mode counterpart is a grey mesh on white. Applied to the whole
+        // stack so the pushed scan and paste steps do not flip back mid-flow.
+        .preferredColorScheme(.dark)
     }
 
     // MARK: - Sections
 
-    private var header: some View {
-        VStack(spacing: 8) {
-            Image(systemName: "hexagon.fill")
-                .font(.hiveSymbol(fixedSize: 56))
-                .foregroundStyle(.tint)
-                .accessibilityHidden(true)
-            Text(isAddingCommunity ? Self.addingBlurb : Self.welcomeBlurb)
-                .font(.hive(.subheadline))
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-        }
-        .padding(.top, 24)
+    private var hero: some View {
+        OnboardingHero(
+            title: isAddingCommunity ? "Add a community" : "Welcome to Hive",
+            accentLine: isAddingCommunity ? nil : "for Buzz",
+            blurb: isAddingCommunity ? Self.addingBlurb : Self.welcomeBlurb,
+            markSize: isAddingCommunity ? 48 : 68
+        )
     }
 
-    private var relaySection: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("RELAY")
-                .font(.hive(.caption2, weight: .semibold))
-                .foregroundStyle(.secondary)
-            TextField("wss://relay.example", text: $relayURLString)
-                .textContentType(.URL)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .keyboardType(.URL)
-                .focused($relayFocused)
-                .padding(12)
-                .glassEffect(.regular, in: .rect(cornerRadius: 12))
-            // Says why the buttons below are dead, at the moment they are. A disabled
-            // control with no explanation is the one state a reader cannot get out of.
-            Text(relayNote)
-                .font(.hive(.caption2))
-                .foregroundStyle(relayIsRefused ? Color.red : Color.secondary)
+    private var controls: some View {
+        VStack(spacing: 14) {
+            if address.relayURLString != nil {
+                CommunityCard(
+                    name: lookup.name,
+                    icon: lookup.icon,
+                    isChecking: lookup.isChecking,
+                    isVerified: lookup.isVerified
+                )
+            }
+            OnboardingRelayField(
+                relayURLString: $relayURLString,
+                isExpanded: $relayExpanded,
+                note: relayNote,
+                isRefused: relayIsRefused,
+                isFocused: $relayFocused
+            )
+            actions
         }
+        .animation(.snappy(duration: 0.25), value: relayExpanded)
+        .animation(.snappy(duration: 0.25), value: invitation != nil)
     }
 
     private var actions: some View {
-        VStack(spacing: 12) {
-            // An invite in the field takes the screen over. Not a hint pointing at the button
+        VStack(spacing: 10) {
+            // An invite in the field takes the screen over. Not a hint pointing at a button
             // below — the reader has already supplied the whole invitation, and asking them to
             // go and paste it a second time somewhere else is the same dead end in a politer
             // voice.
@@ -194,77 +221,107 @@ struct OnboardingView: View {
                     )
                     .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(.glassProminent)
+                .buttonStyle(.glass)
             } else {
-                Button(action: create) {
-                    Label("Create New Identity", systemImage: "sparkles")
+                // The lead route: the only one that needs nothing typed, and the one a reader
+                // with Buzz already open on their desktop is here to take.
+                //
+                // Glass rather than `.glassProminent`, and *the same* glass as the route under
+                // it. Prominent fills the capsule with flat accent, and a solid amber slab over
+                // a lit amber lattice is the one shape on this screen that stops the pattern
+                // dead — it reads as a sticker on the artwork rather than as a control sitting
+                // in it. A tinted glass was tried in between and is the same objection in a
+                // paler shade. Rank now comes from order and from the glyph, which is what it
+                // comes from everywhere else in the app.
+                NavigationLink(value: OnboardingRoute.scan) {
+                    Label("Scan QR from Desktop", systemImage: "qrcode.viewfinder")
                         .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(.glassProminent)
-                .disabled(!relayIsValid)
+                .buttonStyle(.glass)
+
+                // The only route that works on a relay you are not already a member of, and
+                // the one an invite link is for (§ ``JoinCommunityModel``).
+                Button {
+                    environment.communitySheet = .join(nil)
+                } label: {
+                    Label("Join with an Invite", systemImage: "envelope.open")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.glass)
             }
 
-            NavigationLink(value: OnboardingRoute.scan) {
-                Label("Scan QR from Desktop", systemImage: "qrcode.viewfinder")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.glass)
-
-            NavigationLink(value: OnboardingRoute.paste) {
-                Label("Paste Existing Key", systemImage: "key.horizontal")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.glass)
-            .disabled(invitation != nil)
-
-            // The fourth way in, and the only one that works on a relay you are not already
-            // a member of. It is last because the three above are what a reader with their
-            // own relay came here to do; it is present because a reader with an invite link
-            // has no other route (§ ``JoinCommunityModel``).
-            Button {
-                environment.communitySheet = .join(nil)
-            } label: {
-                Label("Join with an Invite", systemImage: "envelope.open")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.glass)
+            moreWaysIn
+                .padding(.top, 6)
         }
         .controlSize(.large)
+    }
+
+    /// Create and paste. A text row rather than two more slabs: both need a relay of your own,
+    /// which is the less common arrival, and neither is hidden — they are one tap from here,
+    /// same as they were when they were buttons.
+    ///
+    /// Both push a walk now rather than acting from here (§ ``CreateIdentityView``,
+    /// ``PasteKeyView``), which is why neither is gated on the relay field any more: the walk
+    /// opens *on* the relay, so a reader who arrives with the field empty is asked rather than
+    /// handed a dead control with nothing explaining it. The one thing still gated is an
+    /// invitation sitting in the field — see ``relayIsValid`` for why that is a different case.
+    private var moreWaysIn: some View {
+        HStack(spacing: 0) {
+            NavigationLink(value: OnboardingRoute.create) {
+                Text("Create new identity")
+                    .padding(.vertical, 10)
+                    .padding(.horizontal, 12)
+                    .contentShape(.rect)
+            }
+            .disabled(invitation != nil)
+            .opacity(invitation == nil ? 1 : 0.35)
+
+            Text("·")
+                .foregroundStyle(.white.opacity(0.3))
+
+            NavigationLink(value: OnboardingRoute.paste) {
+                Text("Paste existing key")
+                    .padding(.vertical, 10)
+                    .padding(.horizontal, 12)
+                    .contentShape(.rect)
+            }
+            .disabled(invitation != nil)
+            .opacity(invitation == nil ? 1 : 0.35)
+        }
+        .font(.hive(.footnote, weight: .medium))
+        .foregroundStyle(.hiveAccent)
+        .buttonStyle(.plain)
     }
 
     @ViewBuilder
     private func destination(_ route: OnboardingRoute) -> some View {
         switch route {
+        case .create:
+            CreateIdentityView(relayURLString: handedDownRelay)
         case .paste:
-            // The reduced form, not the text. A community is identified by its socket URL, so
-            // handing the field's `https://…` spelling down would make the same relay pasted
-            // two ways into two communities with two keys and two copies of one history.
-            PasteKeyView(relayURLString: address.relayURLString ?? relayURLString)
+            PasteKeyView(relayURLString: handedDownRelay)
         case .scan:
             PairingFlowView()
         }
     }
 
-    // MARK: - Actions
-
-    private func create() {
-        guard !isBusy, let relay = address.relayURLString, relayIsValid else {
-            error = .invalidRelayURL
-            return
-        }
-        relayFocused = false
-        isBusy = true
-        error = nil
-        Task {
-            let result = await environment.createIdentity(relayURLString: relay)
-            isBusy = false
-            error = result
-        }
+    /// The relay to open a walk on: the reduced form, not the text.
+    ///
+    /// A community is identified by its socket URL, so handing the field's `https://…` spelling
+    /// down would make the same relay pasted two ways into two communities with two keys and two
+    /// copies of one history. The raw text is the fallback only so a half-typed address arrives
+    /// for the reader to finish rather than vanishing.
+    private var handedDownRelay: String {
+        address.relayURLString ?? relayURLString
     }
 }
 
 extension OnboardingView {
-    static let welcomeBlurb = "Connect your identity to start messaging on the Buzz relay."
+    /// Names the two routes the screen leads with, in the order it leads with them. The old
+    /// line ("Connect your identity to start messaging on the Buzz relay") described the
+    /// screen's purpose rather than what to do next, which a reader can already see.
+    static let welcomeBlurb =
+        "Scan the code on your desktop, or paste an invite link to connect this phone."
     /// Says the one thing a reader adding their second community needs to know, which is
     /// that it does not cost them the first.
     static let addingBlurb =
@@ -302,6 +359,7 @@ extension OnboardingView {
 
 /// The pushable onboarding sub-flows.
 enum OnboardingRoute: Hashable {
+    case create
     case paste
     case scan
 }

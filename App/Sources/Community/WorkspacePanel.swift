@@ -90,14 +90,36 @@ struct WorkspacePanel: View {
             actions
         }
         .frame(width: width, alignment: .leading)
-        // The app's own grouped surface, which is what ``AccountView`` puts behind a screen
-        // of cards — the panel is a screen, not a popover, so it takes a screen's background
-        // rather than a material that would let the sidebar read through it.
-        .background(Color(.systemGroupedBackground))
+        .background(background)
         // Rounded on the leading corners only where the panel meets the strip, the way a
         // drawer that came from off-screen would be.
         .clipShape(.rect(bottomTrailingRadius: Self.corner, topTrailingRadius: Self.corner))
         .shadow(color: .black.opacity(0.22), radius: 12, x: 2, y: 0)
+    }
+
+    // MARK: - The background
+
+    /// **A trial, by the owner's request, and meant to be cheap to undo.** Everything the
+    /// honeycomb needs is this property and the `isAnimating` flag it passes; dropping it back
+    /// to `Color(.systemGroupedBackground)` — the app's own grouped surface, which is what
+    /// ``AccountView`` puts behind a screen of cards — restores exactly what was here before.
+    ///
+    /// Two things make it safe to keep the comb mounted behind a closed panel. It is *paused*
+    /// while the panel is off-screen, so the shader is not running at 120 Hz behind a sidebar
+    /// nobody has dragged. And ``HoneycombBackground`` composites over its own opaque `base`,
+    /// so the panel stays a screen rather than a material — the sidebar underneath never reads
+    /// through it, which is the one property the flat colour was chosen for.
+    ///
+    /// The comb is the onboarding one unchanged, including the falloff that puts its light
+    /// near the top and settles it toward the bottom. That happens to be the right way round
+    /// here: the heading is at the top and the two actions are at the bottom, over the calm
+    /// end of the pattern.
+    ///
+    /// The ground under it is ``ShapeStyle/hiveNight``, the app's one dark, which the panel
+    /// takes by taking the comb's default. It shares that colour with the sidebar it stands
+    /// over; what separates the two is ``WorkspacePanelScrim``, not a step in the ground.
+    private var background: some View {
+        HoneycombBackground(isAnimating: state.isOpen)
     }
 
     /// The two ways to gain a community, at the bottom because that is where the owner asked
@@ -110,6 +132,14 @@ struct WorkspacePanel: View {
             }
             action("Add a relay", icon: "plus.circle") {
                 environment.communitySheet = .add
+            }
+            // The app's own settings, not this community's — which is why they are reached from
+            // the communities list rather than from inside one of them, and why the row sits
+            // apart from the two above it. See ``SettingsView``.
+            Divider()
+                .padding(.vertical, 4)
+            action("Settings", icon: "gearshape") {
+                environment.showsSettings = true
             }
         }
         .padding(.horizontal, Self.inset)

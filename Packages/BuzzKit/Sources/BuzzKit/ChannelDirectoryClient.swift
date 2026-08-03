@@ -38,6 +38,16 @@ public struct AnyChannelDirectoryFetcher: ChannelDirectoryFetching, Sendable {
 public enum ChannelDirectoryError: Error, Equatable {
     case transport(TransportError)
     case httpStatus(Int)
+    /// The relay is closed (`require_relay_membership`) and this key is not a member of
+    /// it, so it will not answer *any* route — `relay_membership_required`, 403,
+    /// `buzz-relay/src/api/mod.rs:136`.
+    ///
+    /// Its own case rather than a 403 among the others because it is the one refusal that
+    /// is neither transient nor a client mistake: retrying never clears it, the relay
+    /// address is not wrong, and the only route in is an invite link redeemed through
+    /// ``InviteClient``. Everything else `/query` answers 403 to is a malformed filter
+    /// this client does not send.
+    case membershipRequired
     case unreadableResponse
     case invalidPagination
 }
@@ -239,10 +249,14 @@ public struct ChannelDirectoryClient: ChannelDirectoryFetching, Sendable {
     /// perfectly well. That is a far worse failure than the one this fetch exists to
     /// fix, so the two error classes are separated:
     ///
-    /// - **The relay answered, and its answer was a refusal or unreadable.** Nothing
-    ///   about retrying changes that, and NIP-DV §Client Behavior already defines the
-    ///   fallback: no snapshot means nothing is hidden. Absorbed, and the rest of the
-    ///   pass proceeds normally.
+    /// - **The relay answered, and its answer was a refusal of *this query* or was
+    ///   unreadable.** Nothing about retrying changes that, and NIP-DV §Client Behavior
+    ///   already defines the fallback: no snapshot means nothing is hidden. Absorbed, and
+    ///   the rest of the pass proceeds normally.
+    ///   ``ChannelDirectoryError/membershipRequired`` is deliberately *not* absorbed here:
+    ///   it is not an answer about visibility but a closed door in front of every query
+    ///   this pass is about to make, so it propagates from the first one rather than being
+    ///   swallowed and re-earned by the next.
     /// - **The relay did not answer at all** (transport, cancellation). The membership
     ///   query is about to hit the same wall, so this propagates and the caller keeps
     ///   its last good state — which still has the hidden DMs hidden. Preserving the
@@ -342,12 +356,27 @@ public struct ChannelDirectoryClient: ChannelDirectoryFetching, Sendable {
 
         try Task.checkCancellation()
         guard (200 ... 299).contains(response.status) else {
+            if response.status == 403, Self.isMembershipRefusal(response.body) {
+                throw ChannelDirectoryError.membershipRequired
+            }
             throw ChannelDirectoryError.httpStatus(response.status)
         }
         guard let events = try? JSONDecoder().decode([NostrEvent].self, from: response.body) else {
             throw ChannelDirectoryError.unreadableResponse
         }
         return events
+    }
+
+    /// Whether a 403 body is the relay's closed-door answer rather than one of `/query`'s
+    /// filter-level refusals, which answer the same status with a plain string.
+    ///
+    /// Matched on the machine-readable `error` key the relay puts there for exactly this
+    /// (`api/mod.rs:132-139`), not on the prose beside it. A body this cannot read is not
+    /// the closed door — a client that guessed would tell a reader to go and find an
+    /// invite for a community that had already let them in.
+    static func isMembershipRefusal(_ body: Data) -> Bool {
+        struct Refusal: Decodable { let error: String? }
+        return (try? JSONDecoder().decode(Refusal.self, from: body))?.error == "relay_membership_required"
     }
 
     /// Collapses addressable group state by `(kind, d)`, choosing the greatest

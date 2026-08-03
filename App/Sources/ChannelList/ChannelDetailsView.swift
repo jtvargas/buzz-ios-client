@@ -71,6 +71,9 @@ struct ChannelDetailsView: View {
                     }
                 }
             }
+            // The page behind the grouped cards. The cards keep their own surface — this is
+            // the colour they sit on, which was the system's grey.
+            .hiveScreenGround()
             .navigationTitle(conversation.title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

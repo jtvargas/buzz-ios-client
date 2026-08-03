@@ -35,9 +35,14 @@ struct DraftsView: View {
         List(selection: $selection) {
             ForEach(model.summaries) { summary in
                 row(summary)
+                    // Here rather than inside ``row(_:)``, which has two branches — a row
+                    // that kept the default in one of them would be an opaque black band
+                    // that appears only while selecting.
+                    .listRowBackground(Color.clear)
             }
         }
         .listStyle(.plain)
+        .hiveScreenGround()
         .environment(\.editMode, .constant(isSelecting ? .active : .inactive))
         .navigationTitle("Drafts")
         .navigationBarTitleDisplayMode(.inline)

@@ -162,11 +162,15 @@ struct ActivityView: View {
                         // ``ThreadsView`` makes. A hairline under every row turns a list of
                         // summaries into a form.
                         .listRowSeparator(.hidden)
+                        .listRowBackground(Color.clear)
                 }
             }
             .listStyle(.plain)
             .overlay { emptyState(isFiltered: filter != .all, isEmpty: rows.isEmpty) }
         }
+        // The rail and the list together, so the filter chips sit on the same ground the
+        // rows do rather than on a strip of their own.
+        .hiveScreenGround()
     }
 
     /// Two different empty states, because they mean two different things and the wrong one

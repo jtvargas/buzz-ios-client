@@ -125,6 +125,17 @@ struct ChannelListView: View {
 
         NavigationStack(path: $path) {
             sidebar(names: names, resumable: resumable?.channel.id)
+                // The onboarding ground, by the owner's call, in place of the system's own.
+                // A plain `List` in dark mode sits on `systemBackground`, which is pure
+                // black; ``ShapeStyle/hiveNight`` is the colour the honeycomb composites
+                // over, so the sidebar and the first screen anyone sees are one dark rather
+                // than two that are nearly the same.
+                //
+                // On the container rather than on the `List`, because the sidebar has four
+                // surfaces — the placeholder bars, the two `ContentUnavailableView`s and the
+                // list itself — and a ground applied to only the last of them would flash
+                // black for as long as the relay takes to answer.
+                .hiveScreenGround()
                 .overlay(alignment: .top) {
                     // Gated on the surface and not on having rows: an identity the relay
                     // confirmed is in *nothing* still needs to be told when a later refresh
@@ -354,7 +365,12 @@ struct ChannelListView: View {
             let model = LaterModel(
                 store: store,
                 engine: engine,
-                scheduler: ReminderScheduler(),
+                // Read through the environment's settings rather than captured, so the
+                // reconciler that runs on every projection change asks the switch its current
+                // answer — this model outlives any number of visits to the settings screen.
+                scheduler: ReminderScheduler(
+                    notificationsEnabled: { environment.settings.notificationsEnabled }
+                ),
                 authorName: { names.name(for: $0) }
             )
             laterModel = model
@@ -493,6 +509,7 @@ private extension ChannelListView {
                     )
                     .listRowInsets(Self.headerInsets)
                     .listRowSeparator(.hidden)
+                    .listRowBackground(Color.clear)
                     if expansion(for: section.section).wrappedValue {
                         if section.rows.isEmpty {
                             emptySectionRow(section.section)
@@ -526,6 +543,7 @@ private extension ChannelListView {
         HomeShortcutCards(count: count(for:), isCalling: isCalling(_:), press: press(_:))
             .listRowInsets(Self.cardsInsets)
             .listRowSeparator(.hidden)
+            .listRowBackground(Color.clear)
     }
 
     /// The communities panel, sized against the real screen.
@@ -653,6 +671,10 @@ private extension ChannelListView {
     ///
     /// Inset from the row's own bounds so it reads as a marked row rather than a full-width
     /// band, and rounded to match the glyph beside it.
+    /// `Color.clear` and not nothing when there is no mark: this is a row's *whole*
+    /// background, and a `List` row that is given none falls back to `systemBackground` —
+    /// opaque black, over the ground the sidebar draws. Every row in this list says clear
+    /// for that reason.
     @ViewBuilder
     func resumeMark(isResumable: Bool) -> some View {
         if isResumable {
@@ -660,6 +682,8 @@ private extension ChannelListView {
                 .fill(Color.hiveAccent.opacity(0.14))
                 .padding(.horizontal, 8)
                 .padding(.vertical, 1)
+        } else {
+            Color.clear
         }
     }
 
@@ -714,6 +738,7 @@ private extension ChannelListView {
             .padding(.vertical, 6)
             .listRowInsets(Self.rowInsets)
             .listRowSeparator(.hidden)
+            .listRowBackground(Color.clear)
             .accessibilityIdentifier("sidebar-section-empty-\(section.rawValue)")
     }
 

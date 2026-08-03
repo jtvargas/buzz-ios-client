@@ -24,6 +24,9 @@ struct LaterView: View {
             tabs
             list
         }
+        // On the whole screen rather than on ``rowList``: the segmented strip above the list
+        // and the three empty states that replace it are outside that view.
+        .hiveScreenGround()
         .navigationTitle("Later")
         .navigationBarTitleDisplayMode(.inline)
         .navigationDestination(item: $rescheduling) { row in
@@ -100,6 +103,7 @@ struct LaterView: View {
                         .tint(.orange)
                     }
                 }
+                .listRowBackground(Color.clear)
             }
         }
         .listStyle(.plain)

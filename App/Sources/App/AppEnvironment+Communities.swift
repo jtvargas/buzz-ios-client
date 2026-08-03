@@ -118,6 +118,45 @@ extension AppEnvironment {
         return await joinCommunity(relayURLString: relay, key: key)
     }
 
+    /// Publishes the name and picture a reader gave on the way in, once the community they gave
+    /// them to is open.
+    ///
+    /// Deliberately after the arrival and not part of it. It goes through the ordinary outbox,
+    /// so it is durable and retried like any other send, and a failure here is **not** surfaced:
+    /// the reader is already in, on the screen they asked for, and a red line about a profile
+    /// would report the join as having gone wrong. Both values are theirs to correct from the
+    /// account screen either way, which is the same editor this writes through.
+    ///
+    /// Sent when *either* was answered, and each field carries only what was: a reader who picked
+    /// a picture and skipped the name gets a kind-0 with a `picture` and no `name`, rather than
+    /// nothing at all.
+    ///
+    /// **Only ever called for a key this app just minted.** A kind-0 is replaceable, and this
+    /// writes a fresh one rather than merging into what the relay already holds the way
+    /// ``ProfileModel`` does — so publishing it for a key the reader pasted would silently drop
+    /// whatever `about`, `nip05` or `lud16` that identity already had. Both walks that call this
+    /// ask for a profile only on the new-key route for exactly that reason.
+    func announceArrivalProfile(displayName: String, emoji: String?, color: String) async {
+        let name = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let picture = emoji.map { EmojiAvatar(emoji: $0, color: color).dataURL() }
+        guard !name.isEmpty || picture != nil, let sender = engine else { return }
+        let content = ProfileMetadataContent(
+            name: name.isEmpty ? nil : name,
+            displayName: name.isEmpty ? nil : name,
+            about: nil,
+            picture: picture,
+            nip05: nil,
+            lud16: nil
+        )
+        _ = try? await sender.enqueue(
+            kind: .metadata,
+            content: content.jsonString(),
+            in: "",
+            tags: [],
+            maxContentBytes: OutboxPolicy.maxContentBytes
+        )
+    }
+
     /// The application-specific sink a ``TargetPairingSession`` hands its decrypted
     /// credential to. It commits the imported key to the community the credential's relay
     /// belongs to — creating that community if this device does not have it yet — and the
@@ -324,7 +363,7 @@ extension AppEnvironment {
             notice = nil
             return nil
         } catch {
-            let failure = IdentityGateError.couldNotStart(String(describing: error))
+            let failure = Self.gateAnswer(for: error)
             await teardownSession()
             await returnToCommunity(previousID, after: community.id)
             // Only worth saying out here if the reader was put back somewhere: the gate
@@ -333,6 +372,18 @@ extension AppEnvironment {
                 notice = AppNotice(title: "Couldn't open that community", message: failure.message)
             }
             return failure
+        }
+    }
+
+    /// The sentence a failed start is worth to the person who caused it.
+    ///
+    /// Only the failures a reader can act on differently are named; everything else keeps
+    /// its `String(describing:)`, which is deliberately a developer's description because
+    /// the alternative is inventing advice for a failure nobody has diagnosed yet.
+    private static func gateAnswer(for error: any Error) -> IdentityGateError {
+        switch error {
+        case CompositionError.relayMembershipRequired: .needsInvitation
+        default: .couldNotStart(String(describing: error))
         }
     }
 

@@ -120,5 +120,5 @@ struct ActivityFilterRail: View {
         ActivityFilterRail(selection: $selection) { counts[$0] ?? 0 }
         Spacer()
     }
-    .background(Color(.systemGroupedBackground))
+    .background(Color.hiveNight)
 }

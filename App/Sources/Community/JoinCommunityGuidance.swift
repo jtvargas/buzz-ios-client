@@ -57,7 +57,8 @@ extension JoinCommunityModel {
     var stepTitle: String {
         switch step {
         case .needsLink, .community: alreadyJoined != nil ? "Already here" : "The community"
-        case .identity, .joining: "Who you'll be here"
+        case .profile: "Who you'll be here"
+        case .identity, .joining: "The key that signs for you"
         }
     }
 
@@ -70,9 +71,12 @@ extension JoinCommunityModel {
                 ? "This relay is already one of your communities on this phone."
                 : "Check where you're going, and what this community asks of you. Nothing is "
                 + "claimed until the next screen."
+        case .profile:
+            "Your name and picture in this community. Both are only for this one, and both "
+                + "can be changed later."
         case .identity, .joining:
-            "How this community sees you, and which key signs for you in it. Both are only "
-                + "for this community."
+            "Every message you send here is signed by a key. This is the one that will sign "
+                + "yours, and it is only for this community."
         }
     }
 
@@ -181,7 +185,13 @@ extension JoinCommunityModel {
         "Optional. Without one, people in this community see a code instead of you — you can "
             + "change it later from your account."
 
+    /// Also says what happens to the previous step's answers, because on this route they are
+    /// *not* used and a reader who filled them in is owed the reason. See
+    /// ``AppEnvironment/announceArrivalProfile(displayName:emoji:color:)``: a kind-0 is
+    /// replaceable and this app writes a fresh one, so publishing the name and picture from the
+    /// step before would overwrite the profile this key already has rather than adding to it.
     static let existingIdentityBlurb =
-        "The community will see this key's public identity. Use a new one if you'd rather "
-            + "it not be linked to where else you use it."
+        "The community will see this key's public identity, and keeps the name and picture it "
+            + "already has — the ones on the last step are only used for a new key. Use a new "
+            + "one if you'd rather it not be linked to where else you use it."
 }
