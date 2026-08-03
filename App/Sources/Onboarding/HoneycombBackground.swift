@@ -70,25 +70,24 @@ struct HoneycombBackground: View {
 }
 
 extension ShapeStyle where Self == Color {
-    /// The onboarding ground: the dark end of `LaunchBackground`, fixed rather than adaptive.
+    /// **The app's one dark**, and the dark end of `LaunchBackground` — the two are kept at the
+    /// same value on purpose, so the launch screen and the first frame the app draws are the
+    /// same colour and there is no flash between them.
     ///
-    /// The hero is a dark screen in both appearances on purpose — an amber lattice glowing out
-    /// of near-black is the whole look, and the light-mode version of it is a grey mesh on
-    /// white. The one screen in the app that owns its own background.
-    static var hiveNight: Color { Color(red: 0.055, green: 0.067, blue: 0.075) }
-
-    /// The same night with the light taken out of it, for the comb behind the communities panel.
+    /// Everything that owns a ground takes this: the onboarding hero and the wizards on its
+    /// comb, the communities panel, and the sidebar. They were three darks that were nearly but
+    /// not quite the same, which is more visible than any of them being wrong — a reader moving
+    /// between two surfaces sees the step, not the colour.
     ///
-    /// The hero is a whole screen and can afford a ground that reads as a dark grey. The panel
-    /// is a drawer standing next to the sidebar, and the sidebar in dark mode is very close to
-    /// black — at ``hiveNight`` the drawer read as the lighter of the two, which is backwards
-    /// for the thing in front. Same hue, same ratio between the channels, a little over a third
-    /// of the brightness.
+    /// Fixed rather than adaptive. An amber lattice glowing out of near-black is the whole
+    /// look, and the light-mode version of it is a grey mesh on white.
     ///
     /// Not black itself: the panel's leading edge is what tells a reader it is a surface that
     /// arrived over the sidebar rather than part of it, and against pure black that edge is
-    /// carried by the drop shadow alone.
-    static var hiveMidnight: Color { Color(red: 0.021, green: 0.025, blue: 0.029) }
+    /// carried by the drop shadow alone. What separates panel from sidebar now that they share
+    /// a colour is the scrim (``WorkspacePanelGeometry/scrimOpacity``), which darkens what is
+    /// behind the panel by a quarter for as long as it is out.
+    static var hiveNight: Color { Color(red: 0.021, green: 0.025, blue: 0.029) }
 
     /// What the head of a travelling pulse reaches: the accent pushed toward white so the
     /// light reads as passing *through* the line rather than as a second colour painted on it.
