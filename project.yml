@@ -67,6 +67,25 @@ targets:
         # regenerates from this block: a key written straight into that file survives
         # until the next `make generate` and then silently disappears.
         UIUserInterfaceStyle: Dark
+        # Hive is laid out for one hand in portrait and has no landscape design: the
+        # sidebar overlays the conversation rather than sitting beside it, and the
+        # composer's growth and keyboard handling are both measured against a portrait
+        # safe area. Rotating produced a stretched version of a phone layout, not a
+        # wider one, so the orientation is fixed rather than left to the default (which
+        # is every orientation).
+        #
+        # Declared for both device families on purpose — there is no iPad design either,
+        # so an iPad runs the same portrait layout. That leaves Xcode's "All interface
+        # orientations must be supported unless the app requires full screen" validation
+        # warning standing; it predates this key and silencing it means opting out of
+        # iPad multitasking (`UIRequiresFullScreen`), which is a product decision this
+        # change does not make.
+        #
+        # Here and not in `App/Info.plist` for the reason given above: xcodegen
+        # regenerates that file from this block, so a key written straight into it
+        # survives until the next `make generate` and then silently disappears.
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
         # The mobile client's Inter body and GeistMono code families, both under SIL
         # Open Font License 1.1 — which requires its text to travel with the fonts, so
         # `Inter-LICENSE.txt` and `GeistMono-LICENSE.txt` ship beside them. Their
