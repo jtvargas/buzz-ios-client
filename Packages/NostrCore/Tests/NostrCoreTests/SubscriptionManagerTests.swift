@@ -346,6 +346,81 @@ struct SubscriptionManagerTests {
         await connection.stop()
     }
 
+    @Test("A rate-limited CLOSED re-REQs the subscription instead of surfacing it", .timeLimit(.minutes(1)))
+    func rateLimitedCloseRetriesRatherThanSurfacing() async throws {
+        let signer = try InMemorySigner()
+        let relay = FakeRelay()
+        let transports = TransportQueue([relay])
+        let connection = makeInertConnection(signer: signer, transports: transports)
+        // No real waiting: the backoff and the gate both resolve immediately, so the test asserts
+        // *that* the retry happens rather than how long it slept.
+        let manager = SubscriptionManager(
+            connection: connection,
+            signer: signer,
+            rateLimitGate: RelayRateLimitGate(sleepFor: { _ in }),
+            pacingSleep: { _ in },
+            jitter: { 0 }
+        )
+        let sink = RecordingSink()
+
+        try await connection.connect()
+        try await driveAuthToReady(connection, relay, authSendIndex: 0)
+        let id = try await manager.register(filters: [Filter(kinds: [.channelMessage])], sink: sink)
+        _ = await relay.awaitSend(index: 1) // the first REQ
+
+        await relay.enqueue(Frames.closed(id.rawValue, "rate-limited: slow down, retry in 1s"))
+
+        // The proof: a second REQ for the same subscription id, and nothing on the error surface.
+        // Bounded rather than `awaitSend`, so dropping the subscription again fails this in a
+        // second instead of hanging — without the retry there is no third frame, ever.
+        #expect(await holds { await relay.sentFrames.count >= 3 })
+        let retried = await relay.sentFrames[2]
+        #expect(try reqSubscriptionID(from: retried) == id.rawValue)
+        #expect(await sink.closureCount == 0)
+
+        await manager.shutdown()
+        await connection.stop()
+    }
+
+    @Test("A subscription refused past its retry budget finally surfaces", .timeLimit(.minutes(1)))
+    func rateLimitedCloseSurfacesOnceRetriesAreSpent() async throws {
+        let signer = try InMemorySigner()
+        let relay = FakeRelay()
+        let transports = TransportQueue([relay])
+        let connection = makeInertConnection(signer: signer, transports: transports)
+        let manager = SubscriptionManager(
+            connection: connection,
+            signer: signer,
+            config: SubscriptionManagerConfig(maxClosedRetries: 2),
+            rateLimitGate: RelayRateLimitGate(sleepFor: { _ in }),
+            pacingSleep: { _ in },
+            jitter: { 0 }
+        )
+        let sink = RecordingSink()
+
+        try await connection.connect()
+        try await driveAuthToReady(connection, relay, authSendIndex: 0)
+        let id = try await manager.register(filters: [Filter(kinds: [.channelMessage])], sink: sink)
+        _ = await relay.awaitSend(index: 1)
+
+        // Refuse every re-REQ. The budget is two, so the third refusal is the one that gives up
+        // and hands the channel to the engine's own recovery.
+        for attempt in 0 ..< 3 {
+            await relay.enqueue(Frames.closed(id.rawValue, "rate-limited: still busy"))
+            if attempt < 2 {
+                #expect(await holds { await relay.sentFrames.count >= 3 + attempt })
+            }
+        }
+        #expect(await holds { await sink.closureCount == 1 })
+
+        let closure = await sink.closureAt(0)
+        #expect(closure.subscription == id)
+        #expect(closure.error == .closedByRelay(.rateLimited("still busy")))
+
+        await manager.shutdown()
+        await connection.stop()
+    }
+
     @Test("A CLOSED auth-required re-REQs once, then surfaces on a second", .timeLimit(.minutes(1)))
     func closedAuthRequiredReRequestsOnceThenSurfaces() async throws {
         let signer = try InMemorySigner()

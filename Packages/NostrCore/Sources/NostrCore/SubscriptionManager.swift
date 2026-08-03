@@ -49,6 +49,19 @@ public actor SubscriptionManager {
     /// by the wall clock; production sleeps for real.
     let liveFlushSleep: @Sendable (Duration) async throws -> Void
 
+    /// Sleeps the pauses between reconnect replay batches and before a refused subscription's
+    /// re-`REQ`. Separate from ``liveFlushSleep`` so a test can compress the pacing without
+    /// disturbing flush timing, and the reverse.
+    let pacingSleep: @Sendable (Duration) async throws -> Void
+
+    /// Draws the jitter fraction for a refused subscription's backoff. Injected for the reason
+    /// ``ReconnectPolicy`` takes one: a test pins the delay instead of fighting a generator.
+    let jitter: @Sendable () -> Double
+
+    /// The session's rate-limit window. Shared with the connection's other request paths so a
+    /// refusal on one subscription pauses every request behind it, not just its own retry.
+    let rateLimitGate: RelayRateLimitGate
+
     // MARK: - Subscription state
 
     /// The mutable per-subscription bookkeeping. A reference type so a flush can
@@ -79,6 +92,14 @@ public actor SubscriptionManager {
         /// Guards the single re-open after a `CLOSED auth-required`, mirroring the
         /// connection's one-shot retry-once. Reset by a clean `EOSE`.
         var retriedAfterClose = false
+
+        /// How many times a retryable `CLOSED` has re-`REQ`ed this subscription without a clean
+        /// `EOSE` in between. Drives the backoff, and gives up at
+        /// ``SubscriptionManagerConfig/maxClosedRetries``. Reset by an `EOSE` and by a reconnect.
+        var closedRetryAttempt = 0
+        /// The pending re-`REQ` for a refused subscription. At most one at a time — a second
+        /// `CLOSED` arriving while this is armed is the same refusal restated.
+        var closedRetryTask: Task<Void, Never>?
 
         init(id: SubscriptionID, originalFilters: [Filter], sink: any EventSink) {
             self.id = id
@@ -125,12 +146,18 @@ public actor SubscriptionManager {
         connection: RelayConnection,
         signer: any EventSigner,
         config: SubscriptionManagerConfig = .default,
-        liveFlushSleep: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
+        rateLimitGate: RelayRateLimitGate = RelayRateLimitGate(),
+        liveFlushSleep: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) },
+        pacingSleep: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) },
+        jitter: @escaping @Sendable () -> Double = { Double.random(in: 0 ... 1) }
     ) {
         self.connection = connection
         self.signer = signer
         self.config = config
+        self.rateLimitGate = rateLimitGate
         self.liveFlushSleep = liveFlushSleep
+        self.pacingSleep = pacingSleep
+        self.jitter = jitter
     }
 
     // MARK: - Lifecycle
@@ -172,6 +199,9 @@ public actor SubscriptionManager {
         stateTask?.cancel(); stateTask = nil
         for subscription in subscriptions.values {
             subscription.liveFlushTask?.cancel()
+            // A pending re-`REQ` outliving the manager would fire against a connection nobody
+            // owns any more.
+            subscription.closedRetryTask?.cancel()
         }
         subscriptions.removeAll()
         connectionIsReady = false
@@ -224,6 +254,7 @@ public actor SubscriptionManager {
     public func unsubscribe(_ id: SubscriptionID) async {
         guard let subscription = subscriptions.removeValue(forKey: id) else { return }
         subscription.liveFlushTask?.cancel()
+        subscription.closedRetryTask?.cancel()
         // Best effort: if there is no live socket the relay-side subscription is
         // already gone, and dropping it from our table is what stops delivery.
         try? await connection.send(.close(subscriptionID: id.rawValue))

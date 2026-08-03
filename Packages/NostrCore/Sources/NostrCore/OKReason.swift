@@ -84,20 +84,62 @@ public enum OKReason: Sendable, Equatable {
     /// terminal too here: this client mines no proof of work, so an identical
     /// resend can never satisfy a difficulty demand and would only hammer the
     /// relay. `auth-required` earns one retry after re-authenticating.
-    /// `rate-limited`, `error` and an unrecognised reason are transient and
-    /// retried under backoff. `duplicate` means the relay already stored the
+    /// `rate-limited` and an unrecognised reason are transient and retried under
+    /// backoff. `duplicate` means the relay already stored the
     /// event, which the caller should treat as a successful publish.
+    ///
+    /// `error` is transient *except* for the two the relay uses to say the request
+    /// itself is the problem — see ``terminalErrorMessages``.
     public var disposition: Disposition {
         switch self {
         case .invalid, .restricted, .blocked, .pow:
             .terminal
         case .authRequired:
             .reauthThenRetry
-        case .rateLimited, .error, .unspecified:
+        case let .error(message):
+            Self.isTerminalError(message) ? .terminal : .retryable
+        case .rateLimited, .unspecified:
             .retryable
         case .duplicate:
             .alreadyAccepted
         }
+    }
+
+    /// The `error:` remainders that an identical retry can never satisfy.
+    ///
+    /// A generic `error:` is the relay saying *something went wrong*, which is worth trying
+    /// again. These two are the relay saying *this request is the problem*: the subscription
+    /// budget is already full, or the filter mixes a search term with constraints the relay
+    /// cannot serve together. Retrying either on a timer is an infinite loop that also keeps the
+    /// budget full — the precise failure this classifier exists to prevent. Matched by prefix on
+    /// the human remainder, since the relay appends detail to both.
+    static let terminalErrorMessages = ["too many subscriptions", "mixed search"]
+
+    private static func isTerminalError(_ message: String) -> Bool {
+        let normalized = message.lowercased()
+        return terminalErrorMessages.contains { normalized.hasPrefix($0) }
+    }
+
+    // MARK: - Rate-limit retry hint
+
+    /// The wait a `rate-limited:` message asks for, in seconds, when it names one.
+    ///
+    /// A Buzz relay writes the hint as `retry in 30s` inside the human remainder. It is advisory
+    /// and frequently absent, so the caller supplies its own default — see
+    /// ``RelayRateLimitGate/defaultRetrySeconds``. Only meaningful on ``rateLimited(_:)``;
+    /// every other reason yields `nil` rather than mining an unrelated message for digits.
+    public var retryAfterSeconds: Int? {
+        guard case let .rateLimited(message) = self else { return nil }
+        return Self.parseRetryInSeconds(message)
+    }
+
+    /// Built per call rather than held in a `static`: `Regex` is not `Sendable`, and this package
+    /// compiles under complete strict concurrency. The cost is irrelevant — the only caller is a
+    /// relay refusal, which is rare by construction.
+    private static func parseRetryInSeconds(_ message: String) -> Int? {
+        let pattern = /retry in (\d+)s/.ignoresCase()
+        guard let match = try? pattern.firstMatch(in: message) else { return nil }
+        return Int(match.output.1)
     }
 }
 
