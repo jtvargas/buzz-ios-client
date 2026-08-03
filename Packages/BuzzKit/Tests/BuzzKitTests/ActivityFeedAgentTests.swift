@@ -139,6 +139,30 @@ struct ActivityFeedAxisTests {
         #expect(!row.matches(.agentActivity), "its kind already says what it is")
     }
 
+    @Test("a long message body comes back cut, not whole")
+    func bodiesAreCutToThePreviewLength() async throws {
+        let database = TempDatabase()
+        defer { database.remove() }
+        let me = try Fixture().pubkey
+        let store = try await ActivityFixtures.openStore(database, identity: me, channels: ["room-1"])
+        let relay = try Fixture()
+        let author = try Fixture()
+
+        let long = String(repeating: "x", count: 5000)
+        _ = try await store.ingest(batch: [
+            try ActivityFixtures.meta(relay, "room-1", name: "Room", at: 500),
+            try ActivityFixtures.message(author, long, in: "room-1", mentions: [me], at: 1000),
+        ], phase: .backfill)
+
+        let row = try #require(try store.activityFeed(selfPubkey: me, limit: 50).first)
+        // The scan reaches thousands of events so one busy thread cannot crowd out the rest,
+        // and every event past a row's representative one only adds `+1` to a count. Carrying
+        // whole bodies for all of them measured ~1 MB of text per commit for text nothing
+        // draws. Pinned because removing the `substr` breaks nothing visible.
+        #expect(row.latest.content.count == ActivityFeedRead.previewLength)
+        #expect(row.latest.content.allSatisfy { $0 == "x" })
+    }
+
     @Test("the activity read seeks its index instead of scanning and sorting the log")
     func readUsesTheKindRecentIndex() async throws {
         let database = TempDatabase()

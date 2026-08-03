@@ -90,6 +90,23 @@ enum ActivityFeedRead {
     )
     """
 
+    /// How much of a message body the read carries back.
+    ///
+    /// The scan reaches ``scanLimit`` events so that a busy thread cannot crowd out every
+    /// other conversation — but all an event past a row's representative one ever
+    /// contributes is `+1` to a count. Selecting whole bodies for all of them measured at
+    /// ~1 MB of text crossing into Swift on **every commit**, against ~140 KB capped here,
+    /// for nothing anyone can see: the row draws two tail-truncated lines of the newest
+    /// event only.
+    ///
+    /// Two hundred characters rather than something tighter because the cut has to survive
+    /// the widest phone at the smallest dynamic type, where two lines hold appreciably more
+    /// than they do at the default. It is a *byte* cut in SQL rather than a grapheme-aware
+    /// one, so it can split a multi-byte character at the boundary — harmless because SQLite
+    /// returns the truncated bytes as text and SwiftUI renders the replacement character at
+    /// worst, off the end of a string already being ellipsised.
+    static let previewLength = 200
+
     /// Whether the event's author is an agent rather than a person.
     ///
     /// The same two facts ``DirectorySnapshot`` builds `isAgent` from
@@ -186,7 +203,7 @@ enum ActivityFeedRead {
     SELECT e.id             AS id,
            e.pubkey         AS pubkey,
            e.kind           AS kind,
-           e.content        AS content,
+           substr(e.content, 1, \(previewLength)) AS content,
            e.created_at     AS created_at,
            e.h              AS channel_id,
            c.name           AS channel_name,

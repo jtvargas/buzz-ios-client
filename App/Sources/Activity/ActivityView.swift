@@ -222,6 +222,13 @@ struct ActivityView: View {
     /// second answer to the same question.
     private func unreadCount(for entry: ActivityEntry) -> Int {
         guard entry.unreadCount > 0 else { return 0 }
+        // A direct message is keyed on its channel, not on a thread
+        // (``BuzzKit/ActivityFeedRead/Candidate/conversationID``), while `rootID` comes from
+        // whichever event happens to be newest. So a DM whose latest message sits in a
+        // thread would otherwise have its **whole** count gated on that one thread's mark —
+        // read the thread, and messages outside it silently stop counting. The channel
+        // frontier is the only honest answer for a conversation keyed by channel.
+        guard !entry.isDirectMessage else { return entry.unreadCount }
         guard let rootID = entry.rootID else { return entry.unreadCount }
         return threadReads.hasUnseen(rootID, latestReplyByOthersAt: entry.latest.createdAt)
             ? entry.unreadCount

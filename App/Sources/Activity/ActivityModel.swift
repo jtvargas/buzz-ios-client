@@ -51,9 +51,23 @@ final class ActivityModel {
         self.selfPubkey = selfPubkey
     }
 
+    /// How long the feed waits after a read before accepting the next change.
+    ///
+    /// The read costs roughly 62 ms on a development Mac at this workspace's shape, and a
+    /// phone is several times slower. Live chat commits several times a second — a message,
+    /// its reaction, a read-state blob, a thread fetch — and without this every one of them
+    /// paid for a full re-read and re-group.
+    ///
+    /// A quarter second is below the threshold at which a list arriving late is noticeable,
+    /// and this is a summary surface rather than one being typed into. It is paired with
+    /// ``DatabaseSignal/coalescedChanges(in:)``, and both halves are required: the wait
+    /// creates the window, and the buffering policy is what makes a burst inside that window
+    /// collapse to one token rather than queue up behind it.
+    nonisolated static let coalescingWindow = Duration.milliseconds(250)
+
     nonisolated func run() async {
         do {
-            for try await _ in DatabaseSignal.changes(in: store.reader) {
+            for try await _ in DatabaseSignal.coalescedChanges(in: store.reader) {
                 let feed = (try? store.activityFeed(
                     selfPubkey: selfPubkey,
                     limit: Self.limit
@@ -66,6 +80,9 @@ final class ActivityModel {
                 let directory = (try? store.directorySnapshot()) ?? .empty
                 let channels = (try? store.channelList(selfPubkey: selfPubkey)) ?? []
                 await apply(feed, directory: directory, channels: channels)
+                // The coalescing window. Everything committed during it collapses into the
+                // single token waiting when this returns — see ``coalescingWindow``.
+                try await Task.sleep(for: Self.coalescingWindow)
             }
         } catch {
             // Ends on cancellation or teardown; the last snapshot stays on screen.

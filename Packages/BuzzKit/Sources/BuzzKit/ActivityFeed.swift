@@ -155,7 +155,13 @@ public struct ActivityEvent: Sendable, Hashable, Identifiable {
     public let authorPicture: String?
     /// The raw Nostr kind, which is what decides an agent event's headline.
     public let kind: Int
-    /// The event's text, uncut. Cutting is the row's business — it knows its own width.
+    /// The event's text, cut to ``ActivityFeedRead/previewLength`` by the read.
+    ///
+    /// Deliberately **not** the whole body, unlike every other row type in this app. A row
+    /// draws two tail-truncated lines, and the scan reaches thousands of events so that one
+    /// busy thread cannot crowd out the rest — carrying full bodies for all of them moved
+    /// about a megabyte of text per commit for text nothing renders. Anything that needs the
+    /// real message has ``id`` and can read it.
     public let content: String
     /// Unix seconds.
     public let createdAt: Int64
