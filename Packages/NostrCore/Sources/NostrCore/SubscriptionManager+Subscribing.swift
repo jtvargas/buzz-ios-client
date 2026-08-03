@@ -96,14 +96,23 @@ extension SubscriptionManager {
     /// choosing the filter by cursor state. A send that fails for lack of a live
     /// socket is expected churn, not an error: the subscription stays registered
     /// and the next `ready` re-arms it.
+    /// # Why this does *not* wait on the rate-limit gate
+    ///
+    /// It is the obvious place to put it — one choke point every `REQ` passes through — and it is
+    /// wrong here. ``register(filters:sink:)`` awaits this method, and the engine registers
+    /// channels in a serial loop, so a gate holding a 300-second window would suspend
+    /// registration for the length of it, once per channel. Subscribing to a channel would look
+    /// like a hang.
+    ///
+    /// The gate belongs on the paths that are already background work and already batched: the
+    /// reconnect replay, and a refused subscription's retry. A newly registered subscription
+    /// sends its `REQ` immediately, and if the relay refuses it for budget, ``handleClosed``
+    /// now schedules the retry *behind* the gate — which is the outcome waiting here would have
+    /// bought, without stalling the caller to get it.
     func sendRequest(for subscription: Subscription, epoch: Int) async {
-        // The single choke point every `REQ` passes through, so the session's rate-limit window
-        // is honoured by registration, replay and retry alike rather than by each of them
-        // separately. Waiting here suspends this task but not the actor, so frames keep routing.
-        await rateLimitGate.wait()
-        // Both re-checked after that suspension, which a long window can stretch to minutes: the
-        // subscription may have been unsubscribed, and a new socket makes this `REQ` a duplicate
-        // of one the new epoch's replay already sent.
+        // Cheap insurance for the callers that *do* suspend before reaching here — a retry that
+        // waited out a long window may find its subscription unsubscribed, or a new socket whose
+        // own replay has already re-`REQ`ed it.
         guard subscriptions[subscription.id] === subscription, readyEpoch == epoch else { return }
 
         subscription.phase = .backfill
