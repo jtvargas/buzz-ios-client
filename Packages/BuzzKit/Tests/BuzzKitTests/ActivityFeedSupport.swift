@@ -39,6 +39,32 @@ enum ActivityFixtures {
         return try author.event(.channelMessage, text, tags: tags, at: seconds)
     }
 
+    /// Registers `agent` in the relay's agent directory — one of the two authorities that
+    /// make an author an agent (`Directory.swift:158`).
+    static func agentProfile(_ agent: Fixture, name: String, at seconds: Int64) throws -> NostrEvent {
+        try agent.event(
+            .agentProfile,
+            #"{"display_name":"\#(name)","respond_to":"anyone","channel_ids":[]}"#,
+            at: seconds
+        )
+    }
+
+    /// A channel roster carrying the `bot` role for `bots` — the *other* authority, and the
+    /// one that actually applies on JT's relay, where agents are channel members with a role
+    /// rather than entries in a directory.
+    static func members(
+        _ relay: Fixture,
+        _ channel: String,
+        people: [String],
+        bots: [String] = [],
+        at seconds: Int64
+    ) throws -> NostrEvent {
+        let tags = [["d", channel]]
+            + people.map { ["p", $0] }
+            + bots.map { ["p", $0, "bot"] }
+        return try relay.event(.groupMembers, "", tags: tags, at: seconds)
+    }
+
     /// A store holding one channel the identity may see. Every test needs this pair —
     /// the feed gates on `channel_access` exactly as the sidebar does, so a channel the
     /// sidebar would not show contributes nothing here either.

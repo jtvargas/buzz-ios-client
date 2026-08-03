@@ -73,6 +73,29 @@ enum ActivityFeedRead {
     )
     """
 
+    /// Whether the event's author is an agent rather than a person.
+    ///
+    /// The same two facts ``DirectorySnapshot`` builds `isAgent` from
+    /// (`Directory.swift:158`): a row in `agent_directory`, or the `bot` role on any
+    /// channel membership. Asked in SQL rather than resolved in the view because it decides
+    /// which *chip* a row appears under, and a filter that depends on a value the view has
+    /// not loaded yet would flicker rows in and out as the roster arrives.
+    ///
+    /// # Why this exists at all
+    ///
+    /// The Agents chip was first built on the agent job kinds alone (43001–43006), which is
+    /// what the relay's own feed SQL keys on. Checked against JT's live relay: **zero** such
+    /// events exist, and every agent on it — Fizz, Bumble, Sentry — replies as an ordinary
+    /// `kind:9` channel message. So the chip was empty and would have stayed empty. The
+    /// relay's `agent_activity` feed bucket classifies by *author*, and returns exactly
+    /// those kind-9 messages; this matches that. The kind list stays as well, so a real job
+    /// event still classifies correctly if one ever arrives.
+    private static let authorIsAgent = """
+    (EXISTS (SELECT 1 FROM agent_directory ad WHERE ad.pubkey = e.pubkey)
+     OR EXISTS (SELECT 1 FROM channel_member cm
+                 WHERE cm.pubkey = e.pubkey AND LOWER(cm.role) = 'bot'))
+    """
+
     /// One channel's effective read frontier — `MAX(read_at)` across every device's NIP-RS
     /// slot, identical to ``ChannelList``'s. `MAX` over no rows is NULL and falls to 0, so
     /// a channel nothing has ever marked read counts as entirely unread, which is the
@@ -130,6 +153,7 @@ enum ActivityFeedRead {
            p.picture        AS author_picture,
            t.root_id        AS root_id,
            names_me.value IS NOT NULL AS names_me,
+           \(authorIsAgent) AS author_is_agent,
            e.created_at > \(channelFrontier) AS is_unread
     FROM event e
     LEFT JOIN thread t        ON t.event_id = e.id
@@ -186,6 +210,7 @@ enum ActivityFeedRead {
         let isDirectMessage: Bool
         let rootID: String?
         let namesMe: Bool
+        let authorIsAgent: Bool
         let isUnread: Bool
 
         init(_ row: Row) {
@@ -208,17 +233,29 @@ enum ActivityFeedRead {
             isDirectMessage = (row["channel_type"] as String?) == "dm"
             rootID = row["root_id"]
             namesMe = row["names_me"] ?? false
+            authorIsAgent = row["author_is_agent"] ?? false
             isUnread = row["is_unread"] ?? false
         }
 
-        /// Which category this event lands in.
+        /// Which categories this event lands in — plural, because one event genuinely is
+        /// more than one thing.
         ///
-        /// Kind decides first: an approval request or a job report is what it is wherever
-        /// it arrived. Only a plain message falls through to "does it name me", and only
-        /// then to activity — which by the `WHERE` clause above means it reached the feed
-        /// through the DM or thread-participation route.
-        var category: ActivityCategory {
-            ActivityKinds.category(forKind: event.kind) ?? (namesMe ? .mention : .activity)
+        /// Kind decides first and alone: an approval request or a job report is what it is
+        /// wherever it arrived and whoever sent it.
+        ///
+        /// A plain message is classified on two independent axes, and this is the part that
+        /// was wrong in the first cut. *Does it name me* gives mention, else activity —
+        /// which by the `WHERE` clause means it reached the feed by the DM or
+        /// thread-participation route. *Was it written by an agent* additionally gives
+        /// agentActivity. They are independent: an agent that `@`-names you produces
+        /// `[.mention, .agentActivity]`, so the row reads as a **Mention** (mention outranks
+        /// agentActivity in ``ActivityCategory``'s order) and still appears under the Agents
+        /// chip. Collapsing that to one category is what made Agents an empty screen.
+        var categories: Set<ActivityCategory> {
+            if let byKind = ActivityKinds.category(forKind: event.kind) { return [byKind] }
+            var present: Set<ActivityCategory> = [namesMe ? .mention : .activity]
+            if authorIsAgent { present.insert(.agentActivity) }
+            return present
         }
 
         /// The conversation this event belongs to.
@@ -263,7 +300,7 @@ enum ActivityFeedRead {
             }
             counts[key, default: 0] += 1
             if candidate.isUnread { unread[key, default: 0] += 1 }
-            categories[key, default: []].insert(candidate.category)
+            categories[key, default: []].formUnion(candidate.categories)
         }
 
         return order.prefix(limit).compactMap { key -> ActivityEntry? in
@@ -272,11 +309,11 @@ enum ActivityFeedRead {
             // approval that also names you is filed under Action and still appears under
             // Mentions — the behaviour desktop gets from carrying a `categories` array on
             // every inbox item rather than a single category.
-            let present = (categories[key] ?? [candidate.category])
+            let present = (categories[key] ?? candidate.categories)
                 .sorted { $0.priority < $1.priority }
             return ActivityEntry(
                 id: key,
-                category: present.first ?? candidate.category,
+                category: present.first ?? .activity,
                 categories: present,
                 channelID: candidate.channelID,
                 channelName: candidate.channelName,
