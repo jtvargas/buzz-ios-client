@@ -129,6 +129,14 @@ struct WorkspacePanel: View {
             action("Add a relay", icon: "plus.circle") {
                 environment.communitySheet = .add
             }
+            // The app's own settings, not this community's — which is why they are reached from
+            // the communities list rather than from inside one of them, and why the row sits
+            // apart from the two above it. See ``SettingsView``.
+            Divider()
+                .padding(.vertical, 4)
+            action("Settings", icon: "gearshape") {
+                environment.showsSettings = true
+            }
         }
         .padding(.horizontal, Self.inset)
         .padding(.top, 10)

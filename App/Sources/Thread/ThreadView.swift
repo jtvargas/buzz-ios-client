@@ -207,7 +207,10 @@ struct ThreadView: View {
                         channelID: channelID,
                         due: due,
                         engine: engine,
-                        authorName: names.name(for: row.pubkey)
+                        authorName: names.name(for: row.pubkey),
+                        scheduler: ReminderScheduler(
+                            notificationsEnabled: { appEnvironment.settings.notificationsEnabled }
+                        )
                     )
                 }
             }

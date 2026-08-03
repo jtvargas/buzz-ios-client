@@ -23,6 +23,12 @@ struct RootView: View {
                 case let .join(link): JoinCommunityView(initialLink: link)
                 }
             }
+            // Above the remount boundary for the same reason, and one more: it is opened from
+            // the workspace panel, which closes itself as it opens this — see
+            // ``AppEnvironment/showsSettings``.
+            .sheet(isPresented: $environment.showsSettings) {
+                SettingsView()
+            }
             .alert(
                 environment.notice?.title ?? "",
                 isPresented: Binding(

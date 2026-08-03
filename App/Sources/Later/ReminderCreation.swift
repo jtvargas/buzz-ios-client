@@ -11,6 +11,11 @@ import Foundation
 /// The scheduler is constructed per call rather than injected: it holds no state of its
 /// own, and `UNUserNotificationCenter.current()` is already the process-wide singleton
 /// everything it does goes through.
+///
+/// It has **no default**, deliberately. A scheduler built with no arguments is one with the
+/// app-wide notification switch left at its permissive default (``ReminderScheduler/init``), so
+/// a default here would be a way to schedule an alert past a switch the reader has turned off,
+/// available to anyone who forgot to pass one. Requiring it makes the compiler ask.
 @MainActor
 enum ReminderCreation {
     static func set(
@@ -19,7 +24,7 @@ enum ReminderCreation {
         due: Date,
         engine: SyncEngine,
         authorName: String,
-        scheduler: ReminderScheduler = ReminderScheduler()
+        scheduler: ReminderScheduler
     ) async {
         // Asked here, at the moment someone has chosen a time, rather than at launch. A
         // permission prompt before anyone has asked for anything is the one most reliably

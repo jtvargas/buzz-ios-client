@@ -354,7 +354,12 @@ struct ChannelListView: View {
             let model = LaterModel(
                 store: store,
                 engine: engine,
-                scheduler: ReminderScheduler(),
+                // Read through the environment's settings rather than captured, so the
+                // reconciler that runs on every projection change asks the switch its current
+                // answer — this model outlives any number of visits to the settings screen.
+                scheduler: ReminderScheduler(
+                    notificationsEnabled: { environment.settings.notificationsEnabled }
+                ),
                 authorName: { names.name(for: $0) }
             )
             laterModel = model

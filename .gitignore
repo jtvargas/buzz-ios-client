@@ -7,8 +7,10 @@ xcuserdata/
 *.xcscmblueprint
 DerivedData/
 # CI passes -derivedDataPath .dd so the cache has a stable path; running the
-# same command locally puts ~900 MB here.
-.dd/
+# same command locally puts ~900 MB here. The glob covers the per-destination
+# spellings too (.dd-sim, .dd-device) — one `git add -A` with only `.dd/`
+# ignored stages ten thousand build artifacts, which is a very quiet mistake.
+.dd*/
 build/
 *.moved-aside
 *.pbxuser

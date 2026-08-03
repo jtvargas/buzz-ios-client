@@ -30,10 +30,21 @@ final class ReminderScheduler {
 
     private let center: UNUserNotificationCenter
     private let now: () -> Date
+    private let notificationsEnabled: () -> Bool
 
-    init(center: UNUserNotificationCenter = .current(), now: @escaping () -> Date = Date.init) {
+    /// - Parameter notificationsEnabled: the app-wide switch, read at the moment an alert
+    ///   would be scheduled rather than captured once. Read through a closure rather than by
+    ///   holding ``AppSettings`` so this stays testable without one, and so the one place every
+    ///   alert in the app is created is also the one place the switch is enforced — a caller
+    ///   cannot schedule past it by forgetting to ask.
+    init(
+        center: UNUserNotificationCenter = .current(),
+        now: @escaping () -> Date = Date.init,
+        notificationsEnabled: @escaping () -> Bool = { true }
+    ) {
         self.center = center
         self.now = now
+        self.notificationsEnabled = notificationsEnabled
     }
 
     /// Asks for permission, returning whether alerts may be shown.
@@ -41,9 +52,14 @@ final class ReminderScheduler {
     /// Called when a reminder is actually set rather than at launch: a permission prompt
     /// on first run, before anyone has asked for anything, is the one most reliably
     /// refused — and a refusal here costs the feature for good.
+    ///
+    /// Withheld while the app-wide switch is off. iOS grants this once and never asks again, so
+    /// spending the one prompt on a reader who has already said they do not want alerts would
+    /// burn it on a question whose answer is not going to be used.
     @discardableResult
     func requestAuthorization() async -> Bool {
-        (try? await center.requestAuthorization(options: [.alert, .sound, .badge])) ?? false
+        guard notificationsEnabled() else { return false }
+        return (try? await center.requestAuthorization(options: [.alert, .sound, .badge])) ?? false
     }
 
     /// Whether alerts are allowed right now, without prompting.
@@ -62,6 +78,11 @@ final class ReminderScheduler {
     /// a moment that has gone.
     func schedule(_ row: ReminderRow, authorName: String) async {
         cancel(row.id)
+        // The app-wide switch, checked after the cancel and before anything is added, so
+        // turning alerts off mid-life removes the pending one for this reminder rather than
+        // leaving it armed. The reminder itself is untouched — it stays on the relay, the
+        // Later screen still lists it, and it still comes due. Only the alert is withheld.
+        guard notificationsEnabled() else { return }
         guard row.status == .pending, let due = row.dueDate else { return }
         let interval = due.timeIntervalSince(now())
         guard interval > 0 else { return }
@@ -91,12 +112,39 @@ final class ReminderScheduler {
         center.removePendingNotificationRequests(withIdentifiers: [Self.identifierPrefix + reminderID])
     }
 
+    /// Drops every alert this app has armed, leaving anything scheduled by anything else.
+    ///
+    /// What the app-wide switch does the moment it is turned off. Waiting for the next
+    /// ``reconcile(pending:authorName:)`` would not do: the switch is thrown on a settings
+    /// screen, nothing about the reminder projection changes when it is, and the alerts already
+    /// sitting in the notification centre would go on firing until something unrelated happened
+    /// to move. A switch that takes effect at some unpredictable later moment is not a switch.
+    ///
+    /// Filtered by ``identifierPrefix`` rather than `removeAllPendingNotificationRequests()`,
+    /// which would also take anything a future feature schedules.
+    func cancelAll() async {
+        let ours = await center.pendingNotificationRequests()
+            .map(\.identifier)
+            .filter { $0.hasPrefix(Self.identifierPrefix) }
+        guard !ours.isEmpty else { return }
+        center.removePendingNotificationRequests(withIdentifiers: ours)
+    }
+
     /// Brings the scheduled alerts in line with the reminders that are actually pending.
     ///
     /// The reconciler, run whenever the pending set changes. Scheduling on its own is not
     /// enough: a reminder completed on the *desktop* arrives here as a status change with
     /// no local action behind it, and its alert would otherwise still fire on this phone.
     func reconcile(pending: [ReminderRow], authorName: (String) -> String) async {
+        // With alerts off, the set that ought to be scheduled is empty — so the reconciler's
+        // answer is to clear it, not to walk a list it would refuse every entry of. Stated here
+        // as well as in ``schedule(_:authorName:)`` because this is the path that runs on every
+        // projection change: without it, an alert armed before the switch was thrown would
+        // survive every pass, since nothing in `pending` says it should not exist.
+        guard notificationsEnabled() else {
+            await cancelAll()
+            return
+        }
         let wanted = Dictionary(uniqueKeysWithValues: pending.map { ($0.id, $0) })
         let existing = await center.pendingNotificationRequests()
             .map(\.identifier)
