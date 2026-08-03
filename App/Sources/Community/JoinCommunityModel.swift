@@ -368,35 +368,23 @@ final class JoinCommunityModel {
     }
 
     /// Publishes the name and picture the reader gave, once the community they gave them to is
-    /// open.
+    /// open. The writing itself is
+    /// ``AppEnvironment/announceArrivalProfile(displayName:emoji:color:)``, shared with the
+    /// onboarding walks.
     ///
-    /// Deliberately after the join and not part of it. It goes through the ordinary outbox,
-    /// so it is durable and retried like any other send, and a failure here is **not** shown:
-    /// the reader is already in, on the screen they asked for, and a red line about a profile
-    /// would report the join as having gone wrong. Both are theirs to correct from the account
-    /// screen either way, which is the same editor this writes through.
-    ///
-    /// Sent when *either* was answered, and each field carries only what was: a reader who
-    /// picked a picture and skipped the name gets a kind-0 with a `picture` and no `name`,
-    /// rather than nothing at all.
+    /// **Only on the new-key route.** The profile step comes before the key step, so a reader
+    /// answers it without having said yet which key will sign — and that helper writes a *fresh*
+    /// kind-0 rather than merging into what the relay already holds. On a pasted key that would
+    /// replace an existing profile, dropping its `about`, `nip05` and `lud16` and whichever of
+    /// name and picture was left blank here. A key this app just minted has nothing to lose,
+    /// which is the only case where writing a whole profile from two answers is safe.
+    /// ``JoinCommunityGuidance/existingIdentityBlurb`` says so on the step where it matters.
     private func announceProfile() async {
-        let name = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
-        let picture = avatarEmoji.map { EmojiAvatar(emoji: $0, color: avatarColor).dataURL() }
-        guard !name.isEmpty || picture != nil, let sender = environment.engine else { return }
-        let content = ProfileMetadataContent(
-            name: name.isEmpty ? nil : name,
-            displayName: name.isEmpty ? nil : name,
-            about: nil,
-            picture: picture,
-            nip05: nil,
-            lud16: nil
-        )
-        _ = try? await sender.enqueue(
-            kind: .metadata,
-            content: content.jsonString(),
-            in: "",
-            tags: [],
-            maxContentBytes: OutboxPolicy.maxContentBytes
+        guard identity == .new else { return }
+        await environment.announceArrivalProfile(
+            displayName: displayName,
+            emoji: avatarEmoji,
+            color: avatarColor
         )
     }
 

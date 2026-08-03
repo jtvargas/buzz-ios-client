@@ -54,10 +54,6 @@ struct JoinCommunityProfileStep: View {
                     }
                 }
             }
-            // The picker is a grid of several hundred glyphs and its own search field. It is
-            // the platform's surface, not this flow's, so it keeps the platform's appearance
-            // rather than inheriting the honeycomb's forced dark.
-            .preferredColorScheme(nil)
         }
     }
 

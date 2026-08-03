@@ -32,8 +32,6 @@ struct OnboardingView: View {
     let isAddingCommunity: Bool
 
     @State private var relayURLString: String
-    @State private var error: IdentityGateError?
-    @State private var isBusy = false
     @State private var lookup = CommunityLookup()
     /// Whether the relay editor is open. See ``relaySection`` for when it opens itself.
     @State private var relayExpanded: Bool
@@ -166,11 +164,6 @@ struct OnboardingView: View {
             .onChange(of: relayIsValid) { _, isValid in
                 if !isValid { relayExpanded = true }
             }
-            .overlay {
-                if isBusy { ProgressView().controlSize(.large) }
-            }
-            .animation(.default, value: error)
-            .disabled(isBusy)
         }
         // The hero owns its appearance: an amber lattice glowing out of near-black is the
         // screen, and its light-mode counterpart is a grey mesh on white. Applied to the whole
@@ -207,13 +200,6 @@ struct OnboardingView: View {
                 isFocused: $relayFocused
             )
             actions
-            if let error {
-                Text(error.message)
-                    .font(.hive(.footnote))
-                    .foregroundStyle(.red)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .accessibilityLabel("Error: \(error.message)")
-            }
         }
         .animation(.snappy(duration: 0.25), value: relayExpanded)
         .animation(.snappy(duration: 0.25), value: invitation != nil)
@@ -273,16 +259,22 @@ struct OnboardingView: View {
     /// Create and paste. A text row rather than two more slabs: both need a relay of your own,
     /// which is the less common arrival, and neither is hidden — they are one tap from here,
     /// same as they were when they were buttons.
+    ///
+    /// Both push a walk now rather than acting from here (§ ``CreateIdentityView``,
+    /// ``PasteKeyView``), which is why neither is gated on the relay field any more: the walk
+    /// opens *on* the relay, so a reader who arrives with the field empty is asked rather than
+    /// handed a dead control with nothing explaining it. The one thing still gated is an
+    /// invitation sitting in the field — see ``relayIsValid`` for why that is a different case.
     private var moreWaysIn: some View {
         HStack(spacing: 0) {
-            Button(action: create) {
+            NavigationLink(value: OnboardingRoute.create) {
                 Text("Create new identity")
                     .padding(.vertical, 10)
                     .padding(.horizontal, 12)
                     .contentShape(.rect)
             }
-            .disabled(!relayIsValid)
-            .opacity(relayIsValid ? 1 : 0.35)
+            .disabled(invitation != nil)
+            .opacity(invitation == nil ? 1 : 0.35)
 
             Text("·")
                 .foregroundStyle(.white.opacity(0.3))
@@ -304,31 +296,23 @@ struct OnboardingView: View {
     @ViewBuilder
     private func destination(_ route: OnboardingRoute) -> some View {
         switch route {
+        case .create:
+            CreateIdentityView(relayURLString: handedDownRelay)
         case .paste:
-            // The reduced form, not the text. A community is identified by its socket URL, so
-            // handing the field's `https://…` spelling down would make the same relay pasted
-            // two ways into two communities with two keys and two copies of one history.
-            PasteKeyView(relayURLString: address.relayURLString ?? relayURLString)
+            PasteKeyView(relayURLString: handedDownRelay)
         case .scan:
             PairingFlowView()
         }
     }
 
-    // MARK: - Actions
-
-    private func create() {
-        guard !isBusy, let relay = address.relayURLString, relayIsValid else {
-            error = .invalidRelayURL
-            return
-        }
-        relayFocused = false
-        isBusy = true
-        error = nil
-        Task {
-            let result = await environment.createIdentity(relayURLString: relay)
-            isBusy = false
-            error = result
-        }
+    /// The relay to open a walk on: the reduced form, not the text.
+    ///
+    /// A community is identified by its socket URL, so handing the field's `https://…` spelling
+    /// down would make the same relay pasted two ways into two communities with two keys and two
+    /// copies of one history. The raw text is the fallback only so a half-typed address arrives
+    /// for the reader to finish rather than vanishing.
+    private var handedDownRelay: String {
+        address.relayURLString ?? relayURLString
     }
 }
 
@@ -375,6 +359,7 @@ extension OnboardingView {
 
 /// The pushable onboarding sub-flows.
 enum OnboardingRoute: Hashable {
+    case create
     case paste
     case scan
 }

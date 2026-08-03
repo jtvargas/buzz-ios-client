@@ -58,5 +58,12 @@
 		<key>UIColorName</key>
 		<string>LaunchBackground</string>
 	</dict>
+	<!-- Hive is a dark app and has no light-mode design. This is the UIKit half of that
+	     decision: it fixes the style of every window, of the surfaces UIKit presents for
+	     us (the share sheet, the photo picker, the keyboard, system alerts) and of the
+	     launch screen, none of which a SwiftUI `preferredColorScheme` reaches. The SwiftUI
+	     half is on the window group in `HiveApp`. -->
+	<key>UIUserInterfaceStyle</key>
+	<string>Dark</string>
 </dict>
 </plist>

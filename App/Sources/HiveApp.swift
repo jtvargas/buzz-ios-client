@@ -45,6 +45,19 @@ struct HiveApp: App {
                 // app is at the identity gate is handled by the same door as one tapped
                 // with a community open.
                 .onOpenURL { url in _ = environment.handle(incomingURL: url) }
+                // Hive is dark, on a light-mode phone as much as on a dark one.
+                //
+                // It was already dark everywhere it was drawn by hand — the conversation, the
+                // sidebar, the honeycomb — and the screens that had not been gone over yet were
+                // the ones that flipped: a `Form`, a `List`, a system alert. So light mode was
+                // never a second design this app supported, it was the set of places the first
+                // one had not reached, and it looked like a bug because it was one.
+                //
+                // Here rather than on ``launch``, so the DEBUG fixture host is set the same way
+                // the shipping app is — a scroll test measured on a light background is a test
+                // of a screen nobody has. The UIKit half, which this does not reach, is
+                // `UIUserInterfaceStyle` in `Info.plist`.
+                .preferredColorScheme(.dark)
         }
         .onChange(of: scenePhase) { _, phase in
             environment.handleScenePhase(phase)

@@ -185,7 +185,13 @@ extension JoinCommunityModel {
         "Optional. Without one, people in this community see a code instead of you — you can "
             + "change it later from your account."
 
+    /// Also says what happens to the previous step's answers, because on this route they are
+    /// *not* used and a reader who filled them in is owed the reason. See
+    /// ``AppEnvironment/announceArrivalProfile(displayName:emoji:color:)``: a kind-0 is
+    /// replaceable and this app writes a fresh one, so publishing the name and picture from the
+    /// step before would overwrite the profile this key already has rather than adding to it.
     static let existingIdentityBlurb =
-        "The community will see this key's public identity. Use a new one if you'd rather "
-            + "it not be linked to where else you use it."
+        "The community will see this key's public identity, and keeps the name and picture it "
+            + "already has — the ones on the last step are only used for a new key. Use a new "
+            + "one if you'd rather it not be linked to where else you use it."
 }

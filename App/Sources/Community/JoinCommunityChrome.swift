@@ -14,14 +14,19 @@ import SwiftUI
 
 // MARK: - Focus
 
-/// The fields across all three steps.
+/// The fields across every walk drawn out of these pieces.
 ///
-/// One type for the whole walk, rather than one per step, because the control that hands the
-/// keyboard back lives on the navigation stack above them and does not care which step raised
-/// it. It is here rather than nested in ``JoinCommunityView`` so the profile step — which is its
-/// own file — can bind to the same focus state.
+/// One type rather than one per step, because the control that hands the keyboard back lives on
+/// the navigation stack above them and does not care which step raised it. It is here rather
+/// than nested in ``JoinCommunityView`` so the profile step — which is its own file — can bind
+/// to the same focus state, and so the two onboarding walks in ``IdentityWizardScaffold`` can
+/// reuse that step without a second focus type to translate between.
+///
+/// Not every case appears in every walk: the join asks for a `link`, the onboarding walks ask
+/// for a `relay`, and both can end at an `nsec`.
 enum JoinField: Hashable {
     case link
+    case relay
     case name
     case nsec
 }
