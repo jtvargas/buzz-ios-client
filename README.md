@@ -58,12 +58,14 @@ This section describes the app as it is on `main`, not as planned. Anything not 
 - Create a channel with a name, optional description, and visibility.
 - Read channels, direct messages, and threads through one shared conversation shell.
 - Open or create a DM from a profile sheet, read thread replies, see day separators, and page back through history with position preserved.
+- Use the Activity tab for mentions, replies, direct messages, action items, and agent updates, grouped by conversation and filtered by All, Mentions, Action, Activity, and Agents.
 
 **Reading and writing**
 
 - Render Buzz rich-message events as a markdown subset: headings, quotes, fenced code blocks, lists, bold, italic, strikethrough, inline code, and links.
 - Use interactive member, agent, channel, web, email, and `buzz://message` links.
 - Compose multiline drafts with mention autocomplete, durable optimistic sending, retry/discard handling, and relay rejection reasons.
+- Attach pictures from Photos or the pasteboard, up to five per message; uploads start when the picture is picked or pasted, and still images are re-rendered and scrubbed of metadata before they leave the device.
 - React with quick reactions or the emoji picker; save or share pictures others post.
 - Apply message edits and deletions authored elsewhere.
 
@@ -86,11 +88,11 @@ This section describes the app as it is on `main`, not as planned. Anything not 
 These exist upstream, or are on the roadmap, and are honestly absent here:
 
 - **Push notifications.** There is no APNs registration; you see activity when the app is open.
-- **Activity feed** and **in-app search.** The Activity tab exists and is a placeholder: there is no mentions/reactions inbox behind it, and no cross-channel search screen.
-- **Sending media.** Pictures others post render inline and open full screen, but nothing can be attached from here — the composer's `+` opens a placeholder. Video is marked and not played.
+- **In-app search.** There is no cross-channel search screen.
+- **Video, files, and camera capture.** Pictures can be attached from Photos or the pasteboard, but video is only marked, files are not attachable, and Camera currently opens a work-in-progress alert.
 - **Authoring an edit or a deletion.** Both render when they arrive from elsewhere; Hive can only discard one of its own messages that has not left the outbox.
 - **A profile from the sidebar or the channel roster.** The sheet is reached from a message today, so someone who has not posted in the open conversation has no entry point.
-- **Forum, Pulse, invites and deep links, custom emoji, and channel mutes.** A conversation can be starred, but the star stays on the device rather than syncing.
+- **Forum, Pulse, creating or sending invites, custom emoji, and channel mutes.** Hive can redeem invite links and `buzz://join` handoffs, but cannot mint an invitation. A conversation can be starred, but the star stays on the device rather than syncing.
 - **Editing a roster.** A channel can be made here and a direct message opened, but membership is read rather than changed: nobody can be added to a channel or removed from one.
 - **An iPad layout.** The app installs and runs on iPad, but nothing is laid out for it.
 - **Widgets, share extension, App Intents, Live Activities.**
@@ -112,7 +114,7 @@ make build               # app build for iOS Simulator, no signing
 make lint                # SwiftLint
 ```
 
-`Hive.xcodeproj` is generated and gitignored. Edit `project.yml`, then re-run `xcodegen generate` after adding a file or new sources and tests will be skipped.
+`Hive.xcodeproj` is generated and gitignored. Edit `project.yml`, then re-run `xcodegen generate` after adding a file, or new sources and tests will be skipped.
 
 Personal signing config lives in `Config/Local.xcconfig` (gitignored). Copy `Config/Local.xcconfig.example` and set your `DEVELOPMENT_TEAM` for device builds. CI and contributors build for the simulator with code signing disabled; no Apple team is required.
 
