@@ -130,8 +130,11 @@ struct WorkspacePanel: View {
             action("Join with an invite", icon: "envelope.open") {
                 environment.communitySheet = .join(nil)
             }
-            action("Add a relay", icon: "plus.circle") {
-                environment.communitySheet = .add
+            // Straight onto the scanner rather than onto the hub that holds it — see
+            // ``AppEnvironment/CommunitySheet/scan``. Back reaches the hub, so create and
+            // paste are still one tap further on rather than gone.
+            action("Scan QR from Desktop", icon: "qrcode.viewfinder") {
+                environment.communitySheet = .scan
             }
             // The app's own settings, not this community's — which is why they are reached from
             // the communities list rather than from inside one of them, and why the row sits

@@ -109,6 +109,13 @@ final class AppEnvironment {
         /// Adding a relay this phone can already get into — the same three paths as
         /// onboarding. Enough for an open relay, and not enough for a closed one.
         case add
+        /// The same screen as ``add``, opened already standing on the pairing scanner.
+        ///
+        /// The communities list offers this rather than ``add`` because scanning is the one
+        /// route that needs nothing typed and nothing asked for, and a reader who came to
+        /// the list to bring their desktop identity over was spending a tap reaching it.
+        /// The hub stays underneath — Back is how the other three routes are still reached.
+        case scan
         /// Redeeming an invitation, which is the only way into a relay that gates on
         /// membership. Carries the invite when one arrived from outside the app.
         case join(InviteLink?)
@@ -121,6 +128,7 @@ final class AppEnvironment {
             switch self {
             case .switcher: "switcher"
             case .add: "add"
+            case .scan: "scan"
             case let .join(link): "join:\(link?.code ?? "")"
             }
         }

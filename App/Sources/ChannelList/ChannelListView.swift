@@ -277,7 +277,7 @@ struct ChannelListView: View {
         //
         // Hidden outright while the communities panel is out, because that panel is
         // full-height: a tab bar drawn over its bottom edge would put Home and Activity on
-        // top of **Add a relay**, and the reference the owner gave has nothing there.
+        // top of **Scan QR from Desktop**, and the reference the owner gave has nothing there.
         .toolbar(
             workspacePanel.isOpen
                 ? .hidden

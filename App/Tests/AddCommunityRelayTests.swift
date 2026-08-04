@@ -129,4 +129,17 @@ struct AddCommunityRelayTests {
         #expect(Community.new(relayURLString: reduced).isSameRelay(as: "wss://relay.example"))
         #expect(Community.relayIdentity(of: "https://relay.example") == nil)
     }
+
+    // MARK: - The door the communities list opens
+
+    /// The communities list opens ``AppEnvironment/CommunitySheet/scan`` rather than
+    /// ``AppEnvironment/CommunitySheet/add``, and the two have to stay *different* sheets by
+    /// `Identifiable`: `.sheet(item:)` re-presents only when the id changes, so a `.scan`
+    /// that answered `"add"` would leave whichever screen was already up in place — the hub
+    /// where the scanner was asked for, or the scanner where the hub was.
+    @Test func theScannerAndTheHubAreDifferentSheets() {
+        #expect(AppEnvironment.CommunitySheet.scan.id == "scan")
+        #expect(AppEnvironment.CommunitySheet.scan.id != AppEnvironment.CommunitySheet.add.id)
+        #expect(AppEnvironment.CommunitySheet.scan != .add)
+    }
 }
