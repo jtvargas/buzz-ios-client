@@ -28,8 +28,16 @@ import SwiftUI
 /// the toolbar's `+` presents the same sheet the Channels heading used to, through the
 /// same modifier — so when that sheet grows into a wizard, this screen gets it for free.
 struct BrowseChannelsView: View {
-    /// Called with the channel to open, immediately before this dismisses.
-    let chose: (String) -> Void
+    /// Called with the channel to open and, when this screen knows it, the row to draw it
+    /// with until the sidebar's own list catches up — immediately before this dismisses.
+    ///
+    /// The row travels because a channel opened from here may be one the sidebar does not
+    /// list: since the membership flip, ``BuzzKit/BuzzEventStore/channelList(selfPubkey:)``
+    /// carries only channels whose roster names you, and that list is what the pushed
+    /// conversation resolves its title from. A row browsed but not joined misses it, and
+    /// the conversation opens titled *Untitled conversation*. Everything needed to draw it
+    /// properly is already in hand here — see ``BuzzKit/BrowsableChannel``.
+    let chose: (String, ChannelListRow?) -> Void
 
     @Environment(\.dismiss) private var dismiss
     @State private var model: BrowseChannelsModel
@@ -42,7 +50,7 @@ struct BrowseChannelsView: View {
         identity: String?,
         joiner: any ChannelJoining,
         creator: any ChannelCreating,
-        chose: @escaping (String) -> Void
+        chose: @escaping (String, ChannelListRow?) -> Void
     ) {
         self.init(
             model: BrowseChannelsModel(store: store, identity: identity, joiner: joiner),
@@ -54,7 +62,11 @@ struct BrowseChannelsView: View {
     /// The designated initialiser, taking the state directly — how a preview or fixture
     /// opens the browser already filtered or mid-join, states that otherwise exist only
     /// after somebody has typed and tapped.
-    init(model: BrowseChannelsModel, creator: any ChannelCreating, chose: @escaping (String) -> Void) {
+    init(
+        model: BrowseChannelsModel,
+        creator: any ChannelCreating,
+        chose: @escaping (String, ChannelListRow?) -> Void
+    ) {
         _model = State(initialValue: model)
         self.creator = creator
         self.chose = chose
@@ -88,9 +100,11 @@ struct BrowseChannelsView: View {
                 }
         }
         // The new-channel sheet, over this one. A channel you created is one whose
-        // roster already names you, so it is handed straight on to open.
+        // roster already names you, so it is handed straight on to open — with no row,
+        // because a create returns an id and the catalogue has not read the new channel
+        // yet. The sidebar has it either way: creating is joining.
         .createChannelSheet(isPresented: $showsCreate, engine: creator) { channelID in
-            choose(channelID)
+            choose(channelID, row: nil)
         }
         // A join has no cancel; the sheet holds still while one is on the wire rather
         // than letting a swipe strand its narration — the create sheet's own rule.
@@ -166,7 +180,7 @@ struct BrowseChannelsView: View {
     private func row(_ channel: BrowsableChannel) -> some View {
         HStack(spacing: 12) {
             Button {
-                choose(channel.id)
+                choose(channel.id, row: Self.row(from: channel))
             } label: {
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 6) {
@@ -233,7 +247,7 @@ struct BrowseChannelsView: View {
             .accessibilityIdentifier("browse-join-progress")
         } else if !channel.isJoined {
             Button("Join") {
-                join(channel.id)
+                join(channel)
             }
             .font(.hive(.subheadline, weight: .semibold))
             .buttonStyle(.borderedProminent)
@@ -259,18 +273,43 @@ struct BrowseChannelsView: View {
 
     // MARK: - Actions
 
-    private func join(_ channelID: String) {
+    private func join(_ channel: BrowsableChannel) {
         Task {
             // `false` is a refusal (already in the alert) or a double tap that lost the
             // race — either way, not a state to navigate into.
-            guard await model.join(channelID) else { return }
-            choose(channelID)
+            guard await model.join(channel.id) else { return }
+            // Carried on a *successful* join too, not only on a preview. The join commits
+            // the roster before it returns, but the sidebar's list is a separate
+            // observation and may not have seen that commit by the time `onDismiss` fires
+            // — which flashed the same placeholder on the happy path.
+            choose(channel.id, row: Self.row(from: channel))
         }
     }
 
-    private func choose(_ channelID: String) {
-        chose(channelID)
+    private func choose(_ channelID: String, row: ChannelListRow?) {
+        chose(channelID, row)
         dismiss()
+    }
+
+    /// The catalogue's row as the conversation surface draws one.
+    ///
+    /// Only the identity and display fields cross over. Everything else a
+    /// ``BuzzKit/ChannelListRow`` carries is *sidebar* state — the last message, the unread
+    /// and mention counts, the mute flag — which this screen has never read and which the
+    /// conversation resolves for itself once the channel is in the live list. Defaulted
+    /// rather than guessed: a fabricated unread count would draw a badge for messages
+    /// nobody has.
+    static func row(from channel: BrowsableChannel) -> ChannelListRow {
+        ChannelListRow(
+            id: channel.id,
+            name: channel.name,
+            about: channel.about,
+            picture: channel.picture,
+            isPrivate: channel.isPrivate,
+            lastMessageAt: nil,
+            lastMessageSnippet: nil,
+            lastMessageAuthor: nil
+        )
     }
 
     // MARK: - Words
@@ -320,7 +359,7 @@ extension View {
         store: BuzzEventStore,
         identity: String?,
         engine: any ChannelJoining & ChannelCreating,
-        open: @escaping (String) -> Void
+        open: @escaping (String, ChannelListRow?) -> Void
     ) -> some View {
         modifier(BrowseChannelsPresentation(
             isPresented: isPresented,
@@ -337,24 +376,25 @@ private struct BrowseChannelsPresentation: ViewModifier {
     let store: BuzzEventStore
     let identity: String?
     let engine: any ChannelJoining & ChannelCreating
-    let open: (String) -> Void
+    let open: (String, ChannelListRow?) -> Void
 
     /// The channel the browser chose — joined, created, or already open — held from its
-    /// callback until the sheet is gone.
-    @State private var chosen: String?
+    /// callback until the sheet is gone, with the row to draw it by until the sidebar's
+    /// list carries it.
+    @State private var chosen: (id: String, row: ChannelListRow?)?
 
     func body(content: Content) -> some View {
         content.sheet(isPresented: $isPresented) {
-            guard let channelID = chosen else { return }
-            chosen = nil
-            open(channelID)
+            guard let chosen else { return }
+            self.chosen = nil
+            open(chosen.id, chosen.row)
         } content: {
             BrowseChannelsView(
                 store: store,
                 identity: identity,
                 joiner: engine,
                 creator: engine
-            ) { chosen = $0 }
+            ) { chosen = (id: $0, row: $1) }
         }
     }
 }
