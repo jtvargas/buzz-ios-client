@@ -34,6 +34,7 @@ struct SettingsView: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 20) {
+                    themeCard
                     notificationsCard
                 }
                 .padding(.horizontal, 20)
@@ -51,6 +52,73 @@ struct SettingsView: View {
             .task { await readSystemAuthorization() }
         }
     }
+
+    // MARK: - Theme
+
+    /// The theme picker: a swatch per theme, the chosen one ringed.
+    ///
+    /// A horizontal row of swatches rather than a `Picker`, because the thing being chosen *is*
+    /// two colours — a menu of thirteen names asks somebody to remember what "Rosé Pine" looks
+    /// like, and a swatch simply shows them. Each swatch is the theme's own ground with its own
+    /// accent as a dot on it, which is exactly the pair the choice controls.
+    private var themeCard: some View {
+        @Bindable var settings = environment.settings
+        return AccountCard(title: "Theme", subtitle: Self.themeBlurb) {
+            EmptyView()
+        } content: {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 12) {
+                    ForEach(HiveTheme.all) { theme in
+                        themeSwatch(theme, isSelected: settings.themeID == theme.id)
+                    }
+                }
+                .padding(.horizontal, 2)
+                .padding(.vertical, 4)
+            }
+            // The swatches scroll under the card's own padding otherwise, which reads as the row
+            // being clipped rather than scrollable.
+            .scrollClipDisabled()
+        }
+    }
+
+    private func themeSwatch(_ theme: HiveTheme, isSelected: Bool) -> some View {
+        Button {
+            // The ground crossfades on its own (`HiveScreenGround`); this is what animates the
+            // ring and the swatch's own lift, so the picker moves with the screen behind it
+            // rather than snapping while the screen fades.
+            withAnimation(.easeInOut(duration: 0.35)) {
+                environment.settings.themeID = theme.id
+            }
+        } label: {
+            VStack(spacing: 6) {
+                ZStack {
+                    Circle()
+                        .fill(theme.background)
+                        .frame(width: 44, height: 44)
+                    Circle()
+                        .fill(theme.accent)
+                        .frame(width: 16, height: 16)
+                }
+                .overlay {
+                    Circle()
+                        .strokeBorder(isSelected ? theme.accent : Color.white.opacity(0.14),
+                                      lineWidth: isSelected ? 2 : 1)
+                }
+                Text(theme.name)
+                    .font(.hive(.caption))
+                    .foregroundStyle(isSelected ? .primary : .secondary)
+                    .lineLimit(1)
+            }
+            .frame(width: 76)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(theme.name)
+        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+    }
+
+    private static let themeBlurb =
+        "The ground every screen is drawn on, and the colour Hive uses for its own marks. "
+            + "Backgrounds come from the Buzz client's own theme catalogue."
 
     // MARK: - Notifications
 

@@ -34,10 +34,15 @@ struct HiveApp: App {
                 // ``HiveAccent``. Every SwiftUI control that has not been tinted by hand —
                 // a `Button`'s label, a `Link`, a `Toggle`, the swipe actions, the caret
                 // SwiftUI hands to its own text fields — reads it from here.
-                .tint(.hiveAccent)
-                // And the same colour on the window underneath, for what UIKit draws:
-                // the composer's caret and selection handles, menus, alerts.
-                .hiveWindowTint()
+                // …and the ground that goes with it. One call puts the chosen theme into the
+                // environment for `hiveScreenGround()`, onto `Color.hiveAccent` for the call
+                // sites that draw the app's own colour, and onto the window for what UIKit
+                // draws — the composer's caret and selection handles, menus, alerts.
+                //
+                // Reading `environment.settings.theme` here is what makes the change immediate:
+                // `AppSettings` is `@Observable`, so writing the id in Settings re-evaluates
+                // this scene and every screen under it.
+                .hiveTheme(environment.settings.theme)
                 // An invitation handed over by the system — the relay's own web page sends
                 // `buzz://join?relay=…&code=…` once its terms have been accepted there
                 // (`buzz/web/src/features/invite/ui/InvitePage.tsx:113`). Declared on the

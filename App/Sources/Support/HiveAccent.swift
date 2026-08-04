@@ -21,11 +21,19 @@ enum HiveAccent {
     /// The catalogue name. One string, so a typo is one test away rather than eight.
     static let assetName = "AccentColor"
 
-    /// The accent as UIKit sees it. Falls back to the system tint rather than trapping:
-    /// a missing asset is a wrong colour, not a reason for the app not to open.
-    static var uiColor: UIColor {
-        UIColor(named: assetName) ?? .tintColor
-    }
+    /// The accent the app is currently drawing — the chosen ``HiveTheme``'s, or the amber asset
+    /// until a theme says otherwise.
+    ///
+    /// A stored global rather than an environment value because the accent is read from places
+    /// that have no environment to read: `static` colours on style types, and UIKit's window
+    /// tint. Written only from ``SwiftUI/View/hiveTheme(_:)`` on the main actor as the reader
+    /// changes theme, and read on the main actor everywhere else — hence `nonisolated(unsafe)`
+    /// rather than an actor hop that every call site would have to become `async` to make.
+    nonisolated(unsafe) static var current = Color(assetName, bundle: .main)
+
+    /// The accent as UIKit sees it, for the window tint and anything else drawing through
+    /// `UIColor`.
+    static var uiColor: UIColor { UIColor(current) }
 }
 
 extension ShapeStyle where Self == Color {
@@ -35,7 +43,25 @@ extension ShapeStyle where Self == Color {
     /// colour*. `.accentColor` is inherited and overridable — correct for a control that
     /// should follow the tint it is placed in, wrong for a brand mark that should not
     /// change because an enclosing view tinted itself.
-    static var hiveAccent: Color { Color(HiveAccent.assetName, bundle: .main) }
+    /// Now the *chosen theme's* accent rather than the asset directly — see
+    /// ``HiveAccent/current``. Unchanged for anybody who has not picked a theme, since the
+    /// default is that same asset.
+    static var hiveAccent: Color { HiveAccent.current }
+}
+
+extension View {
+    /// Puts a theme into force: into the environment for the ground, onto the accent every
+    /// call site reads, and onto the window UIKit tints.
+    ///
+    /// Said once, on the app's window content. The accent is pushed into ``HiveAccent/current``
+    /// *before* the environment is written so that the re-render the environment triggers
+    /// already reads the new colour — the other order draws one frame in the outgoing accent.
+    func hiveTheme(_ theme: HiveTheme) -> some View {
+        HiveAccent.current = theme.accent
+        return environment(\.hiveTheme, theme)
+            .tint(theme.accent)
+            .background(WindowTint(color: UIColor(theme.accent)).allowsHitTesting(false))
+    }
 }
 
 extension View {

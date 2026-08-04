@@ -46,7 +46,9 @@ enum PressFeedback {
 
     /// The colour of that wash. Named here so the sidebar's mark and every press in the app
     /// cannot drift apart without this line changing.
-    static let fillColor = Color.hiveAccent
+    /// Computed, not stored: a `static let` captures the accent at first touch and would keep
+    /// drawing the theme that was in force then.
+    static var fillColor: Color { .hiveAccent }
 
     /// How long a press stays on screen at the very least.
     ///

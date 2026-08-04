@@ -8,7 +8,9 @@ import SwiftUI
 enum RichTextStyle {
     /// The token tint — the app's global accent (honey amber), the same colour that
     /// tints buttons and the unread pill.
-    static let tint = Color.hiveAccent
+    /// Computed, not stored — a `static let` would freeze the accent at first touch, see
+    /// ``PressFeedbackButtonStyle/fillColor``.
+    static var tint: Color { .hiveAccent }
 
     /// A plain (non-self) mention: medium weight, distinct from body text and links.
     static let mentionWeight: Font.Weight = .medium

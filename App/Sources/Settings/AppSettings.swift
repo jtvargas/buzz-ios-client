@@ -45,12 +45,29 @@ final class AppSettings {
         didSet { defaults.set(notificationsEnabled, forKey: Key.notificationsEnabled) }
     }
 
+    /// Which ``HiveTheme`` the app draws — the ground on every screen, and the accent.
+    ///
+    /// Stored as the theme's id rather than its index, so re-ordering the catalogue or dropping a
+    /// theme cannot silently hand somebody a different colour than the one they chose. An id that
+    /// no longer names anything resolves back to ``HiveTheme/hive`` (``HiveTheme/named(_:)``).
+    ///
+    /// Defaults to `Hive`, which is the ground and amber the app has always drawn, so an install
+    /// that never opens the picker is unchanged.
+    var themeID: String {
+        didSet { defaults.set(themeID, forKey: Key.themeID) }
+    }
+
+    /// The chosen theme itself. Resolved rather than stored so ``themeID`` stays the single
+    /// source of truth and the two cannot drift.
+    var theme: HiveTheme { .named(themeID) }
+
     /// The `UserDefaults` keys, in one place and pinned by a test.
     ///
     /// Renaming one silently resets that preference for every existing install, and — unlike a
     /// renamed symbol — nothing in the compiler notices.
     enum Key {
         static let notificationsEnabled = "settings.notifications.enabled"
+        static let themeID = "settings.theme.id"
     }
 
     private let defaults: UserDefaults
@@ -60,6 +77,7 @@ final class AppSettings {
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         notificationsEnabled = Self.flag(Key.notificationsEnabled, default: true, in: defaults)
+        themeID = defaults.string(forKey: Key.themeID) ?? HiveTheme.hive.id
     }
 
     /// A stored `Bool` with a default that applies only when nobody has written one.
