@@ -1,6 +1,7 @@
 import BuzzKit
 import Foundation
 import NostrCore
+import OSLog
 
 /// Joining, leaving and moving between communities.
 ///
@@ -143,22 +144,53 @@ extension AppEnvironment {
     /// on has no engine and therefore nowhere to put a picture. This is the first line of code
     /// after a join that has one. So the draw, the upload and the decision about what `picture`
     /// ends up holding all happen here, in the same fire-and-forget task the name already rode.
+    ///
+    /// # Why the engine is taken on the way in and held across that work
+    ///
+    /// ``engine`` is a property of this object and every community transition replaces it: a
+    /// switch, a removal and a sign-out all nil it in ``teardownSession()``. Reading it *after*
+    /// the picture is finished put a draw and an HTTP `PUT` between the join and the read — and
+    /// that `PUT` is allowed 60 s of silence and 240 s in total
+    /// (§ ``makeMediaUploader(signer:websocketURL:)``). Anything that ended the session inside
+    /// that window took the whole announcement with it, **the name as well as the picture**, and
+    /// left the reader in their new community as a `?`. That is the shape of the defect the
+    /// owner reported; the guard was silent, so it took a relay's database to find.
+    ///
+    /// Captured, the send goes to the engine for the community these two answers were actually
+    /// given to — the only community they mean anything on. Sending them through whatever engine
+    /// exists a minute later would write a fresh kind-0 for whichever identity the reader has
+    /// meanwhile switched to, replacing that profile: the same overwrite the new-key rule above
+    /// exists to prevent, reached from the other side.
+    ///
+    /// Holding it also makes the send *durable* rather than merely correct. `enqueue` writes a
+    /// row into the joined community's own database before it tries the relay, so a community
+    /// left mid-upload still keeps its announcement and drains it the next time it is opened.
     func announceArrivalProfile(displayName: String, picture: ArrivalPicture?) async {
         let name = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty || picture != nil else { return }
 
+        guard let sender = engine else {
+            // Not reachable from either walk as they stand — both await a join that returns
+            // successfully only once the engine exists — so this is the honest report of a
+            // caller that has not, rather than a state to recover from.
+            Self.arrivalLog.error("Arrival profile dropped: the joined community has no engine.")
+            return
+        }
+
         var value: String?
         if let picture { value = await Self.publishableValue(for: picture, uploader: mediaUploader) }
-
-        // Read after the upload rather than before it: the engine that sends this is the one
-        // that exists now, not the one that existed when the picture started being drawn.
-        guard let sender = engine else { return }
+        if picture != nil, value == nil {
+            Self.arrivalLog.notice("Arrival picture could not be drawn or uploaded; sending the name alone.")
+        }
 
         var content = Self.arrivalMetadata(name: name, picture: value)
         // The inline fallback below is tens of kilobytes and the ceiling is 64 KiB, so this is
         // reachable — by a hair, and only for the fallback. A name that arrives without its
         // picture is the better half of the answer; a refused send is neither half.
         if content.utf8.count > OutboxPolicy.maxContentBytes {
+            Self.arrivalLog.notice(
+                "Arrival picture dropped: \(content.utf8.count, privacy: .public) bytes over the send ceiling."
+            )
             value = nil
             content = Self.arrivalMetadata(name: name, picture: nil)
         }
@@ -167,18 +199,42 @@ extension AppEnvironment {
         // actually went out, because that is what the editor matches against to recognise its
         // own work (§ ``AvatarKitRecipeStore/Recipe``).
         if case let .built(avatar) = picture {
-            AvatarKitRecipeStore.save(.init(avatar: avatar, publishedURL: value))
+            AvatarKitPublishedAvatar.record(avatar, publishedAs: value)
         }
-        guard !name.isEmpty || value != nil else { return }
+        guard !name.isEmpty || value != nil else {
+            Self.arrivalLog.notice("Nothing left to announce: no name was given and the picture did not survive.")
+            return
+        }
 
-        _ = try? await sender.enqueue(
-            kind: .metadata,
-            content: content,
-            in: "",
-            tags: [],
-            maxContentBytes: OutboxPolicy.maxContentBytes
-        )
+        do {
+            _ = try await sender.enqueue(
+                kind: .metadata,
+                content: content,
+                in: "",
+                tags: [],
+                maxContentBytes: OutboxPolicy.maxContentBytes
+            )
+        } catch {
+            // The one failure here that is not recoverable by the outbox: nothing was queued,
+            // so nothing will be retried, and the reader has no way to know. Said out loud
+            // because the alternative is what this whole method just cost to diagnose.
+            Self.arrivalLog.error(
+                "Arrival profile could not be queued: \(String(describing: error), privacy: .public)"
+            )
+        }
     }
+
+    /// Logger for the arrival announcement, in the same shape and for the same reason as
+    /// ``BuzzKit/SyncEngine/channelCreationLog``: this is a verdict nothing else records.
+    ///
+    /// The send is fire-and-forget by design — a red line about a profile would report a join
+    /// that worked as having gone wrong (§ ``announceArrivalProfile(displayName:picture:)``) —
+    /// which means every way it can fail is invisible from the outside, and a reader who lands
+    /// with no name looks exactly like a reader who chose not to give one. Not `#if DEBUG`: the
+    /// point is a phone in somebody else's hand, and the one thing that would have shortened
+    /// this diagnosis is a line retrievable from a device that is not attached to a debugger.
+    /// Nothing the reader typed is logged, only which branch was taken.
+    static let arrivalLog = Logger(subsystem: "Hive", category: "AppEnvironment.arrivalProfile")
 
     /// The kind-0 body for an arrival, as JSON. Each field carries only what was answered.
     private static func arrivalMetadata(name: String, picture: String?) -> String {
