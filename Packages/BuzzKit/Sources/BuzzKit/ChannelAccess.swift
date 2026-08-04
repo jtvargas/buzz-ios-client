@@ -39,6 +39,52 @@ public struct ChannelAccessRecord: Sendable, Hashable {
     public let updatedAt: Int64
 }
 
+/// What the relay's kind-39000 metadata says a channel *is*.
+///
+/// Only the three facts a participation rule turns on. Split out from
+/// ``ChannelParticipationFacts`` so its absence is representable: see the `channel`
+/// property there.
+public struct ChannelFacts: Sendable, Hashable {
+    public let isPrivate: Bool
+    public let isArchived: Bool
+    /// The relay's answer, not an inference from the roster — a group DM of four and a
+    /// private channel of four are the same shape from here. Mirrors
+    /// ``ChannelListRow/isDirectMessage``.
+    public let isDirectMessage: Bool
+
+    public init(isPrivate: Bool, isArchived: Bool, isDirectMessage: Bool) {
+        self.isPrivate = isPrivate
+        self.isArchived = isArchived
+        self.isDirectMessage = isDirectMessage
+    }
+}
+
+/// One identity's standing in one channel, all of it read at the same instant —
+/// see ``BuzzEventStore/channelParticipationFacts(identity:channel:)``.
+public struct ChannelParticipationFacts: Sendable, Hashable {
+    /// `nil` when this identity has no `channel_access` row at all.
+    public let access: ChannelAccessState?
+    /// `nil` when the `channel` row is not projected yet, and that is load-bearing rather
+    /// than incidental.
+    ///
+    /// A freshly opened DM whose kind-39000 read-back failed or has not landed has no row
+    /// — `confirmJoinedRoster` and `adoptOpenedChannel` are both best-effort. Read through
+    /// column defaults that channel looks *open, unarchived and not joined*, which is
+    /// exactly the shape a "you are not a member" rule fires on. So the absence is carried
+    /// as an absence and a rule binds to it explicitly, because there is no column left to
+    /// default the wrong way.
+    public let channel: ChannelFacts?
+    /// Whether the relay-signed roster names this identity — the durable `channel_member`
+    /// projection, not what the relay is merely willing to show this key.
+    public let isMember: Bool
+
+    public init(access: ChannelAccessState?, channel: ChannelFacts?, isMember: Bool) {
+        self.access = access
+        self.channel = channel
+        self.isMember = isMember
+    }
+}
+
 /// A complete directory result. The client builds this value off-store; only a
 /// complete result is eligible for the store's single atomic commit.
 public struct ChannelDirectorySnapshot: Sendable {
@@ -272,6 +318,57 @@ public extension BuzzEventStore {
                 sql: "SELECT state FROM channel_access WHERE identity_pubkey = ? AND channel_id = ?",
                 arguments: [identity, channel]
             ).flatMap(ChannelAccessState.init(rawValue:))
+        }
+    }
+
+    /// Everything a participation gate needs about one identity in one channel, from a
+    /// single snapshot of the store.
+    ///
+    /// One read rather than three calls, because the terms would otherwise disagree. A
+    /// caller that takes the channel's privacy from a value it is already holding — a
+    /// route, a browsed row — and its membership from the store is mixing a frozen term
+    /// with a live one: a channel archived while it is being read then keeps whatever the
+    /// snapshot said. Everything here is as of the same instant.
+    ///
+    /// Advisory, like every other permission read in this file. The relay decides.
+    nonisolated func channelParticipationFacts(
+        identity: String,
+        channel: String
+    ) throws -> ChannelParticipationFacts {
+        try reader.read { db in
+            let access = try String.fetchOne(
+                db,
+                sql: "SELECT state FROM channel_access WHERE identity_pubkey = ? AND channel_id = ?",
+                arguments: [identity, channel]
+            ).flatMap(ChannelAccessState.init(rawValue:))
+
+            let facts = try Row.fetchOne(
+                db,
+                sql: "SELECT is_private, is_archived, channel_type FROM channel WHERE id = ?",
+                arguments: [channel]
+            ).map { row in
+                ChannelFacts(
+                    isPrivate: row["is_private"],
+                    isArchived: row["is_archived"],
+                    // `channel_type` is nullable and a NULL is a *don't know*, not a
+                    // `stream` — see the column's own note in `Schema.swift`. Only the
+                    // relay's literal `dm` makes this true.
+                    isDirectMessage: (row["channel_type"] as String?) == "dm"
+                )
+            }
+
+            // Compared exactly against a lowercased parameter, unlike the
+            // `channel_access` read above: `channel_member.pubkey` is stored as the relay
+            // wrote it and `channel_member_pubkey` is a case-sensitive index that a
+            // `LOWER()` or `COLLATE NOCASE` comparison would decline to seek. The same
+            // rule and the same reason as ``fetchJoinedChannelIDs(_:identity:)``.
+            let isMember = try Bool.fetchOne(
+                db,
+                sql: "SELECT EXISTS(SELECT 1 FROM channel_member WHERE pubkey = ? AND channel_id = ?)",
+                arguments: [identity.lowercased(), channel]
+            ) ?? false
+
+            return ChannelParticipationFacts(access: access, channel: facts, isMember: isMember)
         }
     }
 

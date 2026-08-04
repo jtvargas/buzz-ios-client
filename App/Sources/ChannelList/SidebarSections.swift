@@ -35,7 +35,8 @@ enum SidebarSection: String, CaseIterable, Hashable, Sendable, Identifiable {
     var createLabel: String {
         switch self {
         case .starred: "New starred conversation"
-        case .channels: "New channel"
+        // The browser, not the create form — joining and creating both live in it.
+        case .channels: "Browse channels"
         case .directMessages: "New direct message"
         case .agents: "New agent"
         }

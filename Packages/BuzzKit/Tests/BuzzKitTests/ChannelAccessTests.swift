@@ -26,6 +26,36 @@ struct ChannelAccessTests {
         #expect(try store.channelList(selfPubkey: identity.pubkey).map(\.id) == ["mine"])
     }
 
+    @Test("an open channel the relay shows but whose roster does not name you stays off the sidebar")
+    func accessWithoutMembershipStaysOffTheSidebar() async throws {
+        let database = TempDatabase()
+        defer { database.remove() }
+        let store = try database.open()
+        let relay = try Fixture()
+        let identity = try Fixture()
+
+        try await store.ingest(batch: [
+            relay.event(.groupMetadata, #"{"name":"Open"}"#, tags: [["d", "open"]], at: 10),
+            relay.event(.groupMembers, "", tags: [["d", "open"], ["p", "somebody-else"]], at: 11),
+        ], phase: .backfill)
+        // The directory grants *visibility* — which is the browser's business, not the
+        // sidebar's. Before the membership test, this row alone put the channel there.
+        try await store.markChannelAccess(identity: identity.pubkey, channel: "open", state: .active)
+
+        #expect(try store.channelList(selfPubkey: identity.pubkey).isEmpty)
+
+        // A newer roster naming this identity is what puts it on the sidebar.
+        try await store.ingest(batch: [
+            relay.event(
+                .groupMembers,
+                "",
+                tags: [["d", "open"], ["p", "somebody-else"], ["p", identity.pubkey]],
+                at: 12
+            ),
+        ], phase: .backfill)
+        #expect(try store.channelList(selfPubkey: identity.pubkey).map(\.id) == ["open"])
+    }
+
     @Test("archive hides a channel while retaining metadata, messages, and the watermark")
     func archiveRetainsHistory() async throws {
         let database = TempDatabase()

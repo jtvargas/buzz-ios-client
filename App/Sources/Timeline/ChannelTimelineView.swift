@@ -24,6 +24,10 @@ struct ChannelTimelineView: View {
     @State private var messageActions: MessageActionTarget?
     /// Whose profile is open, if anyone's — set by a tap on a row's avatar or name.
     @State private var profilePeer: ProfilePeer?
+    /// Whether a join started from the bar is on the wire. Local to the surface that
+    /// offers it: the *outcome* is read from the store like everything else, and this is
+    /// only the in-flight moment between the tap and the roster commit.
+    @State private var isJoining = false
     @Environment(\.entityNames) private var names
     @Environment(AppEnvironment.self) private var appEnvironment
     private let channel: ChannelListRow
@@ -173,11 +177,7 @@ struct ChannelTimelineView: View {
         ) {
             list
         } bar: {
-            // The composer alone. The typing pill was here, stacked above it, and the
-            // bar's height is the list's bottom inset — so somebody starting to type
-            // re-inset the conversation and moved the reader. It is an accessory now.
-            ComposerView(model: model)
-                .disabled(!access.isWritable)
+            bar
         } accessory: {
             accessory
         }
@@ -219,7 +219,7 @@ struct ChannelTimelineView: View {
         .messageActionsSheet(
             target: $messageActions,
             actions: model,
-            isReadOnly: !access.isWritable,
+            isReadOnly: !access.allowsInteraction,
             onReplyInThread: { open(thread: $0, focusingComposer: true) },
             onRemind: { row, due in
                 Task {
@@ -246,6 +246,10 @@ struct ChannelTimelineView: View {
                 drafts: model.drafts,
                 uploader: uploader,
                 selfPubkey: selfPubkey,
+                // The same engine this screen joins through, so a thread opened from a
+                // channel the reader has not joined offers the same way in rather than a
+                // dead bar.
+                joiner: lifecycleEngine,
                 focusingComposer: route.focusesComposer
             )
         }
@@ -261,9 +265,12 @@ struct ChannelTimelineView: View {
         // the replies themselves, so on a cold launch a row would otherwise say "3 replies"
         // over an empty strip. See ``BuzzKit/SyncEngine/prefetchThreads(in:)``.
         .task { await prefetcher?.prefetchThreads(in: channelID) }
-        // Which conversation is on screen, so that a reconnect — which is most of what
-        // foregrounding the app does — restores *this* channel's live subscription
-        // before the other joined channels' (§ ``BuzzKit/SyncEngine/setActiveChannel(_:)``).
+        // Which conversation is on screen, with two effects
+        // (§ ``BuzzKit/SyncEngine/setActiveChannel(_:)``): a reconnect — which is most of
+        // what foregrounding the app does — restores *this* channel's live subscription
+        // before the other joined channels'; and a channel with no standing subscription —
+        // one opened without being a member, as Browse allows — gets one registered plus a
+        // head reconcile, which is this screen's only relay path.
         // Not cleared when the view goes away: the engine's preference is advisory, and
         // the channel just left is the one most likely to be opened again.
         .task { await lifecycleEngine?.setActiveChannel(channelID) }
@@ -317,38 +324,6 @@ struct ChannelTimelineView: View {
             ProgressView()
                 .frame(height: Self.topSentinelHeight)
                 .accessibilityHidden(true)
-        }
-    }
-
-    /// What floats over the list just above the composer: the jump affordances, and the
-    /// mention suggestion panel.
-    private var accessory: some View {
-        // A local `Bindable` rather than `$model`, for the same reason the `isAtBottom`
-        // binding is hand-written above.
-        @Bindable var model = model
-        return VStack(spacing: 8) {
-            ChannelAccessBanner(state: access.state)
-            // `model.jump` is a `let`, so reading it here registers no dependency: the
-            // count is read inside ``ConversationJumpControls``, and an arrival that
-            // moves it invalidates that view alone rather than this body and its list.
-            ConversationJumpControls(
-                state: model.jump,
-                onJumpToNew: { model.jumpToNewMessages() }
-            )
-            MentionSuggestionsView(
-                document: $model.mentionDraft,
-                autocomplete: model.mentionAutocomplete
-            )
-            // Last, so it sits closest to the composer — the thing it is about — and so
-            // the suggestion panel, which is the taller and more urgent of the two,
-            // grows upwards away from it rather than pushing it off the bar.
-            TypingIndicatorView(model: typing, nameFor: authorName)
-            // Beneath the typing strip, in the same capsule: while the connection is
-            // down nobody's typing can reach us anyway, so the two are near-exclusive,
-            // and this is the one that explains the silence. It reads the engine state
-            // itself rather than taking it as a parameter, so a transition invalidates
-            // this one small view instead of the whole surface and its list.
-            ConnectionStatusIndicatorView()
         }
     }
 
@@ -442,7 +417,7 @@ private extension ChannelTimelineView {
             mentions: model.mentions(for: row.id),
             replyParticipants: model.participants(for: row.id),
             selfPubkey: selfPubkey,
-            allowsInteraction: access.isWritable,
+            allowsInteraction: access.allowsInteraction,
             onRetry: { model.retry($0) },
             onReact: { model.react($0, on: row.id) },
             onToggleReaction: { model.toggleReaction($0, on: row.id) },
@@ -495,5 +470,92 @@ private extension ChannelTimelineView {
     /// could only name someone who had already spoken in the page on screen.
     func authorName(_ pubkey: String) -> String {
         names.name(for: pubkey)
+    }
+
+    /// What floats over the list just above the composer: the jump affordances, and the
+    /// mention suggestion panel.
+    var accessory: some View {
+        // A local `Bindable` rather than `$model`, for the same reason the `isAtBottom`
+        // binding is hand-written above.
+        @Bindable var model = model
+        return VStack(spacing: 8) {
+            ChannelAccessBanner(state: access.state)
+            // `model.jump` is a `let`, so reading it here registers no dependency: the
+            // count is read inside ``ConversationJumpControls``, and an arrival that
+            // moves it invalidates that view alone rather than this body and its list.
+            ConversationJumpControls(
+                state: model.jump,
+                onJumpToNew: { model.jumpToNewMessages() }
+            )
+            MentionSuggestionsView(
+                document: $model.mentionDraft,
+                autocomplete: model.mentionAutocomplete
+            )
+            // Last, so it sits closest to the composer — the thing it is about — and so
+            // the suggestion panel, which is the taller and more urgent of the two,
+            // grows upwards away from it rather than pushing it off the bar.
+            TypingIndicatorView(model: typing, nameFor: authorName)
+            // Beneath the typing strip, in the same capsule: while the connection is
+            // down nobody's typing can reach us anyway, so the two are near-exclusive,
+            // and this is the one that explains the silence. It reads the engine state
+            // itself rather than taking it as a parameter, so a transition invalidates
+            // this one small view instead of the whole surface and its list.
+            ConnectionStatusIndicatorView()
+        }
+    }
+
+    /// What stands at the bottom of the conversation — one thing at a time.
+    ///
+    /// The composer alone, historically. The typing pill was here, stacked above it, and
+    /// the bar's height *is* the list's bottom inset — so somebody starting to type
+    /// re-inset the conversation and moved the reader. It is an accessory now, and the
+    /// join bar keeps out of the same trap by replacing the composer rather than sitting
+    /// over it.
+    @ViewBuilder
+    var bar: some View {
+        switch access.participation {
+        case .allowed, .readOnly:
+            // `.readOnly` is byte-identical to today deliberately. An archived channel is
+            // already non-writable through `isWritable`, and the accessory's
+            // ``ChannelAccessBanner`` already says so in words — a second sentence down
+            // here would be the same explanation twice on one screen. What the case buys
+            // is the ordering above it: archived resolves here and never to
+            // `.joinRequired`, so this surface cannot offer a Join the relay refuses.
+            ComposerView(model: model)
+                .disabled(!access.isWritable)
+        case .joinRequired:
+            ChannelJoinBar(
+                name: conversation.title,
+                isJoining: isJoining,
+                // Withheld rather than handed over and guarded inside, the same as the
+                // thread's. `joinThisChannel` can only no-op without an engine, and a
+                // button that no-ops is the one thing ``ChannelJoinBar`` documents it will
+                // not draw. Production always has one, so this is the fixture host.
+                join: lifecycleEngine.map { _ in joinThisChannel }
+            )
+        }
+    }
+
+    /// Joins the channel being read, from the bar, without leaving it.
+    ///
+    /// Nothing is assigned on success: the join commits the roster before it returns, and
+    /// ``ChannelAccessModel`` is already watching for that commit — so the bar becomes a
+    /// composer through the same live read every other participation decision comes from,
+    /// rather than through a second piece of state here that could disagree with it.
+    ///
+    /// The in-flight guard is the browser's (``BrowseChannelsModel/join(_:)``): the button
+    /// disables, but a double tap can land before the first assignment paints.
+    ///
+    /// A failure is deliberately silent. There is no error surface in the bar and the two
+    /// refusals that can reach it are both already prevented — an archived channel resolves
+    /// `.readOnly` and never offers this, and a private one resolves `.allowed`. What is
+    /// left is a dropped socket, where the bar simply stays and the button is live again.
+    func joinThisChannel() {
+        guard !isJoining, let lifecycleEngine else { return }
+        isJoining = true
+        Task {
+            defer { isJoining = false }
+            try? await lifecycleEngine.joinChannel(channelID) { _ in }
+        }
     }
 }

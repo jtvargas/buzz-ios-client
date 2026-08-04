@@ -25,6 +25,9 @@ struct UnreadMentionTests {
         let opener = try peer.message("opener", in: "room-1", at: 1000)
         _ = try await store.ingest(batch: [
             try meta(relay, "room-1", name: "One", at: 500),
+            // The roster names the reader — membership, not access, is what puts the
+            // channel on the list the badge is read from.
+            try roster(relay, "room-1", naming: selfPubkey, at: 501),
             opener,
             // Two messages address the reader; a third does not.
             try peer.event(
@@ -118,6 +121,7 @@ struct UnreadMentionTests {
         )
         _ = try await store.ingest(batch: [
             try meta(relay, "room-1", name: "One", at: 500),
+            try roster(relay, "room-1", naming: selfPubkey, at: 501),
             mention,
         ], phase: .backfill)
         try await store.markChannelAccess(identity: selfPubkey, channel: "room-1", state: .active)
@@ -149,6 +153,7 @@ struct UnreadMentionTests {
 
         _ = try await store.ingest(batch: [
             try meta(relay, "room-1", name: "One", at: 500),
+            try roster(relay, "room-1", naming: selfPubkey, at: 501),
             try peer.event(
                 .channelMessage, "lower @you",
                 tags: [["h", "room-1"], ["p", selfPubkey]], at: 2000
@@ -165,6 +170,12 @@ struct UnreadMentionTests {
 
     private func meta(_ relay: Fixture, _ id: String, name: String, at seconds: Int64) throws -> NostrEvent {
         try relay.event(.groupMetadata, #"{"name":"\#(name)"}"#, tags: [["d", id]], at: seconds)
+    }
+
+    /// A kind-39002 roster naming `member` — what `channelList(selfPubkey:)` requires
+    /// before it lists the channel at all.
+    private func roster(_ relay: Fixture, _ id: String, naming member: String, at seconds: Int64) throws -> NostrEvent {
+        try relay.event(.groupMembers, "", tags: [["d", id], ["p", member]], at: seconds)
     }
 }
 

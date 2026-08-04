@@ -227,6 +227,7 @@ struct ChannelMuteTests {
             channel: "room-a",
             state: .active
         )
+        try await store.seedMembershipForTest(channel: "room-a", members: [selfKey.publicKey.hex])
 
         try await store.setChannelMute("room-a", muted: true, updatedAt: 1100)
         let row = try #require(

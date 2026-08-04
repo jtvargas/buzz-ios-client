@@ -29,6 +29,8 @@ struct ThreadView: View {
     @State private var messageActions: MessageActionTarget?
     /// Whether the participants sheet is open — the `person.3.fill` in the bar.
     @State private var showsPeople = false
+    /// Whether a join started from the bar is on the wire — see the channel's own.
+    @State private var isJoining = false
     /// This device's per-thread read marks. Absent on a surface reached without them (the
     /// conversation fixture), where nothing is recorded.
     @Environment(\.threadReadMarks) private var threadReads
@@ -38,6 +40,14 @@ struct ThreadView: View {
     /// model above is this view's; a sheet is a separate lifetime and reads it from the
     /// same store rather than borrowing a model whose `.task` belongs to this screen.
     private let presenceStore: PresenceStore
+    /// Joins the channel this thread hangs off, for the bar a non-member sees.
+    ///
+    /// Optional and defaulted, because three of this view's four call sites reach it
+    /// through the production initialiser and hand a whole `SyncEngine`; only the channel
+    /// timeline names its collaborators one by one, and only a fixture has none. Absent, a
+    /// non-member still gets the bar and its explanation — the button is simply not
+    /// offered, which is the honest answer on a surface with nothing to join through.
+    private let joiner: (any ChannelJoining)?
 
     /// The mark on a thread's heading. `text.append` rather than a bubble or an arrow: it is
     /// the symbol for adding a line to something already written, which is what a thread is.
@@ -81,6 +91,7 @@ struct ThreadView: View {
             drafts: drafts,
             uploader: uploader,
             selfPubkey: selfPubkey,
+            joiner: engine,
             landingOn: landing,
             focusingComposer: focusesComposer
         )
@@ -108,11 +119,13 @@ struct ThreadView: View {
         drafts: ComposerDrafts? = nil,
         uploader: @escaping MediaUploaderProvider,
         selfPubkey: String?,
+        joiner: (any ChannelJoining)? = nil,
         landingOn landing: ThreadLanding = .latestReply,
         focusingComposer focusesComposer: Bool = false
     ) {
         channelID = channel
         presenceStore = presence
+        self.joiner = joiner
         self.landing = landing
         self.focusesComposer = focusesComposer
         _model = State(initialValue: ThreadModel(
@@ -161,8 +174,7 @@ struct ThreadView: View {
         ) {
             list
         } bar: {
-            ThreadComposerView(model: model)
-                .disabled(!access.isWritable)
+            bar
         } accessory: {
             accessory
         }
@@ -198,7 +210,7 @@ struct ThreadView: View {
         .messageActionsSheet(
             target: $messageActions,
             actions: model,
-            isReadOnly: !access.isWritable,
+            isReadOnly: !access.allowsInteraction,
             onRemind: { row, due in
                 Task {
                     await ReminderCreation.set(
@@ -279,7 +291,7 @@ struct ThreadView: View {
                 reactions: model.reactions(for: row.id),
                 mentions: model.mentions(for: row.id),
                 selfPubkey: model.selfPubkey,
-                allowsInteraction: access.isWritable,
+                allowsInteraction: access.allowsInteraction,
                 onRetry: { model.retry($0) },
                 onReact: { model.react($0, on: row.id) },
                 onToggleReaction: { model.toggleReaction($0, on: row.id) },
@@ -378,6 +390,43 @@ struct ThreadView: View {
 
     private func messageActionTarget(for row: TimelineRow) -> MessageActionTarget {
         .init(row: row, isOwn: model.isOwn(row), channelID: channelID, threadRootID: model.root)
+    }
+}
+
+private extension ThreadView {
+    /// What stands at the bottom of the thread — the channel's own rule, applied to the
+    /// thread's own composer.
+    ///
+    /// See ``ChannelTimelineView/bar`` for why `.readOnly` keeps today's composer, and why
+    /// this replaces rather than stacks.
+    @ViewBuilder
+    var bar: some View {
+        switch access.participation {
+        case .allowed, .readOnly:
+            ThreadComposerView(model: model)
+                .disabled(!access.isWritable)
+        case .joinRequired:
+            ChannelJoinBar(
+                name: conversation.title,
+                isJoining: isJoining,
+                join: joiner.map { joiner in { joinThisChannel(through: joiner) } }
+            )
+        }
+    }
+
+    /// Joins the channel this thread hangs off, without leaving the thread.
+    ///
+    /// The channel's own, and for the same reasons — nothing is assigned on success,
+    /// because ``ChannelAccessModel`` is already watching the commit this awaits. A join
+    /// taken here returns the composer on both surfaces: the channel underneath is reading
+    /// the same store on the same signal.
+    func joinThisChannel(through joiner: any ChannelJoining) {
+        guard !isJoining else { return }
+        isJoining = true
+        Task {
+            defer { isJoining = false }
+            try? await joiner.joinChannel(channelID) { _ in }
+        }
     }
 }
 

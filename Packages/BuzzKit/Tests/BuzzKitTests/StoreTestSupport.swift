@@ -119,6 +119,25 @@ final class RecordingProjector: EventProjecting, @unchecked Sendable {
 // MARK: - Read helpers
 
 extension BuzzEventStore {
+    /// Membership as the sidebar's visibility test requires it: a signed kind-39002
+    /// roster naming `members`, ingested through the store's own choke point.
+    ///
+    /// List-visibility fixtures pair this with ``markChannelAccess(identity:channel:state:)``
+    /// — the access row carries the directory's verdict, the roster carries membership,
+    /// and `channelList(selfPubkey:)` requires both. Timestamped early by default so a
+    /// test that ingests its own roster afterwards replaces this one rather than losing
+    /// to its `(created_at, id)` cursor.
+    func seedMembershipForTest(
+        channel: String,
+        members: [String],
+        at seconds: Int64 = 1_000
+    ) async throws {
+        let relay = try Fixture()
+        try await ingest(batch: [
+            relay.event(.groupMembers, tags: [["d", channel]] + members.map { ["p", $0] }, at: seconds),
+        ], phase: .backfill)
+    }
+
     /// Row count of a table, for asserting projection sizes.
     nonisolated func rowCount(_ table: String) async throws -> Int {
         try await reader.read { db in
