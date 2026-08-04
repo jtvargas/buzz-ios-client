@@ -38,11 +38,11 @@ struct CommunitySwitcherView: View {
                     } label: {
                         Label("Join with an invite", systemImage: "envelope.open")
                     }
-                    // Straight onto the scanner, not onto the hub that holds it. A reader
+                    // The scanner on its own, not the hub that used to hold it. A reader
                     // whose desktop already has Buzz open is the commonest arrival here, and
                     // the route needs nothing typed — see
-                    // ``AppEnvironment/CommunitySheet/scan``. The hub is one Back away, so
-                    // create and paste are still reachable from this row.
+                    // ``AppEnvironment/CommunitySheet/scan``. It closes rather than going
+                    // back, so create and paste are not reachable from this row.
                     Button {
                         environment.communitySheet = .scan
                     } label: {
