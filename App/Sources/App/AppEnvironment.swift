@@ -109,12 +109,18 @@ final class AppEnvironment {
         /// Adding a relay this phone can already get into — the same three paths as
         /// onboarding. Enough for an open relay, and not enough for a closed one.
         case add
-        /// The same screen as ``add``, opened already standing on the pairing scanner.
+        /// The pairing scanner on its own, presented rather than pushed.
         ///
         /// The communities list offers this rather than ``add`` because scanning is the one
         /// route that needs nothing typed and nothing asked for, and a reader who came to
         /// the list to bring their desktop identity over was spending a tap reaching it.
-        /// The hub stays underneath — Back is how the other three routes are still reached.
+        ///
+        /// It opened *standing on* the hub at first, so the scanner carried a Back button
+        /// to a screen that had never been on the display. The owner reported that, and the
+        /// hub is now gone from this route entirely: the scanner is the root of its own
+        /// stack and dismisses with a close button. The cost is that Create and Paste are no
+        /// longer reachable from the communities list — ``add`` still holds all four, and
+        /// nothing presents it today.
         case scan
         /// Redeeming an invitation, which is the only way into a relay that gates on
         /// membership. Carries the invite when one arrived from outside the app.

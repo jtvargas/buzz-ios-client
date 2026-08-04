@@ -130,9 +130,9 @@ struct WorkspacePanel: View {
             action("Join with an invite", icon: "envelope.open") {
                 environment.communitySheet = .join(nil)
             }
-            // Straight onto the scanner rather than onto the hub that holds it — see
-            // ``AppEnvironment/CommunitySheet/scan``. Back reaches the hub, so create and
-            // paste are still one tap further on rather than gone.
+            // The scanner on its own, not the hub that used to hold it — see
+            // ``AppEnvironment/CommunitySheet/scan``. It closes rather than going back,
+            // which also means create and paste are not reachable from this row.
             action("Scan QR from Desktop", icon: "qrcode.viewfinder") {
                 environment.communitySheet = .scan
             }

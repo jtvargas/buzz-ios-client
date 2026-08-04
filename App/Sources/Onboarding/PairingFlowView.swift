@@ -6,6 +6,18 @@ import SwiftUI
 /// current screen. On completion the model starts the engine, which flips the app
 /// to its running state and unwinds onboarding.
 struct PairingFlowView: View {
+    /// Whether this view is the root of its own presentation rather than a step pushed onto
+    /// the add-a-community hub.
+    ///
+    /// The communities list opens the scanner *directly* (§ ``AppEnvironment/CommunitySheet/scan``),
+    /// so there is nothing behind it to go back to and a system Back button would be pointing at
+    /// a screen the reader never saw. That entry point supplies its own dismissal instead — the
+    /// same close button the media viewer uses, because it is the phone's own control for
+    /// "this was presented, put it away".
+    ///
+    /// False on the onboarding route, where the hub really is one pop behind and Back is right.
+    var isPresentedDirectly = false
+
     @Environment(AppEnvironment.self) private var environment
     @Environment(\.dismiss) private var dismiss
 
@@ -33,6 +45,18 @@ struct PairingFlowView: View {
         // Otherwise the bar's own material lays a grey band across the top of the lattice —
         // the same call ``IdentityWizardScaffold`` makes for the same reason.
         .toolbarBackgroundVisibility(.hidden, for: .navigationBar)
+        .toolbar {
+            if isPresentedDirectly {
+                ToolbarItem(placement: .topBarLeading) {
+                    // `role: .close` is the phone's own dismissal control — the circular
+                    // glyph the media viewer draws (§ ``MessageMediaViewer/closeButton``),
+                    // supplied by the toolbar here rather than hand-built, so it arrives
+                    // already the right size and already carrying the Close accessibility
+                    // label. No `.tint` override: in a bar the accent is where it belongs.
+                    Button(role: .close) { dismiss() }
+                }
+            }
+        }
         .task {
             if model == nil { model = makeModel() }
             cameraAuthorized = await QRScannerView.requestAccess()
@@ -178,7 +202,10 @@ struct PairingFlowView: View {
             HStack {
                 Button("Scan Again") { scannerID += 1; model.scanAgain() }
                     .buttonStyle(.glass)
-                Button("Back") { dismiss() }
+                // Same call, two different truths about where it lands: a pop back to the
+                // hub when this was pushed, and closing the sheet when it was not. The
+                // label follows the destination rather than the code.
+                Button(isPresentedDirectly ? "Close" : "Back") { dismiss() }
                     .buttonStyle(.glassProminent)
             }
             .controlSize(.large)

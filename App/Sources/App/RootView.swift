@@ -20,7 +20,17 @@ struct RootView: View {
                 switch sheet {
                 case .switcher: CommunitySwitcherView()
                 case .add: OnboardingView(isAddingCommunity: true)
-                case .scan: OnboardingView(isAddingCommunity: true, initialRoute: .scan)
+                // The scanner *is* this sheet, not a step standing on the add-a-community
+                // hub. Pushing it onto the hub gave it a Back button pointing at a screen
+                // the reader never saw, which is the owner's report. Presented on its own
+                // it carries a close button instead — see ``PairingFlowView``.
+                //
+                // `.preferredColorScheme(.dark)` is re-supplied here because it was the hub
+                // that used to say it, and the lattice behind the viewfinder is drawn for
+                // a dark screen.
+                case .scan:
+                    NavigationStack { PairingFlowView(isPresentedDirectly: true) }
+                        .preferredColorScheme(.dark)
                 case let .join(link): JoinCommunityView(initialLink: link)
                 }
             }
