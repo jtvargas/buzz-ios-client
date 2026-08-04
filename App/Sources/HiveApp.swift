@@ -83,6 +83,10 @@ struct HiveApp: App {
             // can be reviewed as pictures before the feature reaches a phone — see
             // ``DirectMessagePickerFixture``.
             DirectMessagePickerFixtureHost(state: picker)
+        } else if let theme = SettingsFixture.requested() {
+            // And for Settings, whose theme picker is a row of swatches that has already been
+            // wrong in a way only a picture showed — see ``SettingsFixture``.
+            SettingsFixtureHost(themeID: theme)
         } else {
             launch
         }
