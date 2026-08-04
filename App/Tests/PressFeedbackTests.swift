@@ -12,9 +12,12 @@ import UIKit
 /// the *rules* the constants exist to express, each of which is invisible on a resting
 /// screen and each of which a later hand can undo without noticing:
 ///
-/// - **nothing moves.** The owner had the scale removed outright after five rounds of it, so
-///   the strongest assertion in this file is a negative one, measured on pixels: a pressed row
-///   lands in exactly the box the resting one did;
+/// - **the shrink is 2.5% and it is centred.** The owner had the scale removed outright after
+///   five rounds of it and then asked for it back on 2026-08-04, so the assertion that used to
+///   be a negative measured on pixels is now a positive one measured the same way: a pressed
+///   row lands 2.5% narrower than the resting one, and in the middle of where it was;
+/// - **Reduce Motion takes the shrink and leaves the light**, which is what that setting
+///   actually asks for — a cross-fade in place of a movement, not the absence of feedback;
 /// - only a control with edges of its own washes: the owner had the amber taken off the
 ///   sidebar and off a message entirely;
 /// - a press outlives the curve that draws it by nothing at all — it may never stand in front
@@ -26,20 +29,37 @@ import UIKit
 ///   no amount of reading the code can establish.
 @Suite("Press feedback")
 struct PressFeedbackTests {
-    @Test("there is no scale, and it is gone rather than dialled to one")
-    func nothingInTheTreatmentScales() {
-        // The owner's fifth and final word on it: *"forget about it, I don't want that scale
-        // animation."* This is asserted as an absence at the type level — `PressFeedback` has
-        // no scale constant and `PressTreatment` has no `scaleEffect` — and the reason it also
-        // gets a test is that an absence is the one thing a diff review is worst at noticing.
-        // `nothingMovesUnderAPress` below is the half of this claim that measures pixels; this
-        // half exists so the file that *names* the treatment says so too.
-        //
-        // What is left is light, and only light: a control washes, a row and an inline control
-        // dim, and every one of those is checked below.
+    @Test("a control and a row shrink; a control drawn onto a message does not")
+    func theShrinkAppliesWhereItCanBeSeenAsDepth() {
+        // The owner rejected 0.94 and 0.97 across five rounds before removing the scale
+        // outright, then asked for 0.975. The band rather than the number: below about 0.96 it
+        // is a squeeze rather than an answer, and at 0.99 it is not visible on a phone.
+        #expect(PressFeedback.pressedScale >= 0.96)
+        #expect(PressFeedback.pressedScale < 1)
+        #expect(PressFeedback.scale(for: .control) == PressFeedback.pressedScale)
+        #expect(PressFeedback.scale(for: .row) == PressFeedback.pressedScale)
+        // And the exception that is the reason `scale(for:)` exists at all. The sender's name
+        // and face draw straight onto a message's own text with no shape of their own, so a
+        // shrink there reflows the paragraph around them — the sentence under the finger moves,
+        // which is a much louder event than a control answering.
+        #expect(PressFeedback.scale(for: .inline) == 1)
+
+        // Light is still the rest of the answer, unchanged.
         #expect(PressFeedback.fill(for: .control) > 0)
         #expect(PressFeedback.dim(for: .row) < 1)
         #expect(PressFeedback.dim(for: .inline) < 1)
+    }
+
+    @Test("Reduce Motion drops the movement and keeps the light")
+    func reduceMotionTakesTheShrinkOnly() {
+        // The setting asks for a cross-fade *in place of* a movement, not for no feedback. So
+        // the curves stop being springs — a spring with nothing left to spring is only a slower
+        // fade — and the wash and dim are untouched. The pixel half is `reduceMotionDoesNotMove`.
+        #expect(PressFeedback.animation(pressed: true, reduceMotion: true) != PressFeedback.press)
+        #expect(PressFeedback.animation(pressed: false, reduceMotion: true) != PressFeedback.release)
+        // And with it off, the accessor is the plain one rather than a third set of curves.
+        #expect(PressFeedback.animation(pressed: true, reduceMotion: false) == PressFeedback.press)
+        #expect(PressFeedback.animation(pressed: false, reduceMotion: false) == PressFeedback.release)
     }
 
     @Test("the whole gesture is snappy, and nothing in it is a dwell")
@@ -125,11 +145,16 @@ struct PressFeedbackTests {
         //
         // *Longer* than the curve and the latch becomes a dwell — which is what it was when
         // it also held the button's action back, and the owner's report on that build was
-        // that the whole app felt delayed. Equality is the only value that is neither, so it
-        // is asserted as equality rather than as a range: if this line has to be relaxed,
-        // the question being answered is "how long should a control stall for?", and the
-        // answer to that question is that it should not.
-        #expect(PressFeedback.minimumVisible == PressFeedback.pressDuration)
+        // that the whole app felt delayed.
+        //
+        // **A spring dissolves the dilemma rather than balancing it.** It reverses from
+        // wherever it currently is, carrying its velocity, so a quick tap gives a small real
+        // dip with no latch at all — where an ease-out could only jump to a new curve. The
+        // owner asked for exactly that in two of his bullets at once: *"quick taps reverse
+        // smoothly before the scale-down finishes"* and *"no artificial delay"*. So the latch
+        // is zero, and asserted as zero rather than deleted, because it is the first dial to
+        // turn if a quick tap now reads as too faint.
+        #expect(PressFeedback.minimumVisible == 0)
     }
 
     @Test("down is quick and up is given longer to settle")
@@ -218,18 +243,40 @@ struct PressTreatmentRenderTests {
     private static let canvas = CGSize(width: 300, height: 100)
     private static let white: [UInt8] = [255, 255, 255]
 
-    @Test("a pressed row does not move by so much as a pixel")
-    func nothingMovesUnderAPress() throws {
+    @Test("a pressed row shrinks by the stated amount, and shrinks toward its own centre")
+    func aPressedRowShrinks() throws {
         let resting = try Self.inkBox(of: #require(Self.render(pressed: false, emphasis: .row, ink: .black)))
         let pressed = try Self.inkBox(of: #require(Self.render(pressed: true, emphasis: .row, ink: .black)))
 
         // The subject drew at its full size at rest — the control for everything below.
         #expect(abs(resting.width - Self.subject.width) <= 1)
-        // And it drew in exactly the same place under a press. This is the owner's instruction
-        // held to pixels: he had the scale removed after five rounds of it, and "there is no
-        // longer a `scaleEffect` in that file" is precisely the kind of claim that a later
-        // hand undoes in one line while adding something else. A tolerance of one pixel is
-        // antialiasing, not movement — the shrink this replaces moved a 240pt subject by 7.
+
+        // It shrank, and by the number rather than by *some* amount: a `scaleEffect` left on a
+        // stale constant is the failure this catches, and "it moved" would pass against any
+        // value at all. One pixel of tolerance is antialiasing.
+        let expected = Self.subject.width * PressFeedback.pressedScale
+        #expect(abs(pressed.width - expected) <= 1, "expected \(expected)pt wide, drew \(pressed.width)")
+
+        // And it came in from *both* edges. A row is four times wider than it is tall, so a
+        // shrink anchored anywhere but the centre moves one edge by the whole 2.5% while the
+        // other stays put — which reads as the row being tugged sideways rather than pressed.
+        // Asserted on the centre line, which is the one thing an anchor cannot fake.
+        #expect(abs(pressed.midX - resting.midX) <= 1, "the shrink was not centred")
+    }
+
+    @Test("Reduce Motion leaves the row exactly where it was")
+    func reduceMotionDoesNotMove() throws {
+        // The pixel half of `reduceMotionTakesTheShrinkOnly`. This is the assertion the old
+        // suite made unconditionally, kept for the reader who asked for it — and it is worth
+        // keeping in this shape because it is the one place the *absence* of movement is still
+        // a requirement rather than a preference.
+        let resting = try Self.inkBox(of: #require(
+            Self.render(pressed: false, emphasis: .row, ink: .black, reduceMotion: true)
+        ))
+        let pressed = try Self.inkBox(of: #require(
+            Self.render(pressed: true, emphasis: .row, ink: .black, reduceMotion: true)
+        ))
+
         #expect(abs(pressed.width - resting.width) <= 1)
         #expect(abs(pressed.height - resting.height) <= 1)
         #expect(abs(pressed.minX - resting.minX) <= 1)
@@ -237,10 +284,10 @@ struct PressTreatmentRenderTests {
 
     @Test("a pressed row answers with light, since it no longer answers with movement")
     func aPressedRowIsLighter() throws {
-        // The other side of the test above, and the reason it is not enough on its own: with
-        // the movement gone, a treatment that did nothing at all would pass it. A row's whole
-        // answer is now the dim, so the dim is measured — black ink over white, so a fade
-        // toward the background can only make the middle of the subject lighter.
+        // The other side of the test above, and the reason it is not enough on its own: a
+        // treatment that *only* moved would pass that one. A row draws no wash, so its light is
+        // the dim — black ink over white, so a fade toward the background can only make the
+        // middle of the subject lighter.
         let resting = try Self.centre(of: #require(Self.render(pressed: false, emphasis: .row, ink: .black)))
         let pressed = try Self.centre(of: #require(Self.render(pressed: true, emphasis: .row, ink: .black)))
         #expect(pressed[0] > resting[0], "a pressed row drew no lighter than a resting one")
@@ -270,14 +317,15 @@ struct PressTreatmentRenderTests {
     private static func render(
         pressed: Bool,
         emphasis: PressFeedbackButtonStyle.Emphasis,
-        ink: Color
+        ink: Color,
+        reduceMotion: Bool = false
     ) -> UIImage? {
         let renderer = ImageRenderer(
             content: ZStack {
                 Color.white
                 ink
                     .frame(width: subject.width, height: subject.height)
-                    .pressTreatment(isShowing: pressed, emphasis: emphasis)
+                    .pressTreatment(isShowing: pressed, emphasis: emphasis, reduceMotion: reduceMotion)
             }
             .frame(width: canvas.width, height: canvas.height)
             .environment(\.colorScheme, .light)

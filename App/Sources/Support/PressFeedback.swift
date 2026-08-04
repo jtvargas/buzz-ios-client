@@ -7,24 +7,44 @@ import SwiftUI
 /// answers another reads as two apps. The same reasoning as ``MessageRowMetrics`` — values
 /// agreeing in eleven files is an accident waiting to be changed in one of them.
 ///
-/// # Nothing here moves
+/// # The scale is back, and this paragraph is the receipt
 ///
-/// **There is no scale.** A press was drawn as a shrink for five rounds, at 0.965, then 0.94,
-/// then 0.97, and the owner's verdict on the last of them was *"forget about it, I don't want
-/// that scale animation"*. It is not dialled to 1 — it is gone, so that adding one back is a
-/// deliberate act with this paragraph in front of it. What is left is light: a **control**
-/// washes the accent inside its own shape, a **row** dims a few per cent, an **inline**
-/// control dims further, and a **message** answers nothing at all, because the long press it
-/// is on its way to announces itself with a haptic and then a sheet.
+/// A press was drawn as a shrink for five rounds — 0.965, then 0.94, then 0.97 — and the
+/// owner's verdict on the last of them was *"forget about it, I don't want that scale
+/// animation"*. It was removed outright rather than dialled to 1, precisely so that putting
+/// one back would be a deliberate act with this paragraph in front of it. **On 2026-08-04 he
+/// asked for it back**, in a spec naming 0.975, a fast spring in and a softer one out.
+///
+/// It is worth being exact about what was wrong before, because none of it was the scale:
+///
+/// - it **arrived ~150ms late**, behind `UIScrollView.delaysContentTouches`, so on a short tap
+///   it arrived after the finger had gone. That is ``ScrollTouchDeliveryView``'s job now, and
+///   it was fixed after the scale had already been removed for being invisible;
+/// - for one round the **action waited behind it**, and the owner reported the whole app as
+///   laggy within the hour. ``PressFeedbackBody/fire()`` has nothing in front of it now;
+/// - and it was drawn with an **ease-out**, which cannot reverse from a moving state, so a
+///   quick tap either played the whole shrink or looked like a stutter. A spring can, which is
+///   the difference this round rests on.
+///
+/// So the shrink is on a control and on a row, and it is **not** on an `.inline` control —
+/// the sender's name and face on a message. Scaling a run of text inside a paragraph moves the
+/// paragraph, and a message answers nothing anyway. Light is still the rest of the answer: a
+/// **control** washes the accent inside its own shape, a **row** dims a few per cent, an
+/// **inline** control dims further, and a **message** answers nothing at all.
 ///
 /// # The shape of the gesture
 ///
-/// Three curves, all ease-outs, differing only in how long they take. Down is fast, because a
-/// press has to answer immediately. Up is slower, because a release is allowed to settle. And
-/// a press that is **abandoned** — the finger moved, the scroll view took the touch — comes off
-/// in a fraction of either, with no latch in front of it: a highlight that trails a scrolling
-/// finger is the most common way this treatment reads as broken, and it is not a release, so
-/// it must not animate like one.
+/// **Springs, since there is something to spring again.** Down is fast, because a press has to
+/// answer immediately. Up is given longer to settle, and both are damped flat — an overshoot on
+/// a 2.5% shrink reads as a wobble, not as physics. A press that is **abandoned** — the finger
+/// moved, the scroll view took the touch — comes off in a fraction of either, with no latch in
+/// front of it: a highlight that trails a scrolling finger is the most common way this
+/// treatment reads as broken, and it is not a release, so it must not animate like one.
+///
+/// SwiftUI's springs are **retargetable**: changing the destination mid-flight continues from
+/// the current value *and the current velocity* rather than restarting. That is the whole of
+/// the owner's "quick taps reverse smoothly before the scale-down finishes", and it is why
+/// ``minimumVisible`` no longer stands in front of the release — see that property.
 ///
 /// # None of it stands in front of the action
 ///
@@ -50,20 +70,27 @@ enum PressFeedback {
     /// drawing the theme that was in force then.
     static var fillColor: Color { .hiveAccent }
 
-    /// How long a press stays on screen at the very least.
+    /// How long a press stays on screen at the very least — **zero, now that a spring draws it.**
     ///
-    /// `isPressed` follows the finger exactly, and a quick tap is shorter than the curve that
-    /// draws it — so without this the wash starts to arrive, the finger lifts, and it fades
-    /// back out from somewhere around a tenth of its opacity. The latch lets the down-curve
-    /// land before the release begins, and it is set to ``pressDuration`` for exactly that
-    /// reason: it is the shortest hold that can show the whole animation and not a millisecond
-    /// of dwell beyond it.
+    /// It was ``pressDuration``, and the reasoning was sound for the treatment it was written
+    /// for: `isPressed` follows the finger exactly, a quick tap is shorter than an ease-out, so
+    /// without a latch the wash started to arrive, the finger lifted, and it faded back from
+    /// about a tenth of its opacity. The latch let the down-curve land first.
     ///
-    /// It holds the *drawing* and nothing else. It briefly held the action too — see this
-    /// type's own documentation — and that is the one thing it must never be made to do again.
-    /// A press interrupted by a new one drops it: a control tapped twice in a row answers the
-    /// second tap immediately rather than finishing its account of the first.
-    static let minimumVisible: TimeInterval = pressDuration
+    /// A spring does not need that, and with one it is actively the wrong shape. A spring
+    /// reverses **from wherever it currently is, carrying its velocity**, so a quick tap gives
+    /// a small real dip rather than a stutter — no latch required. Keeping the latch would hold
+    /// the control compressed for 90ms after the finger had already gone, which is the owner's
+    /// *"quick taps reverse smoothly before the scale-down finishes"* read backwards, and his
+    /// *"no artificial delay"* broken outright.
+    ///
+    /// **This is the one behaviour that changes for reasons other than the scale**, so it is
+    /// the one dial to turn first if a quick tap now reads as too faint. Set it back to
+    /// ``pressDuration`` and the old latch returns.
+    ///
+    /// It has only ever held the *drawing*. It briefly held the action too — see this type's
+    /// own documentation — and that is the one thing it must never be made to do again.
+    static let minimumVisible: TimeInterval = 0
 
     /// What a pressed control's content fades to.
     ///
@@ -80,36 +107,72 @@ enum PressFeedback {
     /// The sidebar mark's, and `.continuous` like it.
     static let cornerRadius: CGFloat = 10
 
+    /// What a pressed control shrinks to.
+    ///
+    /// The owner's number, given as 0.975 after he had previously rejected 0.94 and 0.97. On a
+    /// 240pt row that is six points across the whole width and three at the leading edge —
+    /// deliberately near the floor of what reads as movement at all, because the thing being
+    /// asked for is *that it answered*, not a squeeze.
+    static let pressedScale: CGFloat = 0.975
+
+    /// Which emphases move. A control and a row do; an `.inline` control does not.
+    ///
+    /// The sender's name and face on a message draw straight onto the message's own text, with
+    /// no shape of their own. Scaling a run inside a paragraph reflows the paragraph around it,
+    /// so the sentence under the finger moves — which is a different and much louder event than
+    /// a control answering. See this type's own documentation.
+    static func scale(for emphasis: PressFeedbackButtonStyle.Emphasis) -> CGFloat {
+        emphasis == .inline ? 1 : pressedScale
+    }
+
     /// How long the press takes to land, how long the release takes to settle, and how long
     /// an abandoned press takes to disappear.
     ///
-    /// 90ms down, which is the owner's 80–100ms and is about five frames: fast enough to read
-    /// as *the moment I touched it*, slow enough to be an animation rather than a jump.
+    /// 90ms down, which is the owner's 80–140ms and is about five frames: fast enough to read
+    /// as *the moment I touched it*, slow enough to be an animation rather than a jump. 220ms
+    /// up, in the middle of his 180–260ms.
     static let pressDuration: TimeInterval = 0.09
     static let releaseDuration: TimeInterval = 0.22
     /// Near enough to instant to be gone within two frames of the finger moving.
     static let cancelDuration: TimeInterval = 0.06
 
     /// Down: fast where the finger is.
-    static let press = Animation.easeOut(duration: pressDuration)
-
-    /// Up: the same curve, given longer to settle.
     ///
-    /// It was a spring while there was a scale to spring — an overshoot is what makes movement
-    /// read as physical, and it is meaningless on an opacity, which cannot usefully go past
-    /// its target. With the scale gone the honest curve is the plain one.
-    static let release = Animation.easeOut(duration: releaseDuration)
+    /// A spring rather than an ease-out, and `bounce: 0` rather than a default spring. The
+    /// reason for the spring is **not** the overshoot — it is that a spring is retargetable, so
+    /// a finger that lifts 30ms into a 90ms press reverses from where the control actually is,
+    /// carrying its velocity, instead of snapping to a new curve. The reason for the flat bounce
+    /// is that an overshoot on a 2.5% shrink is a wobble, and the owner asked for no bounce and
+    /// no overshoot in the same breath as he asked for the spring.
+    static let press = Animation.spring(duration: pressDuration, bounce: 0)
+
+    /// Up: the same spring, given longer to settle, and allowed the faintest amount of life.
+    ///
+    /// `bounce: 0.12` is under a tenth of a point of overshoot at this scale — not enough to
+    /// see as a bounce, enough to keep the settle from reading as mechanical. It is the one
+    /// number here that is taste rather than arithmetic, and the first one to take to zero if
+    /// the release reads as loose.
+    static let release = Animation.spring(duration: releaseDuration, bounce: 0.12)
 
     /// Abandoned: off the screen before the finger has travelled a centimetre.
-    static let cancel = Animation.easeOut(duration: cancelDuration)
+    static let cancel = Animation.spring(duration: cancelDuration, bounce: 0)
 
     /// The animation for a transition *into* `isPressed`.
-    ///
-    /// Reduce Motion is not consulted, and that is not an oversight: nothing in this treatment
-    /// moves any more. A cross-fade is what the setting *prefers* to movement, not something
-    /// it declines.
     static func animation(pressed: Bool) -> Animation {
         pressed ? press : release
+    }
+
+    /// The same, for a reader who has asked the system for less movement.
+    ///
+    /// Reduce Motion does not mean "no feedback" — it means *prefer a cross-fade to a
+    /// movement*. So the shrink is dropped (``scale(for:)`` is overridden to 1 at the call
+    /// site) and the wash and the dim stay, on the plain ease-outs this treatment used before
+    /// the scale came back. A spring with nothing left to spring is just a slower fade.
+    static func animation(pressed: Bool, reduceMotion: Bool) -> Animation {
+        guard reduceMotion else { return animation(pressed: pressed) }
+        return pressed
+            ? .easeOut(duration: pressDuration)
+            : .easeOut(duration: releaseDuration)
     }
 
     /// What a pressed control of this emphasis fades to.
@@ -202,14 +265,31 @@ struct PressFeedbackButtonStyle: PrimitiveButtonStyle {
 /// Split out of the style on purpose, and it is the only part of this file a test can hold to
 /// the screen. `ImageRenderer` can render a view; it cannot press a button. So the treatment
 /// is a function of `isShowing` alone, `PressFeedbackTests` renders it at both values and
-/// measures the pixels — which is what now holds the *absence* of a scale to something firmer
-/// than a promise: a pressed row's ink must land in exactly the box the resting one did.
+/// measures the pixels — which is what holds the shrink to a number rather than to a promise.
 ///
-/// There is no `scaleEffect` here and there must not be one. See ``PressFeedback``.
+/// # The `scaleEffect` and where it is anchored
+///
+/// `.center`, which is the default and is named here anyway because it is the only anchor that
+/// does not make a row appear to slide. A row is much wider than it is tall, so a shrink
+/// anchored at a leading edge moves its trailing edge by the whole 2.5% while the leading edge
+/// stays put — which reads as the row being tugged sideways rather than pressed. Centred, both
+/// edges come in by half of it and the movement reads as depth.
+///
+/// It sits **outside** the wash rather than inside it: the wash is the control's own surface,
+/// so it must shrink with the control. Applying the scale first and the background after would
+/// leave a full-size wash around a shrunken label.
 struct PressTreatment: ViewModifier {
     let isShowing: Bool
     let emphasis: PressFeedbackButtonStyle.Emphasis
     let shape: AnyShape
+    /// Whether the reader has asked the system for less movement. The shrink is the only part
+    /// of this treatment that moves, so this drops it and leaves the light alone.
+    var reduceMotion: Bool = false
+
+    private var scale: CGFloat {
+        guard isShowing, !reduceMotion else { return 1 }
+        return PressFeedback.scale(for: emphasis)
+    }
 
     func body(content: Content) -> some View {
         content
@@ -220,6 +300,7 @@ struct PressTreatment: ViewModifier {
                         .opacity(isShowing ? PressFeedback.fill(for: emphasis) : 0)
                 )
             }
+            .scaleEffect(scale, anchor: .center)
     }
 }
 
@@ -228,9 +309,12 @@ extension View {
     func pressTreatment(
         isShowing: Bool,
         emphasis: PressFeedbackButtonStyle.Emphasis = .control,
-        in shape: AnyShape = AnyShape(.rect(cornerRadius: PressFeedback.cornerRadius, style: .continuous))
+        in shape: AnyShape = AnyShape(.rect(cornerRadius: PressFeedback.cornerRadius, style: .continuous)),
+        reduceMotion: Bool = false
     ) -> some View {
-        modifier(PressTreatment(isShowing: isShowing, emphasis: emphasis, shape: shape))
+        modifier(
+            PressTreatment(isShowing: isShowing, emphasis: emphasis, shape: shape, reduceMotion: reduceMotion)
+        )
     }
 }
 
