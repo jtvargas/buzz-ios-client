@@ -87,8 +87,8 @@ extension JoinCommunityModel {
     static var relayNotInviteNote: String {
         "That's a relay address, not an invite. An invite link has a code on the end, like "
             + "https://relay.example/invite/v2.abc — ask whoever invited you for one. If "
-            + "you're already a member of this relay somewhere else, use Add a relay and "
-            + "sign in with that key instead."
+            + "you're already a member of this relay somewhere else, use Scan QR from "
+            + "Desktop to bring that key over instead."
     }
 
     static var notAnInviteNote: String {

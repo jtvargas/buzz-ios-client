@@ -38,10 +38,15 @@ struct CommunitySwitcherView: View {
                     } label: {
                         Label("Join with an invite", systemImage: "envelope.open")
                     }
+                    // Straight onto the scanner, not onto the hub that holds it. A reader
+                    // whose desktop already has Buzz open is the commonest arrival here, and
+                    // the route needs nothing typed — see
+                    // ``AppEnvironment/CommunitySheet/scan``. The hub is one Back away, so
+                    // create and paste are still reachable from this row.
                     Button {
-                        environment.communitySheet = .add
+                        environment.communitySheet = .scan
                     } label: {
-                        Label("Add a relay", systemImage: "plus.circle")
+                        Label("Scan QR from Desktop", systemImage: "qrcode.viewfinder")
                     }
                 } footer: {
                     Text(Self.footer)
