@@ -202,6 +202,22 @@ enum PressFeedback {
         }
     }
 
+    /// Whether a pressed control's wash shrinks along with the control.
+    ///
+    /// **It does everywhere except a list row, and that exception is the owner's.** For a chip,
+    /// a card or a button the wash *is* the control's surface, so a full-size wash around a
+    /// shrunken label would be a lit rectangle the control had come away from. That reasoning
+    /// held for a row too, right up until a row's wash had to line up with something that is not
+    /// being pressed: ``ChannelListView/resumeMark(isResumable:)`` is a fixed rectangle, and a
+    /// press wash that shrinks 2.5% under the finger lands about 5pt inside it on each side.
+    ///
+    /// The owner photographed exactly that and said the two had to match in *style, spacing and
+    /// dimensions*. They can only match if the row's wash does not move — so on a row the label
+    /// takes the shrink and the wash stays where the mark is. See ``PressTreatment``.
+    static func washFollowsScale(for emphasis: PressFeedbackButtonStyle.Emphasis) -> Bool {
+        emphasis != .row
+    }
+
     /// The wash a pressed control of this emphasis draws in its own shape. See ``pressedFill``.
     ///
     /// A control and a row both draw one now. An `.inline` control still draws none, and that
@@ -300,9 +316,16 @@ struct PressFeedbackButtonStyle: PrimitiveButtonStyle {
 /// stays put — which reads as the row being tugged sideways rather than pressed. Centred, both
 /// edges come in by half of it and the movement reads as depth.
 ///
-/// It sits **outside** the wash rather than inside it: the wash is the control's own surface,
-/// so it must shrink with the control. Applying the scale first and the background after would
-/// leave a full-size wash around a shrunken label.
+/// **Where it sits relative to the wash is the whole difference between a control and a row**,
+/// and it is the one thing in this file that is genuinely two treatments rather than one:
+///
+/// - on a **control**, the scale is applied *outside* the wash, because the wash is that
+///   control's own surface and has to shrink with it. Scaling first and washing after would
+///   leave a full-size rectangle around a label that had pulled away from it;
+/// - on a **row**, the scale is applied *inside*, so the label shrinks within a wash that stays
+///   put. A row's wash has to line up with ``ChannelListView/resumeMark(isResumable:)``, which
+///   is not being pressed and does not move, and a wash that shrank 2.5% would sit about 5pt
+///   inside that mark on each side. See ``PressFeedback/washFollowsScale(for:)``.
 struct PressTreatment: ViewModifier {
     let isShowing: Bool
     let emphasis: PressFeedbackButtonStyle.Emphasis
@@ -316,16 +339,30 @@ struct PressTreatment: ViewModifier {
         return PressFeedback.scale(for: emphasis)
     }
 
+    /// The pressed control's own light — the dim on its content. Always applied, and always
+    /// innermost, so it fades with the label rather than with the surface behind it.
+    private var lit: some View {
+        shape.fill(
+            PressFeedback.fillColor
+                .opacity(isShowing ? PressFeedback.fill(for: emphasis) : 0)
+        )
+    }
+
+    @ViewBuilder
     func body(content: Content) -> some View {
-        content
-            .opacity(isShowing ? PressFeedback.dim(for: emphasis) : 1)
-            .background {
-                shape.fill(
-                    PressFeedback.fillColor
-                        .opacity(isShowing ? PressFeedback.fill(for: emphasis) : 0)
-                )
-            }
-            .scaleEffect(scale, anchor: .center)
+        let label = content.opacity(isShowing ? PressFeedback.dim(for: emphasis) : 1)
+
+        if PressFeedback.washFollowsScale(for: emphasis) {
+            // A control: the wash is its surface, so it shrinks with it.
+            label
+                .background { lit }
+                .scaleEffect(scale, anchor: .center)
+        } else {
+            // A row: the wash has a fixed mark to line up with, so only the label moves.
+            label
+                .scaleEffect(scale, anchor: .center)
+                .background { lit }
+        }
     }
 }
 

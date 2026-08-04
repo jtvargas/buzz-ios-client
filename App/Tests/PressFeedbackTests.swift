@@ -151,14 +151,15 @@ struct PressFeedbackTests {
         #expect(PressFeedback.pressedFill > 0)
     }
 
-    /// `ChannelListView.resumeMark`'s own opacity — **the real one**, not a copy.
+    /// `resumeMark`'s own opacity — **the real one**, not a copy.
     ///
     /// It was a restated literal for one commit, because the value was buried in a
-    /// `@ViewBuilder` no test could reach. Aligning the press wash with the mark's rectangle
-    /// meant naming that geometry anyway, and the opacity came out with it, so this now reads
-    /// the constant the view actually draws. A restated number would have passed forever after
-    /// someone changed the mark.
-    private static let resumeMarkOpacity = ChannelListView.markOpacity
+    /// `@ViewBuilder` no test could reach. Aligning the press wash with the mark meant naming
+    /// that geometry anyway, and the opacity came out with it. It lives in a plain `enum` rather
+    /// than on the view because `ChannelListView` and `SidebarRowMark` are both `View`s — `Shape`
+    /// refines `View` — so both are `@MainActor`, and a main-actor constant cannot be the default
+    /// value of a nonisolated stored property.
+    private static let resumeMarkOpacity = SidebarRowMetrics.opacity
 
     @Test("the press latch is the down-curve and not one millisecond of dwell more")
     func aPressPlaysThroughAndNoLonger() {
@@ -355,6 +356,43 @@ struct PressTreatmentRenderTests {
         // The first zero in the owner's `0.00 → 0.08 → 0.00`: a highlight that is not there
         // until a finger is.
         #expect(resting == Self.white, "a resting control drew a wash")
+    }
+
+    @Test("a pressed row's wash stays put; a control's shrinks with the control")
+    func onlyAControlsWashTakesTheShrink() throws {
+        // The owner photographed a pressed row beside the resume mark and said they had to match
+        // in style, spacing and dimensions. They cannot, if the wash takes the 2.5%: the mark is
+        // not being pressed and does not move, so a shrinking wash lands about 5pt inside it on
+        // each side. This is that rule on pixels, and it is the reason `PressTreatment` applies
+        // the scale on different sides of the wash for the two emphases.
+        let row = try Self.washBox(of: #require(Self.render(pressed: true, emphasis: .row, ink: .clear)))
+        #expect(abs(row.width - Self.subject.width) <= 1, "a row's wash shrank; it must stay on the mark")
+
+        // And the other half, which is what stops this being "the scale was dropped": a control's
+        // wash *is* its surface, so it still moves.
+        let control = try Self.washBox(of: #require(Self.render(pressed: true, emphasis: .control, ink: .clear)))
+        let expected = Self.subject.width * PressFeedback.pressedScale
+        #expect(abs(control.width - expected) <= 1, "expected \(expected)pt wide, drew \(control.width)")
+    }
+
+    /// The bounding box of everything that is not the white canvas — where the wash landed.
+    ///
+    /// Separate from ``inkBox(of:)``, which looks for pixels *darker* than mid-grey and so is
+    /// blind to a 0.08 wash: at that strength the difference from white is about six values in
+    /// one channel, nowhere near the ink threshold.
+    private static func washBox(of image: UIImage) throws -> CGRect {
+        let bitmap = try pixels(of: image)
+        var minX = bitmap.width, maxX = -1, minY = bitmap.height, maxY = -1
+        for row in 0 ..< bitmap.height {
+            for column in 0 ..< bitmap.width where bitmap.colour(row: row, column: column) != white {
+                minX = min(minX, column)
+                maxX = max(maxX, column)
+                minY = min(minY, row)
+                maxY = max(maxY, row)
+            }
+        }
+        guard maxX >= minX, maxY >= minY else { return .zero }
+        return CGRect(x: minX, y: minY, width: maxX - minX + 1, height: maxY - minY + 1)
     }
 
     private static func render(

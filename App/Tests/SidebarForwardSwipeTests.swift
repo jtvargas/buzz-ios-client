@@ -205,12 +205,12 @@ struct SidebarRowMarkTests {
 
     @Test("the press wash lands exactly on the resume mark beside it")
     func thePressWashMatchesTheResumeMark() {
-        let insets = ChannelListView.rowInsets
+        let insets = SidebarRowMetrics.rowInsets
 
         // What `resumeMark` draws: its own padding, taken off the whole cell.
         let mark = Self.cell.insetBy(
-            dx: ChannelListView.markInsetH,
-            dy: ChannelListView.markInsetV
+            dx: SidebarRowMetrics.insetH,
+            dy: SidebarRowMetrics.insetV
         )
 
         // What the press draws: a path measured from inside the button, which begins where
@@ -221,7 +221,7 @@ struct SidebarRowMarkTests {
             width: Self.cell.width - insets.leading - insets.trailing,
             height: Self.cell.height - insets.top - insets.bottom
         )
-        let wash = ChannelListView.pressMark
+        let wash = SidebarRowMetrics.pressMark
             .path(in: CGRect(origin: .zero, size: button.size))
             .boundingRect
             .offsetBy(dx: button.minX, dy: button.minY)
@@ -237,12 +237,12 @@ struct SidebarRowMarkTests {
         // The whole point of computing it: moving `rowInsets` alone must not part them. This
         // asserts the relationship rather than today's 8 and 1, so it keeps holding after a
         // later hand changes either number.
-        let insets = ChannelListView.rowInsets
-        #expect(ChannelListView.pressMark.outsetH == insets.leading - ChannelListView.markInsetH)
-        #expect(ChannelListView.pressMark.outsetV == insets.top - ChannelListView.markInsetV)
+        let insets = SidebarRowMetrics.rowInsets
+        #expect(SidebarRowMetrics.pressMark.outsetH == insets.leading - SidebarRowMetrics.insetH)
+        #expect(SidebarRowMetrics.pressMark.outsetV == insets.top - SidebarRowMetrics.insetV)
         // And the corner has to agree too, or the two rectangles line up and still read as
         // different shapes.
-        #expect(ChannelListView.pressMark.radius == ChannelListView.markRadius)
+        #expect(SidebarRowMetrics.pressMark.radius == SidebarRowMetrics.radius)
     }
 
     @Test("the wash never reaches outside the row cell")
@@ -250,11 +250,11 @@ struct SidebarRowMarkTests {
         // The outset draws beyond the view it is a background for, which is legal but worth
         // bounding: if it ever exceeded `rowInsets` the wash would bleed into the neighbouring
         // row, and a `List` cell is the one thing here that will not clip it back.
-        let insets = ChannelListView.rowInsets
-        #expect(ChannelListView.pressMark.outsetH <= insets.leading)
-        #expect(ChannelListView.pressMark.outsetH >= 0)
-        #expect(ChannelListView.pressMark.outsetV <= insets.top)
-        #expect(ChannelListView.pressMark.outsetV >= 0)
+        let insets = SidebarRowMetrics.rowInsets
+        #expect(SidebarRowMetrics.pressMark.outsetH <= insets.leading)
+        #expect(SidebarRowMetrics.pressMark.outsetH >= 0)
+        #expect(SidebarRowMetrics.pressMark.outsetV <= insets.top)
+        #expect(SidebarRowMetrics.pressMark.outsetV >= 0)
     }
 
     @Test("the press is dimmer than the mark it now shares a rectangle with")
@@ -263,7 +263,7 @@ struct SidebarRowMarkTests {
         // same rectangle, the opacity is the *only* thing left telling a press apart from the
         // conversation you were last in — so the inequality that was a preference in
         // `PressFeedbackTests` is load-bearing here.
-        #expect(PressFeedback.pressedFill < ChannelListView.markOpacity)
+        #expect(PressFeedback.pressedFill < SidebarRowMetrics.opacity)
         #expect(PressFeedback.fillColor == Color.hiveAccent)
     }
 }
