@@ -73,10 +73,17 @@ struct Fixture {
     ///
     /// Addressable by `d` like the metadata above, and authored by the same relay fixture,
     /// because the store projects `channel_member` from whoever signed it.
+    ///
+    /// Timestamped early by default — unlike every other builder here — so a test that
+    /// ingests its own roster afterwards *replaces* this one rather than losing to the
+    /// projector's `(created_at, id)` cursor. That is the same default and the same reason
+    /// as BuzzKit's `seedMembershipForTest`, and it is the one property of that helper a
+    /// copy is most likely to drop, because nothing fails when it does: the seeded roster
+    /// simply wins and the test asserts against membership it did not write.
     func channelMembers(
         _ channel: String,
         _ members: [String],
-        at seconds: Int64 = 1_700_000_000
+        at seconds: Int64 = 1_000
     ) throws -> NostrEvent {
         try event(
             .groupMembers,

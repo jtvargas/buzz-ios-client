@@ -60,6 +60,13 @@ struct ComposerAttachmentsTests {
 
         #expect(model.hasSendableContent)
         #expect(model.readyDescriptors.count == 1)
+        // Asserted rather than waited on, now that the wait above is about the upload. The
+        // model writing the preview onto the row is what draws the strip thumbnail while
+        // the upload is still in flight, and nothing else in this target covers it —
+        // `ComposerImagePreparationTests` covers `prepare()` producing one, not the model
+        // applying it. As a wait it never guarded anything: the bounded helper falls
+        // through, so a preview that never arrived cost five seconds and still passed.
+        #expect(model.attachments.first?.preview != nil)
         // A PNG is a format the relay stores, so it went up as it was.
         let requests = await uploader.requests
         #expect(requests.map(\.mimeType) == ["image/png"])
