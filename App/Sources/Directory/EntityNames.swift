@@ -56,7 +56,7 @@ struct EntityNames: Equatable, Sendable {
     }
 
     /// Every identity the directory holds — the rosters of every channel this account is in,
-    /// plus the agent directory. Unordered.
+    /// plus the agent directory, plus the reader themselves. Unordered.
     ///
     /// The only enumeration this type offers, and it exists for one caller: the
     /// new-direct-message sheet has to *offer* people before anybody has named one, which

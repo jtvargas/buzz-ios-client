@@ -19,9 +19,15 @@ final class EntityDirectoryModel {
     private(set) var snapshot: DirectorySnapshot = .empty
 
     private let store: BuzzEventStore
+    /// The reader, who is in the snapshot whether or not a roster names them — which is
+    /// what lets the toolbar draw their own face on a first join (§ ``BuzzKit/DirectorySnapshot``).
+    /// No default: a caller that forgot it would silently get the `?` this argument exists
+    /// to end.
+    private let selfPubkey: String?
 
-    init(store: BuzzEventStore) {
+    init(store: BuzzEventStore, selfPubkey: String?) {
         self.store = store
+        self.selfPubkey = selfPubkey
     }
 
     /// Consumes the observation until cancelled. Attach with SwiftUI's `.task`.
@@ -30,7 +36,7 @@ final class EntityDirectoryModel {
     nonisolated func run() async {
         do {
             for try await _ in DatabaseSignal.changes(in: store.reader) {
-                let snapshot = (try? store.directorySnapshot()) ?? .empty
+                let snapshot = (try? store.directorySnapshot(selfPubkey: selfPubkey)) ?? .empty
                 await apply(snapshot)
             }
         } catch {

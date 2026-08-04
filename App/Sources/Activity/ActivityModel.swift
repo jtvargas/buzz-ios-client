@@ -77,7 +77,7 @@ final class ActivityModel {
                 // tab needs them at all; the point of folding them into this observation is
                 // that it already re-runs on every relevant commit, so these cost two reads
                 // rather than two more `ValueObservation`s over the same tables.
-                let directory = (try? store.directorySnapshot()) ?? .empty
+                let directory = (try? store.directorySnapshot(selfPubkey: selfPubkey)) ?? .empty
                 let channels = (try? store.channelList(selfPubkey: selfPubkey)) ?? []
                 await apply(feed, directory: directory, channels: channels)
                 // The coalescing window. Everything committed during it collapses into the
