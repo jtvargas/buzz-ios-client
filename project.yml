@@ -48,6 +48,24 @@ targets:
       path: App/Info.plist
       properties:
         CFBundleDisplayName: Hive
+        # Answers App Store Connect's export-compliance question once, in the binary,
+        # instead of by hand at every single upload.
+        #
+        # Recorded plainly because the answer is not self-evident from the code: this
+        # app does implement encryption of its own. `NostrCore/NIP44.swift` is NIP-44 v2
+        # authenticated encryption over `NostrCore/ChaCha20.swift` — raw ChaCha20
+        # (RFC 8439), hand-rolled because CryptoKit ships only the AEAD variant — keyed
+        # by HKDF-SHA256 and authenticated with HMAC-SHA256. It is live, not
+        # aspirational: `SyncEngine+ChannelMutes`, `SyncEngine+ReadState` and
+        # `SyncEngine+Reminders` all encrypt user state through it before it reaches a
+        # relay.
+        #
+        # `false` is set here as a deliberate call by the app owner (2026-08-04) to
+        # unblock TestFlight, having been shown the above. It asserts no *non-exempt*
+        # encryption. Revisit before public release: this is a declaration to Apple and
+        # to US export regulators, and whether this use qualifies for an exemption is a
+        # compliance question rather than an engineering one.
+        ITSAppUsesNonExemptEncryption: false
         # ProMotion. Without this key iOS clamps every animation in the app to 60 Hz on a
         # 120 Hz phone — the cap is opt-out, not opt-in, and it applies to Core Animation and
         # to SwiftUI's `TimelineView(.animation)` alike. The onboarding honeycomb is a
