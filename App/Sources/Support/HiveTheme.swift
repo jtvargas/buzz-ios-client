@@ -22,6 +22,18 @@ import SwiftUI
 /// Gruvbox's orange, Nord's frost blue. Those are the canonical accents those palettes are known
 /// by, not values extracted from upstream's file. It is the one place this deliberately diverges,
 /// and it is what makes choosing a theme visibly change two things rather than one.
+///
+/// # The two Slack entries
+///
+/// Upstream's catalogue does carry a `slack-dark`, and ``all`` takes its `#222222` background
+/// verbatim like every other one. But `#222222` is a plain grey — next to Gruvbox's `#282828` it
+/// is not recognisably anything, least of all Slack. So there is a second entry, **Slack
+/// Aubergine**, on the sidebar purple the product is actually known by. Neither is a compromise
+/// on the other: the first is what the catalogue says, the second is what Slack looks like.
+///
+/// Their accents are Slack's own brand palette rather than upstream's `added` field, for the
+/// reason above — upstream records `#ECB22E` for `slack-dark`, which is within a few degrees of
+/// Hive's own `#FFBA38` and would have made the two swatches read as the same theme.
 struct HiveTheme: Identifiable, Equatable, Sendable {
     /// The upstream catalogue's own name, and the persisted value. Stable across releases:
     /// changing one silently resets the reader's choice to the default.
@@ -47,16 +59,19 @@ extension HiveTheme {
         accent: Color(HiveAccent.assetName, bundle: .main)
     )
 
-    /// The twelve alternatives, ordered light-to-dark by background so the picker reads as a
-    /// gradient rather than an arbitrary list.
+    /// The fourteen alternatives, ordered by the WCAG relative luminance of their background so
+    /// the picker reads as a gradient rather than an arbitrary list. ``hive`` is pinned first
+    /// regardless, because it is the default and the one somebody scrolls back to.
     static let all: [HiveTheme] = [
         .hive,
         HiveTheme(id: "vitesse-black", name: "Vitesse Black", background: .hex(0x000000), accent: .hex(0x4D9375)),
-        HiveTheme(id: "night-owl", name: "Night Owl", background: .hex(0x011627), accent: .hex(0x82AAFF)),
         HiveTheme(id: "github-dark-default", name: "GitHub Dark", background: .hex(0x0D1117), accent: .hex(0x58A6FF)),
+        HiveTheme(id: "night-owl", name: "Night Owl", background: .hex(0x011627), accent: .hex(0x82AAFF)),
         HiveTheme(id: "rose-pine", name: "Rosé Pine", background: .hex(0x191724), accent: .hex(0xC4A7E7)),
         HiveTheme(id: "tokyo-night", name: "Tokyo Night", background: .hex(0x1A1B26), accent: .hex(0x7AA2F7)),
         HiveTheme(id: "catppuccin-mocha", name: "Catppuccin Mocha", background: .hex(0x1E1E2E), accent: .hex(0xCBA6F7)),
+        HiveTheme(id: "slack-dark", name: "Slack Dark", background: .hex(0x222222), accent: .hex(0xE01E5A)),
+        HiveTheme(id: "slack-aubergine", name: "Slack Aubergine", background: .hex(0x3F0E40), accent: .hex(0x36C5F0)),
         HiveTheme(id: "solarized-dark", name: "Solarized Dark", background: .hex(0x002B36), accent: .hex(0x2AA198)),
         HiveTheme(id: "monokai", name: "Monokai", background: .hex(0x272822), accent: .hex(0xA6E22E)),
         HiveTheme(id: "gruvbox-dark-medium", name: "Gruvbox Dark", background: .hex(0x282828), accent: .hex(0xFE8019)),
