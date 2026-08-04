@@ -206,12 +206,15 @@ struct CreateChannelTests {
         // The open state is this glyph turned a half-turn, so the symbol it becomes has
         // to exist too — a rotation cannot invent one, but a future swap to it could.
         #expect(UIImage(systemName: "chevron.up") != nil)
-        #expect(SidebarSection.channels.createLabel == "New channel")
+        // The browser, not the create form: the `+` opens Browse, where joining and
+        // creating both live. It said "New channel" when creating was all it did.
+        #expect(SidebarSection.channels.createLabel == "Browse channels")
         // Every section has words for its plus, so a second addable section cannot
-        // inherit "New channel".
+        // inherit the one Channels uses. Compared against that label rather than a
+        // literal, so this keeps its meaning the next time the words change.
         for section in SidebarSection.allCases {
             #expect(!section.createLabel.isEmpty)
-            #expect(section == .channels || section.createLabel != "New channel")
+            #expect(section == .channels || section.createLabel != SidebarSection.channels.createLabel)
         }
     }
 }
