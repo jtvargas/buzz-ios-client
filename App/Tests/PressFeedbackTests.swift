@@ -399,14 +399,15 @@ struct PressTreatmentRenderTests {
         pressed: Bool,
         emphasis: PressFeedbackButtonStyle.Emphasis,
         ink: Color,
-        reduceMotion: Bool = false
+        reduceMotion: Bool = false,
+        shape: AnyShape = AnyShape(.rect(cornerRadius: PressFeedback.cornerRadius, style: .continuous))
     ) -> UIImage? {
         let renderer = ImageRenderer(
             content: ZStack {
                 Color.white
                 ink
                     .frame(width: subject.width, height: subject.height)
-                    .pressTreatment(isShowing: pressed, emphasis: emphasis, reduceMotion: reduceMotion)
+                    .pressTreatment(isShowing: pressed, emphasis: emphasis, in: shape, reduceMotion: reduceMotion)
             }
             .frame(width: canvas.width, height: canvas.height)
             .environment(\.colorScheme, .light)

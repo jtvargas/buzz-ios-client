@@ -21,7 +21,7 @@ struct HapticVocabularyTests {
         }
     }
 
-    @Test("the four events keep the weights they were chosen for")
+    @Test("every event keeps the weight it was chosen for")
     func patternsAreTheOnesChosen() {
         // Light for a confirmation, soft for the action a reader repeats most, medium for
         // the gesture that reports itself while the finger is still down.
@@ -29,6 +29,10 @@ struct HapticVocabularyTests {
         #expect(HiveHaptic.reaction.pattern == .impact(.soft))
         #expect(HiveHaptic.longPress.pattern == .impact(.medium))
         #expect(HiveHaptic.delete.pattern == .notification(.warning))
+        // The fifth, and the reason it is a `selection` rather than another impact: `send` is
+        // already `.impact(.light)`, so the owner's "light haptic" spelled literally would have
+        // been indistinguishable from a message leaving — which `everyEventIsDistinct` forbids.
+        #expect(HiveHaptic.suggestionPicked.pattern == .selection)
     }
 
     @Test("only the destructive event plays a notification")
@@ -47,6 +51,8 @@ struct HapticVocabularyTests {
         // Not a style rule. A haptic is information only while it is rare, and the way an
         // app stops meaning anything by touch is one case at a time. A fifth is a decision,
         // and this is where it gets made rather than noticed.
-        #expect(HiveHaptic.allCases.count == 4)
+        // Five since 2026-08-04. The number is asserted rather than the list so that adding one
+        // is a deliberate edit here with the paragraph on `HiveHaptic` in front of it.
+        #expect(HiveHaptic.allCases.count == 5)
     }
 }

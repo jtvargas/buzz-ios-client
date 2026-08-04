@@ -8,32 +8,36 @@ import SwiftUI
 /// reasoning as ``MessageRowMetrics``: values that have to agree across files are values that
 /// get changed in one of them.
 ///
-/// # The two drawers, and why they kept parting
+/// # The two drawers, and the two attempts at making them agree
 ///
-/// - ``ChannelListView/resumeMark(isResumable:)`` is a `listRowBackground`. It is handed the
-///   **whole row cell** and insets itself by ``insetH`` and ``insetV`` from that.
-/// - the press wash is a `background` *inside* the row's `Button`, which ``rowInsets`` has
-///   already pulled in by 16 and 2. Drawn plainly it lands 8pt narrower on each side and 1pt
-///   shorter — which is what ``pressMark`` gives back.
+/// ``ChannelListView/resumeMark(isResumable:)`` is a `listRowBackground`: it is handed the
+/// **whole row cell** and insets itself by ``insetH`` and ``insetV``. The press wash is a
+/// `background` behind the row's `Button`, so it can only ever be the size of that button.
 ///
-/// Neither declaration was ever wrong on its own. That is exactly why this file exists: the
-/// defect lives in the relationship, so the relationship is what gets named and tested.
+/// The first attempt gave the button a `Shape` that returned a path *larger* than the rect it
+/// was handed, reaching back out to the mark. A render test proved the path really is drawn
+/// unclipped by `.background` — and the owner reported the rows still not matching. The
+/// remaining explanation is the one that fix could not reach: a `List` row's content is laid out
+/// inside a container inset by `listRowInsets`, and that container clips. A path can escape its
+/// own background. It cannot escape the cell.
+///
+/// **So the spacing moved instead of the drawing.** ``rowInsets`` is now the *mark's* inset, and
+/// ``labelPaddingH``/``labelPaddingV`` carry the content the rest of the way in. The button's
+/// frame is therefore the mark's rectangle exactly, by construction — there is nothing left to
+/// escape, and the wash, the mark and the row's hit area are one rectangle. It is also the same
+/// shape as ``ActivityRowMetrics``, which had the same fix for a different reason.
 ///
 /// # A plain `enum`, deliberately
 ///
-/// Not static members on ``ChannelListView``, and not on ``SidebarRowMark`` either. Both of
-/// those are `View`s — `Shape` refines `View` — so both are `@MainActor`, and a main-actor
+/// Not static members on ``ChannelListView``: a `View` is `@MainActor`, and a main-actor
 /// constant cannot be read as the default value of a nonisolated test's stored property. The
 /// numbers are geometry, not view state; a namespace with no isolation is what they actually are.
 enum SidebarRowMetrics {
-    /// The row's own insets inside its `List` cell.
-    static let rowInsets = EdgeInsets(top: 2, leading: 16, bottom: 2, trailing: 16)
-
     /// The mark's inset from the whole cell, per axis, and its corner.
     ///
-    /// Measured back off a device screenshot on 2026-08-04 to confirm they are what ships:
-    /// on a 440pt-wide sidebar the mark drew 424pt across, 8pt clear of each edge, with a
-    /// corner that reaches full width about 9pt in.
+    /// Measured back off a device screenshot on 2026-08-04 to confirm they are what ships: on a
+    /// 440pt-wide sidebar the mark drew 424pt across, 8pt clear of each edge, with a corner that
+    /// reaches full width about 9pt in.
     static let insetH: CGFloat = 8
     static let insetV: CGFloat = 1
     static let radius: CGFloat = 10
@@ -43,47 +47,29 @@ enum SidebarRowMetrics {
     /// Deliberately **not** ``PressFeedback/pressedFill``. This is the *place* mark and that is
     /// a press; they are one hue at two strengths on purpose, and the press is the dimmer of the
     /// two so a finger cannot be mistaken for where you were. Now that they also share a
-    /// rectangle, this difference is the only thing left telling them apart — equalising them is
-    /// what got the press wash removed from this list once already.
+    /// rectangle, this difference is the only thing telling them apart — equalising them is what
+    /// got the press wash removed from this list once already.
     static let opacity: Double = 0.14
 
-    /// The mark's rectangle, expressed from inside the row's button.
-    ///
-    /// Computed from the numbers above rather than typed as `8` and `1`, so that moving
-    /// ``rowInsets`` or the mark's own inset keeps the two aligned instead of silently parting.
-    /// `SidebarRowMarkTests` holds them to each other.
-    static var pressMark: SidebarRowMark {
-        SidebarRowMark(
-            outsetH: rowInsets.leading - insetH,
-            outsetV: rowInsets.top - insetV,
-            radius: radius
-        )
-    }
-}
+    /// Where the row's content sits inside its cell — unchanged through both attempts above.
+    static let contentInsetH: CGFloat = 16
+    static let contentInsetV: CGFloat = 2
 
-/// The sidebar's row mark, drawn from inside a view that already sits within the row's insets.
-///
-/// # Why a `Shape` and not padding
-///
-/// ``PressFeedbackButtonStyle`` fills the shape a control names for itself behind that control's
-/// own frame. What has to be described here is a rectangle **larger** than the view it is drawn
-/// behind — the press wash has to reach back out to where ``ChannelListView/resumeMark(isResumable:)``
-/// sits, and that mark is measured from the whole row cell rather than from inside
-/// ``SidebarRowMetrics/rowInsets``.
-///
-/// `path(in:)` may return a path outside the rect it is handed, and a `background` does not clip
-/// its content, so an outset is expressible here and nowhere else in that API. It stays inside
-/// the row cell regardless: the outset only gives back what `rowInsets` took, so the widest this
-/// ever draws is exactly the mark.
-struct SidebarRowMark: Shape {
-    /// How far past the pressed view's own bounds the mark reaches, per axis. Always the
-    /// difference between the row's insets and the mark's — never typed as a literal.
-    let outsetH: CGFloat
-    let outsetV: CGFloat
-    let radius: CGFloat
+    /// The cell's inset: up to the highlight, and no further. This is what makes the button's
+    /// frame the mark's rectangle.
+    static let rowInsets = EdgeInsets(top: insetV, leading: insetH, bottom: insetV, trailing: insetH)
 
-    func path(in rect: CGRect) -> Path {
-        RoundedRectangle(cornerRadius: radius, style: .continuous)
-            .path(in: rect.insetBy(dx: -outsetH, dy: -outsetV))
-    }
+    /// The rest of the way in, inside the button, so the wash has something to draw in.
+    /// Derived, so moving either number keeps the content where it has always been.
+    static let labelPaddingH = contentInsetH - insetH
+    static let labelPaddingV = contentInsetV - insetV
+
+    /// For a row that is **not** a button and so draws no highlight — the empty-section line.
+    /// It wants the content position directly, since it has no label padding to add.
+    static let contentInsets = EdgeInsets(
+        top: contentInsetV,
+        leading: contentInsetH,
+        bottom: contentInsetV,
+        trailing: contentInsetH
+    )
 }

@@ -57,6 +57,16 @@ struct ActivityRow: View {
                 // Fills the row so the whole width is pressable, not just the text.
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
+            // Inside the button, deliberately. This spacing used to live entirely in the
+            // cell's `listRowInsets` — outside the button — which put the content in the right
+            // place and left the press wash nothing to draw in: `PressTreatment` fills the
+            // button's own frame, and that frame was exactly the content, so the highlight
+            // ended flush against the avatar and the text. Splitting it moves the wash out to
+            // where it can be seen without moving the content at all. See ``ActivityRowMetrics``.
+            .padding(.horizontal, ActivityRowMetrics.labelPaddingH)
+            .padding(.vertical, ActivityRowMetrics.labelPaddingV)
+            // After the padding, so the whole highlighted area is pressable rather than just
+            // the glyphs it surrounds.
             .contentShape(.rect)
         }
         // A bare `Button` with `.hivePress`, and deliberately nothing that tracks the press

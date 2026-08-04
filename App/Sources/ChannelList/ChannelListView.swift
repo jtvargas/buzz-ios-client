@@ -684,11 +684,16 @@ private extension ChannelListView {
                 path = route.pushed(onto: path)
             } label: {
                 ChannelRowView(row: row, presence: presence)
+                    // Inside the button, so the button's frame *is* `resumeMark`'s rectangle
+                    // and the wash drawn behind it lands exactly there. The row's spacing used
+                    // to be entirely `listRowInsets`, outside the button, which left the wash
+                    // 8pt narrower on each side than the mark beside it — and a `Shape` that
+                    // reached back out could not escape the cell's own inset container.
+                    // See ``SidebarRowMetrics``.
+                    .padding(.horizontal, SidebarRowMetrics.labelPaddingH)
+                    .padding(.vertical, SidebarRowMetrics.labelPaddingV)
             }
-            // Not the default press shape: this one has to land on `resumeMark`, which is a
-            // row *background* and so is measured from a rectangle 16pt wider and 2pt taller
-            // than this button. See ``ChannelListView/pressMark``.
-            .buttonStyle(.hivePress(.row, in: SidebarRowMetrics.pressMark))
+            .buttonStyle(.hivePress(.row, in: .rect(cornerRadius: SidebarRowMetrics.radius, style: .continuous)))
             .listRowInsets(SidebarRowMetrics.rowInsets)
             // No per-row rule: sections of ruled rows read as a form, not as one
             // navigation surface. The section headings do the separating.
@@ -791,7 +796,7 @@ private extension ChannelListView {
             .foregroundStyle(.secondary)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.vertical, 6)
-            .listRowInsets(SidebarRowMetrics.rowInsets)
+            .listRowInsets(SidebarRowMetrics.contentInsets)
             .listRowSeparator(.hidden)
             .listRowBackground(Color.clear)
             .accessibilityIdentifier("sidebar-section-empty-\(section.rawValue)")
