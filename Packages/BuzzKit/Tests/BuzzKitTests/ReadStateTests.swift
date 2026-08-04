@@ -92,6 +92,10 @@ struct ReadStateTests {
         _ = try await store.ingest(batch: [
             try meta(relay, "room-1", name: "One", at: 500),
             try meta(relay, "room-2", name: "Two", at: 500),
+            // The rosters name the reader — membership, not access, is what puts a
+            // channel on the list these counts are read from.
+            try roster(relay, "room-1", naming: selfKey.publicKey.hex, at: 501),
+            try roster(relay, "room-2", naming: selfKey.publicKey.hex, at: 501),
             opener,
             try peer.message("second", in: "room-1", at: 2000),
             try selfFixture.message("my own", in: "room-1", at: 2500),
@@ -161,6 +165,7 @@ struct ReadStateTests {
         let newest = try peer.message("newest", in: "room-1", at: 3000)
         _ = try await store.ingest(batch: [
             try meta(relay, "room-1", name: "One", at: 500),
+            try roster(relay, "room-1", naming: selfKey.publicKey.hex, at: 501),
             try peer.message("older", in: "room-1", at: 2000),
             newest,
         ], phase: .backfill)
@@ -270,6 +275,12 @@ struct ReadStateTests {
     /// A kind-39000 channel-metadata event, relay-signed and addressable by its `d`.
     private func meta(_ relay: Fixture, _ id: String, name: String, at seconds: Int64) throws -> NostrEvent {
         try relay.event(.groupMetadata, #"{"name":"\#(name)"}"#, tags: [["d", id]], at: seconds)
+    }
+
+    /// A kind-39002 roster naming `member` — what `channelList(selfPubkey:)` requires
+    /// before it lists the channel at all.
+    private func roster(_ relay: Fixture, _ id: String, naming member: String, at seconds: Int64) throws -> NostrEvent {
+        try relay.event(.groupMembers, "", tags: [["d", id], ["p", member]], at: seconds)
     }
 }
 

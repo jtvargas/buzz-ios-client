@@ -33,6 +33,10 @@ struct ReadStateEngineTests {
             channel: "room-1",
             state: .active
         )
+        try await harness.store.seedMembershipForTest(
+            channel: "room-1",
+            members: [harness.selfPubkey]
+        )
         #expect(try harness.store.channelList(selfPubkey: harness.selfPubkey).first?.unreadCount == 1)
 
         // markRead awaits its drain, which awaits the relay OK — run it in a Task so the
@@ -112,6 +116,10 @@ struct ReadStateEngineTests {
             identity: harness.selfPubkey,
             channel: "room-1",
             state: .active
+        )
+        try await harness.store.seedMembershipForTest(
+            channel: "room-1",
+            members: [harness.selfPubkey]
         )
         #expect(try harness.store.channelList(selfPubkey: harness.selfPubkey).first?.unreadCount == 1)
 

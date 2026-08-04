@@ -251,6 +251,7 @@ struct ChannelListTests {
             channel: "room-1",
             state: .active
         )
+        try await store.seedMembershipForTest(channel: "room-1", members: [selfKey.publicKey.hex])
 
         let row = try #require(
             try store.channelList(selfPubkey: selfKey.publicKey.hex).first { $0.id == "room-1" }

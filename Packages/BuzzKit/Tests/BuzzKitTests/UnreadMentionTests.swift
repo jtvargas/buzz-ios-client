@@ -56,6 +56,7 @@ struct UnreadMentionTests {
             ),
         ], phase: .backfill)
         try await store.markChannelAccess(identity: selfPubkey, channel: "room-1", state: .active)
+        try await store.seedMembershipForTest(channel: "room-1", members: [selfPubkey])
         return store
     }
 
@@ -121,6 +122,7 @@ struct UnreadMentionTests {
             mention,
         ], phase: .backfill)
         try await store.markChannelAccess(identity: selfPubkey, channel: "room-1", state: .active)
+        try await store.seedMembershipForTest(channel: "room-1", members: [selfPubkey])
         #expect(try store.channelList(selfPubkey: selfPubkey).first?.unreadMentionCount == 1)
 
         // Without a local identity there is nobody for a message to be addressed to.
@@ -159,6 +161,7 @@ struct UnreadMentionTests {
             ),
         ], phase: .backfill)
         try await store.markChannelAccess(identity: selfPubkey, channel: "room-1", state: .active)
+        try await store.seedMembershipForTest(channel: "room-1", members: [selfPubkey])
 
         #expect(try store.channelList(selfPubkey: selfPubkey).first?.unreadMentionCount == 2)
     }
