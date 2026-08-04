@@ -261,9 +261,12 @@ struct ChannelTimelineView: View {
         // the replies themselves, so on a cold launch a row would otherwise say "3 replies"
         // over an empty strip. See ``BuzzKit/SyncEngine/prefetchThreads(in:)``.
         .task { await prefetcher?.prefetchThreads(in: channelID) }
-        // Which conversation is on screen, so that a reconnect — which is most of what
-        // foregrounding the app does — restores *this* channel's live subscription
-        // before the other joined channels' (§ ``BuzzKit/SyncEngine/setActiveChannel(_:)``).
+        // Which conversation is on screen, with two effects
+        // (§ ``BuzzKit/SyncEngine/setActiveChannel(_:)``): a reconnect — which is most of
+        // what foregrounding the app does — restores *this* channel's live subscription
+        // before the other joined channels'; and a channel with no standing subscription —
+        // one opened without being a member, as Browse allows — gets one registered plus a
+        // head reconcile, which is this screen's only relay path.
         // Not cleared when the view goes away: the engine's preference is advisory, and
         // the channel just left is the one most likely to be opened again.
         .task { await lifecycleEngine?.setActiveChannel(channelID) }
