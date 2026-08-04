@@ -182,6 +182,13 @@ extension SyncEngine {
 
         guard isCurrent(generation) else { return }
         await requestDrain(generation: generation)
+
+        // Last, and after the drain: the reader's own queued sends must not wait behind
+        // two channels' worth of reply fetching. Both halves need every head window above
+        // to have committed — a join hydrates against it, and a reply prefetch has no
+        // candidates until the roots are held locally (``ThreadPrefetch``).
+        guard isCurrent(generation) else { return }
+        await settleStarterChannels(joined: joined, generation: generation)
     }
 
     private func setDirectoryStatus(_ status: ChannelDirectoryStatus) {
