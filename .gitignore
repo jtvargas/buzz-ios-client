@@ -35,6 +35,11 @@ Config/Local.xcconfig
 .build/
 .swiftpm/
 Package.resolved
+# …except the one Xcode Cloud requires. It builds with automatic package
+# resolution disabled machine-wide, so it cannot produce this file and neither
+# can `ci_post_clone.sh` — it can only be handed one. Kept here and copied into
+# the generated project by that script. `make pins` refreshes it.
+!Config/Package.resolved
 
 # macOS
 .DS_Store

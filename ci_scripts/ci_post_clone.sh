@@ -12,7 +12,8 @@
 #
 # A clone is missing a second thing for the same reason: the `Package.resolved`
 # Xcode Cloud requires lives inside that same generated project. Both gaps are
-# closed below, in the order the build reads them.
+# closed below, in the order the build reads them — the project is generated,
+# then the committed pins are copied into it.
 #
 # `set -e` is the whole error handling: a failure to generate must fail the build
 # loudly rather than hand Xcode Cloud a repository it will report as "scheme not
@@ -41,24 +42,26 @@ echo "--- Generated:"
 ls -d Hive.xcodeproj
 ls Hive.xcodeproj/xcshareddata/xcschemes
 
-echo "--- Resolving package dependencies"
-# Xcode Cloud builds with `-disableAutomaticPackageResolution`, so its build step
-# will not fetch a dependency it has not already been told the exact version of.
-# It reads that from a `Package.resolved` inside the project's workspace — and
-# that file is doubly absent from a clone: it lives at
-# `Hive.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved`,
-# inside the gitignored project, and `Package.resolved` is gitignored in its own
-# right. XcodeGen does not write one either; generating a project is not
-# resolving it. Without this step every build fails twice, in
-# ResolvePackageDependenciesStep and again in ValidationStep, with "a resolved
-# file is required when automatic dependency resolution is disabled".
+echo "--- Installing Package.resolved"
+# Xcode Cloud builds with automatic package resolution disabled, and reads the
+# versions it may fetch from a `Package.resolved` inside the generated project's
+# workspace. A clone cannot carry that file: it lives inside the gitignored
+# `Hive.xcodeproj`, and `Package.resolved` is gitignored in its own right. So it
+# is copied in from `Config/Package.resolved`, which IS committed (see the
+# negation in `.gitignore`).
 #
-# Resolving here rather than committing the file loses nothing: every remote
-# dependency is pinned `exact` (`swift-secp256k1` 0.23.2 in NostrCore, GRDB
-# 7.11.1 in both BuzzKit and `project.yml`), so a fresh resolve can only produce
-# the versions already written down. A committed copy would be a second place to
-# forget to update.
-xcodebuild -resolvePackageDependencies -project Hive.xcodeproj -scheme Hive
+# It is COPIED rather than resolved here. Resolving was tried and does not work:
+# the flag is not scoped to Xcode Cloud's own build command, it is in force for
+# every `xcodebuild` on the machine, so `xcodebuild -resolvePackageDependencies`
+# is refused with the same message it was meant to prevent and the script dies
+# with exit 74 (build 29). Nothing run from this script can resolve. Handing the
+# build a finished file is the only move available.
+#
+# The cost is that `Config/Package.resolved` is a second place to update when a
+# dependency version changes — `make pins` regenerates it, and a stale one fails
+# the build here rather than silently building the wrong version.
+mkdir -p Hive.xcodeproj/project.xcworkspace/xcshareddata/swiftpm
+cp Config/Package.resolved Hive.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
 
-echo "--- Resolved:"
+echo "--- Installed:"
 ls -l Hive.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
