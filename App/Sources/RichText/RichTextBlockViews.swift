@@ -69,6 +69,12 @@ private struct RichListRow: View {
                 .font(.hive(.body))
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
+        // The row is as tall as the item's own text. An `HStack` sizes its children
+        // against the height it was offered, and an item offered one line's worth
+        // truncates the rest of the sentence with an ellipsis instead of wrapping —
+        // which is what a numbered list of long items showed on device. The quote block
+        // below has carried the same modifier since it was written.
+        .richTextIdealHeight()
     }
 
     @ViewBuilder
