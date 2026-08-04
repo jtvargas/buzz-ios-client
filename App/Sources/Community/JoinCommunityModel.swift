@@ -115,18 +115,24 @@ final class JoinCommunityModel {
     /// is the one moment the reader is already filling a form in. Published as an ordinary
     /// kind-0 after the community is open (§ ``announceDisplayName()``).
     var displayName = ""
+    /// Which kind of picture the reader is on, and the built avatar behind the step's Shuffle
+    /// button (§ ``ArrivalPictureChoice``). Defaults to a rolled avatar, which is what the step
+    /// opens showing.
+    var pictureChoice = ArrivalPictureChoice()
     /// The glyph on the reader's picture, or `nil` while they have not picked one.
     ///
-    /// `nil` rather than a default emoji, on purpose. A default gives every member of a
+    /// `nil` rather than a default emoji, on purpose. A default *glyph* gives every member of a
     /// community the same face on the day they joined, which is worse than no face at all: the
     /// app already draws a stable per-key monogram where there is no picture, and that at least
-    /// differs between people. So a picture is published only if one was actually chosen.
+    /// differs between people. A rolled avatar — which is what ``pictureChoice`` now opens on —
+    /// is the opposite proposition, and does not have that problem.
     ///
-    /// Emoji only, where the account screen's editor also takes a photo — because a photo has
-    /// to be uploaded to the community's media server, and at this point in the flow there is
-    /// no community, no key committed, and no engine to upload through. An emoji avatar is a
-    /// `data:` URI (§ ``EmojiAvatar``) needing nothing but the two values beside it, which is
-    /// why Buzz's own clients store the workspace owner's avatar as one.
+    /// Still no photo, where the account screen's editor takes one: a photo has to be uploaded
+    /// to the community's media server, and at this point in the flow there is no community, no
+    /// key committed, and no engine to upload through. The two answers this step does offer both
+    /// cost nothing here — an emoji is a `data:` URI (§ ``EmojiAvatar``) made of the two values
+    /// beside it, and a built avatar is a recipe until something draws it, which happens after
+    /// the join (§ ``ArrivalPicture``).
     var avatarEmoji: String?
     /// The background behind ``avatarEmoji``, as an uppercase `#RRGGBB` string.
     var avatarColor = EmojiAvatar.defaultColor
@@ -369,8 +375,9 @@ final class JoinCommunityModel {
 
     /// Publishes the name and picture the reader gave, once the community they gave them to is
     /// open. The writing itself is
-    /// ``AppEnvironment/announceArrivalProfile(displayName:emoji:color:)``, shared with the
-    /// onboarding walks.
+    /// ``AppEnvironment/announceArrivalProfile(displayName:picture:)``, shared with the
+    /// onboarding walks — and, for a built avatar, the drawing and the upload too, since this is
+    /// the first moment in the walk with an engine to upload through.
     ///
     /// **Only on the new-key route.** The profile step comes before the key step, so a reader
     /// answers it without having said yet which key will sign — and that helper writes a *fresh*
@@ -381,11 +388,13 @@ final class JoinCommunityModel {
     /// ``JoinCommunityGuidance/existingIdentityBlurb`` says so on the step where it matters.
     private func announceProfile() async {
         guard identity == .new else { return }
-        await environment.announceArrivalProfile(
-            displayName: displayName,
-            emoji: avatarEmoji,
-            color: avatarColor
-        )
+        await environment.announceArrivalProfile(displayName: displayName, picture: arrivalPicture)
+    }
+
+    /// The profile step's picture answer, or `nil` for none — the value the recap on the last
+    /// step draws and the one the publish above sends, so the two cannot say different things.
+    var arrivalPicture: ArrivalPicture? {
+        pictureChoice.resolved(emoji: avatarEmoji, color: avatarColor)
     }
 
     /// The acceptance to present with the claim: the one the link already carries, or one

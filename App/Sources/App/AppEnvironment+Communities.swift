@@ -1,6 +1,7 @@
 import BuzzKit
 import Foundation
 import NostrCore
+import OSLog
 
 /// Joining, leaving and moving between communities.
 ///
@@ -136,11 +137,116 @@ extension AppEnvironment {
     /// ``ProfileModel`` does — so publishing it for a key the reader pasted would silently drop
     /// whatever `about`, `nip05` or `lud16` that identity already had. Both walks that call this
     /// ask for a profile only on the new-key route for exactly that reason.
-    func announceArrivalProfile(displayName: String, emoji: String?, color: String) async {
+    ///
+    /// # Why the picture is finished here rather than on the step that asked for it
+    ///
+    /// A built avatar arrives as a recipe (§ ``ArrivalPicture``), because the step it was chosen
+    /// on has no engine and therefore nowhere to put a picture. This is the first line of code
+    /// after a join that has one. So the draw and the decision about what `picture` ends up
+    /// holding both happen here, in the same fire-and-forget task the name already rode.
+    ///
+    /// # Why the engine is taken on the way in and held across that work
+    ///
+    /// ``engine`` is a property of this object and every community transition replaces it: a
+    /// switch, a removal and a sign-out all nil it in ``teardownSession()``. Reading it *after*
+    /// the picture is finished put that work between the join and the read. It used to be a draw
+    /// **and an HTTP `PUT`**, and that `PUT` is allowed 60 s of silence and 240 s in total
+    /// (§ ``makeMediaUploader(signer:websocketURL:)``) — so anything that ended the session
+    /// inside that window took the whole announcement with it, **the name as well as the
+    /// picture**, and left the reader in their new community as a `?`. That is the shape of the
+    /// defect the owner reported; the guard was silent, so it took a relay's database to find.
+    ///
+    /// The picture no longer uploads (§ ``publishableValue(for:)``), which leaves a draw and a
+    /// window measured in milliseconds. The capture stays anyway, because closing that race was
+    /// only one of the things it was doing.
+    ///
+    /// Captured, the send goes to the engine for the community these two answers were actually
+    /// given to — the only community they mean anything on. Sending them through whatever engine
+    /// exists a minute later would write a fresh kind-0 for whichever identity the reader has
+    /// meanwhile switched to, replacing that profile: the same overwrite the new-key rule above
+    /// exists to prevent, reached from the other side.
+    ///
+    /// Holding it also makes the send *durable* rather than merely correct. `enqueue` writes a
+    /// row into the joined community's own database before it tries the relay, so a community
+    /// left before the relay answered still keeps its announcement and drains it the next time
+    /// it is opened.
+    func announceArrivalProfile(displayName: String, picture: ArrivalPicture?) async {
         let name = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
-        let picture = emoji.map { EmojiAvatar(emoji: $0, color: color).dataURL() }
-        guard !name.isEmpty || picture != nil, let sender = engine else { return }
-        let content = ProfileMetadataContent(
+        guard !name.isEmpty || picture != nil else { return }
+
+        guard let sender = engine else {
+            // Not reachable from either walk as they stand — both await a join that returns
+            // successfully only once the engine exists — so this is the honest report of a
+            // caller that has not, rather than a state to recover from.
+            Self.arrivalLog.error("Arrival profile dropped: the joined community has no engine.")
+            return
+        }
+
+        var value: String?
+        if let picture { value = Self.publishableValue(for: picture) }
+        if picture != nil, value == nil {
+            Self.arrivalLog.notice("Arrival picture could not be drawn; sending the name alone.")
+        }
+
+        var content = Self.arrivalMetadata(name: name, picture: value)
+        // A backstop rather than a live branch. The inline avatar is exported at a size chosen
+        // so this cannot fire (§ ``AvatarKitExport/inlineSide``): the worst of 320 measured
+        // bodies came in at two thirds of the ceiling. The only input left that could reach it
+        // is a name long enough to matter, and one lands in the body twice — so if it ever
+        // does, a name arriving without its picture is the better half of the answer; a refused
+        // send is neither half.
+        if content.utf8.count > OutboxPolicy.maxContentBytes {
+            Self.arrivalLog.notice(
+                "Arrival picture dropped: \(content.utf8.count, privacy: .public) bytes over the send ceiling."
+            )
+            value = nil
+            content = Self.arrivalMetadata(name: name, picture: nil)
+        }
+        // Remembered whatever became of the publish, so the account screen's editor opens on the
+        // face the walk produced rather than on a stranger. `publishedURL` is only set to what
+        // actually went out, because that is what the editor matches against to recognise its
+        // own work (§ ``AvatarKitRecipeStore/Recipe``).
+        if case let .built(avatar) = picture {
+            AvatarKitPublishedAvatar.record(avatar, publishedAs: value)
+        }
+        guard !name.isEmpty || value != nil else {
+            Self.arrivalLog.notice("Nothing left to announce: no name was given and the picture did not survive.")
+            return
+        }
+
+        do {
+            _ = try await sender.enqueue(
+                kind: .metadata,
+                content: content,
+                in: "",
+                tags: [],
+                maxContentBytes: OutboxPolicy.maxContentBytes
+            )
+        } catch {
+            // The one failure here that is not recoverable by the outbox: nothing was queued,
+            // so nothing will be retried, and the reader has no way to know. Said out loud
+            // because the alternative is what this whole method just cost to diagnose.
+            Self.arrivalLog.error(
+                "Arrival profile could not be queued: \(String(describing: error), privacy: .public)"
+            )
+        }
+    }
+
+    /// Logger for the arrival announcement, in the same shape and for the same reason as
+    /// ``BuzzKit/SyncEngine/channelCreationLog``: this is a verdict nothing else records.
+    ///
+    /// The send is fire-and-forget by design — a red line about a profile would report a join
+    /// that worked as having gone wrong (§ ``announceArrivalProfile(displayName:picture:)``) —
+    /// which means every way it can fail is invisible from the outside, and a reader who lands
+    /// with no name looks exactly like a reader who chose not to give one. Not `#if DEBUG`: the
+    /// point is a phone in somebody else's hand, and the one thing that would have shortened
+    /// this diagnosis is a line retrievable from a device that is not attached to a debugger.
+    /// Nothing the reader typed is logged, only which branch was taken.
+    static let arrivalLog = Logger(subsystem: "Hive", category: "AppEnvironment.arrivalProfile")
+
+    /// The kind-0 body for an arrival, as JSON. Each field carries only what was answered.
+    private static func arrivalMetadata(name: String, picture: String?) -> String {
+        ProfileMetadataContent(
             name: name.isEmpty ? nil : name,
             displayName: name.isEmpty ? nil : name,
             about: nil,
@@ -148,13 +254,50 @@ extension AppEnvironment {
             nip05: nil,
             lud16: nil
         )
-        _ = try? await sender.enqueue(
-            kind: .metadata,
-            content: content.jsonString(),
-            in: "",
-            tags: [],
-            maxContentBytes: OutboxPolicy.maxContentBytes
-        )
+        .jsonString()
+    }
+
+    /// What a step's answer becomes in the `picture` field, or `nil` if it could not become
+    /// anything.
+    ///
+    /// Both answers become a `data:` URI, and neither touches the network. An emoji is its own
+    /// document and has never needed a relay; a built avatar is drawn at
+    /// ``AvatarKitExport/inlineSide`` and its bytes are the document.
+    ///
+    /// # Why an arrival avatar is embedded where the account editor uploads
+    ///
+    /// The editor uploads, and is right to. It runs in a community the reader has been living
+    /// in, against a media host this app has already fetched from, with a Done button to report
+    /// a failure to. This runs seconds after a join, for an identity minutes old, on a relay the
+    /// app has just met — and a published URL is only worth having if it can be *read back*.
+    ///
+    /// On a hosted relay it cannot. `GET /media/<sha>` there answers **401 even for a blob that
+    /// does not exist**, so a read is authenticated before it is resolved, and nothing in this
+    /// app sends an `Authorization` header when it fetches an image. The upload succeeds, the
+    /// URL is published, and the picture is undrawable — by the reader who chose it and by
+    /// everyone who meets them. Nothing fails loudly enough to notice: this function is called
+    /// exactly once, its failures are deliberately silent, and what the reader sees is the `?`
+    /// they were promised a face instead of.
+    ///
+    /// An inline picture has none of that surface. It needs no host, no auth and no network at
+    /// the moment it is drawn — the same property that has always made the emoji avatar work
+    /// everywhere, and the only one of the two a brand-new identity can rely on. It costs bytes
+    /// instead of trust, and ``AvatarKitExport/inlineSide`` is where those bytes were measured
+    /// to fit with room to spare.
+    ///
+    /// The gate itself is the larger defect and not this function's to fix: on such a relay
+    /// every photo and every attachment is unreadable for exactly the same reason.
+    private static func publishableValue(for picture: ArrivalPicture) -> String? {
+        switch picture {
+        case let .emoji(glyph, color):
+            return EmojiAvatar(emoji: glyph, color: color).dataURL()
+        case let .built(avatar):
+            guard let png = try? AvatarKitExport.pngData(
+                for: avatar,
+                side: AvatarKitExport.inlineSide
+            ) else { return nil }
+            return "data:\(AvatarKitExport.mimeType);base64,\(png.base64EncodedString())"
+        }
     }
 
     /// The application-specific sink a ``TargetPairingSession`` hands its decrypted

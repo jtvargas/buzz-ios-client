@@ -132,6 +132,7 @@ struct JoinCommunityView: View {
                 case .profile:
                     JoinCommunityProfileStep(
                         displayName: $model.displayName,
+                        picture: $model.pictureChoice,
                         emoji: $model.avatarEmoji,
                         color: $model.avatarColor,
                         focused: $focused
@@ -363,13 +364,9 @@ struct JoinCommunityView: View {
                         .lineLimit(1)
                 }
                 Spacer(minLength: 0)
-                if let emoji = model.avatarEmoji {
-                    Circle()
-                        .fill(Color(avatarHex: model.avatarColor) ?? .white)
-                        .frame(width: 34, height: 34)
-                        .overlay { Text(emoji).font(.hive(fixedSize: 17, relativeTo: .body)) }
-                        .overlay(Circle().strokeBorder(.white.opacity(0.22), lineWidth: 1))
-                }
+                // Whichever of the three the profile step ended on — § ``ArrivalPictureMark``,
+                // shared with the other walk so the confirmation cannot disagree with the step.
+                ArrivalPictureMark(picture: model.arrivalPicture)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .accessibilityElement(children: .combine)

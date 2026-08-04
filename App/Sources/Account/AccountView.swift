@@ -40,6 +40,9 @@ struct AccountView: View {
                         avatarHeader(model)
                         AccountProfileInfoCard(model: model)
                         AccountIdentityCard(model: model, selfPubkey: selfPubkey)
+                        #if DEBUG
+                        AccountExportAvatarCard(picture: model.draftPicture)
+                        #endif
                     } else {
                         ProgressView().padding(.top, 60)
                     }
@@ -183,3 +186,85 @@ struct AccountView: View {
         }
     }
 }
+
+// MARK: - Exporting a built avatar
+
+#if DEBUG
+/// **Debug builds only.** The way to get a built avatar *out* of the app, so a face can be
+/// looked at beside the artwork it was assembled from.
+///
+/// # Why a release does not have it
+///
+/// What it hands over is a finished, transparent-capable PNG of a face this app can draw
+/// again from eight numbers. Shipping that control is offering readers a *template*, which is
+/// a different feature with a different set of questions attached to it — this one exists to
+/// inspect the builder's own output while it is still a proof of concept. So the whole thing
+/// is compiled out, control and plumbing alike, rather than hidden behind a flag that a
+/// release still contains.
+///
+/// # Why it appears for some avatars and not others
+///
+/// Only for a face this app drew and this device published, which is
+/// ``AvatarKitPublishedAvatar/recipe(forPublished:in:)``'s whole subject. A photo and an
+/// emoji have no recipe to re-draw, and a build that has since been replaced by one of those
+/// is not what is being worn — offering it there would export somebody's *previous* avatar.
+private struct AccountExportAvatarCard: View {
+    /// What the profile is publishing right now. The same value the header above draws from,
+    /// so this row cannot end up disagreeing with the face it is talking about.
+    let picture: String?
+
+    /// The prepared file, whose presence is the entire arming condition — there is no separate
+    /// "should this show" flag, because a picture with no recipe behind it produces no file.
+    ///
+    /// Prepared ahead of the tap rather than during it, because `ShareLink` has to be handed
+    /// its item when it is built rather than when it is pressed.
+    @State private var export: AvatarKitPublishedAvatar.Export?
+
+    var body: some View {
+        content
+            // Keyed by the picture, so switching to a photo takes the row away and building a
+            // new face replaces the file instead of sharing the one before it.
+            .task(id: picture) {
+                export = AvatarKitPublishedAvatar.recipe(forPublished: picture)
+                    .flatMap { try? AvatarKitPublishedAvatar.export($0) }
+            }
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        if let export {
+            AccountCard(
+                title: "Debug",
+                subtitle: "Only in debug builds. Release doesn't have this."
+            ) {
+                EmptyView()
+            } content: {
+                ShareLink(item: export.file, preview: sharePreview(export)) {
+                    AccountFieldRow(label: "Built avatar") {
+                        HStack(spacing: 10) {
+                            Text("Export avatar")
+                                .font(.hive(.body))
+                                .foregroundStyle(.secondary)
+                            Spacer(minLength: 8)
+                            Image(systemName: "square.and.arrow.up")
+                                .font(.hiveSymbol(.footnote, weight: .semibold))
+                                .foregroundStyle(.tint)
+                        }
+                    }
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Export your built avatar")
+            }
+        }
+    }
+
+    /// What the share sheet draws while the reader chooses where the picture is going. Always
+    /// carries an image — a symbol if the bitmap somehow did not decode — because a preview
+    /// without one collapses the sheet's header to a bare filename. ``MessageMediaShareButton``
+    /// makes the same allowance for the same reason.
+    private func sharePreview(_ export: AvatarKitPublishedAvatar.Export) -> SharePreview<Image, Never> {
+        let image = export.image.map { Image(uiImage: $0) } ?? Image(systemName: "person.crop.square")
+        return SharePreview("Hive Avatar", image: image)
+    }
+}
+#endif

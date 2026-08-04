@@ -54,9 +54,20 @@ public struct DirectoryEntity: Sendable, Hashable, Identifiable {
 /// `agent_directory` keeps the whole directory live.
 ///
 /// Scope is deliberate: identities that appear in *some* channel roster or in the
-/// agent directory. A message author who has since left every channel is not here —
-/// that row already carries its own resolved ``TimelineRow/authorName`` from the
-/// same `profile` projection, so nothing is left unnamed by the omission.
+/// agent directory, **plus the reader's own**. A message author who has since left
+/// every channel is not here — that row already carries its own resolved
+/// ``TimelineRow/authorName`` from the same `profile` projection, so nothing is left
+/// unnamed by the omission.
+///
+/// The reader is in scope unconditionally because they are the one identity every
+/// screen draws whether or not a roster mentions them — the account button in the
+/// home toolbar is on screen before any conversation is open. Leaving them to the
+/// roster rule made that button a `?` on a plain tile for exactly the people it
+/// mattered most for: a freshly invited member is on **no** roster in their new
+/// community (see ``ChannelDirectoryClient/fetch(selfPubkey:previouslyActiveChannels:)``
+/// — every channel they can see there is *open* rather than joined), so their own
+/// kind-0 was scoped out of the read that names them while sitting in the `profile`
+/// table the account sheet reads directly.
 public struct DirectorySnapshot: Sendable, Hashable {
     /// Identities keyed by lowercased pubkey.
     public let entities: [String: DirectoryEntity]
@@ -93,9 +104,13 @@ public extension BuzzEventStore {
     /// `profile`, and `agent_directory` tables it reads — the discipline that lets
     /// ``channelList(selfPubkey:)`` and ``timeline(channel:before:limit:)`` back
     /// live views.
-    nonisolated func directorySnapshot() throws -> DirectorySnapshot {
+    ///
+    /// - Parameter selfPubkey: the reader, who is in scope whether or not a roster
+    ///   names them (§ ``DirectorySnapshot``). `nil` only for a read with no session,
+    ///   and then nobody's own face is being drawn either.
+    nonisolated func directorySnapshot(selfPubkey: String? = nil) throws -> DirectorySnapshot {
         try reader.read { db in
-            try Self.fetchDirectorySnapshot(db)
+            try Self.fetchDirectorySnapshot(db, selfPubkey: selfPubkey)
         }
     }
 }
@@ -104,11 +119,16 @@ extension BuzzEventStore {
     /// The roster + profile + agent-directory assembly, over an open database so an
     /// observation can track it.
     ///
-    /// Three statements rather than one join: the roster read is also the source of
-    /// the DM test, and scoping the profile read to `channel_member ∪
-    /// agent_directory` keeps a large relay-wide `profile` projection from being
-    /// pulled into memory for identities no surface can show.
-    static func fetchDirectorySnapshot(_ db: Database) throws -> DirectorySnapshot {
+    /// Separate statements rather than one join: the roster read is also the source of
+    /// the DM test, and the profile read is scoped rather than whole (§
+    /// ``profileRows(_:identity:)``).
+    static func fetchDirectorySnapshot(
+        _ db: Database,
+        selfPubkey: String? = nil
+    ) throws -> DirectorySnapshot {
+        // Lowercased on the way in, because that is the key every table here is
+        // compared on and the spelling ``DirectorySnapshot/entity(_:)`` looks up.
+        let identity = selfPubkey?.lowercased()
         var rosters: [String: Set<String>] = [:]
         var botRoles: Set<String> = []
         let memberRows = try Row.fetchAll(
@@ -133,21 +153,15 @@ extension BuzzEventStore {
             agentNames[(row["pubkey"] as String).lowercased()] = nonempty(row["display_name"])
         }
 
-        var profiles: [String: Row] = [:]
-        let profileRows = try Row.fetchAll(db, sql: """
-        SELECT pubkey, display_name, picture, nip05
-        FROM profile
-        WHERE pubkey IN (
-            SELECT pubkey FROM channel_member
-            UNION SELECT pubkey FROM agent_directory
-        )
-        """)
-        for row in profileRows {
-            profiles[(row["pubkey"] as String).lowercased()] = row
-        }
+        let profiles = try profileRows(db, identity: identity)
 
         var entities: [String: DirectoryEntity] = [:]
-        for pubkey in Set(rosters.values.joined()).union(agentNames.keys) {
+        var scope = Set(rosters.values.joined()).union(agentNames.keys)
+        // Present even with no profile behind them, exactly as a roster member with no
+        // kind-0 is: an entity with nothing in it renders as the monogram either way, and
+        // one rule for "in scope" is easier to keep true than two.
+        if let identity { scope.insert(identity) }
+        for pubkey in scope {
             let profile = profiles[pubkey]
             entities[pubkey] = DirectoryEntity(
                 pubkey: pubkey,
@@ -159,6 +173,36 @@ extension BuzzEventStore {
             )
         }
         return DirectorySnapshot(entities: entities, memberPubkeysByChannel: rosters)
+    }
+
+    /// The kind-0 rows worth having, keyed by lowercased pubkey.
+    ///
+    /// Two statements, and the second is the whole point. The first is scoped to
+    /// `channel_member ∪ agent_directory` so a relay-wide `profile` projection is not
+    /// pulled into memory for identities no surface can show; the second fetches
+    /// `identity`'s own row by primary key, because the reader is a surface — the
+    /// account button — that the scope rule cannot see.
+    private static func profileRows(_ db: Database, identity: String?) throws -> [String: Row] {
+        var profiles: [String: Row] = [:]
+        let scoped = try Row.fetchAll(db, sql: """
+        SELECT pubkey, display_name, picture, nip05
+        FROM profile
+        WHERE pubkey IN (
+            SELECT pubkey FROM channel_member
+            UNION SELECT pubkey FROM agent_directory
+        )
+        """)
+        for row in scoped {
+            profiles[(row["pubkey"] as String).lowercased()] = row
+        }
+        if let identity, profiles[identity] == nil {
+            profiles[identity] = try Row.fetchOne(
+                db,
+                sql: "SELECT pubkey, display_name, picture, nip05 FROM profile WHERE pubkey = ?",
+                arguments: [identity]
+            )
+        }
+        return profiles
     }
 
     private static func nonempty(_ value: String?) -> String? {

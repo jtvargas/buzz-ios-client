@@ -87,6 +87,10 @@ struct HiveApp: App {
             // And for Settings, whose theme picker is a row of swatches that has already been
             // wrong in a way only a picture showed — see ``SettingsFixture``.
             SettingsFixtureHost(themeID: theme)
+        } else if let avatarKit = AvatarKitEditorFixture.requested() {
+            // And for the avatar builder, which is a grid of ninety-eight drawings and so is
+            // entirely a thing to be looked at — see ``AvatarKitEditorFixture``.
+            AvatarKitEditorFixtureHost(mode: avatarKit)
         } else {
             launch
         }

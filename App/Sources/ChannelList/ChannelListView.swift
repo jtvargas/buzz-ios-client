@@ -111,7 +111,7 @@ struct ChannelListView: View {
         _draftsModel = State(initialValue: DraftsModel(store: store, drafts: drafts))
         _model = State(initialValue: ChannelListModel(store: store, selfPubkey: selfPubkey))
         _presence = State(initialValue: PresenceModel(store: engine.presenceStore))
-        _directory = State(initialValue: EntityDirectoryModel(store: store))
+        _directory = State(initialValue: EntityDirectoryModel(store: store, selfPubkey: selfPubkey))
         _router = State(initialValue: DirectMessageRouter(opener: engine))
         _hider = State(initialValue: HideDirectMessageModel(hider: engine))
     }
