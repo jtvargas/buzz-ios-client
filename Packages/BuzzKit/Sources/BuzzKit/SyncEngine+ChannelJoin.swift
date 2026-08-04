@@ -12,6 +12,16 @@ import os
 /// not-found refusals happen earlier still, in ingest. So an `OK` is never provisional —
 /// there is no "accepted, ask again later" for this kind, and nothing here has to model
 /// one.
+///
+/// The `OK` carries the relay's *verdict*, though, and not a receipt for the membership
+/// write. Those side effects run before the answer but they are not part of it: the event
+/// is stored first, and `handle_side_effects` returning an error is caught and logged
+/// rather than surfaced (`crates/buzz-relay/src/handlers/ingest.rs`, whose own comment
+/// puts it as "the event was accepted but its side effects … did not run — the relay is
+/// now in a state the client believes it isn't"). So `OK true` with no membership written
+/// is reachable, on a relay database error. Nothing here models it because there is
+/// nothing to decide — the join has been answered — and the directory refresh at the end
+/// of ``SyncEngine/joinChannel(_:onProgress:)`` is what repairs it.
 public enum ChannelJoinError: Error, Equatable, Sendable {
     /// The relay refused the join, carrying its classified reason: `restricted:` (the
     /// channel is private and wants an invitation), `invalid:` (no such channel, or an
@@ -146,15 +156,21 @@ extension SyncEngine {
     /// arrives on the live fan-out whose delivery this device does not control. Waiting on
     /// it would make a join's completion depend on the least reliable of the three things
     /// the relay does. The `#d`-scoped read-back asks for the roster directly, and asks
-    /// only once: every side effect is awaited before the `OK` is sent, so by the time the
-    /// publish above returned, the roster the relay would serve already names us.
+    /// only once: every side effect is awaited before the `OK` is sent, so a roster the
+    /// relay has written is already being served by the time the publish above returned.
+    /// Asking twice would not find one it had not written — the failure this cannot see is
+    /// the side effects not running at all, which no number of read-backs turns into a
+    /// membership, and which the directory refresh at the end of the join repairs.
     ///
     /// The `channel_access` row is written here rather than left to the directory pass so
-    /// the channel is visible to the sidebar immediately, the same adoption
-    /// ``adoptOpenedChannel(_:)`` performs for a created channel or an opened DM.
+    /// the channel reaches the sidebar immediately — jointly with the roster ingest above,
+    /// since the sidebar requires both — the same adoption ``adoptOpenedChannel(_:)``
+    /// performs for a created channel or an opened DM.
     ///
-    /// Best-effort throughout. A failed read-back costs this channel its name and roster
-    /// until the directory refresh at the end of the join, not the join.
+    /// Best-effort throughout. A failed read-back costs this channel its name, its roster,
+    /// and with the roster its sidebar row, until the directory refresh at the end of the
+    /// join repairs all three. The join itself is already decided: the OK carried the
+    /// verdict.
     private func confirmJoinedRoster(_ channelID: String) async {
         let events = (try? await subscriptions.query(Self.channelStateFilters(channelID))) ?? []
         _ = try? await store.ingest(batch: events, phase: .backfill)
