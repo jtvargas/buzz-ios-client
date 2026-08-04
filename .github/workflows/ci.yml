@@ -35,6 +35,11 @@ jobs:
     # run as two jobs rather than two steps.
     name: SPM tests (${{ matrix.package }})
     runs-on: macos-latest
+    # Sized off BuzzKit, not NostrCore: one key covers both matrix legs, and
+    # BuzzKit is the slow one (296s worst, against NostrCore's 125s). Sizing
+    # this off the leg that actually hung would have been far too tight for the
+    # leg that did not.
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -58,6 +63,13 @@ jobs:
     name: NostrCore debug sentinel (non-blocking)
     if: github.event_name != 'pull_request'
     runs-on: macos-latest
+    # The job that needs this most, and looks like it needs it least.
+    # `continue-on-error` below caps the blast radius of a *failure*; it does
+    # nothing to a hang. So this is the one job that can hold a run open for the
+    # 360-minute default while being, by design, the one nobody watches for a
+    # verdict — running the same package and command family that froze twice on
+    # 2026-08-04, in debug.
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - name: NostrCore tests (debug)
@@ -67,6 +79,10 @@ jobs:
   lint:
     name: SwiftLint
     runs-on: macos-latest
+    # Ten rather than the ~30s this takes: `brew install swiftlint` on a cold
+    # runner image is the unbounded part, and a slow install is not what any of
+    # these ceilings are defending against.
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - name: Install SwiftLint
@@ -95,6 +111,13 @@ jobs:
     # step's condition below.
     if: github.event_name == 'workflow_dispatch'
     runs-on: macos-26
+    # The widest margin here, against a 517s worst case, and deliberately so:
+    # only two measured runs to size from, the only job that depends on a
+    # restored cache, and `Ensure an iOS simulator exists` below can fall
+    # through to `xcodebuild -downloadPlatform iOS`, which on a runner image
+    # shipped without the runtime outruns a tighter ceiling on its own. Still
+    # turns six hours into three quarters of one.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - name: Select Xcode 26
