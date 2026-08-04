@@ -151,10 +151,14 @@ struct PressFeedbackTests {
         #expect(PressFeedback.pressedFill > 0)
     }
 
-    /// `ChannelListView.resumeMark`'s own opacity, restated because it is a literal inside a
-    /// `@ViewBuilder` that no test can reach. If that view changes, this changes with it — and
-    /// the assertion above is what makes the pairing matter rather than decorative.
-    private static let resumeMarkOpacity: Double = 0.14
+    /// `ChannelListView.resumeMark`'s own opacity — **the real one**, not a copy.
+    ///
+    /// It was a restated literal for one commit, because the value was buried in a
+    /// `@ViewBuilder` no test could reach. Aligning the press wash with the mark's rectangle
+    /// meant naming that geometry anyway, and the opacity came out with it, so this now reads
+    /// the constant the view actually draws. A restated number would have passed forever after
+    /// someone changed the mark.
+    private static let resumeMarkOpacity = ChannelListView.markOpacity
 
     @Test("the press latch is the down-curve and not one millisecond of dwell more")
     func aPressPlaysThroughAndNoLonger() {

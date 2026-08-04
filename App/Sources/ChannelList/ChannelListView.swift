@@ -685,7 +685,10 @@ private extension ChannelListView {
             } label: {
                 ChannelRowView(row: row, presence: presence)
             }
-            .buttonStyle(.hivePress(.row))
+            // Not the default press shape: this one has to land on `resumeMark`, which is a
+            // row *background* and so is measured from a rectangle 16pt wider and 2pt taller
+            // than this button. See ``ChannelListView/pressMark``.
+            .buttonStyle(.hivePress(.row, in: Self.pressMark))
             .listRowInsets(Self.rowInsets)
             // No per-row rule: sections of ruled rows read as a form, not as one
             // navigation surface. The section headings do the separating.
@@ -727,13 +730,43 @@ private extension ChannelListView {
     @ViewBuilder
     func resumeMark(isResumable: Bool) -> some View {
         if isResumable {
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Color.hiveAccent.opacity(0.14))
-                .padding(.horizontal, 8)
-                .padding(.vertical, 1)
+            RoundedRectangle(cornerRadius: Self.markRadius, style: .continuous)
+                .fill(Color.hiveAccent.opacity(Self.markOpacity))
+                .padding(.horizontal, Self.markInsetH)
+                .padding(.vertical, Self.markInsetV)
         } else {
             Color.clear
         }
+    }
+
+    /// The one rounded rectangle the sidebar draws under a row, and the numbers that place it.
+    ///
+    /// Said once because **two things draw this rectangle from two different coordinate
+    /// spaces**, and the owner spotted the moment they disagreed. ``resumeMark`` is a
+    /// `listRowBackground`, so it is handed the whole row cell and insets itself from that. The
+    /// press wash is a `background` *inside* the row's `Button`, which ``rowInsets`` has already
+    /// pulled in by 16 and 2 — so drawn plainly it lands 8pt narrower on each side and 1pt
+    /// shorter top and bottom than the mark beside it.
+    static let markRadius: CGFloat = 10
+    static let markInsetH: CGFloat = 8
+    static let markInsetV: CGFloat = 1
+    /// Deliberately **not** ``PressFeedback/pressedFill``. This is the *place* mark and that is
+    /// a press; they are the same hue at two strengths on purpose, and the press is the dimmer
+    /// of the two so that a finger cannot be mistaken for where you were. Equalising them is
+    /// what got the press wash removed from this list once already.
+    static let markOpacity: Double = 0.14
+
+    /// The resume mark's rectangle, expressed from inside the row's button.
+    ///
+    /// Computed from the numbers above rather than typed as `8` and `1`, so that moving
+    /// ``rowInsets`` or the mark's own inset keeps the two aligned instead of silently parting.
+    /// `SidebarRowMarkTests` holds them to each other.
+    static var pressMark: SidebarRowMark {
+        SidebarRowMark(
+            outsetH: rowInsets.leading - markInsetH,
+            outsetV: rowInsets.top - markInsetV,
+            radius: markRadius
+        )
     }
 
     /// Star or unstar one conversation — the long press's only item, and the one place the
@@ -905,5 +938,31 @@ private extension ChannelListView {
         case .directMessages: $directMessagesExpanded
         case .agents: $agentsExpanded
         }
+    }
+}
+
+/// The sidebar's row mark, drawn from inside a view that already sits within the row's insets.
+///
+/// # Why a `Shape` and not padding
+///
+/// ``PressFeedbackButtonStyle`` fills the shape a control names for itself behind that control's
+/// own frame. What has to be described here is a rectangle **larger** than the view it is drawn
+/// behind — the press wash has to reach back out to where ``ChannelListView/resumeMark`` sits,
+/// and that mark is measured from the whole row cell rather than from inside ``rowInsets``.
+///
+/// `path(in:)` may return a path outside the rect it is handed, and a `background` does not clip
+/// its content, so an outset is expressible here and nowhere else in that API. It stays inside
+/// the row cell regardless: the outset only gives back what `rowInsets` took, so the widest this
+/// ever draws is exactly the mark.
+struct SidebarRowMark: Shape {
+    /// How far past the pressed view's own bounds the mark reaches, per axis. Always the
+    /// difference between the row's insets and the mark's — never typed as a literal.
+    let outsetH: CGFloat
+    let outsetV: CGFloat
+    let radius: CGFloat
+
+    func path(in rect: CGRect) -> Path {
+        RoundedRectangle(cornerRadius: radius, style: .continuous)
+            .path(in: rect.insetBy(dx: -outsetH, dy: -outsetV))
     }
 }
