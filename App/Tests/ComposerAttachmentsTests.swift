@@ -48,7 +48,13 @@ struct ComposerAttachmentsTests {
         #expect(model.isAttaching)
         #expect(!model.hasSendableContent)
 
-        await Self.waitUntil { model.attachments.first?.preview != nil }
+        // Waited on the upload being *parked*, not on the preview appearing. The model
+        // applies the preview before it calls `upload`, and the call it then makes is
+        // spawned unstructured — so a preview says only that the work is coming, and
+        // `releaseAll()` reached for on that signal can release an empty set and leave the
+        // upload parked for the rest of the test. Every other wait in this suite already
+        // uses `parkedCount`; this was the one that did not, and it is the one that failed.
+        await Self.waitUntil { await uploader.parkedCount == 1 }
         await uploader.releaseAll()
         await Self.waitUntil { !model.isAttaching }
 
