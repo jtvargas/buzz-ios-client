@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// A named ground-and-accent pair the reader can choose in Settings.
 ///
@@ -42,8 +43,26 @@ struct HiveTheme: Identifiable, Equatable, Sendable {
     let name: String
     /// The screen ground — upstream's `bg`, unmodified.
     let background: Color
-    /// The palette's signature colour, drawn wherever the app draws "its" colour.
-    let accent: Color
+    /// The palette's signature colour as the catalogue writes it, `0xRRGGBB` — or `nil` for
+    /// ``hive``, whose accent is the asset catalogue's amber rather than one number.
+    let accentHex: UInt32?
+
+    /// The colour the app draws "its own" marks in.
+    var accent: Color {
+        accentHex.map(Color.hex) ?? Color(HiveAccent.assetName, bundle: .main)
+    }
+
+    /// The same accent for UIKit — the window tint, and so the caret, the selection handles,
+    /// menus and alerts.
+    ///
+    /// Built here rather than bridged with `UIColor(accent)`, because ``hive``'s accent is an
+    /// asset with a *light entry and a dark one* and bridging it through SwiftUI produces a
+    /// colour that stops resolving per appearance. That is a silent failure — the tint is still
+    /// a colour, just the wrong one — and ``AccentTests`` is the only thing that says so.
+    var uiAccent: UIColor {
+        guard let accentHex else { return UIColor(named: HiveAccent.assetName) ?? .tintColor }
+        return .hex(accentHex)
+    }
 
     static func == (lhs: HiveTheme, rhs: HiveTheme) -> Bool { lhs.id == rhs.id }
 }
@@ -56,7 +75,7 @@ extension HiveTheme {
         id: "hive",
         name: "Hive",
         background: Color.hiveNight,
-        accent: Color(HiveAccent.assetName, bundle: .main)
+        accentHex: nil
     )
 
     /// The fourteen alternatives, ordered by the WCAG relative luminance of their background so
@@ -64,20 +83,20 @@ extension HiveTheme {
     /// regardless, because it is the default and the one somebody scrolls back to.
     static let all: [HiveTheme] = [
         .hive,
-        HiveTheme(id: "vitesse-black", name: "Vitesse Black", background: .hex(0x000000), accent: .hex(0x4D9375)),
-        HiveTheme(id: "github-dark-default", name: "GitHub Dark", background: .hex(0x0D1117), accent: .hex(0x58A6FF)),
-        HiveTheme(id: "night-owl", name: "Night Owl", background: .hex(0x011627), accent: .hex(0x82AAFF)),
-        HiveTheme(id: "rose-pine", name: "Rosé Pine", background: .hex(0x191724), accent: .hex(0xC4A7E7)),
-        HiveTheme(id: "tokyo-night", name: "Tokyo Night", background: .hex(0x1A1B26), accent: .hex(0x7AA2F7)),
-        HiveTheme(id: "catppuccin-mocha", name: "Catppuccin Mocha", background: .hex(0x1E1E2E), accent: .hex(0xCBA6F7)),
-        HiveTheme(id: "slack-dark", name: "Slack Dark", background: .hex(0x222222), accent: .hex(0xE01E5A)),
-        HiveTheme(id: "slack-aubergine", name: "Slack Aubergine", background: .hex(0x3F0E40), accent: .hex(0x36C5F0)),
-        HiveTheme(id: "solarized-dark", name: "Solarized Dark", background: .hex(0x002B36), accent: .hex(0x2AA198)),
-        HiveTheme(id: "monokai", name: "Monokai", background: .hex(0x272822), accent: .hex(0xA6E22E)),
-        HiveTheme(id: "gruvbox-dark-medium", name: "Gruvbox Dark", background: .hex(0x282828), accent: .hex(0xFE8019)),
-        HiveTheme(id: "dracula", name: "Dracula", background: .hex(0x282A36), accent: .hex(0xBD93F9)),
-        HiveTheme(id: "one-dark-pro", name: "One Dark Pro", background: .hex(0x282C34), accent: .hex(0x61AFEF)),
-        HiveTheme(id: "nord", name: "Nord", background: .hex(0x2E3440), accent: .hex(0x88C0D0)),
+        HiveTheme(id: "vitesse-black", name: "Vitesse Black", background: .hex(0x000000), accentHex: 0x4D9375),
+        HiveTheme(id: "github-dark-default", name: "GitHub Dark", background: .hex(0x0D1117), accentHex: 0x58A6FF),
+        HiveTheme(id: "night-owl", name: "Night Owl", background: .hex(0x011627), accentHex: 0x82AAFF),
+        HiveTheme(id: "rose-pine", name: "Rosé Pine", background: .hex(0x191724), accentHex: 0xC4A7E7),
+        HiveTheme(id: "tokyo-night", name: "Tokyo Night", background: .hex(0x1A1B26), accentHex: 0x7AA2F7),
+        HiveTheme(id: "catppuccin-mocha", name: "Catppuccin Mocha", background: .hex(0x1E1E2E), accentHex: 0xCBA6F7),
+        HiveTheme(id: "slack-dark", name: "Slack Dark", background: .hex(0x222222), accentHex: 0xE01E5A),
+        HiveTheme(id: "slack-aubergine", name: "Slack Aubergine", background: .hex(0x3F0E40), accentHex: 0x36C5F0),
+        HiveTheme(id: "solarized-dark", name: "Solarized Dark", background: .hex(0x002B36), accentHex: 0x2AA198),
+        HiveTheme(id: "monokai", name: "Monokai", background: .hex(0x272822), accentHex: 0xA6E22E),
+        HiveTheme(id: "gruvbox-dark-medium", name: "Gruvbox Dark", background: .hex(0x282828), accentHex: 0xFE8019),
+        HiveTheme(id: "dracula", name: "Dracula", background: .hex(0x282A36), accentHex: 0xBD93F9),
+        HiveTheme(id: "one-dark-pro", name: "One Dark Pro", background: .hex(0x282C34), accentHex: 0x61AFEF),
+        HiveTheme(id: "nord", name: "Nord", background: .hex(0x2E3440), accentHex: 0x88C0D0),
     ]
 
     /// The theme a stored id names, or ``hive`` when it names nothing — an id written by a later
@@ -85,6 +104,21 @@ extension HiveTheme {
     static func named(_ id: String?) -> HiveTheme {
         guard let id, let match = all.first(where: { $0.id == id }) else { return .hive }
         return match
+    }
+}
+
+extension UIColor {
+    /// The same conversion as ``SwiftUI/Color/hex(_:)``, for the UIKit side of the accent.
+    ///
+    /// A fixed colour rather than a dynamic one, and correctly so: these come from a catalogue
+    /// of *dark* themes, which have one appearance and not two.
+    static func hex(_ value: UInt32) -> UIColor {
+        UIColor(
+            red: CGFloat((value >> 16) & 0xFF) / 255,
+            green: CGFloat((value >> 8) & 0xFF) / 255,
+            blue: CGFloat(value & 0xFF) / 255,
+            alpha: 1
+        )
     }
 }
 

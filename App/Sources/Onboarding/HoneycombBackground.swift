@@ -15,7 +15,7 @@ struct HoneycombBackground: View {
     var cellSize: CGFloat = 56
 
     /// The flat colour under the lattice. The pattern composites over it inside the shader.
-    var base: Color = .hiveNight
+    var base: Color = .hiveGround
 
     /// Whether this instance is on screen at all.
     ///

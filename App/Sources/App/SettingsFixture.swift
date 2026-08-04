@@ -47,7 +47,7 @@ struct SettingsFixtureHost: View {
     @State private var environment = AppEnvironment()
 
     var body: some View {
-        Color.hiveNight
+        Color.hiveGround
             .ignoresSafeArea()
             .sheet(isPresented: .constant(true)) {
                 SettingsView()

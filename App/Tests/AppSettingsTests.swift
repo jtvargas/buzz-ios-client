@@ -1,4 +1,6 @@
 import Foundation
+import Observation
+import SwiftUI
 @testable import Hive
 import Testing
 
@@ -107,5 +109,68 @@ struct AppSettingsTests {
     @Test("Hive is the first swatch, so the default is where somebody scrolls back to")
     func hiveLeadsThePicker() {
         #expect(HiveTheme.all.first == .hive)
+    }
+
+    // MARK: - The accent following the theme
+
+    /// **The defect this whole group exists for.**
+    ///
+    /// The accent was a plain `static var` first. It held the right colour — every one of these
+    /// assertions except this one passed against it — and the app still drew the *outgoing*
+    /// accent on any view that had no other reason to re-render, because SwiftUI cannot depend
+    /// on a global it cannot see. The owner reported it as shortcut cards keeping their amber
+    /// edge and wash while the tab bar beside them went green.
+    ///
+    /// So the property under test is not "the accent is correct" but "**reading** the accent
+    /// registers a dependency". That is what `withObservationTracking` asks, and it is the one
+    /// question a value assertion cannot: turn ``HiveThemeBox`` back into a `static var` and
+    /// every other test here stays green while this one goes red.
+    @Test("reading the accent registers an observation, so a view drawing it re-draws")
+    func readingTheAccentIsObserved() {
+        let (defaults, suite) = makeSuite()
+        defer { forget(suite); HiveThemeBox.shared.theme = .hive }
+
+        let settings = AppSettings(defaults: defaults)
+        // A reference rather than a `var`: `onChange` is `@Sendable`, so it cannot capture a
+        // local to mutate.
+        let invalidated = Invalidation()
+        // Exactly what a view body does — nothing else in the closure, so a dependency that
+        // fires can only have come from the accent read.
+        withObservationTracking {
+            _ = Color.hiveAccent
+        } onChange: {
+            invalidated.fired = true
+        }
+
+        settings.themeID = "nord"
+        #expect(invalidated.fired)
+    }
+
+    /// Somewhere for `withObservationTracking`'s `@Sendable` callback to record that it ran.
+    private final class Invalidation: @unchecked Sendable {
+        var fired = false
+    }
+
+    @Test("the accent every call site reads is the chosen theme's")
+    func theAccentFollowsTheChoice() {
+        let (defaults, suite) = makeSuite()
+        defer { forget(suite); HiveThemeBox.shared.theme = .hive }
+
+        let settings = AppSettings(defaults: defaults)
+        settings.themeID = "gruvbox-dark-medium"
+        #expect(Color.hiveAccent == HiveTheme.named("gruvbox-dark-medium").accent)
+        #expect(Color.hiveGround == HiveTheme.named("gruvbox-dark-medium").background)
+    }
+
+    @Test("a relaunch on a chosen theme comes up in that theme's accent, not the amber")
+    func theAccentSurvivesARelaunch() {
+        let (defaults, suite) = makeSuite()
+        defer { forget(suite); HiveThemeBox.shared.theme = .hive }
+
+        defaults.set("dracula", forKey: AppSettings.Key.themeID)
+        // `didSet` does not fire for the write inside `init`, so this is the one path that a
+        // mirror kept only by the setter would miss — and it is the path every launch takes.
+        _ = AppSettings(defaults: defaults)
+        #expect(Color.hiveAccent == HiveTheme.named("dracula").accent)
     }
 }
