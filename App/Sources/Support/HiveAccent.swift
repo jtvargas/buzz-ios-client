@@ -17,25 +17,107 @@ import UIKit
 /// - ``SwiftUI/View/hiveWindowTint()`` on the same, for the UIKit chrome underneath —
 ///   alerts, menus, selection handles, the caret in a `UITextView`;
 /// - `.hiveAccent` / ``uiColor`` at any call site that draws the accent itself.
+/// The theme in force, held as something SwiftUI can **observe**.
+///
+/// # Why this exists at all, when a `static var` would hold a colour just as well
+///
+/// It was a `static var` first, and that shipped the defect this type is the fix for. SwiftUI
+/// re-draws a view when a value it *read while building* changes, and it can only know about a
+/// read it can see: `@Observable`, `@Environment`, `@State`. A bare global is none of those. So
+/// every view that drew `Color.hiveAccent` and had no other reason to re-render kept the
+/// **outgoing** accent after a theme change — the shortcut cards held their amber edge and wash
+/// while the tab bar beside them went green, and which views updated depended on nothing but
+/// whether something else happened to invalidate them first. That reads as random, and the
+/// owner reported it as random.
+///
+/// Reading through `@Observable` puts all thirty-odd accent call sites back on the dependency
+/// graph **without one of them changing**, which is why the fix is here and not spread across
+/// them. Each still says `.hiveAccent`; the read now registers.
+///
+/// # Why a box rather than the environment
+///
+/// The accent is read from places that have no environment to read from — `static` colours on
+/// style types (``PressFeedbackButtonStyle/fillColor``, ``RichTextStyle/tint``) and UIKit's
+/// window tint. Those cannot take an `@Environment` and would each need a parameter threaded to
+/// them from every caller. The environment carries the theme as well (`\.hiveTheme`), for the
+/// ground; the two agree because both are written from the same preference.
+///
+/// # Isolation
+///
+/// `@unchecked Sendable` with the same discipline the `nonisolated(unsafe)` global it replaces
+/// documented: written on the main actor, read on the main actor. Marking it `@MainActor`
+/// instead would push that annotation onto `Color.hiveAccent` and from there onto every call
+/// site, for a value that has never been touched off the main thread.
+@Observable
+final class HiveThemeBox: @unchecked Sendable {
+    /// The one box.
+    static let shared = HiveThemeBox()
+
+    /// Written by ``AppSettings/themeID`` and nothing else — one writer, so this stays a mirror
+    /// of the stored preference rather than a second source of truth that can drift from it.
+    ///
+    /// Deliberately *not* written from ``SwiftUI/View/hiveTheme(_:)``, which is where it used to
+    /// happen: that is a view-building function, and mutating observed state while SwiftUI is
+    /// building a view is the "Modifying state during view update" hazard. The preference's
+    /// `didSet` fires from a button action instead, which is a moment SwiftUI is not mid-update.
+    var theme: HiveTheme = .hive
+
+    private init() {}
+}
+
 enum HiveAccent {
     /// The catalogue name. One string, so a typo is one test away rather than eight.
     static let assetName = "AccentColor"
 
-    /// The accent as UIKit sees it. Falls back to the system tint rather than trapping:
-    /// a missing asset is a wrong colour, not a reason for the app not to open.
-    static var uiColor: UIColor {
-        UIColor(named: assetName) ?? .tintColor
-    }
+    /// The accent the app is currently drawing — the chosen ``HiveTheme``'s, or the amber asset
+    /// until a theme says otherwise.
+    static var current: Color { HiveThemeBox.shared.theme.accent }
+
+    /// The accent as UIKit sees it, for the window tint and anything else drawing through
+    /// `UIColor`.
+    ///
+    /// Built by the theme rather than bridged with `UIColor(current)`. `UIColor(someSwiftUIColor)`
+    /// is not the identity it looks like: bridging the amber *asset* through it produces a colour
+    /// that no longer answers `resolvedColor(with:)` per appearance, and the amber has a light
+    /// entry and a dark one. Doing that cost the window tint its colour — the caret, the
+    /// selection handles, menus and alerts — and ``AccentTests`` is what said so. See
+    /// ``HiveTheme/uiAccent``.
+    static var uiColor: UIColor { HiveThemeBox.shared.theme.uiAccent }
 }
 
 extension ShapeStyle where Self == Color {
-    /// The app's accent, read from the asset catalogue.
+    /// The app's accent — the chosen ``HiveTheme``'s, or the honey amber in the asset catalogue
+    /// for anyone who has never opened the picker.
     ///
     /// Prefer this to `Color.accentColor` for anything that is meant to be *the app's
     /// colour*. `.accentColor` is inherited and overridable — correct for a control that
     /// should follow the tint it is placed in, wrong for a brand mark that should not
     /// change because an enclosing view tinted itself.
-    static var hiveAccent: Color { Color(HiveAccent.assetName, bundle: .main) }
+    static var hiveAccent: Color { HiveAccent.current }
+
+    /// The ground the chosen theme draws every screen on.
+    ///
+    /// For the handful of marks whose colour *is* the ground rather than merely sitting on it —
+    /// the ring that punches an avatar out of the row behind it, the rail that has to end where
+    /// the screen does. Those said ``hiveNight`` before there was more than one ground, and a
+    /// fixed near-black ring on a Nord screen is a dark hole rather than a separator.
+    ///
+    /// Not for a *surface*: a screen says ``SwiftUI/View/hiveScreenGround()``, which crossfades.
+    static var hiveGround: Color { HiveThemeBox.shared.theme.background }
+}
+
+extension View {
+    /// Puts a theme into force: into the environment for the ground, and onto the window UIKit
+    /// tints.
+    ///
+    /// Said once, on the app's window content. It does **not** write ``HiveThemeBox`` — see the
+    /// note on ``HiveThemeBox/theme`` for why a view-building function is the wrong place to
+    /// mutate observed state from.
+    func hiveTheme(_ theme: HiveTheme) -> some View {
+        environment(\.hiveTheme, theme)
+            .tint(theme.accent)
+            .background(WindowTint(color: theme.uiAccent).allowsHitTesting(false))
+    }
 }
 
 extension View {

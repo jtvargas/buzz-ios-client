@@ -34,6 +34,7 @@ struct SettingsView: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 20) {
+                    themeCard
                     notificationsCard
                 }
                 .padding(.horizontal, 20)
@@ -51,6 +52,90 @@ struct SettingsView: View {
             .task { await readSystemAuthorization() }
         }
     }
+
+    // MARK: - Theme
+
+    /// The theme picker: a swatch per theme, the chosen one ringed.
+    ///
+    /// Swatches rather than a `Picker`, because the thing being chosen *is* two colours — a menu
+    /// of fifteen names asks somebody to remember what "Rosé Pine" looks like, and a swatch
+    /// simply shows them. Each swatch is the theme's own ground with its own accent as a dot on
+    /// it, which is exactly the pair the choice controls.
+    ///
+    /// # Why a grid and not the row this started as
+    ///
+    /// It was a horizontal scroller first, and it shipped cut off: fifteen swatches do not fit
+    /// on any phone, so the last one was always sliced mid-label. Clipping it at the card
+    /// instead of at the display fixed *where* the cut fell without fixing that there was one,
+    /// and a half-word at the edge of a card reads as a broken layout whatever is technically
+    /// happening. A wrapping grid has no edge to fall off: every theme is on screen at once,
+    /// which is also what somebody comparing fifteen colours actually wants. The sheet has the
+    /// room — Settings holds two cards and most of a display's worth of nothing under them.
+    private var themeCard: some View {
+        @Bindable var settings = environment.settings
+        return AccountCard(title: "Theme", subtitle: Self.themeBlurb) {
+            EmptyView()
+        } content: {
+            LazyVGrid(columns: Self.swatchColumns, spacing: 16) {
+                ForEach(HiveTheme.all) { theme in
+                    themeSwatch(theme, isSelected: settings.themeID == theme.id)
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 16)
+        }
+    }
+
+    private func themeSwatch(_ theme: HiveTheme, isSelected: Bool) -> some View {
+        Button {
+            // The ground crossfades on its own (`HiveScreenGround`); this is what animates the
+            // ring and the swatch's own lift, so the picker moves with the screen behind it
+            // rather than snapping while the screen fades.
+            withAnimation(.easeInOut(duration: 0.35)) {
+                environment.settings.themeID = theme.id
+            }
+        } label: {
+            VStack(spacing: 6) {
+                ZStack {
+                    Circle()
+                        .fill(theme.background)
+                        .frame(width: 44, height: 44)
+                    Circle()
+                        .fill(theme.accent)
+                        .frame(width: 16, height: 16)
+                }
+                .overlay {
+                    Circle()
+                        .strokeBorder(isSelected ? theme.accent : Color.white.opacity(0.14),
+                                      lineWidth: isSelected ? 2 : 1)
+                }
+                // `maxWidth: .infinity` rather than a fixed width, so the label can never be
+                // wider than the cell the grid gave it — a fixed width is how the old row
+                // overflowed on a narrow phone. Two lines because the names are what they are;
+                // `reservesSpace` keeps the second line's height even for "Nord", so every
+                // swatch is the same height and the circles sit on one line.
+                Text(theme.name)
+                    .font(.hive(.caption))
+                    .foregroundStyle(isSelected ? .primary : .secondary)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2, reservesSpace: true)
+                    .minimumScaleFactor(0.85)
+                    .frame(maxWidth: .infinity)
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(theme.name)
+        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+    }
+
+    /// Adaptive rather than a fixed count: four columns fit a Pro Max, three fit an SE, and
+    /// naming a number would have picked one of those and overflowed the other — which is the
+    /// same mistake as the fixed label width above, one level up.
+    private static let swatchColumns = [GridItem(.adaptive(minimum: 72), spacing: 12)]
+
+    private static let themeBlurb =
+        "The ground every screen is drawn on, and the colour Hive uses for its own marks. "
+            + "Backgrounds come from the Buzz client's own theme catalogue."
 
     // MARK: - Notifications
 

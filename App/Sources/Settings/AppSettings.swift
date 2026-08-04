@@ -45,12 +45,38 @@ final class AppSettings {
         didSet { defaults.set(notificationsEnabled, forKey: Key.notificationsEnabled) }
     }
 
+    /// Which ``HiveTheme`` the app draws — the ground on every screen, and the accent.
+    ///
+    /// Stored as the theme's id rather than its index, so re-ordering the catalogue or dropping a
+    /// theme cannot silently hand somebody a different colour than the one they chose. An id that
+    /// no longer names anything resolves back to ``HiveTheme/hive`` (``HiveTheme/named(_:)``).
+    ///
+    /// Defaults to `Hive`, which is the ground and amber the app has always drawn, so an install
+    /// that never opens the picker is unchanged.
+    var themeID: String {
+        didSet {
+            defaults.set(themeID, forKey: Key.themeID)
+            HiveThemeBox.shared.theme = theme
+        }
+    }
+
+    /// The chosen theme itself. Resolved rather than stored so ``themeID`` stays the single
+    /// source of truth and the two cannot drift.
+    ///
+    /// Mirrored into ``HiveThemeBox`` on every write — including the one in ``init(defaults:)``,
+    /// since `didSet` does not fire during initialisation. That box is what the accent call
+    /// sites read, and it exists because most of them cannot reach this object: they are
+    /// `static` colours on style types and UIKit's window tint. This stays the source of truth
+    /// and the box stays a mirror of it; the writes are here so there is exactly one writer.
+    var theme: HiveTheme { .named(themeID) }
+
     /// The `UserDefaults` keys, in one place and pinned by a test.
     ///
     /// Renaming one silently resets that preference for every existing install, and — unlike a
     /// renamed symbol — nothing in the compiler notices.
     enum Key {
         static let notificationsEnabled = "settings.notifications.enabled"
+        static let themeID = "settings.theme.id"
     }
 
     private let defaults: UserDefaults
@@ -60,6 +86,11 @@ final class AppSettings {
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         notificationsEnabled = Self.flag(Key.notificationsEnabled, default: true, in: defaults)
+        themeID = defaults.string(forKey: Key.themeID) ?? HiveTheme.hive.id
+        // `didSet` does not fire for a write inside `init`, so the launch value has to be
+        // mirrored by hand — without this, an app relaunched on a chosen theme draws its ground
+        // correctly (that comes through the environment) and every accent in the amber.
+        HiveThemeBox.shared.theme = theme
     }
 
     /// A stored `Bool` with a default that applies only when nobody has written one.
