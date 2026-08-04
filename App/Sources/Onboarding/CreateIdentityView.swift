@@ -22,6 +22,9 @@ struct CreateIdentityView: View {
     @State private var step: Step = .relay
     @State private var relayURLString: String
     @State private var displayName = ""
+    /// Which kind of picture, and the built avatar behind the Shuffle button. Rolled once, when
+    /// this state is created — see ``ArrivalPictureChoice`` for why not on the step's appearance.
+    @State private var picture = ArrivalPictureChoice()
     @State private var avatarEmoji: String?
     @State private var avatarColor = EmojiAvatar.defaultColor
     @State private var error: IdentityGateError?
@@ -70,6 +73,7 @@ struct CreateIdentityView: View {
             case .profile:
                 JoinCommunityProfileStep(
                     displayName: $displayName,
+                    picture: $picture,
                     emoji: $avatarEmoji,
                     color: $avatarColor,
                     focused: $focused
@@ -135,13 +139,9 @@ struct CreateIdentityView: View {
                         .lineLimit(1)
                 }
                 Spacer(minLength: 0)
-                if let avatarEmoji {
-                    Circle()
-                        .fill(Color(avatarHex: avatarColor) ?? .white)
-                        .frame(width: 34, height: 34)
-                        .overlay { Text(avatarEmoji).font(.hive(fixedSize: 17, relativeTo: .body)) }
-                        .overlay(Circle().strokeBorder(.white.opacity(0.22), lineWidth: 1))
-                }
+                // Whichever of the three the profile step ended on — § ``ArrivalPictureMark``,
+                // shared with the join so the confirmation cannot disagree with the step.
+                ArrivalPictureMark(picture: arrivalPicture)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .accessibilityElement(children: .combine)
@@ -156,6 +156,12 @@ struct CreateIdentityView: View {
     private var joiningAs: String {
         let name = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
         return name.isEmpty ? "Joining without a name" : "Joining as \(name)"
+    }
+
+    /// The profile step's picture answer, or `nil` for none — the value both the recap above and
+    /// the publish below are drawn from, so they cannot say different things.
+    private var arrivalPicture: ArrivalPicture? {
+        picture.resolved(emoji: avatarEmoji, color: avatarColor)
     }
 
     // MARK: - What the step says
@@ -260,11 +266,12 @@ struct CreateIdentityView: View {
             }
             // Safe here in a way it is not on the paste route: this key was minted a moment ago
             // and has no profile on the relay for a fresh kind-0 to overwrite. See
-            // ``AppEnvironment/announceArrivalProfile(displayName:emoji:color:)``.
+            // ``AppEnvironment/announceArrivalProfile(displayName:picture:)``, which is also
+            // where a built avatar is finally drawn and uploaded — the first point in either
+            // walk with an engine to upload through.
             await environment.announceArrivalProfile(
                 displayName: displayName,
-                emoji: avatarEmoji,
-                color: avatarColor
+                picture: arrivalPicture
             )
         }
     }

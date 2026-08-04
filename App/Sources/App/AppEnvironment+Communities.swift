@@ -136,11 +136,53 @@ extension AppEnvironment {
     /// ``ProfileModel`` does — so publishing it for a key the reader pasted would silently drop
     /// whatever `about`, `nip05` or `lud16` that identity already had. Both walks that call this
     /// ask for a profile only on the new-key route for exactly that reason.
-    func announceArrivalProfile(displayName: String, emoji: String?, color: String) async {
+    ///
+    /// # Why the picture is finished here rather than on the step that asked for it
+    ///
+    /// A built avatar arrives as a recipe (§ ``ArrivalPicture``), because the step it was chosen
+    /// on has no engine and therefore nowhere to put a picture. This is the first line of code
+    /// after a join that has one. So the draw, the upload and the decision about what `picture`
+    /// ends up holding all happen here, in the same fire-and-forget task the name already rode.
+    func announceArrivalProfile(displayName: String, picture: ArrivalPicture?) async {
         let name = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
-        let picture = emoji.map { EmojiAvatar(emoji: $0, color: color).dataURL() }
-        guard !name.isEmpty || picture != nil, let sender = engine else { return }
-        let content = ProfileMetadataContent(
+        guard !name.isEmpty || picture != nil else { return }
+
+        var value: String?
+        if let picture { value = await Self.publishableValue(for: picture, uploader: mediaUploader) }
+
+        // Read after the upload rather than before it: the engine that sends this is the one
+        // that exists now, not the one that existed when the picture started being drawn.
+        guard let sender = engine else { return }
+
+        var content = Self.arrivalMetadata(name: name, picture: value)
+        // The inline fallback below is tens of kilobytes and the ceiling is 64 KiB, so this is
+        // reachable — by a hair, and only for the fallback. A name that arrives without its
+        // picture is the better half of the answer; a refused send is neither half.
+        if content.utf8.count > OutboxPolicy.maxContentBytes {
+            value = nil
+            content = Self.arrivalMetadata(name: name, picture: nil)
+        }
+        // Remembered whatever became of the publish, so the account screen's editor opens on the
+        // face the walk produced rather than on a stranger. `publishedURL` is only set to what
+        // actually went out, because that is what the editor matches against to recognise its
+        // own work (§ ``AvatarKitRecipeStore/Recipe``).
+        if case let .built(avatar) = picture {
+            AvatarKitRecipeStore.save(.init(avatar: avatar, publishedURL: value))
+        }
+        guard !name.isEmpty || value != nil else { return }
+
+        _ = try? await sender.enqueue(
+            kind: .metadata,
+            content: content,
+            in: "",
+            tags: [],
+            maxContentBytes: OutboxPolicy.maxContentBytes
+        )
+    }
+
+    /// The kind-0 body for an arrival, as JSON. Each field carries only what was answered.
+    private static func arrivalMetadata(name: String, picture: String?) -> String {
+        ProfileMetadataContent(
             name: name.isEmpty ? nil : name,
             displayName: name.isEmpty ? nil : name,
             about: nil,
@@ -148,13 +190,46 @@ extension AppEnvironment {
             nip05: nil,
             lud16: nil
         )
-        _ = try? await sender.enqueue(
-            kind: .metadata,
-            content: content.jsonString(),
-            in: "",
-            tags: [],
-            maxContentBytes: OutboxPolicy.maxContentBytes
-        )
+        .jsonString()
+    }
+
+    /// What a step's answer becomes in the `picture` field, or `nil` if it could not become
+    /// anything.
+    ///
+    /// An emoji is its own document and has never needed a relay. A built avatar has to be drawn
+    /// first, and then it takes the photo's route — `PUT` to the blob store, keep the URL — which
+    /// is what ``ProfileAvatarEditorModel/publishAvatarKit()`` does from the account screen and
+    /// what every surface in the app already knows how to draw.
+    ///
+    /// # Why a failed upload falls back inline instead of giving up
+    ///
+    /// The upload is the one part of this that needs the network, and it runs seconds after a
+    /// join — on the connection that has just been proved to work, but also on the one most
+    /// likely to be a hotel Wi-Fi. Giving up would leave a fresh identity with no picture and no
+    /// second chance at one, because this function is called exactly once and its failures are
+    /// deliberately silent. A 512px avatar is ~30 KB of PNG and ~46 KB of base64, which fits
+    /// under the 64 KiB content ceiling with room for a name — so the picture can simply ride
+    /// inline, the way the emoji one always has. The caller checks the finished body against
+    /// that ceiling before trusting it.
+    private static func publishableValue(
+        for picture: ArrivalPicture,
+        uploader: (any MediaUploading)?
+    ) async -> String? {
+        switch picture {
+        case let .emoji(glyph, color):
+            return EmojiAvatar(emoji: glyph, color: color).dataURL()
+        case let .built(avatar):
+            guard let png = try? AvatarKitExport.pngData(for: avatar) else { return nil }
+            if let uploader,
+               let blob = try? await uploader.upload(
+                   data: png,
+                   mimeType: AvatarKitExport.mimeType,
+                   filename: nil
+               ) {
+                return blob.url
+            }
+            return "data:\(AvatarKitExport.mimeType);base64,\(png.base64EncodedString())"
+        }
     }
 
     /// The application-specific sink a ``TargetPairingSession`` hands its decrypted
