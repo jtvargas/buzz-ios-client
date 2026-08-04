@@ -334,8 +334,22 @@ extension BuzzEventStore {
         LEFT JOIN profile p ON p.pubkey = COALESCE(le.pubkey, lo.pubkey)
         LEFT JOIN channel_access ca
           ON ca.channel_id = c.id AND ca.identity_pubkey = :selfPubkey
+        -- Membership *and* access, deliberately both. The roster (`channel_member`) is
+        -- what makes a channel yours to list — an open channel the relay merely lets
+        -- this key *see* belongs in the browser, not the sidebar. The access state
+        -- stays in the test because it carries verdicts a roster cannot: a hidden DM
+        -- (presentation, roster intact), a state-only archive, a delete. Both writes
+        -- land together on every interactive path — `joinChannel` and the DM open mark
+        -- access active themselves before their roster read-back commits.
+        --
+        -- The membership probe compares binary, like every `event.pubkey` comparison
+        -- here and unlike the mention tag above: `channel_member.pubkey` is written
+        -- from the relay's own roster, which hex-encodes lowercase, and a collation
+        -- would decline the `channel_member` primary-key seek.
         WHERE :selfPubkey IS NULL
-           OR (ca.state = 'active' AND c.is_archived = 0)
+           OR (ca.state = 'active' AND c.is_archived = 0
+               AND EXISTS (SELECT 1 FROM channel_member cm
+                            WHERE cm.channel_id = c.id AND cm.pubkey = :selfPubkey))
         ORDER BY last_message_at DESC NULLS LAST, c.name ASC, c.id ASC
         """
 
