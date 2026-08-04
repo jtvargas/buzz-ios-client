@@ -1,4 +1,4 @@
-.PHONY: bootstrap generate build test uitest format lint
+.PHONY: bootstrap generate pins build test uitest format lint
 
 # The simulator the local UI suite drives. Override for another device:
 # `make uitest DEVICE='iPhone 17'`.
@@ -9,6 +9,16 @@ bootstrap:
 
 generate:
 	xcodegen generate
+
+# Refresh the pins Xcode Cloud builds against. Run this after changing any
+# dependency version — `Config/Package.resolved` is committed precisely because
+# the build machine cannot produce it (automatic resolution is disabled there,
+# so even `xcodebuild -resolvePackageDependencies` is refused; see
+# ci_scripts/ci_post_clone.sh). A stale file fails the Xcode Cloud build.
+pins: generate
+	xcodebuild -resolvePackageDependencies -project Hive.xcodeproj -scheme Hive
+	cp Hive.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved Config/Package.resolved
+	@git diff --stat -- Config/Package.resolved
 
 # Release config: current Swift toolchains (Xcode 26.2+) abort -Onone test
 # runs in the connection suites — an environmental codegen defect, see
