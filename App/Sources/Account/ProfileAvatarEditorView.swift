@@ -2,7 +2,8 @@ import BuzzKit
 import PhotosUI
 import SwiftUI
 
-/// Picks an avatar: a photo from the library, or an emoji on a colour.
+/// Picks an avatar: a photo from the library, an emoji on a colour, or one built out of
+/// layered artwork.
 ///
 /// # Why the emoji is drawn twice
 ///
@@ -58,6 +59,7 @@ struct ProfileAvatarEditorView: View {
                     switch model.tab {
                     case .image: imageTab
                     case .emoji: emojiTab
+                    case .avatarKit: avatarKitTab($model.avatarKitAvatar)
                     }
                 }
             }
@@ -95,6 +97,8 @@ struct ProfileAvatarEditorView: View {
                 emojiPreview
             case .image:
                 imagePreview
+            case .avatarKit:
+                avatarKitPreview
             }
         }
         .frame(width: Self.previewSize, height: Self.previewSize)
@@ -170,6 +174,8 @@ struct ProfileAvatarEditorView: View {
                 ?? "No emoji picked"
         case .image:
             model.imageURL == nil ? "No photo picked" : "Your photo"
+        case .avatarKit:
+            "The avatar you're building"
         }
     }
 
@@ -307,14 +313,63 @@ struct ProfileAvatarEditorView: View {
     /// usually wants — but this screen's decision is made *in a grid*, and a 50pt button
     /// plus its margins took that grid's last two rows. In the bar it costs nothing, and it
     /// sits where the Cancel it undoes already was.
+    ///
+    /// # Why one of the three tabs makes it wait
+    ///
+    /// A photo and an emoji both have their picture ready by the time Done can be pressed —
+    /// one was uploaded on the pick, the other is a string. A built avatar has nothing until
+    /// something draws it, and drawing it on every press of Shuffle is not an option. So on
+    /// that tab alone Done is the thing that draws and uploads, and it spins while it does.
+    /// The other two keep the path they had, synchronously and unchanged.
     private var doneButton: some View {
-        Button("Done") {
-            // `canSave` gates the button, so the value is there; the guard is what keeps
-            // that a fact rather than an assumption.
-            guard let picture = model.pictureValue else { return }
-            onSave(picture)
-            dismiss()
+        Button {
+            // `canSave` gates the button, so on the picking tabs the value is there; the
+            // guard is what keeps that a fact rather than an assumption.
+            if let picture = model.pictureValue {
+                onSave(picture)
+                dismiss()
+                return
+            }
+            Task {
+                guard let picture = await model.publishAvatarKit() else { return }
+                onSave(picture)
+                dismiss()
+            }
+        } label: {
+            if model.isPreparingAvatarKit {
+                ProgressView()
+            } else {
+                Text("Done")
+            }
         }
         .disabled(!model.canSave)
+        // Named rather than read off the label, which for the seconds it is a spinner has
+        // nothing to read.
+        .accessibilityLabel("Done")
+    }
+}
+
+// MARK: - AvatarKit
+
+/// The third tab's two pieces, in an extension rather than in the body above, so the type
+/// that had two tabs still reads as a type with two tabs and a third arriving through three
+/// `case` arms.
+private extension ProfileAvatarEditorView {
+    /// The built avatar at the preview's size, drawn by the very view the export will draw —
+    /// which is what makes "what I saw" and "what got uploaded" the same picture.
+    var avatarKitPreview: some View {
+        AvatarKitAvatarPreview(avatar: model.avatarKitAvatar, side: Self.previewSize)
+    }
+
+    /// The build tab.
+    ///
+    /// Handed the one value it changes rather than the whole model, so a picker cannot reach
+    /// the photo upload it has no business touching — and so it opens on its own.
+    func avatarKitTab(_ avatar: Binding<AvatarKitAvatar>) -> some View {
+        AvatarKitEditorView(
+            avatar: avatar,
+            isPreparing: model.isPreparingAvatarKit,
+            errorMessage: model.avatarKitError
+        )
     }
 }
