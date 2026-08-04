@@ -36,26 +36,21 @@ struct OnboardingView: View {
     /// Whether the relay editor is open. See ``relaySection`` for when it opens itself.
     @State private var relayExpanded: Bool
     @FocusState private var relayFocused: Bool
-    /// The pushed steps, held rather than implicit so a caller can open *on* one — see
-    /// ``init(isAddingCommunity:initialRoute:)``.
-    @State private var path: [OnboardingRoute]
+    /// The pushed steps. Held rather than implicit because the stack was once opened *on* a
+    /// step from outside; it always starts empty now — the communities list presents the
+    /// scanner on its own instead (§ ``AppEnvironment/CommunitySheet/scan``).
+    @State private var path: [OnboardingRoute] = []
 
-    /// - Parameters:
-    ///   - isAddingCommunity: see the property. The relay field starts empty in that mode:
-    ///     the stored URL is the community already open, and prefilling it would offer to
-    ///     "add" the one the reader is standing in.
-    ///   - initialRoute: a step to arrive already standing on, pushed rather than swapped in
-    ///     — the hub stays underneath, so Back reaches the other three routes and nothing is
-    ///     lost by naming one of them from outside. The communities list opens `.scan` this
-    ///     way (§ ``AppEnvironment/CommunitySheet/scan``).
-    init(isAddingCommunity: Bool = false, initialRoute: OnboardingRoute? = nil) {
+    /// - Parameter isAddingCommunity: see the property. The relay field starts empty in that
+    ///   mode: the stored URL is the community already open, and prefilling it would offer to
+    ///   "add" the one the reader is standing in.
+    init(isAddingCommunity: Bool = false) {
         self.isAddingCommunity = isAddingCommunity
         let initialRelay = isAddingCommunity ? "" : RelayEndpoint.storedURLString
         _relayURLString = State(initialValue: initialRelay)
         // Open on arrival unless the stored relay is already usable. A reader who has to tap
         // once to reach an empty required field has been given a puzzle, not a tidy screen.
         _relayExpanded = State(initialValue: !Self.isUsableRelay(initialRelay))
-        _path = State(initialValue: initialRoute.map { [$0] } ?? [])
     }
 
     /// Whether a string reduces to a relay Hive can connect to. Static so ``init`` can ask
