@@ -188,7 +188,11 @@ private extension RichTextView {
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .fixedSize(horizontal: false, vertical: true)
+            // Was a bare `fixedSize(horizontal:vertical:)`, which is this modifier
+            // without the line-limit gate: on a Threads summary row it overrode the
+            // six-line clamp the row asks for, so one quoted message could run the
+            // length of the whole quote. Same treatment on a message being read.
+            .richTextIdealHeight()
 
         case let .code(code, language):
             RichCodeBlock(code: code, language: language)

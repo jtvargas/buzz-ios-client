@@ -88,6 +88,11 @@ struct RichTableView: View {
                 .font(.hive(.body, weight: isHeader ? .semibold : .regular))
                 .multilineTextAlignment(alignment.textAlignment)
         }
+        // A cell's height is its text's, not its row's. Without this the `Grid` decides
+        // what height a cell gets, and a cell handed one line's worth truncates its
+        // wrapped text with an ellipsis rather than growing the row — see
+        // ``RichTextIdealHeight``.
+        .richTextIdealHeight()
         .padding(.horizontal, RichTextStyle.tableCellPadding.width)
         .padding(.vertical, RichTextStyle.tableCellPadding.height)
         // Stated on every cell rather than on one of them. `gridColumnAlignment` sets
@@ -143,7 +148,7 @@ struct RichTextWidthCap: Layout {
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
         guard let subview = subviews.first else { return .zero }
         let width = min(proposal.width ?? maxWidth, maxWidth)
-        return subview.sizeThatFits(ProposedViewSize(width: width, height: proposal.height))
+        return subview.sizeThatFits(ProposedViewSize(width: width, height: nil))
     }
 
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
@@ -151,7 +156,13 @@ struct RichTextWidthCap: Layout {
         subview.place(
             at: CGPoint(x: bounds.minX, y: bounds.minY),
             anchor: .topLeading,
-            proposal: ProposedViewSize(width: bounds.width, height: bounds.height)
+            // Width from the bounds, height unspecified — deliberately, and it is the
+            // whole difference between a cell that wraps and a cell that ends in `…`.
+            // Handing a `Text` a height is handing it a *limit*: offered less than its
+            // wrapped lines need it re-lays out into what it was given and truncates.
+            // Nothing above this layout knows how tall the text is, so nothing above it
+            // may answer that question — the text does, on both passes.
+            proposal: ProposedViewSize(width: bounds.width, height: nil)
         )
     }
 }
