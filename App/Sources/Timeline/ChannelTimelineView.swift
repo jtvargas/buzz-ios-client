@@ -527,7 +527,11 @@ private extension ChannelTimelineView {
             ChannelJoinBar(
                 name: conversation.title,
                 isJoining: isJoining,
-                join: joinThisChannel
+                // Withheld rather than handed over and guarded inside, the same as the
+                // thread's. `joinThisChannel` can only no-op without an engine, and a
+                // button that no-ops is the one thing ``ChannelJoinBar`` documents it will
+                // not draw. Production always has one, so this is the fixture host.
+                join: lifecycleEngine.map { _ in joinThisChannel }
             )
         }
     }
