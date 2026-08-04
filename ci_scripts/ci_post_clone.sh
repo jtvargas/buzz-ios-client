@@ -65,3 +65,39 @@ cp Config/Package.resolved Hive.xcodeproj/project.xcworkspace/xcshareddata/swift
 
 echo "--- Installed:"
 ls -l Hive.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
+
+echo "--- Trusting the swift-secp256k1 build-tool plugin"
+# `swift-secp256k1` ships a build-tool plugin, `SharedSourcesPlugin`, and SwiftPM
+# will not run a plugin it has not been told to trust. Every other consumer of
+# this repo passes `-skipPackagePluginValidation` (Makefile `build`/`uitest`,
+# ci.yml, conversation-ui.yml) — but Xcode Cloud runs its own `xcodebuild`
+# invocation for the Archive action and takes no extra flags from us, so that
+# route is unavailable and the build fails with "Plugin “SharedSourcesPlugin”
+# from package “swift-secp256k1” must be enabled before it can be used"
+# (build 30).
+#
+# The flag is not the only way in. SwiftPM records trust in a plain file keyed by
+# the plugin's fingerprint, which for a source-control dependency is the resolved
+# revision. So the same consent can be granted ahead of time by writing that file
+# — which is what a developer's machine has, and why this never reproduces
+# locally until you move it aside.
+#
+# The revision is read back out of `Config/Package.resolved` rather than written
+# here so that the trust cannot drift from the pin: bumping the dependency
+# changes both together, or the awk below finds nothing and the build stops.
+SECP_REV=$(awk '/"identity" : "swift-secp256k1"/{f=1} f && /"revision"/{sub(/.*"revision" : "/,""); sub(/".*/,""); print; exit}' Config/Package.resolved)
+: "${SECP_REV:?could not read the swift-secp256k1 revision out of Config/Package.resolved}"
+
+mkdir -p "$HOME/Library/org.swift.swiftpm/security"
+cat > "$HOME/Library/org.swift.swiftpm/security/plugins.json" <<PLUGINS
+[
+  {
+    "fingerprint" : "$SECP_REV",
+    "packageIdentity" : "swift-secp256k1",
+    "targetName" : "SharedSourcesPlugin"
+  }
+]
+PLUGINS
+
+echo "--- Trusted:"
+cat "$HOME/Library/org.swift.swiftpm/security/plugins.json"
