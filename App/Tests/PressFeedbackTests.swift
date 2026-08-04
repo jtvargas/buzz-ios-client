@@ -85,15 +85,18 @@ struct PressFeedbackTests {
         #expect(PressFeedback.cancel != PressFeedback.release)
     }
 
-    @Test("a full-width row dims and draws no wash at all")
-    func rowDimsAndDoesNotWash() {
-        // The owner's, given from a device in this order: *remove the highlight on pressing
-        // for the sidebar at all* — because the amber is already the mark on the conversation
-        // you were last in, and a list that flashes it under every finger is a list saying
-        // "this one" about whatever you happened to touch — and then, a round later, the scale
-        // as well. So a row's entire answer to a finger is the line below it.
-        #expect(PressFeedback.fill(for: .row) == 0)
-        // A few per cent of light, and not so much that a pressed row reads as disabled.
+    @Test("a full-width row washes and dims, at the same strength a control washes")
+    func rowWashesAndDims() {
+        // The owner's, and it has been both ways. *Remove the highlight on pressing for the
+        // sidebar at all* — because at 0.14 the wash was the resume mark to the number, and a
+        // list that flashes the place mark under every finger is a list saying "this one"
+        // about whatever you happened to touch. Then, on 2026-08-04, *some highlight container
+        // with the same accent color but very dim*. Both are satisfied by the strength rather
+        // than by the emphasis, which is what `washIsDimmerThanThePlaceItCouldBeConfusedWith`
+        // holds: a row may wash as long as it cannot be read as the mark.
+        #expect(PressFeedback.fill(for: .row) == PressFeedback.pressedFill)
+        // And it keeps the dim on top — a few per cent of light, and not so much that a
+        // pressed row reads as disabled.
         #expect(PressFeedback.dim(for: .row) < 1)
         #expect(PressFeedback.dim(for: .row) > 0.85)
     }
@@ -126,14 +129,32 @@ struct PressFeedbackTests {
         #expect(PressFeedbackButtonStyle(.control, in: .capsule).shape.path(in: box) == Capsule().path(in: box))
     }
 
-    @Test("the highlight is the sidebar mark's colour and opacity, to the number")
-    func washIsTheAccentAtTheMarksOpacity() {
-        // The one that would silently drift: `resumeMark` fills `Color.hiveAccent` at 0.14,
-        // and a press that used `.secondary` — as this did when it first shipped — is a
-        // second highlight vocabulary in a list that already has one.
+    @Test("the highlight is the accent, and dimmer than the mark it must not be mistaken for")
+    func washIsDimmerThanThePlaceItCouldBeConfusedWith() {
+        // Two halves that pull against each other, which is why they are asserted together.
+        //
+        // Same *hue*, because a press that used `.secondary` — as this did when it first
+        // shipped — is a second highlight vocabulary in a list that already has one.
         #expect(PressFeedback.fillColor == Color.hiveAccent)
-        #expect(PressFeedback.pressedFill == 0.14)
+
+        // Different *strength*, because being the same hue at the same opacity is exactly what
+        // got this wash removed from the sidebar: `ChannelListView.resumeMark` fills
+        // `Color.hiveAccent` at 0.14 to mark the conversation you were last in, and a press
+        // drawn at 0.14 is that claim made about whatever your finger is touching. The owner
+        // asked for 0.08. **This inequality is the load-bearing part** — equalise the two and
+        // the row wash has to come off again, so it is asserted rather than left to the
+        // literal below it.
+        #expect(PressFeedback.pressedFill < Self.resumeMarkOpacity)
+        #expect(PressFeedback.pressedFill == 0.08)
+        // And still a highlight rather than nothing: 0.00 → 0.08 → 0.00 is the owner's own
+        // notation, and the first of those zeroes is the resting state, not the peak.
+        #expect(PressFeedback.pressedFill > 0)
     }
+
+    /// `ChannelListView.resumeMark`'s own opacity, restated because it is a literal inside a
+    /// `@ViewBuilder` that no test can reach. If that view changes, this changes with it — and
+    /// the assertion above is what makes the pairing matter rather than decorative.
+    private static let resumeMarkOpacity: Double = 0.14
 
     @Test("the press latch is the down-curve and not one millisecond of dwell more")
     func aPressPlaysThroughAndNoLonger() {
@@ -303,15 +324,33 @@ struct PressTreatmentRenderTests {
         #expect(try Self.inkBox(of: first) == Self.inkBox(of: second))
     }
 
-    @Test("a control washes its own shape and a full-width row washes nothing")
-    func onlyAControlWashes() throws {
-        // The owner's instruction, on pixels: *remove the highlight on pressing for the
-        // sidebar at all.* Rendered with a transparent subject, so the only thing that can
-        // put colour in the middle of the canvas is the wash behind it.
+    @Test("a control and a row both wash; a control drawn onto a message does not")
+    func aWashIsDrawnWhereverThereIsAShapeToDrawItIn() throws {
+        // The owner's instruction on pixels — *some highlight container with the same accent
+        // color but very dim* — and the reason it is measured rather than read off the
+        // constant: at 0.08 over white the difference is about six values in one channel, which
+        // is small enough that a wash silently failing to draw would look exactly like a wash
+        // drawing correctly to anyone reading the code.
+        //
+        // Rendered with a transparent subject, so the only thing that can put colour in the
+        // middle of the canvas is the wash behind it.
         let control = try Self.centre(of: #require(Self.render(pressed: true, emphasis: .control, ink: .clear)))
         let row = try Self.centre(of: #require(Self.render(pressed: true, emphasis: .row, ink: .clear)))
+        let inline = try Self.centre(of: #require(Self.render(pressed: true, emphasis: .inline, ink: .clear)))
+        let resting = try Self.centre(of: #require(Self.render(pressed: false, emphasis: .control, ink: .clear)))
+
         #expect(control != Self.white, "a pressed control drew no wash")
-        #expect(row == Self.white, "a pressed row drew a wash the owner had removed")
+        #expect(row != Self.white, "a pressed row drew no wash")
+        // Both at the same strength: a row that washed *differently* from a control would be a
+        // second highlight vocabulary, which is the thing `fillColor` exists to prevent.
+        #expect(control == row, "a row washed at a different strength from a control")
+        // And the exclusion that is not about strength. The sender's name and face sit on a
+        // message's own text with no shape of their own, so a wash there is a lit rectangle
+        // around a run of a sentence.
+        #expect(inline == Self.white, "a control drawn onto a message drew a wash")
+        // The first zero in the owner's `0.00 → 0.08 → 0.00`: a highlight that is not there
+        // until a finger is.
+        #expect(resting == Self.white, "a resting control drew a wash")
     }
 
     private static func render(

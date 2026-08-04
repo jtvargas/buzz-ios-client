@@ -61,12 +61,23 @@ struct CommunityMark: View {
     @ViewBuilder
     private var initials: some View {
         ZStack {
-            Color.hiveAccent.opacity(PressFeedback.pressedFill)
+            Color.hiveAccent.opacity(Self.tint)
             Text(Self.initials(for: name))
                 .font(.hive(.title3, weight: .semibold))
                 .foregroundStyle(Color.hiveAccent)
         }
     }
+
+    /// The tile a community with no icon sits on.
+    ///
+    /// This read ``PressFeedback/pressedFill`` until 2026-08-04, which was a coincidence of
+    /// number rather than a shared idea: both wanted the accent laid on faintly, so one of them
+    /// borrowed the other's constant. They then stopped agreeing — the press wash was taken to
+    /// 0.08 so it could go back on a list row without being read as the resume mark — and this
+    /// tile would have faded with it for no reason anyone asked for. **A resting surface and a
+    /// press are not the same value and must not share one**; this is the strength that is
+    /// right for a mark that is on screen the whole time.
+    private static let tint: Double = 0.14
 
     /// Returns up to two uppercase initials, one for each of the first two name words.
     ///

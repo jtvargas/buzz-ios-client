@@ -28,9 +28,13 @@ import SwiftUI
 ///
 /// So the shrink is on a control and on a row, and it is **not** on an `.inline` control —
 /// the sender's name and face on a message. Scaling a run of text inside a paragraph moves the
-/// paragraph, and a message answers nothing anyway. Light is still the rest of the answer: a
-/// **control** washes the accent inside its own shape, a **row** dims a few per cent, an
-/// **inline** control dims further, and a **message** answers nothing at all.
+/// paragraph, and a message answers nothing anyway.
+///
+/// Light is the rest of the answer, and it moved the same way the next day: he asked for
+/// *"some highlight container with the same accent color but very dim — 0.00 → 0.08 → 0.00"*,
+/// so a **control** and a **row** both wash the accent inside their own shape at
+/// ``pressedFill``, a **row** dims a few per cent as well, an **inline** control only dims and
+/// dims further, and a **message** answers nothing at all.
 ///
 /// # The shape of the gesture
 ///
@@ -54,15 +58,25 @@ import SwiftUI
 /// an indefensible way to make an app feel, and the owner reported the whole app as laggy
 /// within the hour. Feedback is drawn *beside* what it is feedback for, never in front of it.
 enum PressFeedback {
-    /// The wash a pressed **control** draws behind itself, inside its own shape.
+    /// The wash a pressed control draws behind itself, inside its own shape.
     ///
-    /// The accent at 0.14, which is not a taste call — it is
-    /// ``ChannelListView/resumeMark(isResumable:)``, the mark on the conversation you were
-    /// last in, to the number. It is drawn only where a control has edges of its own now: on
-    /// a list row and on a message the owner had it removed, and the reason is worth keeping
-    /// — the amber is the app's *place* mark, and a list that flashes it under every finger
-    /// is a list saying *this one* about whatever you happened to touch.
-    static let pressedFill: Double = 0.14
+    /// **The owner's number, given as `0.00 → 0.08 → 0.00` on 2026-08-04**, and the arrow is
+    /// the whole specification: a highlight that is not there at rest, reaches 0.08 under the
+    /// finger, and is not there again after. That is what an opacity on `isShowing` already
+    /// draws, riding ``press`` and ``release`` — no second animation was added for it.
+    ///
+    /// It was 0.14, and that number was not a taste call either: it was
+    /// ``ChannelListView/resumeMark(isResumable:)``, the mark on the conversation you were last
+    /// in, to the number. **Being exactly that mark is why it had to come off a row.** The
+    /// amber is the app's *place* mark, and a list that flashes the place mark under every
+    /// finger is a list saying *this one* about whatever you happened to touch.
+    ///
+    /// 0.08 is a little over half of it, which is what lets the wash go back on a row: it is
+    /// now visibly a *press* rather than a claim about where you were. The two are still the
+    /// same hue on purpose — one accent, said at two strengths — so this constant and
+    /// `resumeMark`'s 0.14 must stay apart. If a later hand equalises them, the row wash has to
+    /// come off again.
+    static let pressedFill: Double = 0.08
 
     /// The colour of that wash. Named here so the sidebar's mark and every press in the app
     /// cannot drift apart without this line changing.
@@ -94,12 +108,16 @@ enum PressFeedback {
 
     /// What a pressed control's content fades to.
     ///
-    /// Two depths, and with the scale gone this is now the **whole** answer a row gives. The
-    /// owner has removed, in order: the amber wash from rows, and then the shrink from
-    /// everything. What is left on a list row is a few per cent of light coming out of its
-    /// content — deliberately quiet, and flagged to him as the one dial still available if it
-    /// reads as nothing at all. The **inline** controls on a message, the sender's face and
-    /// name, take the deep one, because they draw no shape and have nothing else either.
+    /// Two depths. A row now answers with three things at once — the shrink, this dim, and the
+    /// wash — where a round ago it had only this one. That is deliberate rather than
+    /// accumulated: the owner asked for the shrink and the highlight back in consecutive
+    /// messages, and 0.08 of accent is faint enough that dropping the dim to compensate would
+    /// leave a row answering more quietly than it did before either was asked for. **It is the
+    /// first thing to take off if a pressed row now reads as too loud** — set it to 1 and the
+    /// row keeps the shrink and the wash, which is exactly what a ``control`` does.
+    ///
+    /// The **inline** controls on a message, the sender's face and name, take the deep one,
+    /// because they draw no shape and so have nothing else at all.
     static let pressedDim: Double = 0.92
     static let inlinePressedDim: Double = 0.55
 
@@ -184,10 +202,15 @@ enum PressFeedback {
         }
     }
 
-    /// The wash a pressed control of this emphasis draws in its own shape. Only a control
-    /// with edges of its own draws one — see ``pressedFill``.
+    /// The wash a pressed control of this emphasis draws in its own shape. See ``pressedFill``.
+    ///
+    /// A control and a row both draw one now. An `.inline` control still draws none, and that
+    /// is the one exclusion here that is not about strength: the sender's name and face sit
+    /// directly on a message's own text with no shape of their own, so a wash behind them would
+    /// put a lit rectangle around a run of a sentence — which is turning part of a message into
+    /// a button, and is ruled out for the same reason ``scale(for:)`` exempts them.
     static func fill(for emphasis: PressFeedbackButtonStyle.Emphasis) -> Double {
-        emphasis == .control ? pressedFill : 0
+        emphasis == .inline ? 0 : pressedFill
     }
 }
 
@@ -222,9 +245,11 @@ struct PressFeedbackButtonStyle: PrimitiveButtonStyle {
         /// Something with edges of its own: a button, a chip, a shortcut card, an avatar.
         /// Washes the accent inside its own shape.
         case control
-        /// A full-width row in a list. Dims very slightly and draws no wash — the owner had
-        /// the amber taken off the sidebar entirely, and then the shrink off everything, so
-        /// this is all a row has left.
+        /// A full-width row in a list. Washes the accent like a control, and dims very
+        /// slightly on top of it. Both of those were off for a while — the owner had the amber
+        /// taken off the sidebar when it was drawn at the resume mark's own 0.14, and then the
+        /// shrink off everything — and both came back at his ask, the wash at a strength that
+        /// can no longer be mistaken for the mark. See ``PressFeedback/pressedFill``.
         case row
         /// A control drawn straight onto content, with no shape of its own: the sender's
         /// name and face on a message. Dims, and draws nothing. Anything that put a shape
