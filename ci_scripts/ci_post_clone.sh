@@ -10,6 +10,10 @@
 # here. Same reason the schemes are absent — they live inside the generated
 # project, and Xcode Cloud resolves the scheme by NAME after this script runs.
 #
+# A clone is missing a second thing for the same reason: the `Package.resolved`
+# Xcode Cloud requires lives inside that same generated project. Both gaps are
+# closed below, in the order the build reads them.
+#
 # `set -e` is the whole error handling: a failure to generate must fail the build
 # loudly rather than hand Xcode Cloud a repository it will report as "scheme not
 # found", which reads as a misconfigured workflow rather than a broken script.
@@ -36,3 +40,25 @@ xcodegen generate
 echo "--- Generated:"
 ls -d Hive.xcodeproj
 ls Hive.xcodeproj/xcshareddata/xcschemes
+
+echo "--- Resolving package dependencies"
+# Xcode Cloud builds with `-disableAutomaticPackageResolution`, so its build step
+# will not fetch a dependency it has not already been told the exact version of.
+# It reads that from a `Package.resolved` inside the project's workspace — and
+# that file is doubly absent from a clone: it lives at
+# `Hive.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved`,
+# inside the gitignored project, and `Package.resolved` is gitignored in its own
+# right. XcodeGen does not write one either; generating a project is not
+# resolving it. Without this step every build fails twice, in
+# ResolvePackageDependenciesStep and again in ValidationStep, with "a resolved
+# file is required when automatic dependency resolution is disabled".
+#
+# Resolving here rather than committing the file loses nothing: every remote
+# dependency is pinned `exact` (`swift-secp256k1` 0.23.2 in NostrCore, GRDB
+# 7.11.1 in both BuzzKit and `project.yml`), so a fresh resolve can only produce
+# the versions already written down. A committed copy would be a second place to
+# forget to update.
+xcodebuild -resolvePackageDependencies -project Hive.xcodeproj -scheme Hive
+
+echo "--- Resolved:"
+ls -l Hive.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
