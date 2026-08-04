@@ -5,7 +5,8 @@ import SwiftUI
 /// The sidebar (§8): Starred, Channels, Direct Messages, and Agents as expandable
 /// sections of compact rows, live from the store, with your face and the connection state
 /// in the toolbar. Tapping a conversation pushes its timeline; a long press stars it; the
-/// Channels heading's `+` makes a new one; a pull refreshes the workspace.
+/// Channels heading's `+` opens the channel browser, where joining and creating live; a
+/// pull refreshes the workspace.
 ///
 /// # Why the app-wide environment lives here
 ///
@@ -52,7 +53,11 @@ struct ChannelListView: View {
     /// keyed on the community and the filename, so a new icon still lands.
     @State private var activeCommunityIcon: Data?
     @State private var showAccount = false
-    /// Whether the new-channel sheet is up.
+    /// Whether the channel browser is up — the Channels heading's `+`.
+    @State private var showsBrowseChannels = false
+    /// Whether the new-channel sheet is up. No trigger sets it from this screen any
+    /// more — creating moved inside the browser — but the seam stays attached: it is
+    /// the documented adoption point for the sheet, and a fixture can still drive it.
     @State private var showsCreateChannel = false
     /// Whether the new-direct-message sheet is up.
     @State private var showsNewDirectMessage = false
@@ -225,8 +230,19 @@ struct ChannelListView: View {
                 .sheet(isPresented: $showAccount) {
                     AccountView(store: store, engine: engine, selfPubkey: environment.selfPubkeyHex)
                 }
-                // From the Channels heading's `+`. The push into the new channel arrives
-                // once the sheet is gone — see ``View/createChannelSheet(isPresented:engine:open:)``.
+                // From the Channels heading's `+`: browse, join, or create. The push into
+                // the chosen channel arrives once the sheet is gone — see
+                // ``View/browseChannelsSheet(isPresented:store:identity:engine:open:)``.
+                .browseChannelsSheet(
+                    isPresented: $showsBrowseChannels,
+                    store: store,
+                    identity: environment.selfPubkeyHex,
+                    engine: engine
+                ) { channelID in
+                    path = ConversationRoute(channel: conversationRow(for: channelID)).pushed(onto: path)
+                }
+                // The new-channel sheet's standing seam — the browser presents its own;
+                // see ``showsCreateChannel`` for why this stays.
                 .createChannelSheet(isPresented: $showsCreateChannel, engine: engine) { channelID in
                     path = ConversationRoute(channel: conversationRow(for: channelID)).pushed(onto: path)
                 }
@@ -540,9 +556,11 @@ private extension ChannelListView {
     }
 
     /// What a section's `+` does, or `nil` for a section that nothing is added to from here.
+    /// Channels opens the browser rather than the create form: search, join, and create
+    /// live behind one entry point, as they do on Desktop.
     func create(for section: SidebarSection) -> (() -> Void)? {
         switch section {
-        case .channels: { showsCreateChannel = true }
+        case .channels: { showsBrowseChannels = true }
         case .directMessages: { showsNewDirectMessage = true }
         case .starred, .agents: nil
         }
