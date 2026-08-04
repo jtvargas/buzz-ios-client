@@ -1,6 +1,7 @@
 import BuzzKit
 @testable import Hive
 import Foundation
+import SwiftUI
 import Testing
 import UIKit
 
@@ -182,5 +183,124 @@ struct SidebarForwardSwipeTests {
             lastMessageSnippet: nil,
             lastMessageAuthor: nil
         )
+    }
+}
+
+// MARK: - Where the mark lands
+
+/// The press wash and the resume mark are one rectangle drawn by two different things.
+///
+/// ``ChannelListView/resumeMark(isResumable:)`` is a `listRowBackground`, handed the whole row
+/// cell. The press wash is a `background` behind the row's `Button`, so it is only ever that
+/// button's size. They agree now because the **button** was made the mark's rectangle: the cell
+/// insets stop at the highlight and the label's own padding carries the content the rest of the
+/// way in.
+///
+/// The attempt before this one gave the button a `Shape` returning a path larger than its rect.
+/// A render test proved that path really is drawn — `.background` does not clip — and the rows
+/// still did not match on the device, because a `List` lays its row content inside a container
+/// inset by `listRowInsets` and *that* clips. **A drawing can escape its background; it cannot
+/// escape the cell.** Hence a layout fix rather than a drawing one, and hence these assertions
+/// are about the arithmetic rather than about a path.
+@Suite("Sidebar row mark")
+struct SidebarRowMarkTests {
+    @Test("the cell's inset is the mark's own, so the button is the mark's rectangle")
+    func theButtonIsTheMark() {
+        // This is the whole fix in two lines: what the `List` insets the row by is exactly what
+        // `resumeMark` insets itself by, so the button the wash sits behind occupies precisely
+        // the rectangle the mark draws.
+        #expect(SidebarRowMetrics.rowInsets.leading == SidebarRowMetrics.insetH)
+        #expect(SidebarRowMetrics.rowInsets.trailing == SidebarRowMetrics.insetH)
+        #expect(SidebarRowMetrics.rowInsets.top == SidebarRowMetrics.insetV)
+        #expect(SidebarRowMetrics.rowInsets.bottom == SidebarRowMetrics.insetV)
+    }
+
+    @Test("splitting the inset did not move the row's content")
+    func theSplitSumsToWhereTheContentAlwaysWas() {
+        // The half that makes this a spacing fix rather than a layout change: a reader should
+        // see the highlight move and the row itself stay exactly where it was.
+        #expect(
+            SidebarRowMetrics.rowInsets.leading + SidebarRowMetrics.labelPaddingH
+                == SidebarRowMetrics.contentInsetH
+        )
+        #expect(
+            SidebarRowMetrics.rowInsets.top + SidebarRowMetrics.labelPaddingV
+                == SidebarRowMetrics.contentInsetV
+        )
+        // And the padding has to be real, or the wash is flush against the glyphs again.
+        #expect(SidebarRowMetrics.labelPaddingH > 0)
+        #expect(SidebarRowMetrics.labelPaddingV > 0)
+    }
+
+    @Test("the press is dimmer than the mark it now shares a rectangle with")
+    func sharingAShapeMakesTheStrengthsMatterMore() {
+        // These were always one hue at two strengths. Now that they are also the same rectangle,
+        // the opacity is the *only* thing left telling a press apart from the conversation you
+        // were last in — so the inequality that was a preference elsewhere is load-bearing here.
+        #expect(PressFeedback.pressedFill < SidebarRowMetrics.opacity)
+        #expect(PressFeedback.fillColor == Color.hiveAccent)
+    }
+
+    @Test("the empty-section line keeps the content position, not the highlight's")
+    func aRowThatIsNotAButtonIsNotIndented() {
+        // It draws no highlight and has no label padding to add, so it has to be inset the whole
+        // way itself — otherwise splitting the row insets would have shifted it 8pt outward.
+        #expect(SidebarRowMetrics.contentInsets.leading == SidebarRowMetrics.contentInsetH)
+        #expect(SidebarRowMetrics.contentInsets.top == SidebarRowMetrics.contentInsetV)
+    }
+}
+
+// MARK: - The activity row's share of the same idea
+
+/// The activity list had the opposite defect from the sidebar's, and it is worth keeping the
+/// two beside each other: the sidebar's highlight was **misplaced**, and this one was **absent**.
+///
+/// All of an activity row's spacing used to be `listRowInsets`, applied to the cell *outside*
+/// the `Button`. That put the content where it belonged and left the press wash nothing of its
+/// own to fill — ``PressTreatment`` draws in the button's frame, and the button's frame was
+/// exactly the content — so the highlight ended flush against the avatar and the text. The
+/// owner's word was that it needed *some spacing in its area*.
+///
+/// The fix is a split, not a move, and that is the only thing worth asserting: the content has
+/// to land exactly where it always did, or a spacing fix has quietly become a layout change.
+@Suite("Activity row metrics")
+struct ActivityRowMetricsTests {
+    @Test("splitting the inset did not move the content")
+    func theSplitSumsToWhereTheContentAlwaysWas() {
+        // The cell's inset carries the row as far as the highlight; the button's padding
+        // carries it the rest of the way. Their sum is the whole spacing, unchanged.
+        #expect(
+            ActivityRowMetrics.rowInsets.leading + ActivityRowMetrics.labelPaddingH
+                == ActivityRowMetrics.contentInsetH
+        )
+        #expect(
+            ActivityRowMetrics.rowInsets.top + ActivityRowMetrics.labelPaddingV
+                == ActivityRowMetrics.contentInsetV
+        )
+        // Symmetric, because a row that is 16 from one edge and 15 from the other is a defect
+        // nobody looks for.
+        #expect(ActivityRowMetrics.rowInsets.leading == ActivityRowMetrics.rowInsets.trailing)
+        #expect(ActivityRowMetrics.rowInsets.top == ActivityRowMetrics.rowInsets.bottom)
+    }
+
+    @Test("the highlight has room of its own, at both ends")
+    func theWashIsNeitherFlushNorSwallowingTheGap() {
+        // The defect being fixed: zero padding meant the wash touched the glyphs.
+        #expect(ActivityRowMetrics.labelPaddingH > 0)
+        #expect(ActivityRowMetrics.labelPaddingV > 0)
+        // And the failure the fix could have introduced instead — taking *all* of the cell's
+        // inset would leave two neighbouring highlights with nothing between them.
+        #expect(ActivityRowMetrics.rowInsets.top > 0)
+        #expect(ActivityRowMetrics.rowInsets.leading > 0)
+    }
+
+    @Test("an activity row's highlight is the same distance from the edge as the sidebar's mark")
+    func thisListAndTheSidebarAgreeAcross() {
+        // The one number shared with the other list, and shared on purpose: a pressed activity
+        // row and a marked sidebar row sit the same distance from the same screen edge, so the
+        // two tabs do not read as two apps. The vertical is deliberately *not* shared — these
+        // rows are three lines tall, and the sidebar's 1pt would put two highlights together.
+        #expect(ActivityRowMetrics.highlightInsetH == SidebarRowMetrics.insetH)
+        #expect(ActivityRowMetrics.highlightInsetV > SidebarRowMetrics.insetV)
     }
 }

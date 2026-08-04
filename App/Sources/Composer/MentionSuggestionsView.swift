@@ -65,7 +65,13 @@ struct MentionSuggestionsView: View {
         .accessibilityLabel("Mention suggestions")
     }
 
+    /// Commits a suggestion into the composer.
+    ///
+    /// The haptic is here rather than on the `Button` because this is the one path both kinds
+    /// take — `@` and `#` are two cases of `MentionSuggestion` and one call site — and because
+    /// it must report the *commit*, which is text appearing that the reader did not type.
     private func select(_ suggestion: MentionSuggestion) {
+        HiveHaptics.play(.suggestionPicked)
         autocomplete.select(suggestion, in: &document)
         autocomplete.isComposerFocused = true
     }

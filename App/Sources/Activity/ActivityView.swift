@@ -157,7 +157,7 @@ struct ActivityView: View {
             List {
                 ForEach(rows) { entry in
                     ActivityRow(entry: entry, unreadCount: unreadCount(for: entry)) { open(entry) }
-                        .listRowInsets(Self.rowInsets)
+                        .listRowInsets(ActivityRowMetrics.rowInsets)
                         // No rule between rows — the space separates them, the same call
                         // ``ThreadsView`` makes. A hairline under every row turns a list of
                         // summaries into a form.
@@ -308,5 +308,4 @@ struct ActivityView: View {
     /// Matched to ``ThreadsView``'s, so the two "what have I missed" lists in this app are
     /// laid out identically. Tighter vertically than that screen's 18, because a row here is
     /// one message rather than a thread's opener and its newest reply.
-    private static let rowInsets = EdgeInsets(top: 10, leading: 16, bottom: 10, trailing: 16)
 }

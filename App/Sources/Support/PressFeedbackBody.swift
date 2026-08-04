@@ -29,6 +29,12 @@ struct PressFeedbackBody: View {
     /// *and* the only correct signal.
     @Environment(\.claimRowTap) private var claimRowTap
 
+    /// Whether the reader has asked the system for less movement. Reaches both halves: the
+    /// shrink is dropped from ``PressTreatment``, and the springs fall back to the ease-outs
+    /// this treatment used before the shrink came back — a spring with nothing left to spring
+    /// is only a slower fade.
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     /// Whether the press is being *shown*, which is not the same as whether a finger is down.
     @State private var isShowing = false
     @State private var shownAt: Date?
@@ -57,7 +63,14 @@ struct PressFeedbackBody: View {
         })
         // Outside the button, so the treatment covers the whole interactive view — its
         // padding and its hit area — and not just the glyphs of its label.
-        .modifier(PressTreatment(isShowing: isShowing, emphasis: emphasis, shape: shape))
+        .modifier(
+            PressTreatment(
+                isShowing: isShowing,
+                emphasis: emphasis,
+                shape: shape,
+                reduceMotion: reduceMotion
+            )
+        )
         .animation(curve, value: isShowing)
         // The other half of "immediate": SwiftUI reports this press honestly, but a scroll
         // view sits on the touch for ~150ms before SwiftUI is told about it at all. Every
@@ -93,7 +106,7 @@ struct PressFeedbackBody: View {
         release = nil
         didTrigger = false
         shownAt = .now
-        curve = PressFeedback.animation(pressed: true)
+        curve = PressFeedback.animation(pressed: true, reduceMotion: reduceMotion)
         isShowing = true
     }
 
@@ -120,7 +133,7 @@ struct PressFeedbackBody: View {
                     try? await Task.sleep(for: .seconds(remaining))
                     guard !Task.isCancelled else { return }
                 }
-                curve = PressFeedback.animation(pressed: false)
+                curve = PressFeedback.animation(pressed: false, reduceMotion: reduceMotion)
             } else {
                 curve = PressFeedback.cancel
             }

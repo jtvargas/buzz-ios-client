@@ -1,17 +1,23 @@
 import SwiftUI
 import UIKit
 
-/// The four things this app says by touch.
+/// The five things this app says by touch.
 ///
 /// A closed list, and that is the point: a haptic is only information while it is rare. An
 /// app that buzzes on every tap teaches its reader to stop noticing, and then the one that
 /// mattered — the message left, the thing is gone — lands as noise. So the vocabulary is
-/// named here, once, and a new call site has to be one of these four or a decision to add
-/// a fifth.
+/// named here, once, and a new call site has to be one of these or a decision to add
+/// another.
 ///
 /// The patterns are chosen to be told apart by feel alone, which is the only test that
-/// matters for a haptic: a light tick, a soft one, a medium knock, and the only
-/// double-beat in the app.
+/// matters for a haptic: a light tick, a soft one, a medium knock, a selection click, and
+/// the only double-beat in the app.
+///
+/// ``suggestionPicked`` was the fifth, added 2026-08-04 at the owner's ask. It is worth
+/// recording why it was allowed past the paragraph above: picking an `@` or a `#` out of the
+/// autocomplete is a *committing* act — text is written into the composer that the reader did
+/// not type — and it happens at most a few times per message rather than per tap. That is the
+/// bar for a new one.
 enum HiveHaptic: Equatable, CaseIterable {
     /// A message left the composer. Light: it is a confirmation, not an event.
     case send
@@ -26,6 +32,14 @@ enum HiveHaptic: Equatable, CaseIterable {
     /// Something was deleted. The one notification pattern in the app, and so the one
     /// feedback with two beats — a destructive act should not feel like a tick.
     case delete
+    /// An `@` or a `#` was picked out of the composer's suggestion list.
+    ///
+    /// The one *selection* generator in the app, which is both why it is allowed to exist
+    /// beside ``send`` and what it is for. UIKit's selection feedback is the platform's own
+    /// answer to "an item was chosen from a list", and it is a crisper, lighter click than any
+    /// of the impacts — so it satisfies the owner's "light" without colliding with ``send``,
+    /// which is already `.impact(.light)` and which `everyEventIsDistinct` would have caught.
+    case suggestionPicked
 
     /// What UIKit is asked to play.
     ///
@@ -35,6 +49,9 @@ enum HiveHaptic: Equatable, CaseIterable {
     enum Pattern: Equatable {
         case impact(UIImpactFeedbackGenerator.FeedbackStyle)
         case notification(UINotificationFeedbackGenerator.FeedbackType)
+        /// UIKit's own "an item was selected". Carries no style because it has none to
+        /// choose — that is the whole reason it is distinguishable from every impact above.
+        case selection
     }
 
     var pattern: Pattern {
@@ -43,6 +60,7 @@ enum HiveHaptic: Equatable, CaseIterable {
         case .reaction: .impact(.soft)
         case .longPress: .impact(.medium)
         case .delete: .notification(.warning)
+        case .suggestionPicked: .selection
         }
     }
 }
@@ -71,6 +89,8 @@ enum HiveHaptics {
             UIImpactFeedbackGenerator(style: style).impactOccurred()
         case let .notification(type):
             UINotificationFeedbackGenerator().notificationOccurred(type)
+        case .selection:
+            UISelectionFeedbackGenerator().selectionChanged()
         }
     }
 }

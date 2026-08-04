@@ -684,9 +684,17 @@ private extension ChannelListView {
                 path = route.pushed(onto: path)
             } label: {
                 ChannelRowView(row: row, presence: presence)
+                    // Inside the button, so the button's frame *is* `resumeMark`'s rectangle
+                    // and the wash drawn behind it lands exactly there. The row's spacing used
+                    // to be entirely `listRowInsets`, outside the button, which left the wash
+                    // 8pt narrower on each side than the mark beside it — and a `Shape` that
+                    // reached back out could not escape the cell's own inset container.
+                    // See ``SidebarRowMetrics``.
+                    .padding(.horizontal, SidebarRowMetrics.labelPaddingH)
+                    .padding(.vertical, SidebarRowMetrics.labelPaddingV)
             }
-            .buttonStyle(.hivePress(.row))
-            .listRowInsets(Self.rowInsets)
+            .buttonStyle(.hivePress(.row, in: .rect(cornerRadius: SidebarRowMetrics.radius, style: .continuous)))
+            .listRowInsets(SidebarRowMetrics.rowInsets)
             // No per-row rule: sections of ruled rows read as a form, not as one
             // navigation surface. The section headings do the separating.
             .listRowSeparator(.hidden)
@@ -727,14 +735,17 @@ private extension ChannelListView {
     @ViewBuilder
     func resumeMark(isResumable: Bool) -> some View {
         if isResumable {
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Color.hiveAccent.opacity(0.14))
-                .padding(.horizontal, 8)
-                .padding(.vertical, 1)
+            RoundedRectangle(cornerRadius: SidebarRowMetrics.radius, style: .continuous)
+                .fill(Color.hiveAccent.opacity(SidebarRowMetrics.opacity))
+                .padding(.horizontal, SidebarRowMetrics.insetH)
+                .padding(.vertical, SidebarRowMetrics.insetV)
         } else {
             Color.clear
         }
     }
+
+    // The numbers behind both of those rectangles are not here — they are internal, in this
+    // file's last extension, so the test that holds them to each other can read them.
 
     /// Star or unstar one conversation — the long press's only item, and the one place the
     /// wording of it is decided.
@@ -785,7 +796,7 @@ private extension ChannelListView {
             .foregroundStyle(.secondary)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.vertical, 6)
-            .listRowInsets(Self.rowInsets)
+            .listRowInsets(SidebarRowMetrics.contentInsets)
             .listRowSeparator(.hidden)
             .listRowBackground(Color.clear)
             .accessibilityIdentifier("sidebar-section-empty-\(section.rawValue)")
@@ -818,7 +829,6 @@ private extension ChannelListView {
         .accessibilityIdentifier("channel-directory-unreachable")
     }
 
-    static let rowInsets = EdgeInsets(top: 2, leading: 16, bottom: 2, trailing: 16)
     static let headerInsets = EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16)
     /// The cards sit slightly clear of the first heading's rule below them.
     static let cardsInsets = EdgeInsets(top: 8, leading: 16, bottom: 10, trailing: 16)
