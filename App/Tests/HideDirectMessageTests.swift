@@ -40,6 +40,28 @@ struct HideDirectMessageTests {
         }
     }
 
+    /// Spins until `condition` holds or the deadline passes, so a test never waits a fixed
+    /// sleep for work that crosses actors. Falls through on expiry rather than failing
+    /// inside itself, so the `#expect` that follows still prints the real values.
+    ///
+    /// Deliberately not `EngineHarness`'s free `waitUntil`, which has no deadline at all. A
+    /// condition that never comes true there spins to the suite's time limit, and a
+    /// sub-second race reported as a sixty-second hang is exactly how two stale fixtures in
+    /// `ChannelListModelTests` spent an evening filed under a known flake.
+    private static func waitUntil(
+        _ condition: @MainActor () async -> Bool,
+        within seconds: Double = 5
+    ) async {
+        let deadline = ContinuousClock.now + .seconds(seconds)
+        while ContinuousClock.now < deadline {
+            if await condition() { return }
+            await Task.yield()
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+    }
+
+    /// A fixed dwell, for the one wait in this file that cannot be a poll. See its single
+    /// caller for why it has to stay a real sleep.
     private func settle() async {
         // A real sleep, not `Task.yield()`: the model hops to its own task and the stub
         // sleeps, so yielding can return before either has run.
@@ -52,11 +74,13 @@ struct HideDirectMessageTests {
         let model = HideDirectMessageModel(hider: hider)
 
         model.hide("dm-1")
-        await settle()
+        await Self.waitUntil { hider.channels.count == 1 }
+        // No wait earns this one: `hide` inserts into `hidingChannels` synchronously, before
+        // it constructs its `Task`, so on a `@MainActor` test this is already true.
         #expect(model.isHiding("dm-1"))
 
         hider.answer(.success(()))
-        await settle()
+        await Self.waitUntil { !model.isHiding("dm-1") }
         #expect(!model.isHiding("dm-1"))
         #expect(model.failure == nil)
         #expect(hider.channels == ["dm-1"])
@@ -68,18 +92,30 @@ struct HideDirectMessageTests {
         let model = HideDirectMessageModel(hider: hider)
 
         model.hide("dm-1")
-        await settle()
+        // Establishes the *first* command arrived, which the assertion below needs as its
+        // baseline: it reads "exactly one", so without this it fails identically whether the
+        // guard leaked a second press or the first press had simply not landed yet. A test
+        // that fails for two opposite reasons is not a guard.
+        await Self.waitUntil { hider.channels.count == 1 }
         model.hide("dm-1")
+        // The one fixed dwell left in this file, and it is not here to wait for the pass.
+        // The assertion below is that a second append did *not* happen, and absence has no
+        // condition to poll for. On the passing path there is nothing async to wait for at
+        // all — the guard returns before the `Task` is constructed — so this sleep is not
+        // needed for the test to succeed. It is what gives the *failure* room to appear: if
+        // the guard ever breaks, that second append is asynchronous, and this window is the
+        // only thing that lets it show up before the check. Do not shorten it, and do not
+        // let a later cleanup delete it as unnecessary.
         await settle()
         #expect(hider.channels == ["dm-1"])
 
         hider.answer(.success(()))
-        await settle()
+        await Self.waitUntil { !model.isHiding("dm-1") }
         // And once it has answered, the same row may be hidden again — the guard is one
         // press, not one lifetime. (Re-opening the DM clears the hide relay-side, so this
         // is a reachable sequence, not a hypothetical one.)
         model.hide("dm-1")
-        await settle()
+        await Self.waitUntil { hider.channels.count == 2 }
         #expect(hider.channels == ["dm-1", "dm-1"])
     }
 
@@ -90,7 +126,9 @@ struct HideDirectMessageTests {
 
         model.hide("dm-1")
         model.hide("dm-2")
-        await settle()
+        // Two appends have to land inside one window here, so this is the weakest wait in
+        // the file if it stays a fixed sleep.
+        await Self.waitUntil { hider.channels.count == 2 }
         #expect(hider.channels.sorted() == ["dm-1", "dm-2"])
         #expect(model.isHiding("dm-1"))
         #expect(model.isHiding("dm-2"))
@@ -102,9 +140,11 @@ struct HideDirectMessageTests {
         let model = HideDirectMessageModel(hider: hider)
 
         model.hide("dm-1")
-        await settle()
+        await Self.waitUntil { hider.channels.count == 1 }
         hider.answer(.failure(DirectMessageError.rejected(.invalid("channel is not a DM"))))
-        await settle()
+        // `failure` is assigned in the same continuation as the `remove`, with no `await`
+        // between them, so observing the mark clear means the sentence is already there.
+        await Self.waitUntil { !model.isHiding("dm-1") }
 
         #expect(!model.isHiding("dm-1"))
         #expect(model.failure == "The relay refused to hide it: channel is not a DM")
@@ -116,14 +156,17 @@ struct HideDirectMessageTests {
         let model = HideDirectMessageModel(hider: hider)
 
         model.hide("dm-1")
-        await settle()
+        await Self.waitUntil { hider.channels.count == 1 }
         hider.answer(.failure(DirectMessageError.publishFailed(.connectionLost)))
-        await settle()
+        await Self.waitUntil { model.failure != nil }
         #expect(model.failure != nil)
 
         hider.answer(.success(()))
         model.hide("dm-2")
-        await settle()
+        // Both halves of this test are real transitions — `nil` to a sentence, then back to
+        // `nil` — so both are pollable. This second one was riding on the whole of `dm-2`'s
+        // hide completing inside a 60 ms sleep.
+        await Self.waitUntil { model.failure == nil }
         #expect(model.failure == nil)
     }
 

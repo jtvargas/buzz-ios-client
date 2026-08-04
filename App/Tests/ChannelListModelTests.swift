@@ -57,6 +57,7 @@ struct ChannelListModelTests {
 
         _ = try await store.ingest(batch: [
             try relay.channelMetadata("general", name: "General", at: 500),
+            try relay.channelMembers("general", [reader.pubkey], at: 500),
             try peer.message("one", in: "general", at: 1_000),
             try peer.message("two", in: "general", at: 2_000),
         ], phase: .backfill)
@@ -90,6 +91,7 @@ struct ChannelListModelTests {
 
         _ = try await store.ingest(batch: [
             try relay.channelMetadata("general", name: "General", at: 500),
+            try relay.channelMembers("general", [reader.pubkey], at: 500),
             try peer.message("nothing to do with you", in: "general", at: 1_000),
             try peer.event(
                 .channelMessage, "hey @reader",
@@ -146,6 +148,7 @@ struct ChannelListModelTests {
 
         _ = try await store.ingest(batch: [
             try relay.channelMetadata("general", name: "General", at: 500),
+            try relay.channelMembers("general", [reader.pubkey], at: 500),
         ], phase: .backfill)
         try await store.markChannelAccess(identity: reader.pubkey, channel: "general", state: .active)
 
@@ -227,6 +230,7 @@ struct ChannelDirectorySurfaceTests {
 
         _ = try await store.ingest(batch: [
             try relay.channelMetadata("stale", name: "Deleted Elsewhere", at: 500),
+            try relay.channelMembers("stale", [reader.pubkey], at: 500),
         ], phase: .backfill)
         try await store.markChannelAccess(identity: reader.pubkey, channel: "stale", state: .active)
 
@@ -249,6 +253,7 @@ struct ChannelDirectorySurfaceTests {
 
         _ = try await store.ingest(batch: [
             try relay.channelMetadata("general", name: "General", at: 500),
+            try relay.channelMembers("general", [reader.pubkey], at: 500),
         ], phase: .backfill)
         try await store.markChannelAccess(identity: reader.pubkey, channel: "general", state: .active)
 
@@ -277,6 +282,7 @@ struct ChannelDirectorySurfaceTests {
         // only thing that can put this channel on screen is the adoption itself.
         _ = try await store.ingest(batch: [
             try relay.channelMetadata("arrived", name: "Arrived", at: 500),
+            try relay.channelMembers("arrived", [reader.pubkey], at: 500),
         ], phase: .backfill)
         try await store.markChannelAccess(identity: reader.pubkey, channel: "arrived", state: .active)
         #expect(model.visibleChannels.isEmpty)
@@ -296,6 +302,7 @@ struct ChannelDirectorySurfaceTests {
 
         _ = try await store.ingest(batch: [
             try relay.channelMetadata("general", name: "General", at: 500),
+            try relay.channelMembers("general", [reader.pubkey], at: 500),
         ], phase: .backfill)
         try await store.markChannelAccess(identity: reader.pubkey, channel: "general", state: .active)
 
@@ -322,6 +329,7 @@ struct ChannelDirectorySurfaceTests {
 
         _ = try await store.ingest(batch: [
             try relay.channelMetadata("stale", name: "Deleted Elsewhere", at: 500),
+            try relay.channelMembers("stale", [reader.pubkey], at: 500),
         ], phase: .backfill)
         try await store.markChannelAccess(identity: reader.pubkey, channel: "stale", state: .active)
 

@@ -48,12 +48,25 @@ struct ComposerAttachmentsTests {
         #expect(model.isAttaching)
         #expect(!model.hasSendableContent)
 
-        await Self.waitUntil { model.attachments.first?.preview != nil }
+        // Waited on the upload being *parked*, not on the preview appearing. The model
+        // applies the preview before it calls `upload`, and the call it then makes is
+        // spawned unstructured — so a preview says only that the work is coming, and
+        // `releaseAll()` reached for on that signal can release an empty set and leave the
+        // upload parked for the rest of the test. Every other wait in this suite already
+        // uses `parkedCount`; this was the one that did not, and it is the one that failed.
+        await Self.waitUntil { await uploader.parkedCount == 1 }
         await uploader.releaseAll()
         await Self.waitUntil { !model.isAttaching }
 
         #expect(model.hasSendableContent)
         #expect(model.readyDescriptors.count == 1)
+        // Asserted rather than waited on, now that the wait above is about the upload. The
+        // model writing the preview onto the row is what draws the strip thumbnail while
+        // the upload is still in flight, and nothing else in this target covers it —
+        // `ComposerImagePreparationTests` covers `prepare()` producing one, not the model
+        // applying it. As a wait it never guarded anything: the bounded helper falls
+        // through, so a preview that never arrived cost five seconds and still passed.
+        #expect(model.attachments.first?.preview != nil)
         // A PNG is a format the relay stores, so it went up as it was.
         let requests = await uploader.requests
         #expect(requests.map(\.mimeType) == ["image/png"])
