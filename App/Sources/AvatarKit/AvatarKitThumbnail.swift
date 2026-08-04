@@ -50,7 +50,7 @@ struct AvatarKitThumbnail: Hashable, Sendable {
 /// SVG with `preserves-vector-representation`, and what re-rasterises it cleanly at a new size
 /// is SwiftUI's own draw of it — `UIImage.draw(in:)` scales whatever bitmap the asset happens
 /// to be holding. ``AvatarKitExport`` reached the same conclusion for the same reason: the
-/// only way the thumbnail, the preview and the uploaded picture cannot drift is that one view
+/// only way the thumbnail, the preview and the published picture cannot drift is that one view
 /// draws all three. So the render is on the main actor, and ``prewarm(_:)`` is what keeps it
 /// off the frame the reader is looking at.
 @MainActor

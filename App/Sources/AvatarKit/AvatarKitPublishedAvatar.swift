@@ -15,13 +15,17 @@ import UIKit
 /// Answering the first where the second was meant offers a reader an avatar they are not
 /// wearing.
 ///
-/// # Why it is the URL that is matched, and matched exactly
+/// # Why it is the published string that is matched, and matched exactly
 ///
-/// A built avatar is published the way a photo is: drawn, `PUT`, and the URL kept. Character
-/// for character it is the same *kind* of string, and nothing in the value says which tab made
-/// it — so the only honest test is whether this device is the one that put that exact URL
-/// there. Being an equality it can never mistake a photo for a build, and it also answers *no*
-/// the moment the picture becomes something else, without having to be told that it did.
+/// From the account editor a built avatar is published the way a photo is: drawn, `PUT`, and
+/// the URL kept. Character for character it is the same *kind* of string, and nothing in the
+/// value says which tab made it — so the only honest test is whether this device is the one
+/// that put that exact string there. Being an equality it can never mistake a photo for a
+/// build, and it also answers *no* the moment the picture becomes something else, without
+/// having to be told that it did.
+///
+/// The arrival walk publishes a `data:` URI instead (§ ``AppEnvironment/publishableValue(for:)``)
+/// and needs no other rule: an equality does not care which shape of string it is comparing.
 ///
 /// # Why there is no second store under this name
 ///
@@ -39,11 +43,10 @@ enum AvatarKitPublishedAvatar {
     /// than about storage, because the *fact* is what matters and where it is kept is this
     /// file's business.
     ///
-    /// `url` is optional because a publish can end with nothing having gone out at all — the
-    /// arrival walk's picture is dropped when the finished kind-0 would breach
-    /// `OutboxPolicy.maxContentBytes` — and recording `nil` is how that is said. It leaves the
-    /// built face for the editor to open on while leaving the profile unclaimed, which is the
-    /// truth in that case.
+    /// `url` is optional because a publish can end with nothing having gone out at all — an
+    /// avatar the renderer could not draw, or one dropped by the arrival walk's last-resort
+    /// ceiling check — and recording `nil` is how that is said. It leaves the built face for the
+    /// editor to open on while leaving the profile unclaimed, which is the truth in that case.
     static func record(_ avatar: AvatarKitAvatar, publishedAs url: String?) {
         AvatarKitRecipeStore.save(.init(avatar: avatar, publishedURL: url))
     }

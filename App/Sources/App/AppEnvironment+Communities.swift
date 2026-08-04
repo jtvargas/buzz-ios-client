@@ -142,19 +142,23 @@ extension AppEnvironment {
     ///
     /// A built avatar arrives as a recipe (§ ``ArrivalPicture``), because the step it was chosen
     /// on has no engine and therefore nowhere to put a picture. This is the first line of code
-    /// after a join that has one. So the draw, the upload and the decision about what `picture`
-    /// ends up holding all happen here, in the same fire-and-forget task the name already rode.
+    /// after a join that has one. So the draw and the decision about what `picture` ends up
+    /// holding both happen here, in the same fire-and-forget task the name already rode.
     ///
     /// # Why the engine is taken on the way in and held across that work
     ///
     /// ``engine`` is a property of this object and every community transition replaces it: a
     /// switch, a removal and a sign-out all nil it in ``teardownSession()``. Reading it *after*
-    /// the picture is finished put a draw and an HTTP `PUT` between the join and the read — and
-    /// that `PUT` is allowed 60 s of silence and 240 s in total
-    /// (§ ``makeMediaUploader(signer:websocketURL:)``). Anything that ended the session inside
-    /// that window took the whole announcement with it, **the name as well as the picture**, and
-    /// left the reader in their new community as a `?`. That is the shape of the defect the
-    /// owner reported; the guard was silent, so it took a relay's database to find.
+    /// the picture is finished put that work between the join and the read. It used to be a draw
+    /// **and an HTTP `PUT`**, and that `PUT` is allowed 60 s of silence and 240 s in total
+    /// (§ ``makeMediaUploader(signer:websocketURL:)``) — so anything that ended the session
+    /// inside that window took the whole announcement with it, **the name as well as the
+    /// picture**, and left the reader in their new community as a `?`. That is the shape of the
+    /// defect the owner reported; the guard was silent, so it took a relay's database to find.
+    ///
+    /// The picture no longer uploads (§ ``publishableValue(for:)``), which leaves a draw and a
+    /// window measured in milliseconds. The capture stays anyway, because closing that race was
+    /// only one of the things it was doing.
     ///
     /// Captured, the send goes to the engine for the community these two answers were actually
     /// given to — the only community they mean anything on. Sending them through whatever engine
@@ -164,7 +168,8 @@ extension AppEnvironment {
     ///
     /// Holding it also makes the send *durable* rather than merely correct. `enqueue` writes a
     /// row into the joined community's own database before it tries the relay, so a community
-    /// left mid-upload still keeps its announcement and drains it the next time it is opened.
+    /// left before the relay answered still keeps its announcement and drains it the next time
+    /// it is opened.
     func announceArrivalProfile(displayName: String, picture: ArrivalPicture?) async {
         let name = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty || picture != nil else { return }
@@ -178,15 +183,18 @@ extension AppEnvironment {
         }
 
         var value: String?
-        if let picture { value = await Self.publishableValue(for: picture, uploader: mediaUploader) }
+        if let picture { value = Self.publishableValue(for: picture) }
         if picture != nil, value == nil {
-            Self.arrivalLog.notice("Arrival picture could not be drawn or uploaded; sending the name alone.")
+            Self.arrivalLog.notice("Arrival picture could not be drawn; sending the name alone.")
         }
 
         var content = Self.arrivalMetadata(name: name, picture: value)
-        // The inline fallback below is tens of kilobytes and the ceiling is 64 KiB, so this is
-        // reachable — by a hair, and only for the fallback. A name that arrives without its
-        // picture is the better half of the answer; a refused send is neither half.
+        // A backstop rather than a live branch. The inline avatar is exported at a size chosen
+        // so this cannot fire (§ ``AvatarKitExport/inlineSide``): the worst of 320 measured
+        // bodies came in at two thirds of the ceiling. The only input left that could reach it
+        // is a name long enough to matter, and one lands in the body twice — so if it ever
+        // does, a name arriving without its picture is the better half of the answer; a refused
+        // send is neither half.
         if content.utf8.count > OutboxPolicy.maxContentBytes {
             Self.arrivalLog.notice(
                 "Arrival picture dropped: \(content.utf8.count, privacy: .public) bytes over the send ceiling."
@@ -252,38 +260,42 @@ extension AppEnvironment {
     /// What a step's answer becomes in the `picture` field, or `nil` if it could not become
     /// anything.
     ///
-    /// An emoji is its own document and has never needed a relay. A built avatar has to be drawn
-    /// first, and then it takes the photo's route — `PUT` to the blob store, keep the URL — which
-    /// is what ``ProfileAvatarEditorModel/publishAvatarKit()`` does from the account screen and
-    /// what every surface in the app already knows how to draw.
+    /// Both answers become a `data:` URI, and neither touches the network. An emoji is its own
+    /// document and has never needed a relay; a built avatar is drawn at
+    /// ``AvatarKitExport/inlineSide`` and its bytes are the document.
     ///
-    /// # Why a failed upload falls back inline instead of giving up
+    /// # Why an arrival avatar is embedded where the account editor uploads
     ///
-    /// The upload is the one part of this that needs the network, and it runs seconds after a
-    /// join — on the connection that has just been proved to work, but also on the one most
-    /// likely to be a hotel Wi-Fi. Giving up would leave a fresh identity with no picture and no
-    /// second chance at one, because this function is called exactly once and its failures are
-    /// deliberately silent. A 512px avatar is ~30 KB of PNG and ~46 KB of base64, which fits
-    /// under the 64 KiB content ceiling with room for a name — so the picture can simply ride
-    /// inline, the way the emoji one always has. The caller checks the finished body against
-    /// that ceiling before trusting it.
-    private static func publishableValue(
-        for picture: ArrivalPicture,
-        uploader: (any MediaUploading)?
-    ) async -> String? {
+    /// The editor uploads, and is right to. It runs in a community the reader has been living
+    /// in, against a media host this app has already fetched from, with a Done button to report
+    /// a failure to. This runs seconds after a join, for an identity minutes old, on a relay the
+    /// app has just met — and a published URL is only worth having if it can be *read back*.
+    ///
+    /// On a hosted relay it cannot. `GET /media/<sha>` there answers **401 even for a blob that
+    /// does not exist**, so a read is authenticated before it is resolved, and nothing in this
+    /// app sends an `Authorization` header when it fetches an image. The upload succeeds, the
+    /// URL is published, and the picture is undrawable — by the reader who chose it and by
+    /// everyone who meets them. Nothing fails loudly enough to notice: this function is called
+    /// exactly once, its failures are deliberately silent, and what the reader sees is the `?`
+    /// they were promised a face instead of.
+    ///
+    /// An inline picture has none of that surface. It needs no host, no auth and no network at
+    /// the moment it is drawn — the same property that has always made the emoji avatar work
+    /// everywhere, and the only one of the two a brand-new identity can rely on. It costs bytes
+    /// instead of trust, and ``AvatarKitExport/inlineSide`` is where those bytes were measured
+    /// to fit with room to spare.
+    ///
+    /// The gate itself is the larger defect and not this function's to fix: on such a relay
+    /// every photo and every attachment is unreadable for exactly the same reason.
+    private static func publishableValue(for picture: ArrivalPicture) -> String? {
         switch picture {
         case let .emoji(glyph, color):
             return EmojiAvatar(emoji: glyph, color: color).dataURL()
         case let .built(avatar):
-            guard let png = try? AvatarKitExport.pngData(for: avatar) else { return nil }
-            if let uploader,
-               let blob = try? await uploader.upload(
-                   data: png,
-                   mimeType: AvatarKitExport.mimeType,
-                   filename: nil
-               ) {
-                return blob.url
-            }
+            guard let png = try? AvatarKitExport.pngData(
+                for: avatar,
+                side: AvatarKitExport.inlineSide
+            ) else { return nil }
             return "data:\(AvatarKitExport.mimeType);base64,\(png.base64EncodedString())"
         }
     }
