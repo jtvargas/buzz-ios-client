@@ -43,23 +43,26 @@ struct ChannelJoinTests {
             relay.event(.groupMembers, "", tags: [["d", "stray"], ["p", peer.pubkey]]),
         ], phase: .backfill)
 
-        let start = Task { try await harness.engine.start() }
-        await waitUntil { await directory.requestCount == 1 }
-        try await driveAuth(harness.connection, socket)
-        await waitUntil { await harness.engine.state == .running }
-        await harness.http.enqueue(status: 200, body: try Self.emptyPage(for: "mine"))
-
-        // `.active` for both, which is what `accessStates` produces for an open channel
-        // and what the sidebar draws — the point being that the sidebar and the
-        // subscription set no longer have to agree.
-        await directory.succeed(
-            ChannelDirectorySnapshot(events: [], states: ["mine": .active, "stray": .active])
+        // `.active` for both, which is what `accessStates` produces for an open channel and
+        // what the sidebar draws — the point being that the sidebar and the subscription set
+        // no longer have to agree. One page enqueued, for the one channel entitled to ask.
+        try await Self.driveLaunchPass(
+            harness, socket, directory,
+            pagesFor: ["mine"],
+            states: ["mine": .active, "stray": .active]
         )
-        try await start.value
 
         await waitUntil { await harness.engine.channelSyncState("mine") == .synced }
         #expect(await harness.engine.channelContentSubscriptions["stray"] == nil)
         #expect(await harness.engine.channelSyncState("stray") == .unsynced)
+        // Non-vacuous: `stray` is `.active` in `channel_access` — the set the sidebar draws
+        // from and the set this pass used to reconcile against. It is still drawn and it
+        // still costs nothing, and that divergence is the entire change. An assertion that
+        // only said "no subscription" would also pass on a channel the pass never saw.
+        #expect(
+            try harness.store.channelAccessState(identity: harness.selfPubkey, channel: "stray")
+                == .active
+        )
         // One window request, for the one channel this identity is a member of. The
         // head-reconcile fan-out is the more expensive half and it is scoped by the same
         // set as the subscriptions.
@@ -234,18 +237,13 @@ struct ChannelJoinTests {
             relay.event(.groupMembers, "", tags: [["d", "w"], ["p", harness.selfPubkey]]),
         ], phase: .backfill)
 
-        let start = Task { try await harness.engine.start() }
-        await waitUntil { await directory.requestCount == 1 }
-        try await driveAuth(harness.connection, socket)
-        await waitUntil { await harness.engine.state == .running }
-        // One for the channel this identity is already a member of, one for the head
-        // window the join hydrates with.
-        await harness.http.enqueue(status: 200, body: try Self.emptyPage(for: "w"))
-        await harness.http.enqueue(status: 200, body: try Self.emptyPage(for: "g"))
-        await directory.succeed(
-            ChannelDirectorySnapshot(events: [], states: ["g": .active, "w": .active])
+        try await Self.driveLaunchPass(
+            harness, socket, directory,
+            // One page for the channel this identity is already a member of, one for the
+            // head window the join hydrates with.
+            pagesFor: ["w", "g"],
+            states: ["g": .active, "w": .active]
         )
-        try await start.value
 
         let request = await awaitPublishedEvent(on: socket)
         #expect(request.kind == .groupJoinRequest)
@@ -287,6 +285,28 @@ struct ChannelJoinTests {
         try await driveAuth(harness.connection, socket)
         await answerDiscovery(on: socket)
         await waitUntil { await harness.engine.state == .running }
+    }
+
+    /// A cold launch on the authoritative path, released in the order the engine needs it:
+    /// the directory answer is held until the socket is authenticated and the engine
+    /// running, because `reconcileAuthoritativeChannels` declines to touch a socket that is
+    /// not — so an answer that arrives first would make the pass a no-op and the test a lie.
+    private static func driveLaunchPass(
+        _ harness: EngineHarness,
+        _ socket: ScriptedRelay,
+        _ directory: ReleasableDirectory,
+        pagesFor channels: [String],
+        states: [String: ChannelAccessState]
+    ) async throws {
+        let start = Task { try await harness.engine.start() }
+        await waitUntil { await directory.requestCount == 1 }
+        try await driveAuth(harness.connection, socket)
+        await waitUntil { await harness.engine.state == .running }
+        for channel in channels {
+            await harness.http.enqueue(status: 200, body: try emptyPage(for: channel))
+        }
+        await directory.succeed(ChannelDirectorySnapshot(events: [], states: states))
+        try await start.value
     }
 
     /// A head page holding nothing but its own exhaustion bounds — enough for a reconcile
