@@ -14,18 +14,22 @@ import os
 ///
 /// # Lifecycle
 ///
-/// The set is *grown* on every `.ready` to cover the discovered/known channel list
-/// (``ensureChannelSubscriptions(_:)``) and on `memberAdded`. It shrinks only on an
-/// explicit departure — `memberRemoved`/leave (``unsubscribeChannelContent(_:)``) —
-/// or a relay `CLOSE` (``dropClosedChannelSubscription(_:)``).
+/// The set is reconciled on every authoritative directory pass to
+/// ``liveChannels(joined:)`` — the channels whose relay-signed roster names this
+/// identity, plus the one on screen — and grown on `memberAdded`,
+/// ``joinChannel(_:onProgress:)`` and ``setActiveChannel(_:)``. It shrinks on that
+/// reconcile, on an explicit departure (`memberRemoved`/leave,
+/// ``unsubscribeChannelContent(_:)``), or a relay `CLOSE`
+/// (``dropClosedChannelSubscription(_:)``).
 ///
-/// Discovery is deliberately **add-only**: a channel is *not* dropped merely because a
-/// single discovery pass failed to echo it. A relay can serve partial group state on
-/// any given pass, and unsubscribing on a transient miss would tear down a live
-/// subscription and re-open it next pass — a CLOSE, a re-REQ, and a re-backfill, with
-/// a window of dropped live events in between. Removal therefore tracks the
-/// authoritative membership signal (the `#p`-scoped 44101 notification) and the
-/// relay's own CLOSE, never a discovery gap.
+/// Removal is deliberately never driven by **discovery**: a channel is not dropped
+/// because a single discovery pass failed to echo it. A relay can serve partial group
+/// state on any given pass, and unsubscribing on a transient miss would tear down a live
+/// subscription and re-open it next pass — a CLOSE, a re-REQ, and a re-backfill, with a
+/// window of dropped live events in between. It is driven instead by the durable
+/// `channel_member` projection, which a *newer* kind 39002 replaces and a missing one
+/// cannot narrow, and by the authoritative membership signal (the `#p`-scoped 44101) and
+/// the relay's own CLOSE.
 ///
 /// The ``SubscriptionManager`` keeps each registered subscription alive across
 /// reconnects and re-arms it on the next `.ready`, so this layer only decides *which*
@@ -85,12 +89,40 @@ extension SyncEngine {
     /// untouched, so a reconnect's rediscovery does not churn the wire. Best-effort —
     /// a filter the relay would refuse is skipped rather than aborting the pass.
     ///
-    /// Called on every discovery pass with the discovered ∪ known channel set, the
-    /// same set the head reconcile iterates.
+    /// Called on every authoritative pass with ``liveChannels(joined:)``, the same set
+    /// the head reconcile iterates.
     func ensureChannelSubscriptions(_ desired: Set<String>) async {
         for channel in desired.subtracting(Set(channelContentSubscriptions.keys)) {
             _ = try? await subscribeChannelContent(channel)
         }
+    }
+
+    /// The channels that earn a standing subscription and a head reconcile at rest:
+    /// **real membership**, plus whatever conversation is on screen.
+    ///
+    /// # Why membership rather than what the sidebar draws
+    ///
+    /// The relay serves every open channel to any key, so `channel_access.state` reaches
+    /// `.active` for channels nobody has joined — by design, since a reader may write to
+    /// an open channel without being on its roster. Scoping the resting cost to that set
+    /// meant every open channel on the relay bought a standing `#h` REQ and a head
+    /// reconcile out of the same 50 REQ / 5 s budget as the channels the reader actually
+    /// reads. `joined` comes from `channel_member` instead — a projection only a newer
+    /// kind 39002 can narrow, which is what makes it safe to *remove* against.
+    ///
+    /// # Why the active channel is in here
+    ///
+    /// Nothing else would give it live traffic. Opening a conversation registers no
+    /// subscription and issues no window request of its own: ``setActiveChannel(_:)`` was
+    /// priority-only, and `ChannelTimelineModel` is purely the read side. So a channel the
+    /// reader can still reach from the sidebar but is not a member of — every open channel
+    /// they have not joined, until a browse surface takes over the sidebar — would render
+    /// its cached history and then never move again. Including it here, and subscribing on
+    /// demand in ``setActiveChannel(_:)``, means the resting cost is membership while
+    /// nothing visible can freeze.
+    func liveChannels(joined: Set<String>) -> Set<String> {
+        guard let activeChannel else { return joined }
+        return joined.union([activeChannel])
     }
 
     /// Reconciles to the authoritative active-membership set exactly. Cached
@@ -153,14 +185,39 @@ extension SyncEngine {
     /// turn in an arbitrary order — on a busy account, potentially last. This names it,
     /// and the ``SubscriptionManager`` arms it first.
     ///
-    /// Ordering only: membership, filters and delivery are all untouched, and a value
-    /// that is stale or names a channel with no subscription is skipped. So it is safe
-    /// to call before the channel is subscribed — ``subscribeChannelContent(_:)`` picks
-    /// the priority up when it registers one — and there is no obligation to clear it
-    /// when the conversation closes. Leaving the last-read channel prioritised is the
-    /// better resting state anyway: it is where the reader most likely returns.
+    /// Ordering only: membership, filters and delivery are all untouched, and there is no
+    /// obligation to clear it when the conversation closes. Leaving the last-read channel
+    /// prioritised is the better resting state anyway: it is where the reader most likely
+    /// returns.
+    ///
+    /// # Why it also subscribes
+    ///
+    /// Because nothing else does. The resting subscription set is real membership
+    /// (``liveChannels(joined:)``), and a reader can still open a channel they are not a
+    /// member of — every open channel on the relay is reachable until a browse surface
+    /// takes the sidebar over. Naming one used to be a no-op against an absent
+    /// subscription, and the screen has no relay path of its own: `ChannelTimelineModel`
+    /// consumes ``DatabaseSignal`` and re-reads the store, and `prefetchThreads(in:)`
+    /// fetches replies to threads already held. So such a channel drew its cached history
+    /// and then froze — no live messages, no fresh head.
+    ///
+    /// This registers the standing subscription if one is missing and kicks the head
+    /// reconcile that fills the gap, which is the entire relay side of opening a channel.
+    /// The reconcile is **detached rather than awaited**, for the same reason
+    /// ``assembleNotices(_:generation:)`` is: a screen presenting must not wait on a
+    /// window round trip. It is generation-guarded, so a reconnect mid-flight abandons it
+    /// and the fresh `.ready` reconciles the channel itself — the active channel is in the
+    /// desired set of every pass.
+    ///
+    /// Idempotent and cheap on the common path: a channel already subscribed — every
+    /// channel the reader is a member of — takes the priority call and nothing else.
     public func setActiveChannel(_ channel: String?) async {
         activeChannel = channel
+        if let channel, channelContentSubscriptions[channel] == nil {
+            _ = try? await subscribeChannelContent(channel)
+            let generation = readyGeneration
+            Task { [weak self] in await self?.reconcile(channel, generation: generation) }
+        }
         await subscriptions.prioritise(channel.flatMap { channelContentSubscriptions[$0] })
     }
 

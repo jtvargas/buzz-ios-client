@@ -11,7 +11,14 @@ public enum ChannelDirectoryStatus: Sendable, Equatable {
 }
 
 struct ChannelDirectoryRefreshResult: Sendable {
+    /// The channels the sidebar may draw: `channel_access.state = .active`. Wider than
+    /// ``joined`` — the relay serves every open channel to any key, so this includes
+    /// channels nobody has joined.
     let channels: Set<String>
+    /// The channels whose relay-signed roster names this identity, and the only ones
+    /// that earn a standing subscription and a head reconcile. See
+    /// ``SyncEngine/liveChannels(joined:)``.
+    let joined: Set<String>
     let status: ChannelDirectoryStatus
 }
 
