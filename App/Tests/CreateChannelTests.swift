@@ -157,6 +157,46 @@ struct CreateChannelTests {
         #expect(model.created == "channel-2")
     }
 
+    // MARK: - The walk
+
+    @Test("The walk is two steps, and both of its ends are closed")
+    func stepEndsAreClosed() {
+        typealias Step = CreateChannelSheet.Step
+        #expect(Step.allCases == [.details, .visibility], "typing comes before deciding")
+        #expect(Step.details.next == .visibility)
+        #expect(Step.visibility.previous == .details)
+        // The two that decide what the toolbar says. A `previous` on the first step would
+        // put a Back button where Cancel is the only way out; a `next` on the last would
+        // hide Create behind it.
+        #expect(Step.details.previous == nil, "nothing behind the first step but Cancel")
+        #expect(Step.visibility.next == nil, "nothing ahead of the last step but Create")
+    }
+
+    @Test("Every step names itself, and counts itself")
+    func stepTitles() {
+        #expect(CreateChannelSheet.Step.details.subtitle == "Step 1 of 2")
+        #expect(CreateChannelSheet.Step.visibility.subtitle == "Step 2 of 2")
+        // The count is derived, so a third step renumbers these rather than leaving two of
+        // them claiming to be the last.
+        for step in CreateChannelSheet.Step.allCases {
+            #expect(!step.title.isEmpty)
+            #expect(step.subtitle.hasSuffix("of \(CreateChannelSheet.Step.allCases.count)"))
+        }
+    }
+
+    @Test("Splitting the sheet did not soften what private means")
+    func visibilityFootersKeepTheirWords() {
+        #expect(
+            CreateChannelSheet.openFooter
+                == "Anyone in the workspace can find this channel and join it."
+        )
+        // This one is a warning, not a description: there is no invite screen in this app,
+        // so a private channel made here really is a room of one. Asserted phrase by phrase
+        // because a rewrite that drops either half stops being a warning.
+        #expect(CreateChannelSheet.privateFooter.contains("joinable only by invitation"))
+        #expect(CreateChannelSheet.privateFooter.contains("added from Desktop"))
+    }
+
     // MARK: - The heading
 
     @Test("Only Channels offers a plus, and both of the header's glyphs exist")

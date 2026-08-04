@@ -1,8 +1,16 @@
 import BuzzKit
 import SwiftUI
 
-/// The sheet behind the Channels heading's `+`: a name, a description, and whether the
+/// The sheet behind the Channels heading's `+`: a name and a description, then whether the
 /// room is private.
+///
+/// # Why two steps and not one form
+///
+/// The three fields are two different kinds of question. A name and a description are
+/// typing — you already know the answer before the sheet opens. Visibility is a decision
+/// with a consequence, and the consequence is a paragraph (below). On one page that
+/// paragraph sits under a toggle nobody has looked at yet, beneath the field the keyboard
+/// is covering; on its own page it is the thing being read. So: type, then decide.
 ///
 /// # The three fields are the relay's, not a design
 ///
@@ -32,6 +40,7 @@ struct CreateChannelSheet: View {
 
     @Environment(\.dismiss) private var dismiss
     @State private var model: CreateChannelModel
+    @State private var step: Step = .details
     @FocusState private var nameIsFocused: Bool
 
     init(engine: any ChannelCreating, created: @escaping (String) -> Void) {
@@ -39,27 +48,67 @@ struct CreateChannelSheet: View {
         self.created = created
     }
 
+    /// The two questions, in the order they are asked.
+    ///
+    /// Ordered by raw value rather than by a pair of hand-written transitions, so the ends
+    /// close themselves: the first step has no `previous` and the last has no `next`, which
+    /// is exactly what decides whether the bar says Cancel or Back, Next or Create. Adding a
+    /// third step is a case, not a rewiring.
+    enum Step: Int, CaseIterable {
+        case details
+        case visibility
+
+        /// What the bar calls this step. Only the first keeps the sheet's own name — the
+        /// second names the question instead, because by then "New Channel" is answered.
+        var title: String {
+            switch self {
+            case .details: "New Channel"
+            case .visibility: "Visibility"
+            }
+        }
+
+        /// The count under the title. Two steps is short enough that a progress bar would
+        /// be more furniture than information, but not so short that "there is another one
+        /// after this" goes without saying.
+        var subtitle: String {
+            "Step \(rawValue + 1) of \(Self.allCases.count)"
+        }
+
+        var next: Step? { Step(rawValue: rawValue + 1) }
+        var previous: Step? { Step(rawValue: rawValue - 1) }
+    }
+
     var body: some View {
         @Bindable var model = model
         NavigationStack {
             Form {
-                Section {
-                    TextField("Name", text: $model.name)
-                        .focused($nameIsFocused)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                    TextField("Description", text: $model.about, axis: .vertical)
-                        .lineLimit(2 ... 4)
-                } footer: {
-                    Text("What this space is for. Both can be changed later from Desktop.")
+                switch step {
+                case .details:
+                    Section {
+                        TextField("Name", text: $model.name)
+                            .focused($nameIsFocused)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .submitLabel(.next)
+                            .onSubmit(advance)
+                        TextField("Description", text: $model.about, axis: .vertical)
+                            .lineLimit(2 ... 4)
+                    } footer: {
+                        Text("What this space is for. Both can be changed later from Desktop.")
+                    }
+
+                case .visibility:
+                    Section {
+                        Toggle("Private", isOn: $model.isPrivate)
+                    } footer: {
+                        Text(model.isPrivate ? Self.privateFooter : Self.openFooter)
+                    }
                 }
 
-                Section {
-                    Toggle("Private", isOn: $model.isPrivate)
-                } footer: {
-                    Text(model.isPrivate ? Self.privateFooter : Self.openFooter)
-                }
-
+                // Not scoped to the step that can produce it. A refusal only ever arrives on
+                // the last one, but "the relay refused that: bad name" is about the field a
+                // step back from here — so it follows the reader there rather than vanishing
+                // the moment they go to act on it.
                 if let failure = model.failure {
                     Section {
                         Text(failure)
@@ -68,16 +117,33 @@ struct CreateChannelSheet: View {
                     }
                 }
             }
-            .navigationTitle("New Channel")
+            .navigationTitle(step.title)
+            .navigationSubtitle(step.subtitle)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                        .disabled(model.isSubmitting)
+                    // Back *replaces* Cancel rather than sitting beside it, for the reason
+                    // ``CreateIdentityView`` replaces the system's: two leading buttons, one
+                    // of which quietly throws away an answered step, is the worse of the two
+                    // problems. Leaving entirely is the swipe, which is still live here — the
+                    // only thing that ever takes it away is a create already on the wire.
+                    if let previous = step.previous {
+                        Button("Back") { go(to: previous) }
+                            .disabled(model.isSubmitting)
+                    } else {
+                        Button("Cancel") { dismiss() }
+                            .disabled(model.isSubmitting)
+                    }
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     if model.isSubmitting {
                         ProgressView()
+                    } else if step.next != nil {
+                        // The same gate as Create, deliberately: a name that canonicalises to
+                        // nothing is refused at the step that asks for it, not two taps later
+                        // by a button on a page that cannot show them why.
+                        Button("Next", action: advance)
+                            .disabled(!model.canSubmit)
                     } else {
                         Button("Create") { submit() }
                             .disabled(!model.canSubmit)
@@ -92,6 +158,26 @@ struct CreateChannelSheet: View {
         // conversation's composer this needs no settling delay: a sheet is presented
         // already laid out, and there is no scroll position for a keyboard to disturb.
         .task { nameIsFocused = true }
+    }
+
+    // MARK: - Moving
+
+    /// Forward one step, if the fields on this one allow it and there is one to go to.
+    ///
+    /// Guarded rather than trusted, because this is also `onSubmit` — the keyboard's Next
+    /// key reaches it without passing the disabled button.
+    private func advance() {
+        guard model.canSubmit, let next = step.next else { return }
+        go(to: next)
+    }
+
+    private func go(to step: Step) {
+        // The keyboard belongs to the field being left. Dropped before the move rather than
+        // with it, so the step that arrives is not laid out against a keyboard on its way
+        // out — and a step back lands on the fields at rest, not with the caret reclaiming
+        // one the reader may not have come back for.
+        nameIsFocused = false
+        withAnimation(.snappy) { self.step = step }
     }
 
     private func submit() {
