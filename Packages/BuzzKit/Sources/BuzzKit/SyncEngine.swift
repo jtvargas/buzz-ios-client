@@ -223,9 +223,28 @@ public actor SyncEngine {
     var sweepEpoch: (generation: Int, startedAt: Int64)?
 
     /// Whether the window fast path has been withdrawn for this session. A
-    /// `.degraded` window result sets it; it resets only with the engine, never
-    /// persisted (NIP-CW §Degradation, per-relay-per-session).
+    /// `.degraded` window result sets it; never persisted (NIP-CW §Degradation,
+    /// per-relay-per-session).
+    ///
+    /// Re-armed at the top of every ``SyncEngine/onReady(generation:)`` — a fresh
+    /// socket is a fresh session, so the fast path is probed again. It used to be
+    /// set once and never cleared anywhere in the process, which meant a single
+    /// transport blip on one page of one channel downgraded *every* channel to the
+    /// one-shot ``SyncEngine/fallbackAssemble(_:generation:)`` (a single
+    /// ``SyncEngineConfig/windowPageLimit`` page, no cursor) for the rest of the
+    /// app's run — and each of those channels then rendered as caught up over a gap
+    /// nothing would go back for.
     var windowDegraded = false
+
+    /// Where on-demand scrollback has paged to in each channel: the relay's own
+    /// `next_cursor` from the last page ``SyncEngine/loadOlderHistory(channel:before:)``
+    /// fetched.
+    ///
+    /// The chain is the relay's, not ours: only a cursor the relay minted describes
+    /// a position in *its* `(created_at DESC, id ASC)` order exactly, and following
+    /// it is what makes paging older provably gap-free. A locally derived cursor
+    /// seeds the first page and nothing after it — see `SyncEngine+History.swift`.
+    var historyCursors: [String: WindowCursor] = [:]
 
     // MARK: - Outbox drain coalescing
 
@@ -480,6 +499,10 @@ public actor SyncEngine {
         // content-subscription ids so a later reopen re-registers cleanly rather than
         // believing a channel is still subscribed.
         channelContentSubscriptions.removeAll()
+        // A scrollback cursor is a position in a store this engine may not be pointed
+        // at again — signing out replaces the identity and the database under it. Keeping
+        // one would seed the next session's paging below history it no longer holds.
+        historyCursors.removeAll()
         // Named an id in the table just cleared; a later session re-reports whatever
         // is on screen then.
         activeChannel = nil

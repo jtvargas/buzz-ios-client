@@ -79,6 +79,7 @@ struct ChannelTimelineView: View {
             sender: engine,
             typing: engine,
             readStateMarking: engine,
+            history: engine,
             opener: engine,
             prefetcher: engine,
             presence: engine.presenceStore,
@@ -107,6 +108,7 @@ struct ChannelTimelineView: View {
         sender: any MessageSending,
         typing: any EphemeralPublishing,
         readStateMarking: (any ReadStateMarking)?,
+        history: (any ChannelHistoryPaging)? = nil,
         opener: any ThreadOpening,
         prefetcher: (any ThreadPrefetching)? = nil,
         presence: PresenceStore,
@@ -135,6 +137,7 @@ struct ChannelTimelineView: View {
             sender: sender,
             typing: typing,
             readStateMarking: readStateMarking,
+            history: history,
             drafts: drafts,
             uploader: uploader,
             selfPubkey: selfPubkey
@@ -310,20 +313,43 @@ struct ChannelTimelineView: View {
         .dismissesSuggestionsOnScroll(model.mentionAutocomplete)
     }
 
-    /// The fixed slot at the top of history: always ``topSentinelHeight`` tall, and
-    /// spinning, for exactly as long as an older page may exist.
+    /// The fixed slot at the top of history: always ``topSentinelHeight`` tall, whatever
+    /// it happens to be saying, because a slot that appears and disappears is itself a
+    /// content-height change at the top of a bottom-anchored list.
     ///
-    /// It stands for "there is more above", not for "a load is in flight". Binding its
-    /// opacity to `isLoadingOlder` looked like the honest thing and was in fact dead:
-    /// `loadOlder()` has no suspension point, so the flag is set and cleared inside one
-    /// MainActor turn and no frame is ever drawn with it `true`. The model keeps the flag
-    /// as its re-entrancy guard, where it does real work.
+    /// It used to be a spinner standing for "there is more above" rather than for a load
+    /// in flight — which was the honest reading of it then, since `loadOlder()` was a
+    /// local read with no suspension point to spin through and nothing above the store to
+    /// reach for. Now that paging leaves the device there are three different things to
+    /// say and a spinner says none of them: fetching, failed, and this is where the
+    /// channel begins. An indefinite spinner over an unreachable page is exactly the
+    /// "hang" this all started as.
     @ViewBuilder
     private var topSentinel: some View {
-        if model.hasMoreOlder {
+        if model.olderFailed {
+            Button(action: loadOlderPage) {
+                Label("Couldn't load older messages. Tap to retry.", systemImage: "arrow.clockwise")
+                    .font(.hive(.caption, weight: .medium))
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .frame(height: Self.topSentinelHeight)
+        } else if model.isLoadingOlder {
             ProgressView()
                 .frame(height: Self.topSentinelHeight)
+                .accessibilityLabel("Loading older messages")
+        } else if model.hasMoreOlder {
+            // Between reports: hold the height and say nothing. A spinner drawn while
+            // nothing is being fetched is the thing that could not be told apart from a
+            // stuck one.
+            Color.clear
+                .frame(height: Self.topSentinelHeight)
                 .accessibilityHidden(true)
+        } else if model.hasReachedBeginning, !model.rows.isEmpty {
+            Text("This is the beginning of the conversation")
+                .font(.hive(.caption, weight: .medium))
+                .foregroundStyle(.secondary)
+                .frame(height: Self.topSentinelHeight)
         }
     }
 
