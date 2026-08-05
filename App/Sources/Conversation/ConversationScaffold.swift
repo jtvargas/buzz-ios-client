@@ -237,7 +237,27 @@ struct ConversationScaffold<Content: View, Bar: View, Accessory: View>: View {
                 isAtBottom = false
             }
             if isNearTop != edges.nearTop { isNearTop = edges.nearTop }
-            if edges.nearTop { onReachedTop() }
+            // Not before the reader has taken hold of the list, and that guard is load-bearing
+            // rather than an optimisation.
+            //
+            // ``ConversationReaderPlace`` holds a conversation nobody has scrolled at its
+            // newest message: while ``ConversationReaderPlace/hasMoved`` is `false`, *any*
+            // structural change corrects to `.bottom` (`correction(for:atBottomSlack:)`). That
+            // was safe for as long as nothing produced a structural change in that window —
+            // and until scrollback learned to leave the device, nothing did. Paging older was
+            // a local read, and in a channel whose history is short it committed nothing at
+            // all.
+            //
+            // Now it is a relay fetch, and `topTrigger` is a whole viewport, so a channel
+            // whose local history is barely longer than the screen — every channel of a
+            // community joined a minute ago — is inside the band the moment it opens, with no
+            // gesture. The page lands a beat later, the reader has just started to scroll, and
+            // the snap-to-newest rule fires under their thumb. Each page that lands asks for
+            // the next one (below), so it repeats.
+            //
+            // Waiting for the reader costs nothing: reaching for history *is* a gesture, and
+            // the fetch it starts is the one they asked for.
+            if edges.nearTop, place.hasMoved { onReachedTop() }
         }
         // The owner's commit, ahead of the readings it produces: `onChange` runs in the
         // update pass and a scroll geometry callback runs after layout, so the window is
@@ -254,7 +274,10 @@ struct ConversationScaffold<Content: View, Bar: View, Accessory: View>: View {
             // `isNearTop`. It runs on for exactly as long as the pages are not moving
             // them, which is the case it exists for, and ends where the owner's own
             // guards do — nothing older left, or a failed reach.
-            if isNearTop { onReachedTop() }
+            //
+            // Behind the same gate as the reading above, and for the same reason: this is the
+            // half that would turn one premature fetch into a run of them.
+            if isNearTop, place.hasMoved { onReachedTop() }
         }
         // The same window, opened for the other kind of change; the difference between them
         // is decided where the window is read, not here.
