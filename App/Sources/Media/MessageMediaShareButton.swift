@@ -33,6 +33,11 @@ struct MessageMediaShareButton: View {
     /// relay; defaults to the one session every export shares.
     var session: URLSession = MessageMediaExport.session
 
+    /// The session's grant for reading relay media, which a gated relay refuses the fetch
+    /// without. Optional because the viewer is also built by previews and tests, which mount
+    /// no environment — there it is `nil` and the fetch goes out unsigned, as it always did.
+    @Environment(AppEnvironment.self) private var environment: AppEnvironment?
+
     /// The fetched original, on disk. Its presence is the whole arming condition.
     @State private var file: URL?
 
@@ -41,7 +46,9 @@ struct MessageMediaShareButton: View {
             // Keyed by the picture, so paging the gallery fetches the one now on screen and
             // abandons the one that is not.
             .task(id: media.url) {
-                file = try? await MessageMediaExport.fetch(media, session: session)
+                file = try? await MessageMediaExport.fetch(
+                    media, session: session, authorization: environment?.mediaReadAuthorizer
+                )
             }
     }
 

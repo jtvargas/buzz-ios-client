@@ -61,9 +61,21 @@ enum MessageMediaExport {
     static let session = RemoteImageLoader.makeSession()
 
     /// Fetches the attachment's original bytes and returns the file they were written to.
-    static func fetch(_ media: MessageMedia, session: URLSession) async throws -> URL {
+    ///
+    /// The grant is the same one the image loaders fetch with, and it is needed here for the
+    /// same reason: a relay with `require_media_get_auth` on refuses an unsigned read, so
+    /// without it the picture a reader is looking at cannot be saved or shared. `nil` sends
+    /// an unauthenticated request, which is what every relay that does not ask for one
+    /// expects.
+    static func fetch(
+        _ media: MessageMedia,
+        session: URLSession,
+        authorization: (any MediaReadAuthorizing)? = nil
+    ) async throws -> URL {
         guard let source = URL(string: media.url) else { throw Failure.download }
-        let (data, response) = try await fetchData(from: source, session: session)
+        let (data, response) = try await fetchData(
+            from: source, session: session, authorization: authorization
+        )
         let name = filename(for: media, responseMIMEType: (response as? HTTPURLResponse)?.mimeType)
         do {
             let file = try destination(for: media, named: name)
@@ -130,9 +142,17 @@ enum MessageMediaExport {
 // MARK: - Fetching
 
 private extension MessageMediaExport {
-    static func fetchData(from source: URL, session: URLSession) async throws -> (Data, URLResponse) {
+    static func fetchData(
+        from source: URL,
+        session: URLSession,
+        authorization: (any MediaReadAuthorizing)?
+    ) async throws -> (Data, URLResponse) {
         do {
-            let (data, response) = try await session.data(from: source)
+            var request = URLRequest(url: source)
+            if let header = await authorization?.authorization(for: source) {
+                request.setValue(header, forHTTPHeaderField: "Authorization")
+            }
+            let (data, response) = try await session.data(for: request)
             // A media host that is reachable but has lost the object answers with a *page*,
             // not with a transport error — so an unchecked body is how an HTML 404 ends up
             // named `.jpg` in front of the share sheet. Both halves are needed: some relays
