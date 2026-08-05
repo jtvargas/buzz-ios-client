@@ -34,7 +34,10 @@ struct ThreadView: View {
     /// This device's per-thread read marks. Absent on a surface reached without them (the
     /// conversation fixture), where nothing is recorded.
     @Environment(\.threadReadMarks) private var threadReads
-    @Environment(AppEnvironment.self) private var appEnvironment
+    /// Optional for ``ChannelTimelineView``'s reason: the non-optional form traps before any
+    /// `body` runs when this surface is mounted outside the app graph, which is what the
+    /// fixtures do.
+    @Environment(AppEnvironment.self) private var appEnvironment: AppEnvironment?
     private let channelID: String
     /// Kept so the participants sheet can start its own presence stream. The `presence`
     /// model above is this view's; a sheet is a separate lifetime and reads it from the
@@ -212,6 +215,7 @@ struct ThreadView: View {
             actions: model,
             isReadOnly: !access.allowsInteraction,
             onRemind: { row, due in
+                guard let appEnvironment else { return }
                 Task {
                     await ReminderCreation.set(
                         row,

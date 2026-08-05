@@ -29,7 +29,14 @@ struct ChannelTimelineView: View {
     /// only the in-flight moment between the tap and the roster commit.
     @State private var isJoining = false
     @Environment(\.entityNames) private var names
-    @Environment(AppEnvironment.self) private var appEnvironment
+    /// Optional, and that is what makes this surface mountable outside the app graph.
+    ///
+    /// The non-optional form traps in `EnvironmentBox.update` when nothing has been put in
+    /// the environment — before any `body` runs, so it is not reachable by guarding the one
+    /// call site below. ``ConversationFixtureHost`` mounts this view directly, so every
+    /// conversation UI shape has crashed on launch since this property was added; the suite is
+    /// not a pull-request gate, so nothing said so.
+    @Environment(AppEnvironment.self) private var appEnvironment: AppEnvironment?
     private let channel: ChannelListRow
     private let channelID: String
     private let store: BuzzEventStore
@@ -226,6 +233,9 @@ struct ChannelTimelineView: View {
             isReadOnly: !access.allowsInteraction,
             onReplyInThread: { open(thread: $0, focusingComposer: true) },
             onRemind: { row, due in
+                // Nothing to schedule against outside the app graph — a fixture has no store
+                // of reminders and no session to own them.
+                guard let appEnvironment else { return }
                 Task {
                     await ReminderCreation.set(
                         row,

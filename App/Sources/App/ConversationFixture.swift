@@ -95,6 +95,19 @@ enum ConversationFixture {
         /// `ConversationReactionScrollTests`, which fails as inconclusive rather than passing
         /// if the chip beat it.
         var reactAfter = 25_000
+        /// How many pages of older history a fake relay will serve when the reader scrolls
+        /// back, or `0` for a conversation whose history is only what was seeded.
+        ///
+        /// The shape nothing else here can make. Every other content change a shape produces
+        /// arrives at the bottom or grows a row in place; this one lands *above* the reader,
+        /// mid-scroll, from a round trip they triggered by reaching for it — and it is the one
+        /// the scroll engine had never been measured against, because the surface could not
+        /// produce it without a pager and no fixture supplied one.
+        var olderPages = 0
+        /// How long the fake relay takes to answer, in milliseconds. Non-zero by default: a
+        /// page that lands in the same turn as the request is not the case that breaks, and
+        /// arriving *during* the reader's own movement is the whole shape.
+        var olderPageDelay = 120
         /// The channel's name, for the one thing in this bar that is not a scroll shape:
         /// whether the heading survives beside the trailing buttons or is moved into the
         /// `…` overflow menu. A toolbar item that does not fit is not truncated — it
@@ -128,6 +141,8 @@ enum ConversationFixture {
             options.imageShape = arguments
                 .first { $0.hasPrefix("-imageShape=") }
                 .map { String($0.dropFirst("-imageShape=".count)) }
+            if let pages = value("olderPages") { options.olderPages = max(0, pages) }
+            if let delay = value("olderPageDelay") { options.olderPageDelay = max(0, delay) }
             if let index = value("reactOn") { options.reactOn = max(0, index) }
             if let after = value("reactAfter") { options.reactAfter = max(0, after) }
             if let name = arguments.first(where: { $0.hasPrefix("-channelName=") }) {
