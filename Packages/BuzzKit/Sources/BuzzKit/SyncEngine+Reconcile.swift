@@ -68,6 +68,13 @@ extension SyncEngine {
         // run's claim. See ``SyncEngine/readyWorkInFlight``.
         defer { if generation == readyGeneration { readyWorkInFlight = false } }
 
+        // A fresh socket is a fresh session, so the window fast path is probed again
+        // (NIP-CW §Degradation scopes the downgrade per relay, per session). Without
+        // this the flag was one-way for the life of the process: one `.degraded` page —
+        // a transport blip is enough — put every channel on the one-shot fallback until
+        // the app was killed. See ``SyncEngine/windowDegraded``.
+        windowDegraded = false
+
         // Backwards-compatible test seam for existing scripted WebSocket
         // harnesses. Production always injects the authoritative HTTP client.
         let discovered = await discover(generation: generation)

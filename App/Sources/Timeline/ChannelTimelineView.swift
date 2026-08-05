@@ -79,6 +79,7 @@ struct ChannelTimelineView: View {
             sender: engine,
             typing: engine,
             readStateMarking: engine,
+            history: engine,
             opener: engine,
             prefetcher: engine,
             presence: engine.presenceStore,
@@ -107,6 +108,7 @@ struct ChannelTimelineView: View {
         sender: any MessageSending,
         typing: any EphemeralPublishing,
         readStateMarking: (any ReadStateMarking)?,
+        history: (any ChannelHistoryPaging)? = nil,
         opener: any ThreadOpening,
         prefetcher: (any ThreadPrefetching)? = nil,
         presence: PresenceStore,
@@ -135,6 +137,7 @@ struct ChannelTimelineView: View {
             sender: sender,
             typing: typing,
             readStateMarking: readStateMarking,
+            history: history,
             drafts: drafts,
             uploader: uploader,
             selfPubkey: selfPubkey
@@ -310,20 +313,45 @@ struct ChannelTimelineView: View {
         .dismissesSuggestionsOnScroll(model.mentionAutocomplete)
     }
 
-    /// The fixed slot at the top of history: always ``topSentinelHeight`` tall, and
-    /// spinning, for exactly as long as an older page may exist.
+    /// The fixed slot at the top of history: always ``topSentinelHeight`` tall, whatever
+    /// it happens to be saying, because a slot that appears and disappears is itself a
+    /// content-height change at the top of a bottom-anchored list.
     ///
-    /// It stands for "there is more above", not for "a load is in flight". Binding its
-    /// opacity to `isLoadingOlder` looked like the honest thing and was in fact dead:
-    /// `loadOlder()` has no suspension point, so the flag is set and cleared inside one
-    /// MainActor turn and no frame is ever drawn with it `true`. The model keeps the flag
-    /// as its re-entrancy guard, where it does real work.
+    /// It says one of three things: older history is on its way, the last reach for it
+    /// failed, or this is where the channel begins.
+    ///
+    /// The spinner is bound to "there is more above" and deliberately **not** to
+    /// ``ChannelTimelineModel/isLoadingOlder``, which is invisible by construction: the
+    /// scaffold reports the top a whole viewport early
+    /// (``ConversationScaffold/topTrigger``, 800pt), so the fetch it triggers starts and
+    /// finishes while this slot is still 800 points above the visible rect. A reader who
+    /// then scrolls up to look at it arrives after the flag has cleared and sees an empty
+    /// gap — which is what the paging feels like when nothing marks it.
+    ///
+    /// The objection to an unconditional spinner was that it cannot be told apart from a
+    /// stuck one, and that was fair while nothing could satisfy it. It resolves now:
+    /// exhaustion is latched on the relay's own answer, so the spinner ends in the
+    /// beginning-of-conversation line, and a failed reach replaces it with a retry rather
+    /// than spinning over it.
     @ViewBuilder
     private var topSentinel: some View {
-        if model.hasMoreOlder {
+        if model.olderFailed {
+            Button(action: loadOlderPage) {
+                Label("Couldn't load older messages. Tap to retry.", systemImage: "arrow.clockwise")
+                    .font(.hive(.caption, weight: .medium))
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .frame(height: Self.topSentinelHeight)
+        } else if model.hasMoreOlder {
             ProgressView()
                 .frame(height: Self.topSentinelHeight)
-                .accessibilityHidden(true)
+                .accessibilityLabel("Loading older messages")
+        } else if model.hasReachedBeginning, !model.rows.isEmpty {
+            Text("This is the beginning of the conversation")
+                .font(.hive(.caption, weight: .medium))
+                .foregroundStyle(.secondary)
+                .frame(height: Self.topSentinelHeight)
         }
     }
 

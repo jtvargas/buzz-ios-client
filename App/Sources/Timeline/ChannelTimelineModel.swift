@@ -60,7 +60,18 @@ final class ChannelTimelineModel {
     private(set) var hasLoaded = false
     /// Whether an older page may still exist before the oldest loaded row.
     private(set) var hasMoreOlder = false
+    /// Whether a page is being fetched right now. Meaningful only since paging
+    /// learned to leave the device: while ``loadOlder()`` was a pure local read it was
+    /// set and cleared inside one MainActor turn and no frame was ever drawn with it
+    /// `true`, which is why the sentinel used to ignore it.
     private(set) var isLoadingOlder = false
+    /// Whether the last reach for older history failed.
+    ///
+    /// Its own state rather than a silent `false` on ``hasMoreOlder``: a spinner cannot
+    /// say whether it is waiting on the network or on nothing at all, and folding the
+    /// failure into "exhausted" is what ends scrollback for the life of a screen with
+    /// nothing on it to retry.
+    private(set) var olderFailed = false
 
     /// The composer's wire text plus identity-bearing selected mention tokens. Every
     /// change is written through to this channel's draft — see
@@ -132,6 +143,10 @@ final class ChannelTimelineModel {
     /// `ChannelTimelineModel+ReadState.swift`: a `private` member is reachable only from
     /// the file that declares it.
     let readStateMarking: (any ReadStateMarking)?
+    /// Where older history comes from once the local store runs out. `nil` — the
+    /// fixtures and the UI tests — keeps the old behaviour: page what is on the
+    /// device, then stop.
+    let history: (any ChannelHistoryPaging)?
     /// Internal for the same reason, so ``fetch(before:)`` can read it from
     /// `ChannelTimelineModel+Live.swift`. Immutable, so widening it exposes no mutation.
     let pageSize: Int
@@ -162,9 +177,15 @@ final class ChannelTimelineModel {
     /// The oldest loaded row's cursor, the basis of the next older page. Tracks the
     /// *full* loaded set, so a frozen tail never affects where pagination resumes.
     private var earliest: TimelineCursor?
-    /// Set once an older page comes back short: history is exhausted before the
-    /// oldest loaded row, and no later head re-read may re-open it.
+    /// Set once history is proved to end above the oldest loaded row, and no later head
+    /// re-read may re-open it. The proof is the relay's exhaustion fact, or — with no
+    /// relay pager — a short local page.
     private var hasExhaustedOlder = false
+
+    /// Whether the oldest loaded row is the first thing this channel ever held, proved
+    /// rather than assumed. What the surface draws the top of the conversation on: a
+    /// channel that has simply not paged yet claims no beginning.
+    var hasReachedBeginning: Bool { hasExhaustedOlder }
     /// The boundary behind which arrivals are held while the reader reads history.
     /// Internal because the jump that releases it lives beside this file.
     var tail = TimelineTail()
@@ -186,6 +207,7 @@ final class ChannelTimelineModel {
         sender: any MessageSending,
         typing: any EphemeralPublishing = NoopEphemeralPublisher(),
         readStateMarking: (any ReadStateMarking)? = nil,
+        history: (any ChannelHistoryPaging)? = nil,
         drafts: ComposerDrafts? = nil,
         uploader: @escaping MediaUploaderProvider = { nil },
         selfPubkey: String? = nil,
@@ -198,6 +220,7 @@ final class ChannelTimelineModel {
         self.sender = sender
         self.typing = typing
         self.readStateMarking = readStateMarking
+        self.history = history
         self.drafts = drafts
         self.selfPubkey = selfPubkey
         self.pageSize = pageSize
@@ -268,15 +291,30 @@ final class ChannelTimelineModel {
         rebuild()
         // Guarded like the rest: written on every commit, read in the timeline's `body`.
         if !hasLoaded { hasLoaded = true }
-        // A full head page means older history may exist. Re-derived on every head
-        // re-read, not only the first, because a channel opened before its backfill
-        // lands starts with a short head and must still offer pagination once the
-        // backfill fills it — but never re-opened once an older page came back short,
-        // the one durable proof that history is exhausted.
-        if !hasExhaustedOlder, hasMoreOlder != (head.count >= pageSize) {
-            hasMoreOlder = head.count >= pageSize
+        // Re-derived on every head re-read, not only the first, because a channel opened
+        // before its backfill lands starts with a short head and must still offer
+        // pagination once the backfill fills it — but never re-opened once history has
+        // been proved exhausted.
+        if !hasExhaustedOlder, hasMoreOlder != mayHaveOlder(head) {
+            hasMoreOlder = mayHaveOlder(head)
         }
         return Array(loaded.keys)
+    }
+
+    /// Whether to offer paging above the loaded set.
+    ///
+    /// Without a relay pager this is the local read's own evidence: a full head page
+    /// means there is more underneath it, and a short one means there is not.
+    ///
+    /// With one, that evidence is worthless in both directions. A short head is exactly
+    /// what an interrupted or degraded backfill leaves — the channel it could not finish
+    /// has *most* of its history above the floor, and reading the shortfall as
+    /// "exhausted" is what stranded a reader at whatever depth the background reconcile
+    /// happened to reach. So paging stays on offer until the relay itself says the
+    /// channel is out of history (``hasExhaustedOlder``). The emptiness check is only to
+    /// keep a channel with nothing in it from advertising history above nothing.
+    private func mayHaveOlder(_ head: [TimelineRow]) -> Bool {
+        history != nil ? !loaded.isEmpty : head.count >= pageSize
     }
 
     /// Drops loaded rows the head has stopped returning.
@@ -308,27 +346,88 @@ final class ChannelTimelineModel {
 
     // MARK: - Pagination
 
-    /// Loads the page immediately older than the oldest loaded row, via the
-    /// `(createdAt, id)` keyset cursor — never an offset. Idempotent while a load
-    /// is in flight and once history is exhausted, because the scaffold reports the
-    /// top threshold as a level rather than an edge and can report it repeatedly
-    /// across one load.
+    /// Loads the page immediately older than the oldest loaded row: from the local
+    /// store first, via the `(createdAt, id)` keyset cursor — never an offset — and
+    /// from the relay when the store has nothing more to give.
+    ///
+    /// Idempotent while a load is in flight and once history is exhausted, because the
+    /// scaffold reports the top threshold as a level rather than an edge and can report
+    /// it repeatedly across one load. That guard now matters more than it did: each
+    /// report past the local floor can cost a round trip.
+    ///
+    /// Exhaustion is latched on one thing only — the relay saying there is nothing
+    /// older. A short local page is where the *device* runs out, which is not the same
+    /// fact and was being treated as if it were.
     func loadOlder() async {
         guard hasMoreOlder, !isLoadingOlder, let cursor = earliest else { return }
         isLoadingOlder = true
         defer { isLoadingOlder = false }
+        if olderFailed { olderFailed = false }
 
         lastOlderCursor = cursor
         let older = fetch(before: cursor)
-        for row in older { loaded[row.id] = row }
-        rebuild()
-        if older.count < pageSize {
+        apply(older: older)
+        guard older.count < pageSize else { return }
+
+        // The device is out of history at this cursor. Without somewhere to ask, that
+        // is the end of it — the pre-relay behaviour, kept for the fixtures.
+        guard let history else {
             hasExhaustedOlder = true
             hasMoreOlder = false
+            return
         }
-        // Bring in the older rows' reactions and mentions immediately rather than
-        // waiting on the next commit signal, so a scroll back never shows chip-less
-        // or unresolved history.
+
+        // Keeps going while the relay has more and the reader has been given nothing to
+        // see. A window page can legitimately land no rows on this screen — the cursor
+        // chain re-walks the boundary second, and a reconcile running underneath can have
+        // filled the stretch it asks for — and returning after one of those leaves the
+        // surface exactly as it was: no new rows, no height change, and so nothing for the
+        // scaffold to report a top with again. One page per report was the whole budget,
+        // and a page that spent it on duplicates ended scrollback silently.
+        //
+        // Bounded, because the alternative is walking a whole channel inside one report.
+        // Running out of budget is not exhaustion: ``hasMoreOlder`` stays true and the
+        // next report resumes where the cursor chain stands.
+        for _ in 0 ..< Self.olderPageBudget {
+            let loadedBefore = loaded.count
+            do {
+                let page = try await history.loadOlderHistory(
+                    channel: channel,
+                    before: WindowCursor(createdAt: cursor.createdAt, id: cursor.id)
+                )
+                // Only a page that wrote something can have moved the local floor. Re-read
+                // from the same cursor: what it just ingested is, by construction, below
+                // it — and the cursor is still the floor on every pass that gets here,
+                // because the first pass to move it returns.
+                if page.ingested > 0 { apply(older: fetch(before: cursor)) }
+                if !page.hasMore {
+                    hasExhaustedOlder = true
+                    hasMoreOlder = false
+                    return
+                }
+                guard loaded.count == loadedBefore else { return }
+            } catch {
+                // Deliberately not latched: the channel is not out of history, this attempt
+                // failed. ``hasMoreOlder`` stays true so the sentinel can offer a retry.
+                olderFailed = true
+                return
+            }
+        }
+    }
+
+    /// How many window pages one ``loadOlder()`` may walk while none of them puts a row
+    /// on screen. Enough to carry the cursor past a crowded boundary second or a stretch
+    /// a background reconcile has already filled; small enough that the reader is never
+    /// waiting on an unbounded walk.
+    private static let olderPageBudget = 5
+
+    /// Merges an older page into the loaded set and brings its reactions, mentions and
+    /// reply participants with it — immediately, rather than waiting on the next commit
+    /// signal, so a scroll back never shows chip-less or unresolved history.
+    private func apply(older: [TimelineRow]) {
+        guard !older.isEmpty else { return }
+        for row in older { loaded[row.id] = row }
+        rebuild()
         let ids = Array(loaded.keys)
         applyReactions(fetchReactions(for: ids))
         applyMentions(fetchMentions(for: ids))
