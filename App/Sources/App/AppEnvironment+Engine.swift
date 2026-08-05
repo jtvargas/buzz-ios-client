@@ -98,6 +98,26 @@ extension AppEnvironment {
         )
     }
 
+    /// Points the image pipeline at this session's signed grant for reading relay media —
+    /// or, with no signer, takes the last session's away.
+    ///
+    /// Both loaders, because both fetch from the same host: an avatar is relay media as
+    /// much as an attachment is, and a deployment that gates blobs gates faces too.
+    ///
+    /// Beside ``makeMediaUploader(signer:websocketURL:)`` and torn down beside it, for the
+    /// reason that one is: the grant is a signature bearing this identity, and a session
+    /// that has ended must not be able to mint another.
+    func installMediaReadAuthorizer(signer: KeychainSigner?, websocketURL: URL?) async {
+        let authorizer: MediaReadAuthorizer? = {
+            guard let signer, let websocketURL,
+                  let baseURL = RelayEndpoint.httpBaseURL(for: websocketURL)
+            else { return nil }
+            return MediaReadAuthorizer(baseURL: baseURL, signer: signer)
+        }()
+        await RemoteImageLoader.shared.setAuthorization(authorizer)
+        await RemoteImageLoader.messageMedia.setAuthorization(authorizer)
+    }
+
     // MARK: - Store location
 
     /// The directory every community's database sits in: `Application Support/Hive`,

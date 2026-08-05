@@ -335,6 +335,7 @@ final class AppEnvironment {
         let engine = makeEngine(store: store, signer: signer, websocketURL: websocketURL, queryURL: queryURL)
         self.engine = engine
         mediaUploader = makeMediaUploader(signer: signer, websocketURL: websocketURL)
+        await installMediaReadAuthorizer(signer: signer, websocketURL: websocketURL)
         heartbeat = PresenceHeartbeat(publisher: engine)
 
         observeEngineState(of: engine)
@@ -422,6 +423,7 @@ final class AppEnvironment {
         engine = nil
         // Beside the engine: it signs with a key this session no longer owns.
         mediaUploader = nil
+        await installMediaReadAuthorizer(signer: nil, websocketURL: nil)
         // Held in memory otherwise — see ``ComposerDrafts/reset()``.
         drafts?.reset()
         drafts = nil

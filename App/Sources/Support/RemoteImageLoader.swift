@@ -1,3 +1,4 @@
+import BuzzKit
 import CryptoKit
 import ImageIO
 import UIKit
@@ -42,10 +43,26 @@ actor RemoteImageLoader {
     private var inFlight: [String: Task<Outcome, Never>] = [:]
     private var failures = RemoteImageFailureCache()
     private let session: URLSession
+    /// The signed grant relay media is fetched with, once there is an identity to sign
+    /// one. `nil` until a session mounts, and again after it ends.
+    private var authorization: (any MediaReadAuthorizing)?
 
     init(session: URLSession = RemoteImageLoader.makeSession(), cache: RemoteImageCache = RemoteImageCache()) {
         self.session = session
         self.cache = cache
+    }
+
+    /// Points the loader at the session's grant, or removes it when the session ends.
+    ///
+    /// Forgetting the remembered failures is part of the same act rather than a courtesy:
+    /// against a relay that requires the grant, every fetch before it arrived came back
+    /// `401` and is now suppressed for the negative cache's lifetime. Those entries
+    /// describe a question that was asked without credentials, so they say nothing about
+    /// the request the loader would make now — and leaving them would hold a conversation
+    /// blank for minutes after the thing that fixes it landed.
+    func setAuthorization(_ provider: (any MediaReadAuthorizing)?) {
+        authorization = provider
+        failures.removeAll()
     }
 
     /// The session images are fetched on.
@@ -120,9 +137,18 @@ actor RemoteImageLoader {
         // behind.
         if let existing = inFlight[key] { return await existing.value.succeeded }
 
+        // Both read off the actor here and passed down, rather than reached for inside the
+        // attempt: the grant is minted on the concurrent executor with everything else, and
+        // this actor keeps its one suspension point — the `await` on the task below — so a
+        // second caller cannot slip past the in-flight table while a signature is in
+        // progress and start a duplicate fetch.
         let session = session
+        let authorization = authorization
         let task = Task<Outcome, Never> {
-            await Self.resolve(url, thumbnail: thumbnail, pixelSize: pixelSize, session: session)
+            await Self.resolve(
+                url, thumbnail: thumbnail, pixelSize: pixelSize,
+                session: session, authorization: authorization
+            )
         }
         inFlight[key] = task
         let outcome = await task.value
@@ -227,7 +253,8 @@ extension RemoteImageLoader {
         _ url: URL,
         thumbnail: URL?,
         pixelSize: CGFloat,
-        session: URLSession
+        session: URLSession,
+        authorization: (any MediaReadAuthorizing)? = nil
     ) async -> Outcome {
         if let dataURI = DataURI(url: url) {
             guard let image = decode(dataURI, pixelSize: pixelSize) else {
@@ -236,7 +263,10 @@ extension RemoteImageLoader {
             }
             return .image(image)
         }
-        return await fetch(url, thumbnail: thumbnail, pixelSize: pixelSize, session: session)
+        return await fetch(
+            url, thumbnail: thumbnail, pixelSize: pixelSize,
+            session: session, authorization: authorization
+        )
     }
 }
 
@@ -251,10 +281,13 @@ extension RemoteImageLoader {
         _ url: URL,
         thumbnail: URL?,
         pixelSize: CGFloat,
-        session: URLSession
+        session: URLSession,
+        authorization: (any MediaReadAuthorizing)? = nil
     ) async -> Outcome {
         if let thumbnail {
-            let outcome = await load(thumbnail, pixelSize: pixelSize, session: session)
+            let outcome = await load(
+                thumbnail, pixelSize: pixelSize, session: session, authorization: authorization
+            )
             switch outcome {
             // Blobs uploaded before the relay generated thumbnails have none, so a missing
             // thumbnail falls through to the original. Only this case does, and only here:
@@ -266,15 +299,25 @@ extension RemoteImageLoader {
             case .image, .failed: return outcome
             }
         }
-        return await load(url, pixelSize: pixelSize, session: session)
+        return await load(url, pixelSize: pixelSize, session: session, authorization: authorization)
     }
 
     private nonisolated static func load(
         _ url: URL,
         pixelSize: CGFloat,
-        session: URLSession
+        session: URLSession,
+        authorization: (any MediaReadAuthorizing)?
     ) async -> Outcome {
-        guard let (data, response) = try? await session.data(from: url) else {
+        var request = URLRequest(url: url)
+        // Sent whenever one can be minted, not only when the relay is known to insist:
+        // whether a deployment requires it is its own configuration and nothing the client
+        // is told, and a relay that does not care ignores the header. The authorizer
+        // answers `nil` for anything that is not this relay's own media, so a picture
+        // hosted elsewhere is still fetched as an anonymous request.
+        if let header = await authorization?.authorization(for: url) {
+            request.setValue(header, forHTTPHeaderField: "Authorization")
+        }
+        guard let (data, response) = try? await session.data(for: request) else {
             return .failed(.transport, url: url)
         }
         if let http = response as? HTTPURLResponse, !(200 ... 299).contains(http.statusCode) {
