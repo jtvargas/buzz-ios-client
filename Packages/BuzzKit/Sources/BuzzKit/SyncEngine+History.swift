@@ -55,6 +55,10 @@ public extension SyncEngine {
         /// survives it (NIP-CW §Client Behavior step 5) and the same request MAY be
         /// retried.
         case invalidPage
+        /// The page arrived intact but the write did not land — a busy database against a
+        /// concurrent reconcile, or a projector that threw. Retriable, and the cursor has
+        /// not moved, so the retry asks for this same page again.
+        case notIngested
     }
 
     /// Fetches the channel-window page immediately older than the reader's floor,
@@ -118,9 +122,21 @@ public extension SyncEngine {
 
         switch result {
         case let .page(page):
-            let outcome = try? await store.commitWindowPage(page, channel: channel, advanceWatermarkTo: nil)
+            // A page whose write threw is not a page this device has. Nothing it carries
+            // may be acted on: advancing the cursor past it would skip its rows until
+            // sign-out — ``historyCursors`` outlives the screen, the channel and the
+            // socket, and unlike ``SyncEngine/reconcile(_:generation:)`` there is no
+            // watermark here to re-anchor from — and echoing its `hasMore` would let a
+            // failed write latch as "this channel begins here" over rows that exist.
+            // Reconcile's identically-shaped `try?` is safe for the opposite reason: its
+            // watermark advances inside the same transaction.
+            guard let outcome = try? await store.commitWindowPage(
+                page, channel: channel, advanceWatermarkTo: nil
+            ) else {
+                throw OlderHistoryError.notIngested
+            }
             if let next = page.bounds.nextCursor { historyCursors[channel] = next }
-            return OlderHistoryPage(hasMore: page.bounds.hasMore, ingested: outcome?.inserted.count ?? 0)
+            return OlderHistoryPage(hasMore: page.bounds.hasMore, ingested: outcome.inserted.count)
 
         case .invalidPage:
             throw OlderHistoryError.invalidPage
