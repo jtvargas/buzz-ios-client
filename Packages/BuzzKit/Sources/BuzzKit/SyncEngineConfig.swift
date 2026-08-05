@@ -58,6 +58,21 @@ public struct SyncEngineConfig: Sendable {
     /// ``ThreadActivity/newReplyCountIsExact``.
     public var threadPrefetchReplyLimit: Int
 
+    /// How many times the launch pass may repeat the prefetch before it stops, whatever
+    /// is left behind — see ``SyncEngine/settleThreadPrefetch(generation:)``.
+    ///
+    /// One pass reaches for ``threadPrefetchRootLimit`` threads, and a pass records what
+    /// it asked about, so repeating it pages down the backlog rather than re-asking. This
+    /// is the number that stops that paging from walking a whole history on a device that
+    /// has been away for a month.
+    ///
+    /// Three, which is sixty threads and at most six requests: a cold launch that has to
+    /// reach further than the sixty most recently active threads in the reader's whole
+    /// community is catching up on more than anyone reads in one sitting, and the rest is
+    /// still reachable — the next launch pages again from where this one stopped, and
+    /// arriving on a screen asks for that screen's own threads directly.
+    public var threadPrefetchLaunchPasses: Int
+
     /// How many of a channel's relay notices one reconcile reaches for.
     ///
     /// These have to be asked for separately from everything else, and the reason is
@@ -78,6 +93,7 @@ public struct SyncEngineConfig: Sendable {
         threadFetchLimit: Int = 1000,
         threadPrefetchRootLimit: Int = 20,
         threadPrefetchReplyLimit: Int = 20,
+        threadPrefetchLaunchPasses: Int = 3,
         noticeBackfillLimit: Int = 200
     ) {
         self.liveSinceWindow = liveSinceWindow
@@ -86,6 +102,7 @@ public struct SyncEngineConfig: Sendable {
         self.threadFetchLimit = threadFetchLimit
         self.threadPrefetchRootLimit = threadPrefetchRootLimit
         self.threadPrefetchReplyLimit = threadPrefetchReplyLimit
+        self.threadPrefetchLaunchPasses = threadPrefetchLaunchPasses
         self.noticeBackfillLimit = noticeBackfillLimit
     }
 

@@ -59,6 +59,7 @@ struct EngineHarness {
         threadFetchLimit: Int = 1000,
         threadPrefetchRootLimit: Int = 20,
         threadPrefetchReplyLimit: Int = 20,
+        threadPrefetchLaunchPasses: Int = 3,
         backoffSleep: @escaping @Sendable (Duration) async throws -> Void = { _ in }
     ) throws {
         self.path = path
@@ -111,7 +112,8 @@ struct EngineHarness {
             presenceSweepInterval: .seconds(3600),
             threadFetchLimit: threadFetchLimit,
             threadPrefetchRootLimit: threadPrefetchRootLimit,
-            threadPrefetchReplyLimit: threadPrefetchReplyLimit
+            threadPrefetchReplyLimit: threadPrefetchReplyLimit,
+            threadPrefetchLaunchPasses: threadPrefetchLaunchPasses
         )
         if let directoryClient {
             engine = SyncEngine(
