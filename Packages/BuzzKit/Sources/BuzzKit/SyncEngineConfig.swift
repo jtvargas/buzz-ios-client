@@ -73,6 +73,28 @@ public struct SyncEngineConfig: Sendable {
     /// arriving on a screen asks for that screen's own threads directly.
     public var threadPrefetchLaunchPasses: Int
 
+    /// How far back ``SyncEngine/settleThreadSweep(generation:)`` will ask about a thread
+    /// it has no evidence about.
+    ///
+    /// The sweep's candidates are chosen without consulting the relay's tally, so nothing
+    /// bounds them but this. Fourteen days, which is well past the watermark boundary the
+    /// defect lives at — a channel read daily exposes anything older than roughly a day —
+    /// while keeping the candidate set to something a few passes can rotate through.
+    ///
+    /// A thread that has been idle longer than this and then gains a reply is the residual
+    /// gap, and it is deliberate: closing it means asking about every root this device has
+    /// ever held, on a schedule, forever. The live subscription covers it while the app is
+    /// running, and opening the thread covers it at any time.
+    public var threadSweepHorizon: TimeInterval
+
+    /// How many threads one sweep pass may ask about.
+    ///
+    /// Forty, which is four requests at ``SyncEngine/maxFiltersPerRequest``. It is a
+    /// throughput cap and not a coverage ceiling: candidates come back least-recently-swept
+    /// first, so successive passes rotate through the backlog rather than re-serving the
+    /// same capful.
+    public var threadSweepRootLimit: Int
+
     /// How many of a channel's relay notices one reconcile reaches for.
     ///
     /// These have to be asked for separately from everything else, and the reason is
@@ -94,6 +116,8 @@ public struct SyncEngineConfig: Sendable {
         threadPrefetchRootLimit: Int = 20,
         threadPrefetchReplyLimit: Int = 20,
         threadPrefetchLaunchPasses: Int = 3,
+        threadSweepHorizon: TimeInterval = 14 * 24 * 60 * 60,
+        threadSweepRootLimit: Int = 40,
         noticeBackfillLimit: Int = 200
     ) {
         self.liveSinceWindow = liveSinceWindow
@@ -103,6 +127,8 @@ public struct SyncEngineConfig: Sendable {
         self.threadPrefetchRootLimit = threadPrefetchRootLimit
         self.threadPrefetchReplyLimit = threadPrefetchReplyLimit
         self.threadPrefetchLaunchPasses = threadPrefetchLaunchPasses
+        self.threadSweepHorizon = threadSweepHorizon
+        self.threadSweepRootLimit = threadSweepRootLimit
         self.noticeBackfillLimit = noticeBackfillLimit
     }
 

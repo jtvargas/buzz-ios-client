@@ -197,6 +197,12 @@ extension SyncEngine {
 
         guard isCurrent(generation) else { return }
         await settleThreadPrefetch(generation: generation)
+
+        // Last of all: the sweep asks about threads it has no evidence are behind, so it is
+        // the most speculative work on the pass and goes behind everything that is not.
+        // See ``SyncEngine/settleThreadSweep(generation:)``.
+        guard isCurrent(generation) else { return }
+        await settleThreadSweep(generation: generation)
     }
 
     private func setDirectoryStatus(_ status: ChannelDirectoryStatus) {

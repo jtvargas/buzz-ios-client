@@ -360,6 +360,52 @@ enum Schema {
             // declared there, and this bump to version 9 is what installs it.
         }
 
+        // When this device last asked the relay directly about a thread's replies, without
+        // consulting the relay's own tally about whether it needed to.
+        //
+        // # Why a sweep exists that ignores the tally
+        //
+        // ``thread_prefetch`` brakes a fetch whose *candidacy* comes from `thread_summary`:
+        // the relay says it holds a reply newer than anything here, so go and get it. That
+        // works exactly as long as the tally rises. It stops for a root that has fallen
+        // behind the sync watermark — the channel window pages down from head and stops
+        // there, ordered by the root's own immutable `created_at`, so an old root is never
+        // re-paged and never carries a fresh kind:39005. A reply landing on it while this
+        // device is asleep raises `last_reply_at` on the relay and nothing here ever learns
+        // it: the thread is not a prefetch candidate, so no dot, no Activity row, no mention
+        // badge — every surface is computed from the local log and all of them stay silent.
+        //
+        // The sweep's candidacy is therefore local: roots this device holds, in channels it
+        // is a member of, inside a horizon. No relay assertion is consulted, which is the
+        // point — the tally is the thing being distrusted.
+        //
+        // # Why that needs a record of its own, and why it is not `thread_prefetch`
+        //
+        // A candidate set built from "roots that exist" does not shrink as it is served, so
+        // without a brake the sweep re-asks the same roots on every authoritative pass
+        // forever, on a device that is entirely caught up. `thread_prefetch` cannot be that
+        // brake: it is keyed to the summary a fetch was selected against, and a sweep is
+        // selected against no summary at all. Writing one there would also mark the root as
+        // prefetch-attempted and suppress the *tally-driven* fetch that is still wanted.
+        //
+        // `swept_at` is a time rather than a flag so the candidate query can order by it:
+        // never-swept first, then least-recently-swept. That is what makes a cap a
+        // throughput knob instead of a coverage ceiling — successive passes rotate through
+        // the backlog rather than re-serving whichever roots happen to sort first, so a
+        // device whose session only ever runs one pass still reaches the whole horizon over
+        // a few launches instead of never seeing past the first capful.
+        //
+        // Local, via a migration, and deliberately not a projection table: like
+        // ``thread_fetch`` and ``thread_prefetch`` this is a fact about what this device has
+        // asked, which no replay of the log could reconstruct. A ``projectionVersion``
+        // rebuild must not erase it — doing so would re-arm a full sweep of every root.
+        // Declared beside the two queries that are its only readers, in `ThreadSweep.swift`,
+        // rather than inline here: this enum's body is four lines under swiftlint's error
+        // ceiling on `type_body_length` and an inline `CREATE TABLE` puts it over.
+        migrator.registerMigration("v12.thread-sweep") { db in
+            try createThreadSweepTable(db)
+        }
+
         return migrator
     }
 
