@@ -88,11 +88,16 @@ extension SyncEngine {
     /// Fetches the newest replies in each starter channel, so the channels the reader
     /// actually opens have their threads populated before they open one.
     ///
-    /// # Why per channel and not the global pass
+    /// # Why per channel, when a global pass now runs behind it
     ///
-    /// `prefetchThreads(in: nil)` takes the twenty most recently active threads across
-    /// *every* channel, so on an account in many channels two busy ones consume the whole
-    /// budget and the starter channels get nothing. Asking per channel gives each its own.
+    /// ``SyncEngine/settleThreadPrefetch(generation:)`` covers every channel, including
+    /// these two, so this could be deleted — but it would take a guarantee with it. One
+    /// global pass takes the twenty most recently active threads across *every* channel, so
+    /// on an account in many channels two busy ones can consume it and the starter channels
+    /// get whatever the loop reaches on a later pass, if it reaches that far. Asking per
+    /// channel first gives each of these its own budget outright, which is what a reader
+    /// arriving in a new community sees first. The cost once they are settled is two local
+    /// queries that return nothing.
     ///
     /// # Why it needs no gate of its own
     ///

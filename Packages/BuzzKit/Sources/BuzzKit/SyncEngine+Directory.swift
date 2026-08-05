@@ -183,12 +183,26 @@ extension SyncEngine {
         guard isCurrent(generation) else { return }
         await requestDrain(generation: generation)
 
-        // Last, and after the drain: the reader's own queued sends must not wait behind
-        // two channels' worth of reply fetching. Both halves need every head window above
-        // to have committed — a join hydrates against it, and a reply prefetch has no
+        // Last, and after the drain: the reader's own queued sends must not wait behind a
+        // launch's worth of reply fetching. Every part of it needs the head windows above
+        // to have committed — a join hydrates against them, and a reply prefetch has no
         // candidates until the roots are held locally (``ThreadPrefetch``).
+        //
+        // Starters first, then everything else. The starter pass asks per channel and so
+        // holds its two channels' place ahead of a budget spent in recency order; the pass
+        // behind it covers every other channel the reader is in, which nothing on this path
+        // did before. See ``SyncEngine/settleThreadPrefetch(generation:)``.
         guard isCurrent(generation) else { return }
         await settleStarterChannels(joined: joined, generation: generation)
+
+        guard isCurrent(generation) else { return }
+        await settleThreadPrefetch(generation: generation)
+
+        // Last of all: the sweep asks about threads it has no evidence are behind, so it is
+        // the most speculative work on the pass and goes behind everything that is not.
+        // See ``SyncEngine/settleThreadSweep(generation:)``.
+        guard isCurrent(generation) else { return }
+        await settleThreadSweep(generation: generation)
     }
 
     private func setDirectoryStatus(_ status: ChannelDirectoryStatus) {

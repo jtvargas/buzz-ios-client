@@ -212,6 +212,16 @@ public actor SyncEngine {
     /// the generation it began under and abandons itself once superseded.
     var readyGeneration = 0
 
+    /// When the current socket's thread sweep began, and which generation that was.
+    ///
+    /// The brake on ``settleThreadSweep(generation:)``: a root already swept at or after
+    /// `startedAt` is skipped, so the repeat passes a session makes — foreground,
+    /// membership change, CLOSED recovery, pull-refresh — cost nothing on the wire once the
+    /// horizon is covered, while a fresh socket re-arms the whole sweep. Held here rather
+    /// than written by the connection state machine because `readyGeneration` already
+    /// changes exactly when the socket does.
+    var sweepEpoch: (generation: Int, startedAt: Int64)?
+
     /// Whether the window fast path has been withdrawn for this session. A
     /// `.degraded` window result sets it; it resets only with the engine, never
     /// persisted (NIP-CW §Degradation, per-relay-per-session).

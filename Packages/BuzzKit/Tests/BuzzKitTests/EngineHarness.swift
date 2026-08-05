@@ -59,6 +59,13 @@ struct EngineHarness {
         threadFetchLimit: Int = 1000,
         threadPrefetchRootLimit: Int = 20,
         threadPrefetchReplyLimit: Int = 20,
+        threadPrefetchLaunchPasses: Int = 3,
+        threadSweepRootLimit: Int = 40,
+        // The engine's own clock, when a test needs to move it. Defaults to the fixed
+        // `nowSeconds` instant every other engine test runs on; the thread sweep's brake is
+        // a comparison of times, so proving a fresh socket re-arms it needs a clock that
+        // advances rather than one that is merely injectable.
+        engineClock: (@Sendable () -> Date)? = nil,
         backoffSleep: @escaping @Sendable (Duration) async throws -> Void = { _ in }
     ) throws {
         self.path = path
@@ -111,8 +118,11 @@ struct EngineHarness {
             presenceSweepInterval: .seconds(3600),
             threadFetchLimit: threadFetchLimit,
             threadPrefetchRootLimit: threadPrefetchRootLimit,
-            threadPrefetchReplyLimit: threadPrefetchReplyLimit
+            threadPrefetchReplyLimit: threadPrefetchReplyLimit,
+            threadPrefetchLaunchPasses: threadPrefetchLaunchPasses,
+            threadSweepRootLimit: threadSweepRootLimit
         )
+        let engineNow = engineClock ?? { Date(timeIntervalSince1970: TimeInterval(seconds)) }
         if let directoryClient {
             engine = SyncEngine(
                 connection: connection,
@@ -123,7 +133,7 @@ struct EngineHarness {
                 directoryClient: directoryClient,
                 signer: signer,
                 config: engineConfig,
-                now: { Date(timeIntervalSince1970: TimeInterval(seconds)) }
+                now: engineNow
             )
         } else {
             engine = SyncEngine(
@@ -134,7 +144,7 @@ struct EngineHarness {
                 windowClient: windowClient,
                 signer: signer,
                 config: engineConfig,
-                now: { Date(timeIntervalSince1970: TimeInterval(seconds)) }
+                now: engineNow
             )
         }
     }
