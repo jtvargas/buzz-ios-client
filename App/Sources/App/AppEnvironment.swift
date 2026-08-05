@@ -188,6 +188,15 @@ final class AppEnvironment {
     /// and dropped with it — see ``makeMediaUploader(websocketURL:)``, which is also
     /// where its separation from the engine is explained.
     private(set) var mediaUploader: (any MediaUploading)?
+    /// Signs the reads a gated relay requires before it will serve a blob. Built and
+    /// dropped beside the uploader, for the same reason — see
+    /// ``installMediaReadAuthorizer(signer:websocketURL:)``.
+    ///
+    /// Held here as well as installed into the image loaders because the loaders are not
+    /// the only thing that fetches a picture: saving and sharing an attachment go out on
+    /// their own session (``MessageMediaExport``), from views that reach this through the
+    /// environment.
+    private(set) var mediaReadAuthorizer: MediaReadAuthorizer?
     /// The authenticated identity's hex pubkey, resolved once the engine starts.
     /// Used to exclude our own typing echo and to key our own presence.
     private(set) var selfPubkeyHex: String?
@@ -335,6 +344,8 @@ final class AppEnvironment {
         let engine = makeEngine(store: store, signer: signer, websocketURL: websocketURL, queryURL: queryURL)
         self.engine = engine
         mediaUploader = makeMediaUploader(signer: signer, websocketURL: websocketURL)
+        mediaReadAuthorizer = makeMediaReadAuthorizer(signer: signer, websocketURL: websocketURL)
+        await installMediaReadAuthorizer(mediaReadAuthorizer)
         heartbeat = PresenceHeartbeat(publisher: engine)
 
         observeEngineState(of: engine)
@@ -422,6 +433,8 @@ final class AppEnvironment {
         engine = nil
         // Beside the engine: it signs with a key this session no longer owns.
         mediaUploader = nil
+        mediaReadAuthorizer = nil
+        await installMediaReadAuthorizer(nil)
         // Held in memory otherwise — see ``ComposerDrafts/reset()``.
         drafts?.reset()
         drafts = nil

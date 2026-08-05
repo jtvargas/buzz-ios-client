@@ -44,6 +44,10 @@ struct MediaActionsSheet: View {
     var session: URLSession = MessageMediaExport.session
 
     @Environment(\.dismiss) private var dismiss
+    /// The session's grant for reading relay media, which a gated relay refuses the fetch
+    /// without. Optional because this sheet is also built by previews and tests, which mount
+    /// no environment — there it is `nil` and the fetch goes out unsigned, as it always did.
+    @Environment(AppEnvironment.self) private var environment: AppEnvironment?
     /// The fetched original, on disk. Its presence is what arms both rows: neither action can
     /// run on a picture that has not arrived, and neither is offered as though it could.
     @State private var file: URL?
@@ -160,7 +164,9 @@ struct MediaActionsSheet: View {
     private func prepare() async {
         defer { isPreparing = false }
         guard file == nil else { return }
-        file = try? await MessageMediaExport.fetch(target.media, session: session)
+        file = try? await MessageMediaExport.fetch(
+            target.media, session: session, authorization: environment?.mediaReadAuthorizer
+        )
     }
 
     private func save() {
@@ -191,7 +197,9 @@ struct MediaActionsSheet: View {
     /// ``prepare()`` — two fetches of one picture would be two writers of one file.
     private func fetchedFile() async throws -> URL {
         if let file { return file }
-        let fetched = try await MessageMediaExport.fetch(target.media, session: session)
+        let fetched = try await MessageMediaExport.fetch(
+            target.media, session: session, authorization: environment?.mediaReadAuthorizer
+        )
         file = fetched
         return fetched
     }
