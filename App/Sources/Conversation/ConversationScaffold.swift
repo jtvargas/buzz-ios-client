@@ -128,6 +128,15 @@ struct ConversationScaffold<Content: View, Bar: View, Accessory: View>: View {
     /// Where the reader is and who put them there — see ``ConversationReaderPlace`` for
     /// what it corrects and why the anchors below are not enough on their own.
     @State private var place = ConversationReaderPlace()
+    /// Whether the last geometry reading put the reader inside the top band.
+    ///
+    /// Kept because `Edges` is a *projection*: its action runs when the three booleans
+    /// change, which is a band crossing and nothing else. A reader who reaches the top
+    /// and stays there therefore gets exactly one ``onReachedTop`` for the whole visit —
+    /// so a page that lands without moving them out of the band (an older page that was
+    /// entirely rows this device already held, and so added no height) has nothing left to
+    /// ask again with, and paging stops for good with no gesture able to restart it.
+    @State private var isNearTop = false
 
     /// The band that counts as *at* the bottom — releasing the owner's frozen tail.
     /// Tight, because releasing grows the content by every held row, and a
@@ -227,12 +236,26 @@ struct ConversationScaffold<Content: View, Bar: View, Accessory: View>: View {
             } else if edges.awayFromBottom, isAtBottom, !place.isLandingOnNewest {
                 isAtBottom = false
             }
+            if isNearTop != edges.nearTop { isNearTop = edges.nearTop }
             if edges.nearTop { onReachedTop() }
         }
         // The owner's commit, ahead of the readings it produces: `onChange` runs in the
         // update pass and a scroll geometry callback runs after layout, so the window is
         // open by the time the new content has been measured.
-        .onChange(of: contentRevision) { place.contentDidChange() }
+        .onChange(of: contentRevision) {
+            place.contentDidChange()
+            // Re-arm while the reader is still in the top band. Each older page changes
+            // the content, and this is what asks for the next one — so scrollback
+            // continues under a reader who stays at the top instead of needing them to
+            // leave the band and come back to cross it again.
+            //
+            // Self-limiting rather than a loop: a page that lands real rows above them
+            // carries their place down past ``topTrigger``, and the next reading clears
+            // `isNearTop`. It runs on for exactly as long as the pages are not moving
+            // them, which is the case it exists for, and ends where the owner's own
+            // guards do — nothing older left, or a failed reach.
+            if isNearTop { onReachedTop() }
+        }
         // The same window, opened for the other kind of change; the difference between them
         // is decided where the window is read, not here.
         .onChange(of: rowRevision) { place.rowDidChangeInPlace() }

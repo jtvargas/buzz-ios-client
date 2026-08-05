@@ -377,24 +377,49 @@ final class ChannelTimelineModel {
             return
         }
 
-        do {
-            let page = try await history.loadOlderHistory(
-                channel: channel,
-                before: WindowCursor(createdAt: cursor.createdAt, id: cursor.id)
-            )
-            // Only a page that wrote something can have moved the local floor. Re-read
-            // from the same cursor: what it just ingested is, by construction, below it.
-            if page.ingested > 0 { apply(older: fetch(before: cursor)) }
-            if !page.hasMore {
-                hasExhaustedOlder = true
-                hasMoreOlder = false
+        // Keeps going while the relay has more and the reader has been given nothing to
+        // see. A window page can legitimately land no rows on this screen — the cursor
+        // chain re-walks the boundary second, and a reconcile running underneath can have
+        // filled the stretch it asks for — and returning after one of those leaves the
+        // surface exactly as it was: no new rows, no height change, and so nothing for the
+        // scaffold to report a top with again. One page per report was the whole budget,
+        // and a page that spent it on duplicates ended scrollback silently.
+        //
+        // Bounded, because the alternative is walking a whole channel inside one report.
+        // Running out of budget is not exhaustion: ``hasMoreOlder`` stays true and the
+        // next report resumes where the cursor chain stands.
+        for _ in 0 ..< Self.olderPageBudget {
+            let loadedBefore = loaded.count
+            do {
+                let page = try await history.loadOlderHistory(
+                    channel: channel,
+                    before: WindowCursor(createdAt: cursor.createdAt, id: cursor.id)
+                )
+                // Only a page that wrote something can have moved the local floor. Re-read
+                // from the same cursor: what it just ingested is, by construction, below
+                // it — and the cursor is still the floor on every pass that gets here,
+                // because the first pass to move it returns.
+                if page.ingested > 0 { apply(older: fetch(before: cursor)) }
+                if !page.hasMore {
+                    hasExhaustedOlder = true
+                    hasMoreOlder = false
+                    return
+                }
+                guard loaded.count == loadedBefore else { return }
+            } catch {
+                // Deliberately not latched: the channel is not out of history, this attempt
+                // failed. ``hasMoreOlder`` stays true so the sentinel can offer a retry.
+                olderFailed = true
+                return
             }
-        } catch {
-            // Deliberately not latched: the channel is not out of history, this attempt
-            // failed. ``hasMoreOlder`` stays true so the sentinel can offer a retry.
-            olderFailed = true
         }
     }
+
+    /// How many window pages one ``loadOlder()`` may walk while none of them puts a row
+    /// on screen. Enough to carry the cursor past a crowded boundary second or a stretch
+    /// a background reconcile has already filled; small enough that the reader is never
+    /// waiting on an unbounded walk.
+    private static let olderPageBudget = 5
 
     /// Merges an older page into the loaded set and brings its reactions, mentions and
     /// reply participants with it — immediately, rather than waiting on the next commit

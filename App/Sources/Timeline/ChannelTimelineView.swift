@@ -317,13 +317,22 @@ struct ChannelTimelineView: View {
     /// it happens to be saying, because a slot that appears and disappears is itself a
     /// content-height change at the top of a bottom-anchored list.
     ///
-    /// It used to be a spinner standing for "there is more above" rather than for a load
-    /// in flight — which was the honest reading of it then, since `loadOlder()` was a
-    /// local read with no suspension point to spin through and nothing above the store to
-    /// reach for. Now that paging leaves the device there are three different things to
-    /// say and a spinner says none of them: fetching, failed, and this is where the
-    /// channel begins. An indefinite spinner over an unreachable page is exactly the
-    /// "hang" this all started as.
+    /// It says one of three things: older history is on its way, the last reach for it
+    /// failed, or this is where the channel begins.
+    ///
+    /// The spinner is bound to "there is more above" and deliberately **not** to
+    /// ``ChannelTimelineModel/isLoadingOlder``, which is invisible by construction: the
+    /// scaffold reports the top a whole viewport early
+    /// (``ConversationScaffold/topTrigger``, 800pt), so the fetch it triggers starts and
+    /// finishes while this slot is still 800 points above the visible rect. A reader who
+    /// then scrolls up to look at it arrives after the flag has cleared and sees an empty
+    /// gap — which is what the paging feels like when nothing marks it.
+    ///
+    /// The objection to an unconditional spinner was that it cannot be told apart from a
+    /// stuck one, and that was fair while nothing could satisfy it. It resolves now:
+    /// exhaustion is latched on the relay's own answer, so the spinner ends in the
+    /// beginning-of-conversation line, and a failed reach replaces it with a retry rather
+    /// than spinning over it.
     @ViewBuilder
     private var topSentinel: some View {
         if model.olderFailed {
@@ -334,17 +343,10 @@ struct ChannelTimelineView: View {
             }
             .buttonStyle(.plain)
             .frame(height: Self.topSentinelHeight)
-        } else if model.isLoadingOlder {
+        } else if model.hasMoreOlder {
             ProgressView()
                 .frame(height: Self.topSentinelHeight)
                 .accessibilityLabel("Loading older messages")
-        } else if model.hasMoreOlder {
-            // Between reports: hold the height and say nothing. A spinner drawn while
-            // nothing is being fetched is the thing that could not be told apart from a
-            // stuck one.
-            Color.clear
-                .frame(height: Self.topSentinelHeight)
-                .accessibilityHidden(true)
         } else if model.hasReachedBeginning, !model.rows.isEmpty {
             Text("This is the beginning of the conversation")
                 .font(.hive(.caption, weight: .medium))
