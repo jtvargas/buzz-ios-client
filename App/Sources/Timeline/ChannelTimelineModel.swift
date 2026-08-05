@@ -43,6 +43,14 @@ final class ChannelTimelineModel {
     /// ``contentRevision``, which is the reported jump on reacting to an older message: one
     /// channel could not say which of the two had happened.
     private(set) var rowRevision = 0
+    /// Bumped when an older page has been inserted *above* the reader — and only then.
+    ///
+    /// Its own channel because it is the one content change whose correction cannot be the
+    /// usual one. ``contentRevision``'s correction preserves the distance to the newest
+    /// message, which is the right invariant for content that arrives at the bottom or grows
+    /// in place; for a page that lands above the reader it is the offset that has to move, by
+    /// exactly the height that went in. See ``ConversationReaderPlace/olderPageDidLand()``.
+    private(set) var olderPageRevision = 0
 
     /// Surviving reaction groups for each loaded row, keyed by message id. Re-read
     /// on the same observation as the rows, so a react, a withdrawal, or a peer's
@@ -432,6 +440,10 @@ final class ChannelTimelineModel {
         applyReactions(fetchReactions(for: ids))
         applyMentions(fetchMentions(for: ids))
         applyThreadParticipants(fetchThreadParticipants(for: threadedRowIDs))
+        // Announced after the rebuild that carries the rows, and separately from
+        // ``contentRevision``, because the surface has to correct for this one differently:
+        // everything here went in *above* the reader. See ``ConversationReaderPlace``.
+        olderPageRevision += 1
     }
 
     /// Re-derives everything downstream of the loaded set: the pagination cursor from

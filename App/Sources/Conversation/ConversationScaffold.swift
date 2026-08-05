@@ -75,6 +75,15 @@ struct ConversationScaffold<Content: View, Bar: View, Accessory: View>: View {
     /// one channel is the reported jump on a reaction — see
     /// ``ConversationReaderPlace/rowDidChangeInPlace()``.
     var rowRevision: Int = 0
+    /// Bumped by the owner when an older page went in *above* the reader. A third channel
+    /// rather than a flag on ``contentRevision``, because the two are announced in the same
+    /// update pass and nothing orders one before the other — see
+    /// ``ConversationReaderPlace/olderPageDidLand()``, which composes with
+    /// ``ConversationReaderPlace/contentDidChange()`` in either order.
+    ///
+    /// Defaulted, because only the channel surface pages older history: a thread is fetched
+    /// whole.
+    var olderPageRevision: Int = 0
     /// The id of the newest row the owner is rendering — the same id its `ForEach` gives that
     /// row.
     ///
@@ -282,6 +291,11 @@ struct ConversationScaffold<Content: View, Bar: View, Accessory: View>: View {
         // The same window, opened for the other kind of change; the difference between them
         // is decided where the window is read, not here.
         .onChange(of: rowRevision) { place.rowDidChangeInPlace() }
+        // And the third: content that went in above the reader, which is the one change whose
+        // correction is an offset delta rather than a distance to converge on, and the one that
+        // has to survive a moving finger — an older page is fetched *because* they are
+        // scrolling up.
+        .onChange(of: olderPageRevision) { place.olderPageDidLand() }
         // A change of *width* is the one content change the owner cannot declare, because it
         // did not make it: every row re-wraps, so every row's height is genuinely new. A
         // rotation, an iPad split, a Slide Over.
