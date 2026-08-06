@@ -223,9 +223,9 @@ struct ChannelListView: View {
                             .allowsHitTesting(workspacePanel.progress < 0.5)
                             .accessibilityHidden(workspacePanel.progress >= 0.5)
                     }
-                    // And its glass circle with it — see the same call in
-                    // ``ConversationTitleBar``. The face faded and left the ring behind.
-                    .sharedBackgroundVisibility(workspacePanel.isOpen ? .hidden : .automatic)
+                    // The account button draws its own hexagonal glass, so the toolbar's
+                    // automatic circular background must stay hidden.
+                    .sharedBackgroundVisibility(.hidden)
                 }
                 .sheet(isPresented: $showAccount) {
                     AccountView(store: store, engine: engine, selfPubkey: environment.selfPubkeyHex)
