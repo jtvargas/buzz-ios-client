@@ -60,5 +60,20 @@ struct HiveShortcuts: AppShortcutsProvider {
             shortTitle: "Drafts",
             systemImageName: "paperplane"
         )
+
+        // The one parameterised entry. Its phrases are what
+        // ``updateAppShortcutParameters()`` regenerates: without a shortcut naming
+        // ``OpenConversationIntent``, that call has nothing to refresh and no spoken
+        // channel name can match anything, however well the entity is indexed.
+        AppShortcut(
+            intent: OpenConversationIntent(),
+            phrases: [
+                "Open \(\.$conversation) in \(.applicationName)",
+                "Open the \(\.$conversation) channel in \(.applicationName)",
+                "Show \(\.$conversation) in \(.applicationName)",
+            ],
+            shortTitle: "Open Conversation",
+            systemImageName: "number"
+        )
     }
 }

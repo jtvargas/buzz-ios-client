@@ -78,12 +78,25 @@ final class ConversationEntityIndex {
         community: Community,
         forcePhrases: Bool
     ) async {
+        let published = snapshots.load().flatMap { $0.communityID == community.id ? $0.entries : nil }
+        // `uniquingKeysWith` rather than `uniqueKeysWithValues`: the latter traps on a repeated
+        // key, and a duplicate channel row would turn a stale index into a crash.
         let previousPairs = Dictionary(
-            uniqueKeysWithValues: snapshots.load()?.entries.map { ($0.id, $0.name) } ?? []
+            (published ?? []).map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first }
         )
         do {
             let entities = try Self.entities(in: store, selfPubkey: selfPubkey, communityID: community.id)
-            let nextPairs = Dictionary(uniqueKeysWithValues: entities.map { ($0.id, $0.name) })
+            let entries = entities.map(ConversationEntitySnapshotStore.Entry.init)
+            // The coalesced signal fires on every stored event — every message anybody sends —
+            // while the channel set changes on a join or a leave, days apart. Republishing an
+            // identical set would rewrite Spotlight per message and flicker the status row
+            // through `.indexing` each time, so an unchanged refresh does nothing at all.
+            // A session start still republishes unconditionally: that is the pass covering a
+            // projection rebuild, which changes no `event` row and so reaches here as "same".
+            if !forcePhrases, published == entries { return }
+            let nextPairs = Dictionary(
+                entries.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first }
+            )
             state = .indexing
             try await searchableIndex.deleteAppEntities(ofType: ConversationEntity.self)
             // Persist first: if the process dies while Spotlight accepts the batch, every

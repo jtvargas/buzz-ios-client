@@ -2,12 +2,26 @@ import AppIntents
 import Foundation
 
 /// An honest failure for a saved entity whose community is no longer the one in scope.
+///
+/// It names no community. The id survives the record — a shortcut saved before a community was
+/// removed still resolves to here — so any message naming the *other* side would have to look up
+/// something it is allowed not to find.
+///
+/// `CustomLocalizedStringResourceConvertible` is what makes the sentence reach a person:
+/// `LocalizedError` alone leaves Siri saying only that something went wrong.
 enum ConversationEntityError: Error, LocalizedError, Equatable {
     case otherCommunity
 
     var errorDescription: String? {
-        "That channel isn't in the community you have open."
+        String(localized: Self.otherCommunityMessage)
     }
+
+    static let otherCommunityMessage: LocalizedStringResource =
+        "That channel isn't in the community you have open."
+}
+
+extension ConversationEntityError: CustomLocalizedStringResourceConvertible {
+    var localizedStringResource: LocalizedStringResource { Self.otherCommunityMessage }
 }
 
 /// Resolves entirely from the cold-launch snapshot.
