@@ -317,7 +317,7 @@ extension BuzzEventStore {
         guard !summaries.isEmpty else { return [] }
 
         let ids = summaries.flatMap { [$0["root_id"] as String, $0["latest_reply_id"] as String] }
-        let rows = try fetchRows(db, ids: Array(Set(ids)))
+        let rows = try fetchRows(db, ids: Array(Set(ids)), selfPubkey: selfPubkey)
         let byID = Dictionary(rows.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
 
         return summaries.compactMap { summary in

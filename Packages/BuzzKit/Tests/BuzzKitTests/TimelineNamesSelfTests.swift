@@ -78,8 +78,35 @@ struct TimelineNamesSelfTests {
         #expect(try store.timeline(channel: "room-1").first?.namesSelf == false)
     }
 
-    @Test("an edit decides it, exactly as it decides a message's attachments")
-    func anEditIsTheCurrentTruth() async throws {
+    @Test("fixing a typo does not un-name the reader")
+    func anEditCannotClearTheMention() async throws {
+        let database = TempDatabase()
+        defer { database.remove() }
+        let store = try database.open()
+        let me = try Fixture()
+        let peer = try Fixture()
+
+        let addressed = try peer.event(
+            .channelMessage, "@me can you look at this",
+            tags: [["h", "room-1"], ["p", me.pubkey]], at: 1_000
+        )
+        // The exact shape `OutboundTags/edit(channel:target:)` sends: `h` and `e`, no `p`,
+        // ever. So this is what *every* edit from this client looks like, and reading the
+        // missing `p` as "no longer named" would re-collapse the block on a typo fix while
+        // the sidebar badge — which reads the insert-only `event_tag` — still counted it.
+        let typoFix = try peer.event(
+            .messageEdit, "@me can you look at this?",
+            tags: [["e", addressed.id], ["h", "room-1"]], at: 1_001
+        )
+        _ = try await store.ingest(batch: [addressed, typoFix], phase: .backfill)
+
+        let row = try #require(try store.timeline(channel: "room-1", selfPubkey: me.pubkey).first)
+        #expect(row.isEdited)
+        #expect(row.namesSelf)
+    }
+
+    @Test("an edit that adds a mention registers it")
+    func anEditCanAddTheMention() async throws {
         let database = TempDatabase()
         defer { database.remove() }
         let store = try database.open()
@@ -93,10 +120,9 @@ struct TimelineNamesSelfTests {
         )
         _ = try await store.ingest(batch: [ambient, addressing], phase: .backfill)
 
-        // `makeRow` reads the edit's tags or the original's, never a mix — the rule
-        // ``editedTags`` states and `media` already follows. An edit that added the mention
-        // is the current truth about the message, so the block breaks where the reader can
-        // now see their name.
+        // The direction an edit *can* carry, and it comes from another client — this one
+        // never puts a `p` on an edit. Both tag sets are read for the mention, so an edit
+        // that added it registers while an edit that merely omits it changes nothing.
         let row = try #require(try store.timeline(channel: "room-1", selfPubkey: me.pubkey).first)
         #expect(row.isEdited)
         #expect(row.namesSelf)

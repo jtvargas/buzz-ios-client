@@ -95,8 +95,12 @@ public struct TimelineRow: Sendable, Hashable, Identifiable {
     /// strips the sender from a message's own `p` tags (`OutboundTags`), and a mention of
     /// yourself is not a thing to be told about anyway.
     ///
-    /// Taken from an edit's tags when an edit applies, exactly as ``media`` is — an edit
-    /// that added or removed the mention is the current truth about the message.
+    /// An edit can add this and cannot take it away — deliberately unlike ``media``, which
+    /// reads the edit's tags alone. `OutboundTags.edit` sends `h` and `e` and nothing else,
+    /// so an edit from this app can never carry a `p` tag; treating its absence as "you are
+    /// no longer named" would read an intention out of a shape that cannot express one, and
+    /// would disagree with every other reader of the same fact — `event_tag` is insert-only,
+    /// so the mention badge and the `@`-token in the text both still see the original.
     public let namesSelf: Bool
 
     public init(
