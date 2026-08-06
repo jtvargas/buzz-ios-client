@@ -146,6 +146,42 @@ struct RootView: View {
                     label(for: .activity)
                 }
             }
+            // A screen asked for from outside the app — Siri, Spotlight, the Shortcuts app —
+            // arrives as a destination on ``AppNavigator``. This half selects the tab that
+            // *holds* the screen; ``ChannelListView`` does the push and clears the request.
+            //
+            // Every destination today lives in the Home tab, so this is a constant rather
+            // than a mapping. It becomes `destination.tab` the day one of them lives in
+            // Activity — and the compiler will not remind anybody, so the day a destination
+            // is added, this line is the one to look at.
+            //
+            // `initial: true` because a cold launch writes the request before this view
+            // exists, and this is the only signal there will be. See ``AppNavigator``.
+            //
+            // # Why two observers of a value one of them destroys is safe
+            //
+            // ``ChannelListView`` reads the same property and calls `consume()`, setting it
+            // to nil. That this half still sees `.threads` first rests on two things, both
+            // true today and both quiet to break:
+            //
+            // 1. `.onChange`'s `of:` argument is evaluated when the modifier is
+            //    *constructed*, during the body pass of the view that declares it — not when
+            //    the action runs. This modifier is built inside `InAppNotificationHost.body`
+            //    (the `content` closure is invoked there), so Observation registers the
+            //    dependency against that view.
+            // 2. `InAppNotificationHost` is a strict *ancestor* of ``ChannelListView`` — it
+            //    is the view that yields the `TabView` that yields the tab that yields it.
+            //    Ancestor-before-descendant evaluation is structural, not a heuristic.
+            //
+            // So this modifier has already latched the destination before the descendant can
+            // nil it. Move this read to a sibling of the tab content, or interpose anything
+            // that caches the child's view value, and a request made while the Activity tab
+            // is selected silently stops switching tabs: the screen gets pushed onto a stack
+            // the reader cannot see.
+            .onChange(of: environment.navigator.pending, initial: true) { _, destination in
+                guard destination != nil else { return }
+                tab = .home
+            }
         }
     }
 

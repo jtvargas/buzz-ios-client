@@ -155,6 +155,17 @@ final class AppEnvironment {
     /// ``AppSettings``.
     let settings = AppSettings()
 
+    /// A screen Siri, Spotlight or the Shortcuts app has asked for, waiting to be opened.
+    ///
+    /// Here for the same reason ``reminderAlerts`` is, and one more: an ``AppIntent`` is not
+    /// part of the view tree at all, so it needs something it can reach without one. It gets
+    /// this object through `@Dependency`, registered once in ``HiveApp/init()``. See
+    /// ``AppNavigator`` for why the request is held rather than delivered.
+    let navigator = AppNavigator()
+
+    /// The active community's Siri/Spotlight index and the status Settings renders.
+    let conversationEntityIndex = ConversationEntityIndex()
+
     /// The community a pairing session has just committed a key into, held between the
     /// import and ``completePairing()``.
     ///
@@ -249,6 +260,11 @@ final class AppEnvironment {
     /// Resolves launch state: if the active community has a key, start its engine;
     /// otherwise rest on the identity gate.
     func bootstrap() async {
+        // Queued, not awaited. The delete is a Core Spotlight round trip, and every launch —
+        // including a returning user's, which `init` already refuses to spend a frame on — sits
+        // behind whatever comes first here. Ordering against the build is the index's own
+        // guarantee (``ConversationEntityIndex``), not this call's.
+        conversationEntityIndex.reconcileLaunch()
         guard let active = communities.active, Self.hasStoredKey(account: active.keychainAccount) else {
             phase = .needsIdentity
             return
@@ -369,7 +385,7 @@ final class AppEnvironment {
             if await engine.directoryRefusedMembership {
                 throw CompositionError.relayMembershipRequired
             }
-            phase = .running
+            mountSession(store: store, selfPubkey: intendedPubkey, community: community)
             heartbeat?.startForeground()
             return
         }
@@ -378,7 +394,7 @@ final class AppEnvironment {
         // into the sidebar's connecting state, which draws no conversation the relay has not
         // confirmed — and the engine comes up underneath it. There is no longer a window in
         // which a cached list is the best thing on hand, because it is never drawn.
-        phase = .running
+        mountSession(store: store, selfPubkey: intendedPubkey, community: community)
         isStartingEngine = true
         engineStartTask = Task { [weak self] in
             defer { self?.isStartingEngine = false }
@@ -422,6 +438,7 @@ final class AppEnvironment {
             await engineStartTask.value
         }
         engineStartTask = nil
+        conversationEntityIndex.teardown()
         // Before the store goes: unsent text is written through as it is typed, but a
         // keystroke landing in the same moment as a switch would otherwise be dropped with
         // the database it was on its way into.
@@ -446,6 +463,45 @@ final class AppEnvironment {
         engineState = .stopped
         hasConnectedBefore = false
         channelDirectoryStatus = .checking
+    }
+
+    /// Applies the active community's per-community Siri preference immediately.
+    ///
+    /// Synchronous end to end, which is what lets the Settings toggle call it directly rather
+    /// than spawning a task per tap: the preference write and the index request then happen in
+    /// the order the taps were made, rather than in whatever order two unstructured tasks
+    /// happened to start.
+    func setSiriIndexingEnabled(_ enabled: Bool) {
+        guard var community = communities.active else { return }
+        community.siriIndexingEnabled = enabled
+        updateCommunities { $0.update(community) }
+
+        guard sessionCommunityID == community.id, let store else {
+            if !enabled { conversationEntityIndex.teardown(nextState: .off) }
+            return
+        }
+        if enabled {
+            conversationEntityIndex.rebuild(store: store, selfPubkey: selfPubkeyHex, community: community)
+        } else {
+            conversationEntityIndex.teardown(nextState: .off)
+        }
+    }
+
+    /// Declares the session running and asks for its Siri index.
+    ///
+    /// The Core Spotlight half is queued rather than awaited, so neither the websocket start
+    /// below nor the gate's heartbeat waits on it. What §4 wanted from an `await` here — that a
+    /// fast double switch cannot interleave two rebuilds — is provided by the index's own
+    /// ordering instead. The half that must not be late is not queued at all: the snapshot an
+    /// intent's push reads for a name is written synchronously inside this call, in the same
+    /// turn as `phase = .running`.
+    private func mountSession(
+        store: BuzzEventStore,
+        selfPubkey: String?,
+        community: Community
+    ) {
+        phase = .running
+        conversationEntityIndex.rebuild(store: store, selfPubkey: selfPubkey, community: community)
     }
 
     private func observeEngineState(of engine: SyncEngine) {

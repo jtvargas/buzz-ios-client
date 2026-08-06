@@ -66,7 +66,15 @@ struct Community: Identifiable, Codable, Equatable, Sendable {
     /// image cache. The filename is enough to recover the bytes without making defaults carry
     /// them through every directory save.
     var iconFilename: String?
+    /// Whether the active community's channel names may enter the on-device Siri index.
+    ///
+    /// Optional is a migration boundary: existing `communities.v1` records decode this as
+    /// `nil`, which means on. A non-optional addition would make the deliberately all-or-empty
+    /// decoder treat every existing install as having no communities.
+    var siriIndexingEnabled: Bool?
     let addedAt: Date
+
+    var isSiriIndexingEnabled: Bool { siriIndexingEnabled ?? true }
 
     /// The Keychain account and database file the single-community app used. A migrated
     /// install keeps both; nothing new is ever given them.

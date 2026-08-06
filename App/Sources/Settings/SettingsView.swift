@@ -29,6 +29,8 @@ struct SettingsView: View {
     /// them. `nil` until the first read, so the card does not accuse the reader of having
     /// refused something during the frame before the answer arrives.
     @State private var systemAuthorization: Bool?
+    /// A view-owned copy exists solely so status insertion/removal is animated at the card.
+    @State private var siriIndexingState: IndexingState = .idle
 
     var body: some View {
         NavigationStack {
@@ -36,6 +38,7 @@ struct SettingsView: View {
                 VStack(spacing: 20) {
                     themeCard
                     notificationsCard
+                    siriCard
                 }
                 .padding(.horizontal, 20)
                 .padding(.top, 8)
@@ -50,6 +53,11 @@ struct SettingsView: View {
                 }
             }
             .task { await readSystemAuthorization() }
+            .onChange(of: environment.conversationEntityIndex.state, initial: true) { _, state in
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    siriIndexingState = state
+                }
+            }
         }
     }
 
@@ -233,4 +241,81 @@ struct SettingsView: View {
     private static let systemDeniedNote =
         "iOS is blocking notifications for Hive, so nothing will arrive until they are allowed "
             + "at the system level too."
+
+    // MARK: - Siri
+
+    /// The deliberate exception to this screen's app-wide rule: Siri follows the active
+    /// community, so the card names that scope instead of pretending the switch is global.
+    private var siriCard: some View {
+        AccountCard(title: "Siri", subtitle: siriBlurb) {
+            EmptyView()
+        } content: {
+            AccountFieldRow(label: "ACTIVE COMMUNITY") {
+                Toggle("Reachable by Siri", isOn: siriBinding)
+                    .font(.hive(.body))
+            }
+            if siriIndexingState != .idle {
+                Divider()
+                siriStatusRow
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+    }
+
+    private var siriBinding: Binding<Bool> {
+        Binding(
+            get: { environment.communities.active?.isSiriIndexingEnabled ?? false },
+            // Called straight through, not from a `Task`: two quick taps then reach the index
+            // in the order they were made, rather than in whatever order two unstructured tasks
+            // happen to start.
+            set: { environment.setSiriIndexingEnabled($0) }
+        )
+    }
+
+    @ViewBuilder
+    private var siriStatusRow: some View {
+        HStack(spacing: 10) {
+            switch siriIndexingState {
+            case .indexing:
+                ProgressView()
+                    .controlSize(.small)
+                Text("Indexing conversations…")
+            case let .indexed(count, at):
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+                // One literal, not a concatenation: `^[…](inflect:)` is only honoured when the
+                // string reaches `Text` as a `LocalizedStringKey`, and `+` would hand it a
+                // plain `String` that draws the markup verbatim.
+                Text("^[\(count) conversation](inflect: true) ready for Siri · \(Self.when(at))")
+            case .off:
+                Image(systemName: "eye.slash")
+                    .foregroundStyle(.secondary)
+                Text("Siri won't find your conversations")
+            case let .failed(message):
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                Text(message)
+                    .foregroundStyle(.orange)
+            case .idle:
+                EmptyView()
+            }
+        }
+        .font(.hive(.footnote))
+        .foregroundStyle(.secondary)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .fixedSize(horizontal: false, vertical: true)
+        .accessibilityElement(children: .combine)
+    }
+
+    private static func when(_ date: Date) -> String {
+        date.formatted(.relative(presentation: .named))
+    }
+
+    private var siriBlurb: String {
+        let community = environment.communities.active?.name ?? "the active community"
+        return "Channel names from \(community) can appear in Siri, Spotlight and Shortcuts. "
+            + "Switching communities changes which channels are reachable."
+    }
 }

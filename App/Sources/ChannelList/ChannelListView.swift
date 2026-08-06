@@ -370,6 +370,20 @@ struct ChannelListView: View {
             showsLater = nil
             path = []
         }
+        // A screen asked for by Siri, Spotlight or the Shortcuts app. The intent names a
+        // destination and knows nothing else; this is the one place that turns it into a
+        // push, and it clears the request as it acts so an unrelated body pass cannot
+        // re-push. ``RootView`` has already selected the tab.
+        //
+        // `initial: true` for the reason the reminder above needs it: an intent that
+        // *launches* the app writes its destination while this view does not exist yet, and
+        // there is no second signal. Without it, "Open Threads in Hive" from a cold start
+        // opens the app onto the sidebar and stops.
+        .onChange(of: environment.navigator.pending, initial: true) { _, target in
+            guard let target else { return }
+            environment.navigator.consume()
+            open(target)
+        }
         // The router hands back an opened conversation once; this is the one place that turns
         // it into a push, and it clears the value so an unrelated body pass cannot re-push.
         .onChange(of: router.pendingConversation) { _, opened in
@@ -451,36 +465,6 @@ struct ChannelListView: View {
         }
     }
 
-    /// The fallback mark used before an active community graph exists. The running home
-    /// heading uses ``activeCommunityMark`` so a cached picture or initials can replace this
-    /// symbol without waiting for a relay response. RootView still needs this fallback while
-    /// the identity gate is being composed.
-    static let communitySymbol = "hexagon.fill"
-
-    /// The one heading drawn in the accent: the workspace's own name is what the colour
-    /// is *for*, where every other heading names a conversation inside it.
-    static let communityMark = ConversationTitleBar.Mark.symbol(communitySymbol, accented: true)
-
-    /// Carries the persisted community mark into the title-bar seam without asking the
-    /// relay for anything. Kept pure so the cached-data contract can be pinned without
-    /// launching a navigation stack.
-    static func communityHeadingMark(
-        name: String,
-        iconData: Data?
-    ) -> ConversationTitleBar.Mark {
-        .community(name: name, iconData: iconData)
-    }
-
-    /// What VoiceOver is told about the marked row. Names the gesture rather than the
-    /// colour, because the colour is not the point and cannot be perceived here anyway.
-    static let resumeHint = "Last opened. Swipe left on this screen to reopen it."
-
-    /// Why the sidebar is empty when the relay cannot be reached. It names the rule rather
-    /// than apologising for it: Hive lists the conversations the relay confirms, so with no
-    /// relay there is nothing it can honestly list.
-    static let unreachableMessage =
-        "Hive lists the conversations the relay confirms you’re in, so there’s nothing to show "
-            + "until it answers. Your messages are still saved."
 }
 
 // MARK: - Content
@@ -640,6 +624,15 @@ private extension ChannelListView {
 
     /// The Later screen. Lifted out of the stack's builder because that builder is already
     /// at the type-checker's limit — inlining this one pushed it over.
+    ///
+    /// **The `else` is load-bearing — it is not dead code.** ``laterModel`` is built by this
+    /// view's own `.task`, and ``open(_:)`` can push this screen before that task has run: an
+    /// intent's request is read in an `.onChange(initial: true)` during the first update
+    /// transaction, and a `.task` body is enqueued behind it. A bare `if let` evaluates to
+    /// `EmptyView`, so a cold-launch "Open Later in Hive" pushes a blank screen whose only
+    /// control is Back. No finger can reach here that early — ``press(_:)`` needs a sidebar
+    /// already on screen — which is why the gap opened only once something outside the view
+    /// tree could ask for this screen. Chrome but no spinner: the model lands a frame later.
     @ViewBuilder
     var laterDestination: some View {
         if let laterModel {
@@ -653,6 +646,11 @@ private extension ChannelListView {
                     ).pushed(onto: path)
                 }
             )
+        } else {
+            Color.clear
+                .hiveScreenGround()
+                .navigationTitle("Later")
+                .navigationBarTitleDisplayMode(.inline)
         }
     }
 
@@ -685,6 +683,30 @@ private extension ChannelListView {
         case .threads: showsThreads = ThreadsRoute()
         case .later: showsLater = LaterRoute()
         case .drafts: showsDrafts = DraftsRoute()
+        }
+    }
+
+    /// Opens a screen the system asked for — see ``AppDestination``.
+    ///
+    /// Not ``press(_:)``. A card is tapped by somebody already looking at the sidebar, so it
+    /// pushes onto whatever is there; an intent arrives from outside with no idea what is
+    /// open, and landing *on top of* a conversation would give the reader a screen they have
+    /// to undo before they can do anything else. So this pops first — the same conclusion
+    /// the reminder alert reached, for the same reason.
+    ///
+    /// Idempotent on the screen being asked for: asking for Threads while Threads is already
+    /// open leaves it exactly where it is rather than popping and re-pushing it, which would
+    /// be a visible flinch for no change of destination.
+    func open(_ destination: AppDestination) {
+        openedThread = nil
+        path = []
+        if destination != .threads { showsThreads = nil }
+        if destination != .later { showsLater = nil }
+        if destination != .drafts { showsDrafts = nil }
+        switch destination {
+        case .threads: if showsThreads == nil { showsThreads = ThreadsRoute() }
+        case .later: if showsLater == nil { showsLater = LaterRoute() }
+        case .drafts: if showsDrafts == nil { showsDrafts = DraftsRoute() }
         }
     }
 
@@ -835,35 +857,6 @@ private extension ChannelListView {
         .disabled(hider.isHiding(row.id))
     }
 
-    /// The relay answered, and the answer is that this key is in nothing.
-    /// What a persistent heading shows instead of rows.
-    ///
-    /// A plain line of secondary text, not a `ContentUnavailableView`: that one centres
-    /// itself in whatever space it is given and is built to own a screen, so inside a
-    /// `List` row it opens a gap the size of the rest of the sidebar. This has to read
-    /// as one quiet row under its heading.
-    ///
-    /// It is not a button. Nothing on this phone starts a direct message — a DM begins
-    /// from a person, on their profile — so an empty DMs heading that offered a tap
-    /// would be offering a dead end.
-    func emptySectionLine(_ section: SidebarSection) -> some View {
-        Text(section.emptyMessage)
-            .font(.subheadline)
-            .foregroundStyle(.secondary)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.vertical, 6 + SidebarRowMetrics.contentInsetV)
-            .padding(.horizontal, SidebarRowMetrics.contentInsetH)
-            .accessibilityIdentifier("sidebar-section-empty-\(section.rawValue)")
-    }
-
-    var emptyState: some View {
-        ContentUnavailableView(
-            "No conversations yet",
-            systemImage: "bubble.left.and.bubble.right",
-            description: Text("Channels and direct messages appear here as they sync from the relay.")
-        )
-    }
-
     /// The relay did not answer, and the grace period is over.
     ///
     /// It offers no list, and that is the point: the alternative is the saved one, which
@@ -882,17 +875,21 @@ private extension ChannelListView {
         }
         .accessibilityIdentifier("channel-directory-unreachable")
     }
-
-    /// How far a heading sits in from the screen's edges. Padding rather than `listRowInsets`,
-    /// since the heading shares its cell with the rows — the same 16pt either way.
-    static let headerInsetH: CGFloat = 16
-    /// The cards sit slightly clear of the first heading's rule below them.
-    static let cardsInsets = EdgeInsets(top: 8, leading: 16, bottom: 10, trailing: 16)
 }
 
 // MARK: - Derivation
 
 private extension ChannelListView {
+    /// Opens one navigation request originating outside this view tree.
+    ///
+    /// The route itself is derived in ``ChannelListView/route(for:)`` — it reads nothing this
+    /// view holds, and this file is six lines from swiftlint's `file_length` error.
+    func open(_ target: AppTarget) {
+        if case let .destination(destination) = target { return open(destination) }
+        guard let route = Self.route(for: target) else { return }
+        openNotification(route)
+    }
+
     var notificationLocation: InAppNotificationLocation? {
         if let openedThread {
             return .thread(channelID: openedThread.channel, rootID: openedThread.root)
