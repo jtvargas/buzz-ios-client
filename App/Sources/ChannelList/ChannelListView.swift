@@ -881,20 +881,12 @@ private extension ChannelListView {
 
 private extension ChannelListView {
     /// Opens one navigation request originating outside this view tree.
+    ///
+    /// The route itself is derived in ``ChannelListView/route(for:)`` — it reads nothing this
+    /// view holds, and this file is six lines from swiftlint's `file_length` error.
     func open(_ target: AppTarget) {
-        let route: InAppNotificationRoute
-        switch target {
-        case let .destination(destination): return open(destination)
-        case let .conversation(id):
-            let fallback = ConversationEntitySnapshotStore().fallbackRow(id: id)
-                ?? Self.conversationRow(for: id.native, in: [], fallback: nil)
-            route = InAppNotificationRoute(location: .channel(id.native), fallbackChannel: fallback)
-        case let .thread(channelID, rootID):
-            let fallback = Self.conversationRow(for: channelID, in: [], fallback: nil)
-            route = InAppNotificationRoute(
-                location: .thread(channelID: channelID, rootID: rootID), fallbackChannel: fallback
-            )
-        }
+        if case let .destination(destination) = target { return open(destination) }
+        guard let route = Self.route(for: target) else { return }
         openNotification(route)
     }
 

@@ -282,7 +282,10 @@ struct SettingsView: View {
             case let .indexed(count, at):
                 Image(systemName: "checkmark.circle.fill")
                     .foregroundStyle(.green)
-                Text("\(count) conversations ready for Siri · \(at.formatted(.relative(presentation: .named)))")
+                // One literal, not a concatenation: `^[…](inflect:)` is only honoured when the
+                // string reaches `Text` as a `LocalizedStringKey`, and `+` would hand it a
+                // plain `String` that draws the markup verbatim.
+                Text("^[\(count) conversation](inflect: true) ready for Siri · \(Self.when(at))")
             case .off:
                 Image(systemName: "eye.slash")
                     .foregroundStyle(.secondary)
@@ -303,6 +306,10 @@ struct SettingsView: View {
         .padding(.vertical, 12)
         .fixedSize(horizontal: false, vertical: true)
         .accessibilityElement(children: .combine)
+    }
+
+    private static func when(_ date: Date) -> String {
+        date.formatted(.relative(presentation: .named))
     }
 
     private var siriBlurb: String {

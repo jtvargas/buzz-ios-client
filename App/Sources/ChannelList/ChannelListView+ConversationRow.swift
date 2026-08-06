@@ -58,4 +58,30 @@ extension ChannelListView {
             lastMessageAuthor: nil
         )
     }
+
+    /// The route an outside navigation request becomes, or `nil` for a plain screen — which
+    /// the caller already knows how to open on its own.
+    ///
+    /// Here rather than beside its caller for the same reason as the row above: it reads
+    /// nothing the view holds. The snapshot is the only source of a name at this moment — an
+    /// intent can arrive before the sidebar's model exists — and ``conversationRow(for:in:)``
+    /// composes the live list over whatever is handed in, so a channel the sidebar already
+    /// knows still draws its real row.
+    nonisolated static func route(for target: AppTarget) -> InAppNotificationRoute? {
+        switch target {
+        case .destination:
+            return nil
+        case let .conversation(id):
+            let named = ConversationEntitySnapshotStore().fallbackRow(id: id)
+            return InAppNotificationRoute(
+                location: .channel(id.native),
+                fallbackChannel: conversationRow(for: id.native, in: [], fallback: named)
+            )
+        case let .thread(channelID, rootID):
+            return InAppNotificationRoute(
+                location: .thread(channelID: channelID, rootID: rootID),
+                fallbackChannel: conversationRow(for: channelID, in: [], fallback: nil)
+            )
+        }
+    }
 }

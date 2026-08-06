@@ -342,12 +342,16 @@ final class AppEnvironment {
         // *different* key (this community re-paired to another identity) is wiped first; a
         // same-key return keeps its history. A community with nothing stored yet has no
         // recorded owner and keeps whatever is there, which is nothing.
-        let intendedPubkey = try await prepareStoreOwnership(
-            store: store,
-            signer: signer,
-            community: community,
-            drafts: drafts
-        )
+        let intendedPubkey = try? await signer.publicKey().hex
+        if let intendedPubkey {
+            if StoreOwnership.shouldWipe(recordedOwner: community.ownerPubkeyHex, incoming: intendedPubkey) {
+                try await store.wipe()
+                // Beside the wipe, so "a different key never sees the last one's drafts"
+                // holds in memory wherever the handover happens, not only on sign-out.
+                drafts.reset()
+            }
+            recordOwner(intendedPubkey, of: community)
+        }
 
         let engine = makeEngine(store: store, signer: signer, websocketURL: websocketURL, queryURL: queryURL)
         self.engine = engine
@@ -489,23 +493,6 @@ final class AppEnvironment {
             selfPubkey: selfPubkey,
             community: community
         )
-    }
-
-    private func prepareStoreOwnership(
-        store: BuzzEventStore,
-        signer: KeychainSigner,
-        community: Community,
-        drafts: ComposerDrafts
-    ) async throws -> String? {
-        let intendedPubkey = try? await signer.publicKey().hex
-        guard let intendedPubkey else { return nil }
-        if StoreOwnership.shouldWipe(recordedOwner: community.ownerPubkeyHex, incoming: intendedPubkey) {
-            try await store.wipe()
-            // Beside the wipe, so a different key never sees the last one's drafts in memory.
-            drafts.reset()
-        }
-        recordOwner(intendedPubkey, of: community)
-        return intendedPubkey
     }
 
     private func observeEngineState(of engine: SyncEngine) {
