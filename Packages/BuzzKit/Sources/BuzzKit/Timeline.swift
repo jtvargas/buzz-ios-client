@@ -79,6 +79,26 @@ public struct TimelineRow: Sendable, Hashable, Identifiable {
     /// Whether this row is a relay notice at all, decodable or not.
     public let isNotice: Bool
 
+    /// Whether this message names the reader — a `p` tag carrying their key, on a
+    /// message somebody else wrote.
+    ///
+    /// # Why the row carries it rather than a surface asking
+    ///
+    /// Because the conversation's *grouping* reads it, and grouping has to be a pure
+    /// function of the rows or it flickers. A message's mentions are also available as
+    /// ``BuzzEventStore/mentions(for:)``, which is what resolves the `@`-tokens inside the
+    /// text — but that read lands on the surface **after** the rows do, so a run regrouped
+    /// when it arrived: the message would stack, then split out a moment later. Carried
+    /// here it arrives with the row it describes, and the group is right the first time.
+    ///
+    /// `false` for the reader's own messages, including their own pending sends: this app
+    /// strips the sender from a message's own `p` tags (`OutboundTags`), and a mention of
+    /// yourself is not a thing to be told about anyway.
+    ///
+    /// Taken from an edit's tags when an edit applies, exactly as ``media`` is — an edit
+    /// that added or removed the mention is the current truth about the message.
+    public let namesSelf: Bool
+
     public init(
         id: String,
         pubkey: String,
@@ -97,7 +117,8 @@ public struct TimelineRow: Sendable, Hashable, Identifiable {
         lastReplyAt: Int64?,
         media: [MessageMedia] = [],
         notice: SystemNotice? = nil,
-        isNotice: Bool = false
+        isNotice: Bool = false,
+        namesSelf: Bool = false
     ) {
         self.id = id
         self.pubkey = pubkey
@@ -119,6 +140,7 @@ public struct TimelineRow: Sendable, Hashable, Identifiable {
         // A decoded notice is a notice, whatever the caller passed: the two cannot
         // disagree, and a test that builds one by hand should not have to say so twice.
         self.isNotice = isNotice || notice != nil
+        self.namesSelf = namesSelf
     }
 
     public var isReply: Bool { parentID != nil }
@@ -195,17 +217,20 @@ public extension BuzzEventStore {
     nonisolated func timeline(
         channel: String,
         before cursor: TimelineCursor? = nil,
-        limit: Int = 50
+        limit: Int = 50,
+        selfPubkey: String? = nil
     ) throws -> [TimelineRow] {
         try reader.read { db in
-            try Self.fetchTimeline(db, channel: channel, before: cursor, limit: limit)
+            try Self.fetchTimeline(
+                db, channel: channel, before: cursor, limit: limit, selfPubkey: selfPubkey
+            )
         }
     }
 
     /// A whole thread: the message that opened it, then every reply, oldest first
     /// because a thread is read forwards.
-    nonisolated func thread(root: String) throws -> [TimelineRow] {
-        try reader.read { db in try Self.fetchThread(db, root: root) }
+    nonisolated func thread(root: String, selfPubkey: String? = nil) throws -> [TimelineRow] {
+        try reader.read { db in try Self.fetchThread(db, root: root, selfPubkey: selfPubkey) }
     }
 }
 
@@ -215,7 +240,8 @@ extension BuzzEventStore {
         _ db: Database,
         channel: String,
         before cursor: TimelineCursor?,
-        limit: Int
+        limit: Int,
+        selfPubkey: String? = nil
     ) throws -> [TimelineRow] {
         // Thread replies are excluded and shown in their thread instead; without
         // this a threaded conversation reads as a flat pile. A broadcast reply
@@ -322,11 +348,15 @@ extension BuzzEventStore {
             "id": cursor?.id ?? "",
             "limit": limit,
         ])
-        return makeRows(rows)
+        return makeRows(rows, selfPubkey: selfPubkey)
     }
 
     /// The thread query: the opener, its replies, and any pending replies.
-    static func fetchThread(_ db: Database, root: String) throws -> [TimelineRow] {
+    static func fetchThread(
+        _ db: Database,
+        root: String,
+        selfPubkey: String? = nil
+    ) throws -> [TimelineRow] {
         let sql = """
         SELECT \(timelineColumns)
         FROM (
@@ -352,6 +382,6 @@ extension BuzzEventStore {
             "root": root,
             "kind": EventKind.channelMessage.rawValue,
         ])
-        return makeRows(rows)
+        return makeRows(rows, selfPubkey: selfPubkey)
     }
 }

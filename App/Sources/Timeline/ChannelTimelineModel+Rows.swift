@@ -71,7 +71,7 @@ extension ChannelTimelineModel {
         let covered = Set(head.map(\.id))
         let outside = await loadedIDs.subtracting(covered)
         guard !outside.isEmpty else { return [] }
-        return (try? store.rows(for: Array(outside))) ?? []
+        return (try? store.rows(for: Array(outside), selfPubkey: selfPubkey)) ?? []
     }
 
     /// Every id currently in the loaded set. Reached from the `nonisolated` observation

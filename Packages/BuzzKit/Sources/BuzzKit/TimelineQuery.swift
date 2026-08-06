@@ -311,11 +311,14 @@ extension BuzzEventStore {
         """
     }
 
-    static func makeRows(_ rows: [Row]) -> [TimelineRow] {
-        rows.map(makeRow)
+    /// - Parameter selfPubkey: the reader's key, which decides ``TimelineRow/namesSelf``.
+    ///   `nil` — an identity-less session — makes every row read as naming nobody, which
+    ///   is the honest answer rather than a degradation: there is nobody to be named.
+    static func makeRows(_ rows: [Row], selfPubkey: String? = nil) -> [TimelineRow] {
+        rows.map { makeRow($0, selfPubkey: selfPubkey) }
     }
 
-    private static func makeRow(_ row: Row) -> TimelineRow {
+    private static func makeRow(_ row: Row, selfPubkey: String?) -> TimelineRow {
         let edited: String? = row["edited"]
         // The edit's tags or the original's, never a mix: see ``editedTags``. An edit
         // that carries no `imeta` at all is an edit that removed the attachments, so an
@@ -328,6 +331,10 @@ extension BuzzEventStore {
         let kind: Int? = row["kind"]
         let isNotice = kind == EventKind.systemMessage.rawValue
         let notice = isNotice ? SystemNotice.parse(row["content"] ?? "") : nil
+        // Decoded once and read twice — the attachments and the mention are two questions
+        // about the same tag array, and the whole reason this row carries either of them is
+        // to keep a render pass from parsing JSON to answer them.
+        let tags = decodeTags(editedTags ?? row["tags"])
         return TimelineRow(
             id: row["id"],
             pubkey: row["pubkey"],
@@ -344,9 +351,29 @@ extension BuzzEventStore {
             rootID: row["root_id"],
             replyCount: row["reply_count"] ?? 0,
             lastReplyAt: row["last_reply_at"],
-            media: MessageMedia.parse(tags: decodeTags(editedTags ?? row["tags"])),
+            media: MessageMedia.parse(tags: tags),
             notice: notice,
-            isNotice: isNotice
+            isNotice: isNotice,
+            namesSelf: names(selfPubkey, in: tags, author: row["pubkey"])
         )
+    }
+
+    /// Whether `tags` carry a `p` tag naming `selfPubkey`, on a message `author` did not
+    /// write.
+    ///
+    /// `COLLATE NOCASE`'s Swift twin, and deliberately so: the sidebar's mention badge
+    /// compares a tag value case-insensitively because a tag value is a raw string written
+    /// by whichever client sent the message and never decoded, unlike `event.pubkey`, which
+    /// went through NIP-01's strictly-lowercase hex decode (``ChannelList``'s
+    /// `mention_count` records the measurement behind that). Two definitions of "names me"
+    /// that disagreed about case would put a badge on a channel whose conversation drew no
+    /// break.
+    private static func names(_ selfPubkey: String?, in tags: [[String]], author: String) -> Bool {
+        guard let selfPubkey, !selfPubkey.isEmpty,
+              author.caseInsensitiveCompare(selfPubkey) != .orderedSame
+        else { return false }
+        return tags.contains { tag in
+            tag.count >= 2 && tag[0] == "p" && tag[1].caseInsensitiveCompare(selfPubkey) == .orderedSame
+        }
     }
 }

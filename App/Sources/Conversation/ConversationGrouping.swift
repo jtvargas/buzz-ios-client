@@ -274,10 +274,20 @@ enum ConversationGrouping {
     ///   carries a fact besides identity — the glyph that marks a broadcast reply — so
     ///   without this a reply landing under its author's own earlier message would lose the
     ///   only mark that says so. It costs nothing inside a thread, where every row is one.
+    /// - **A message that names the reader always names its author.** The owner asked for
+    ///   this, and it is the picture clause's reason again: a message addressed to you is
+    ///   one you will scroll back to find, and buried mid-run it has no name and no time
+    ///   anywhere on it. Only the mentioning message breaks out — a follow-up from the same
+    ///   author still stacks *under* it, so being named starts a block rather than ending
+    ///   grouping for the rest of the conversation.
+    ///
+    ///   Read from the row (``TimelineRow/namesSelf``) and not from the mention map the
+    ///   surface loads, which arrives a beat later and would regroup a run after drawing it.
     private static func continues(_ row: TimelineRow, after previous: TimelineRow?) -> Bool {
         guard let previous,
               previous.pubkey == row.pubkey,
               row.media.isEmpty,
+              !row.namesSelf,
               previous.isReply == row.isReply
         else { return false }
         let gap = row.date.timeIntervalSince(previous.date)

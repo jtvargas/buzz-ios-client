@@ -227,7 +227,7 @@ final class ThreadModel {
     /// Reads the whole thread off the main actor. `store` and `root` are immutable,
     /// so this is safe from the `nonisolated` observation loop.
     private nonisolated func fetchThread() -> [TimelineRow] {
-        (try? store.thread(root: root)) ?? []
+        (try? store.thread(root: root, selfPubkey: selfPubkey)) ?? []
     }
 
     @discardableResult
