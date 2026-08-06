@@ -438,7 +438,7 @@ final class AppEnvironment {
             await engineStartTask.value
         }
         engineStartTask = nil
-        await conversationEntityIndex.teardown()
+        conversationEntityIndex.teardown()
         // Before the store goes: unsent text is written through as it is typed, but a
         // keystroke landing in the same moment as a switch would otherwise be dropped with
         // the database it was on its way into.
@@ -466,28 +466,35 @@ final class AppEnvironment {
     }
 
     /// Applies the active community's per-community Siri preference immediately.
-    func setSiriIndexingEnabled(_ enabled: Bool) async {
+    ///
+    /// Synchronous end to end, which is what lets the Settings toggle call it directly rather
+    /// than spawning a task per tap: the preference write and the index request then happen in
+    /// the order the taps were made, rather than in whatever order two unstructured tasks
+    /// happened to start.
+    func setSiriIndexingEnabled(_ enabled: Bool) {
         guard var community = communities.active else { return }
         community.siriIndexingEnabled = enabled
         updateCommunities { $0.update(community) }
 
         guard sessionCommunityID == community.id, let store else {
-            if !enabled { await conversationEntityIndex.teardown(nextState: .off) }
+            if !enabled { conversationEntityIndex.teardown(nextState: .off) }
             return
         }
         if enabled {
             conversationEntityIndex.rebuild(store: store, selfPubkey: selfPubkeyHex, community: community)
         } else {
-            await conversationEntityIndex.teardown(nextState: .off)
+            conversationEntityIndex.teardown(nextState: .off)
         }
     }
 
     /// Declares the session running and asks for its Siri index.
     ///
-    /// The index pass is queued rather than awaited, so neither the websocket start below nor
-    /// the gate's heartbeat waits on Core Spotlight. What §4 wanted from an `await` here — that
-    /// a fast double switch cannot interleave two rebuilds — is provided by the index's own
-    /// ordering instead, and `teardownSession()` drains it before releasing the store.
+    /// The Core Spotlight half is queued rather than awaited, so neither the websocket start
+    /// below nor the gate's heartbeat waits on it. What §4 wanted from an `await` here — that a
+    /// fast double switch cannot interleave two rebuilds — is provided by the index's own
+    /// ordering instead. The half that must not be late is not queued at all: the snapshot an
+    /// intent's push reads for a name is written synchronously inside this call, in the same
+    /// turn as `phase = .running`.
     private func mountSession(
         store: BuzzEventStore,
         selfPubkey: String?,

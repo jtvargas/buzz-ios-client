@@ -265,9 +265,10 @@ struct SettingsView: View {
     private var siriBinding: Binding<Bool> {
         Binding(
             get: { environment.communities.active?.isSiriIndexingEnabled ?? false },
-            set: { isOn in
-                Task { await environment.setSiriIndexingEnabled(isOn) }
-            }
+            // Called straight through, not from a `Task`: two quick taps then reach the index
+            // in the order they were made, rather than in whatever order two unstructured tasks
+            // happen to start.
+            set: { environment.setSiriIndexingEnabled($0) }
         )
     }
 

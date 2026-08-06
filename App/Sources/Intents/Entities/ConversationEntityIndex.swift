@@ -40,20 +40,18 @@ enum IndexingState: Equatable {
 /// - Doing it at call time is also what orders the snapshot at all: MainActor, no suspension,
 ///   so the later caller wins in the snapshot exactly as it wins in the chain.
 ///
-/// # What the callers get for not waiting
+/// # No hook waits, including this one's teardown
 ///
-/// - ``teardown(nextState:)`` is the one hook that **awaits its own entry**. Everything before
-///   it in the chain reads the store, and `teardownSession()` releases the store the moment
-///   this returns, so draining is what keeps a pass from outliving the database it reads.
-/// - The others return as soon as the work is queued. Ordering no longer depends on the caller
-///   awaiting, which is what keeps a Core Spotlight round trip off the launch path and off the
-///   websocket's.
+/// Every entry point returns as soon as its work is queued, so a Core Spotlight round trip is
+/// never on the launch path, in front of the websocket, or in the middle of a community switch.
+/// Ordering does not depend on any caller awaiting — see ``teardown(nextState:)`` for why the
+/// one wait that used to exist stopped buying anything once the store read moved out of the
+/// queued half.
 ///
-/// One honest limit on the ordering claim: the chain orders *enqueues*, and a hook reached from
-/// an unstructured `Task` enqueues when that task starts running, which is the executor's
-/// business. The property that matters survives — a caller writes its preference and enqueues
-/// in one synchronous span, so a reorder moves both together and the two can never disagree.
-/// What a reorder costs is that the earlier tap wins, visibly and recoverably.
+/// That makes every hook synchronous to its caller, which is worth more than it looks: the
+/// Settings toggle can call straight through instead of spawning a task per tap, so the order
+/// two taps are *made* in is the order they are enqueued in. The chain orders enqueues; without
+/// that, it would only order whenever two unstructured tasks happened to start.
 @MainActor
 @Observable
 final class ConversationEntityIndex {
@@ -100,15 +98,26 @@ final class ConversationEntityIndex {
         indexCurrent(store: store, selfPubkey: selfPubkey, community: community, forcePhrases: false)
     }
 
-    /// Hook 2: removes every entity of Hive's type before the outgoing store is released.
+    /// Hook 2: removes every entity of Hive's type as the outgoing store is released.
     ///
-    /// Awaits the whole chain, so no earlier pass is still holding the store when this returns.
-    /// The cost of that is worth knowing: a wedged `corespotlightd` blocks a switch or a
-    /// sign-out for as long as it stays wedged, where before it blocked them for one call.
-    func teardown(nextState: IndexingState = .idle) async {
+    /// **Does not wait**, deliberately, and an earlier revision did. Waiting was there to keep a
+    /// queued pass from outliving the store it read — but once the derivation moved into the
+    /// synchronous half, no queued closure touches the store at all: they call Core Spotlight,
+    /// write `state`, and read the snapshot. So the wait was buying nothing and costing a real
+    /// failure mode, since a wedged `corespotlightd` would have blocked every switch and every
+    /// sign-out for as long as it stayed wedged.
+    ///
+    /// What waiting *did* still buy is named here rather than lost: without it, a switch can
+    /// mount Y's workspace while a pass queued for X is still publishing, so X's channel names
+    /// can sit in Spotlight for a moment under Y's sidebar. That is visibility only —
+    /// `OpenConversationIntent.perform()` re-checks the live active community, so nothing
+    /// opens — and §4 already accepts a far longer version of exactly this after an unclean
+    /// exit. Ordering is unaffected either way: the chain runs old-build → teardown → new-build
+    /// whether or not the caller waits.
+    func teardown(nextState: IndexingState = .idle) {
         stopObserving()
         snapshots.clear()
-        await enqueue { [self] in
+        enqueue { [self] in
             do {
                 try await Self.deleteAll()
                 state = nextState
@@ -116,7 +125,7 @@ final class ConversationEntityIndex {
             } catch {
                 state = .failed(error.localizedDescription)
             }
-        }.value
+        }
     }
 
     /// Appends one pass to the chain. Synchronous to its caller by construction: a hook must be
