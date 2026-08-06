@@ -146,6 +146,16 @@ struct ConversationScaffold<Content: View, Bar: View, Accessory: View>: View {
     /// entirely rows this device already held, and so added no height) has nothing left to
     /// ask again with, and paging stops for good with no gesture able to restart it.
     @State private var isNearTop = false
+    /// The room the screen's own chrome takes at each end, measured rather than assumed.
+    ///
+    /// Needed because the flip mirrors the scroll view's content insets along with everything
+    /// else inside it: the clearance SwiftUI reserves for the status bar arrives at the visual
+    /// bottom, and the composer's at the visual top. Left alone that is not cosmetic — the top
+    /// row renders *under* the status bar, and a composer that grows no longer pushes the
+    /// newest message out of its way, which is
+    /// `ComposerGrowthTests/testAttachingAPictureKeepsTheNewestMessageAboveTheComposer`
+    /// failing by 72 points.
+    @State private var chrome = EdgeInsets()
 
     /// The band that counts as *at* the bottom — releasing the owner's frozen tail.
     /// Tight, because releasing grows the content by every held row, and a
@@ -196,6 +206,15 @@ struct ConversationScaffold<Content: View, Bar: View, Accessory: View>: View {
                 apply(place.composerRoomDidChange(isAtBottom: isAtBottom), using: proxy)
             }
         }
+        // Read here, outside the scroll view, because the scroll view's *own* insets are the
+        // thing being replaced — reading them there and feeding them back would be a loop that
+        // converges on nothing. This is the screen's chrome as the shell sees it, and it does
+        // not depend on any margin set below.
+        .onGeometryChange(for: EdgeInsets.self) { geometry in
+            geometry.safeAreaInsets
+        } action: { insets in
+            if chrome != insets { chrome = insets }
+        }
         // The app's one dark, the same one the sidebar this was pushed from draws. Both
         // conversation surfaces come through here, so the channel and a thread take it
         // together — see ``View/hiveScreenGround()``.
@@ -215,17 +234,52 @@ struct ConversationScaffold<Content: View, Bar: View, Accessory: View>: View {
         ScrollView(.vertical) {
             content
         }
+        // The flip. See ``View/conversationInverted()`` for the measurements behind it and for
+        // the two halves the owner has to supply: newest-first items, and the same modifier on
+        // each row to draw it the right way up.
+        //
+        // Applied to the scroll view rather than to its content so the *scrolling* is what
+        // inverts: the newest message sits at the scroll view's origin, and an older page
+        // appends past the far end where the estimated rows are and the reader is not.
+        .conversationInverted()
+        // Ships with the flip, not after it. iOS 26's scroll edge effects composited against a
+        // flipped scroll view do not veil an edge — they veil the *whole surface*, a white wash
+        // over every row with the content barely legible; `.hard` is a near-total white-out.
+        // Measured in a probe replicating this chrome (inline navigation title plus
+        // `safeAreaBar` composer) on iPhone 17 / iOS 26.1, two runs, against a no-chrome control
+        // that renders pixel-perfect — so it is the bar edge effects compositing against the
+        // flipped surface, not the flip.
+        //
+        // The cost is real and bounded: this surface gives up automatic Liquid Glass at its
+        // edges. The bars themselves render *outside* the flip and stay upright, so putting the
+        // treatment back explicitly — a toolbar background, a composer background — composes
+        // normally and is a separate piece of polish.
+        .scrollEdgeEffectHidden(true, for: .all)
+        // The mirror, undone. The scroll view's own top is the visual bottom, so the room the
+        // composer needs is set as a *top* margin and the status bar's as a *bottom* one.
+        // Replacing the automatic safe-area margins rather than adding to them is the point:
+        // the automatic pair is the pair that arrives on the wrong ends.
+        .contentMargins(.top, chrome.bottom + barHeight, for: .scrollContent)
+        .contentMargins(.bottom, chrome.top, for: .scrollContent)
+        // The indicator rides the same mirror, and reads as travelling against the content
+        // without this.
+        .contentMargins(.top, chrome.bottom + barHeight, for: .scrollIndicators)
+        .contentMargins(.bottom, chrome.top, for: .scrollIndicators)
         // Innermost, and before `safeAreaBar`: this modifier binds to the *first*
         // scroll view it finds and logs a runtime issue when more than one is in the
         // hierarchy — the suggestion panel has its own. The projection is three `Bool`s
         // on purpose and never the raw distance: it keeps `Edges` cheap to compare, so
         // the action runs on a band crossing rather than on every scrolled frame.
         .onScrollGeometryChange(for: Edges.self) { geometry in
-            let distance = geometry.contentSize.height - geometry.visibleRect.maxY
+            // Both distances are read from the flipped space, where the newest message is at
+            // the origin and history runs away from it. `distance` is still "how far from the
+            // newest message" and `nearTop` still "how close to the oldest thing loaded" —
+            // the names describe the conversation, and only the geometry they read has moved.
+            let distance = geometry.visibleRect.minY
             return Edges(
                 atBottom: distance <= Self.atBottomSlack,
                 awayFromBottom: distance >= Self.awayFromBottomSlack,
-                nearTop: geometry.visibleRect.minY <= Self.topTrigger
+                nearTop: geometry.contentSize.height - geometry.visibleRect.maxY <= Self.topTrigger
             )
         } action: { _, edges in
             // Hysteresis, not a threshold: between the two bands the current state
@@ -349,8 +403,11 @@ struct ConversationScaffold<Content: View, Bar: View, Accessory: View>: View {
         // What it was there for is now done by the two corrections above — one for a declared
         // content change, one for the keyboard taking room at the bottom — both of which land on
         // a row instead of an edge.
-        .defaultScrollAnchor(.bottom, for: .initialOffset)
-        .defaultScrollAnchor(.bottom, for: .alignment)
+        // `.top` in the flipped space is the newest message, which is what both roles wanted
+        // when they said `.bottom`. The conversation still opens at its newest message and a
+        // short one still rests against the composer; the words changed, the behaviour did not.
+        .defaultScrollAnchor(.top, for: .initialOffset)
+        .defaultScrollAnchor(.top, for: .alignment)
         // Only the message list dismisses the keyboard, and this is applied inside
         // `safeAreaBar` so the bar's own scroll views do not inherit the mode.
         .scrollDismissesKeyboard(.interactively)
@@ -410,11 +467,18 @@ struct ConversationScaffold<Content: View, Bar: View, Accessory: View>: View {
 
     /// The three numbers ``ConversationReaderPlace`` reads, taken from one layout so they
     /// cannot disagree with each other.
+    /// Read from the flipped space for ``Edges``' reason: `distance` means *from the newest
+    /// message*, which is now the origin end.
+    ///
+    /// What this buys the type that consumes it: the distance to the newest message no longer
+    /// moves when an older page lands, because the page lands past the other end. Its
+    /// corrections are left in place for the changes they were written for — the keyboard
+    /// taking room, a row growing where it stands — which inversion does not address.
     private static func span(_ geometry: ScrollGeometry) -> ConversationReaderPlace.Span {
         ConversationReaderPlace.Span(
             contentHeight: geometry.contentSize.height,
             offset: geometry.contentOffset.y,
-            distance: geometry.contentSize.height - geometry.visibleRect.maxY
+            distance: geometry.visibleRect.minY
         )
     }
 

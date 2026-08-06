@@ -254,14 +254,17 @@ struct ThreadView: View {
     private var list: some View {
         // The channel's rhythm, from the same constant, so a message does not change
         // size or spacing when a reader follows it into its thread.
+        // Newest first and each row flipped back, as the channel does — the scaffold is shared,
+        // so the inversion is not optional here. See ``View/conversationInverted()``.
         LazyVStack(spacing: MessageRowMetrics.withinGroup) {
             // The same grouped items the channel renders, so a thread that spans days
             // separates them the same way and stacks one person's consecutive replies the
             // same way; the model suppresses the separator that would otherwise sit above
             // the thread's own opener.
-            ForEach(model.items) { item in
+            ForEach(model.items.reversed()) { item in
                 itemView(item)
-                    .padding(.top, item.continuesGroup ? 0 : MessageRowMetrics.aboveNewGroup)
+                    .padding(.bottom, item.continuesGroup ? 0 : MessageRowMetrics.aboveNewGroup)
+                    .conversationInverted()
             }
         }
         .padding(.vertical, 8)

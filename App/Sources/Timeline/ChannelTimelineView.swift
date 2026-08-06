@@ -309,16 +309,28 @@ struct ChannelTimelineView: View {
         // padding on each row: a row's height stays its content's height. Everything that
         // starts something — a new block, a day, a notice — pays the rest of the 12pt gap
         // itself, below. See ``MessageRowMetrics``.
+        // Newest first, and every row flipped back — the two halves the inverted scroll view
+        // needs from its owner. See ``View/conversationInverted()``.
         LazyVStack(spacing: MessageRowMetrics.withinGroup) {
-            topSentinel
             // Day separators and the grouping of consecutive messages are both items, not
             // row headers, so the channel, a thread, and a DM cannot each grow their own
             // copy of either rule. Grouped once per rows change in the model; this pass is
             // a read.
-            ForEach(model.items) { item in
+            //
+            // Reversed here rather than in the model: grouping is chronological — which row
+            // opens a block, where a day starts — and reversing before it would ask those
+            // rules to read backwards. The model stays oldest-first and only the drawing
+            // order turns around.
+            ForEach(model.items.reversed()) { item in
                 itemView(item)
-                    .padding(.top, item.continuesGroup ? 0 : MessageRowMetrics.aboveNewGroup)
+                    // `.bottom`, not `.top`: the gap belongs above the row that opens a block,
+                    // and this stack is drawn upside down.
+                    .padding(.bottom, item.continuesGroup ? 0 : MessageRowMetrics.aboveNewGroup)
+                    .conversationInverted()
             }
+            // Last, because the far end of a flipped stack is the top of history.
+            topSentinel
+                .conversationInverted()
         }
         .padding(.vertical, 8)
         .dismissesSuggestionsOnScroll(model.mentionAutocomplete)
