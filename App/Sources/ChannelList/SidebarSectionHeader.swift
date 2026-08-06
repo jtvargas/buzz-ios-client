@@ -157,7 +157,7 @@ struct SidebarSectionHeader: View {
         // Both the title and the chevron route here, which is what keeps them one control —
         // and it is the only feedback either of them gives, since neither draws a press. The
         // tick lands at the tap; the section it names takes 0.22s to finish arriving.
-        HiveHaptics.play(.sectionToggled)
+        HiveHaptics.play(.disclosureToggled)
         withAnimation(.snappy(duration: 0.22)) { isExpanded.toggle() }
     }
 
