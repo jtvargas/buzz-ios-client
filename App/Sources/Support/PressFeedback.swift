@@ -32,7 +32,8 @@ import SwiftUI
 ///
 /// Light is the rest of the answer, and it moved the same way the next day: he asked for
 /// *"some highlight container with the same accent color but very dim — 0.00 → 0.08 → 0.00"*,
-/// so a **control** and a **row** both wash the accent inside their own shape at
+/// later standardized as a neutral gray across themes. A **control** and a **row** both wash
+/// that neutral color inside their own shape at
 /// ``pressedFill``, a **row** dims a few per cent as well, an **inline** control only dims and
 /// dims further, and a **message** answers nothing at all.
 ///
@@ -68,7 +69,7 @@ enum PressFeedback {
     /// It was 0.14, and that number was not a taste call either: it was
     /// ``ChannelListView/resumeMark(isResumable:)``, the mark on the conversation you were last
     /// in, to the number. **Being exactly that mark is why it had to come off a row.** The
-    /// amber is the app's *place* mark, and a list that flashes the place mark under every
+    /// stronger fill is the app's *place* mark, and a list that flashes the place mark under every
     /// finger is a list saying *this one* about whatever you happened to touch.
     ///
     /// 0.08 is a little over half of it, which is what lets the wash go back on a row: it is
@@ -78,11 +79,9 @@ enum PressFeedback {
     /// come off again.
     static let pressedFill: Double = 0.08
 
-    /// The colour of that wash. Named here so the sidebar's mark and every press in the app
-    /// cannot drift apart without this line changing.
-    /// Computed, not stored: a `static let` captures the accent at first touch and would keep
-    /// drawing the theme that was in force then.
-    static var fillColor: Color { .hiveAccent }
+    /// The neutral wash shared by every press and every theme. White at the low opacities below
+    /// becomes Slack's dim gray over any dark theme without competing with that theme's accent.
+    static let fillColor = Color.white
 
     /// How long a press stays on screen at the very least — **zero, now that a spring draws it.**
     ///
@@ -111,7 +110,7 @@ enum PressFeedback {
     /// Two depths. A row now answers with three things at once — the shrink, this dim, and the
     /// wash — where a round ago it had only this one. That is deliberate rather than
     /// accumulated: the owner asked for the shrink and the highlight back in consecutive
-    /// messages, and 0.08 of accent is faint enough that dropping the dim to compensate would
+    /// messages, and 0.08 of neutral white is faint enough that dropping the dim to compensate would
     /// leave a row answering more quietly than it did before either was asked for. **It is the
     /// first thing to take off if a pressed row now reads as too loud** — set it to 1 and the
     /// row keeps the shrink and the wash, which is exactly what a ``control`` does.
@@ -259,9 +258,9 @@ struct PressFeedbackButtonStyle: PrimitiveButtonStyle {
     /// How much of the treatment a control takes.
     enum Emphasis {
         /// Something with edges of its own: a button, a chip, a shortcut card, an avatar.
-        /// Washes the accent inside its own shape.
+        /// Washes neutral gray inside its own shape.
         case control
-        /// A full-width row in a list. Washes the accent like a control, and dims very
+        /// A full-width row in a list. Washes neutral gray like a control, and dims very
         /// slightly on top of it. Both of those were off for a while — the owner had the amber
         /// taken off the sidebar when it was drawn at the resume mark's own 0.14, and then the
         /// shrink off everything — and both came back at his ask, the wash at a strength that
@@ -277,22 +276,18 @@ struct PressFeedbackButtonStyle: PrimitiveButtonStyle {
     /// The shape the wash is drawn in. A capsule chip and a rounded card want their own
     /// outline: a wash in the wrong shape is more visible than no wash at all.
     var shape: AnyShape
-    /// A surface-specific wash colour, or the app accent when the caller names none.
-    var fillColor: Color?
 
     /// The treatment in a named emphasis, washing in whatever shape that emphasis implies.
     init(_ emphasis: Emphasis = .control) {
         self.emphasis = emphasis
         self.shape = Self.defaultShape
-        self.fillColor = nil
     }
 
     /// The treatment in a named emphasis, washing in a shape the control names for itself —
     /// a capsule for a chip, a circle for a disc, its own radius for a card.
-    init(_ emphasis: Emphasis, in shape: some Shape, fillColor: Color? = nil) {
+    init(_ emphasis: Emphasis, in shape: some Shape) {
         self.emphasis = emphasis
         self.shape = AnyShape(shape)
-        self.fillColor = fillColor
     }
 
     /// The sidebar mark's own rounded rectangle, for a control that names no shape.
@@ -301,12 +296,7 @@ struct PressFeedbackButtonStyle: PrimitiveButtonStyle {
     )
 
     func makeBody(configuration: Configuration) -> some View {
-        PressFeedbackBody(
-            configuration: configuration,
-            emphasis: emphasis,
-            shape: shape,
-            fillColor: fillColor ?? PressFeedback.fillColor
-        )
+        PressFeedbackBody(configuration: configuration, emphasis: emphasis, shape: shape)
     }
 }
 
@@ -342,7 +332,6 @@ struct PressTreatment: ViewModifier {
     /// Whether the reader has asked the system for less movement. The shrink is the only part
     /// of this treatment that moves, so this drops it and leaves the light alone.
     var reduceMotion: Bool = false
-    var fillColor: Color = PressFeedback.fillColor
 
     private var scale: CGFloat {
         guard isShowing, !reduceMotion else { return 1 }
@@ -353,7 +342,7 @@ struct PressTreatment: ViewModifier {
     /// innermost, so it fades with the label rather than with the surface behind it.
     private var lit: some View {
         shape.fill(
-            fillColor
+            PressFeedback.fillColor
                 .opacity(isShowing ? PressFeedback.fill(for: emphasis) : 0)
         )
     }
@@ -382,17 +371,10 @@ extension View {
         isShowing: Bool,
         emphasis: PressFeedbackButtonStyle.Emphasis = .control,
         in shape: AnyShape = AnyShape(.rect(cornerRadius: PressFeedback.cornerRadius, style: .continuous)),
-        reduceMotion: Bool = false,
-        fillColor: Color = PressFeedback.fillColor
+        reduceMotion: Bool = false
     ) -> some View {
         modifier(
-            PressTreatment(
-                isShowing: isShowing,
-                emphasis: emphasis,
-                shape: shape,
-                reduceMotion: reduceMotion,
-                fillColor: fillColor
-            )
+            PressTreatment(isShowing: isShowing, emphasis: emphasis, shape: shape, reduceMotion: reduceMotion)
         )
     }
 }
@@ -422,10 +404,9 @@ extension PrimitiveButtonStyle where Self == PressFeedbackButtonStyle {
     /// for itself.
     static func hivePress(
         _ emphasis: PressFeedbackButtonStyle.Emphasis,
-        in shape: some Shape,
-        fillColor: Color? = nil
+        in shape: some Shape
     ) -> PressFeedbackButtonStyle {
-        PressFeedbackButtonStyle(emphasis, in: shape, fillColor: fillColor)
+        PressFeedbackButtonStyle(emphasis, in: shape)
     }
 }
 

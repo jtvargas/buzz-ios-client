@@ -91,7 +91,8 @@ struct PressFeedbackTests {
         // sidebar at all* — because at 0.14 the wash was the resume mark to the number, and a
         // list that flashes the place mark under every finger is a list saying "this one"
         // about whatever you happened to touch. Then, on 2026-08-04, *some highlight container
-        // with the same accent color but very dim*. Both are satisfied by the strength rather
+        // with the same accent color but very dim*, later standardized as neutral across themes.
+        // Both are satisfied by the strength rather
         // than by the emphasis, which is what `washIsDimmerThanThePlaceItCouldBeConfusedWith`
         // holds: a row may wash as long as it cannot be read as the mark.
         #expect(PressFeedback.fill(for: .row) == PressFeedback.pressedFill)
@@ -129,17 +130,17 @@ struct PressFeedbackTests {
         #expect(PressFeedbackButtonStyle(.control, in: .capsule).shape.path(in: box) == Capsule().path(in: box))
     }
 
-    @Test("the highlight is the accent, and dimmer than the mark it must not be mistaken for")
+    @Test("the highlight is neutral, and dimmer than the mark it must not be mistaken for")
     func washIsDimmerThanThePlaceItCouldBeConfusedWith() {
         // Two halves that pull against each other, which is why they are asserted together.
         //
-        // Same *hue*, because a press that used `.secondary` — as this did when it first
-        // shipped — is a second highlight vocabulary in a list that already has one.
-        #expect(PressFeedback.fillColor == Color.hiveAccent)
+        // Neutral across themes: interaction feedback should not borrow or compete with the
+        // current accent. White at low opacity becomes the same dim gray on every dark ground.
+        #expect(PressFeedback.fillColor == Color.white)
 
         // Different *strength*, because being the same hue at the same opacity is exactly what
         // got this wash removed from the sidebar: `ChannelListView.resumeMark` fills
-        // `Color.hiveAccent` at 0.14 to mark the conversation you were last in, and a press
+        // the same neutral color at 0.14 to mark the conversation you were last in, and a press
         // drawn at 0.14 is that claim made about whatever your finger is touching. The owner
         // asked for 0.08. **This inequality is the load-bearing part** — equalise the two and
         // the row wash has to come off again, so it is asserted rather than left to the
@@ -332,7 +333,8 @@ struct PressTreatmentRenderTests {
     @Test("a control and a row both wash; a control drawn onto a message does not")
     func aWashIsDrawnWhereverThereIsAShapeToDrawItIn() throws {
         // The owner's instruction on pixels — *some highlight container with the same accent
-        // color but very dim* — and the reason it is measured rather than read off the
+        // color but very dim*, later standardized as neutral across themes — and the reason it
+        // is measured rather than read off the
         // constant: at 0.08 over white the difference is about six values in one channel, which
         // is small enough that a wash silently failing to draw would look exactly like a wash
         // drawing correctly to anyone reading the code.

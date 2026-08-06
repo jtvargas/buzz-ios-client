@@ -45,7 +45,7 @@ enum SidebarRowMetrics {
     /// What the resume mark is filled with.
     ///
     /// Deliberately **not** ``PressFeedback/pressedFill``. This is the *place* mark and that is
-    /// a press; they are one hue at two strengths on purpose, and the press is the dimmer of the
+    /// a press; they share one neutral hue at two strengths, and the press is the dimmer of the
     /// two so a finger cannot be mistaken for where you were. Now that they also share a
     /// rectangle, this difference is the only thing telling them apart — equalising them is what
     /// got the press wash removed from this list once already.

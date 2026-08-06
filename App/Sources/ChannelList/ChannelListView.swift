@@ -21,7 +21,6 @@ import SwiftUI
 /// pushed view — see ``ChannelListTabBar``, which holds the measurements that put it here.
 struct ChannelListView: View {
     @Environment(AppEnvironment.self) private var environment
-    @Environment(\.hiveTheme) private var theme
 
     @State private var model: ChannelListModel
     @State private var presence: PresenceModel
@@ -714,13 +713,7 @@ private extension ChannelListView {
                     .padding(.horizontal, SidebarRowMetrics.labelPaddingH)
                     .padding(.vertical, SidebarRowMetrics.labelPaddingV)
             }
-            .buttonStyle(
-                .hivePress(
-                    .row,
-                    in: .rect(cornerRadius: SidebarRowMetrics.radius, style: .continuous),
-                    fillColor: channelRowHighlight
-                )
-            )
+            .buttonStyle(.hivePress(.row, in: .rect(cornerRadius: SidebarRowMetrics.radius, style: .continuous)))
             .listRowInsets(SidebarRowMetrics.rowInsets)
             // No per-row rule: sections of ruled rows read as a form, not as one
             // navigation surface. The section headings do the separating.
@@ -763,17 +756,12 @@ private extension ChannelListView {
     func resumeMark(isResumable: Bool) -> some View {
         if isResumable {
             RoundedRectangle(cornerRadius: SidebarRowMetrics.radius, style: .continuous)
-                .fill(channelRowHighlight.opacity(SidebarRowMetrics.opacity))
+                .fill(PressFeedback.fillColor.opacity(SidebarRowMetrics.opacity))
                 .padding(.horizontal, SidebarRowMetrics.insetH)
                 .padding(.vertical, SidebarRowMetrics.insetV)
         } else {
             Color.clear
         }
-    }
-
-    /// Slack keeps navigation place and press states neutral even when controls use blue.
-    private var channelRowHighlight: Color {
-        theme.id == "slack-dark" ? .white : .hiveAccent
     }
 
     // The numbers behind both of those rectangles are not here — they are internal, in this
