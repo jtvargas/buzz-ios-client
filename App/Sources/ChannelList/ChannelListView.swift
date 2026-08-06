@@ -624,6 +624,15 @@ private extension ChannelListView {
 
     /// The Later screen. Lifted out of the stack's builder because that builder is already
     /// at the type-checker's limit — inlining this one pushed it over.
+    ///
+    /// **The `else` is load-bearing — it is not dead code.** ``laterModel`` is built by this
+    /// view's own `.task`, and ``open(_:)`` can push this screen before that task has run: an
+    /// intent's request is read in an `.onChange(initial: true)` during the first update
+    /// transaction, and a `.task` body is enqueued behind it. A bare `if let` evaluates to
+    /// `EmptyView`, so a cold-launch "Open Later in Hive" pushes a blank screen whose only
+    /// control is Back. No finger can reach here that early — ``press(_:)`` needs a sidebar
+    /// already on screen — which is why the gap opened only once something outside the view
+    /// tree could ask for this screen. Chrome but no spinner: the model lands a frame later.
     @ViewBuilder
     var laterDestination: some View {
         if let laterModel {
@@ -637,6 +646,11 @@ private extension ChannelListView {
                     ).pushed(onto: path)
                 }
             )
+        } else {
+            Color.clear
+                .hiveScreenGround()
+                .navigationTitle("Later")
+                .navigationBarTitleDisplayMode(.inline)
         }
     }
 
