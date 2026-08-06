@@ -1,7 +1,7 @@
 import SwiftUI
 import UIKit
 
-/// The five things this app says by touch.
+/// The six things this app says by touch.
 ///
 /// A closed list, and that is the point: a haptic is only information while it is rare. An
 /// app that buzzes on every tap teaches its reader to stop noticing, and then the one that
@@ -10,8 +10,8 @@ import UIKit
 /// another.
 ///
 /// The patterns are chosen to be told apart by feel alone, which is the only test that
-/// matters for a haptic: a light tick, a soft one, a medium knock, a selection click, and
-/// the only double-beat in the app.
+/// matters for a haptic: a light tick, a soft one, a medium knock, a rigid click, a
+/// selection click, and the only double-beat in the app.
 ///
 /// ``suggestionPicked`` was the fifth, added 2026-08-04 at the owner's ask. It is worth
 /// recording why it was allowed past the paragraph above: picking an `@` or a `#` out of the
@@ -40,6 +40,20 @@ enum HiveHaptic: Equatable, CaseIterable {
     /// of the impacts — so it satisfies the owner's "light" without colliding with ``send``,
     /// which is already `.impact(.light)` and which `everyEventIsDistinct` would have caught.
     case suggestionPicked
+    /// A sidebar section was opened or closed.
+    ///
+    /// The sixth, added 2026-08-06 at the owner's ask, and it clears the same bar
+    /// ``suggestionPicked`` did: collapsing a heading is a *deliberate* act on a control the
+    /// reader aimed at, and not one anybody performs in a stream — the sidebar has a handful
+    /// of headings and they stay where they are left. It is also the only answer the gesture
+    /// has, because the header deliberately draws no press feedback (`.hiveNoPress`, so the
+    /// title and the chevron cannot disagree) and the rows underneath take 0.22s to arrive.
+    ///
+    /// `.rigid` rather than the literal reading of "light": ``send`` already holds
+    /// `.impact(.light)`, and `everyEventIsDistinct` is what would have caught a section
+    /// opening feeling exactly like a message leaving. Rigid is the crisper of the two — a
+    /// click against a stop, which is what an accordion reaching its end is.
+    case sectionToggled
 
     /// What UIKit is asked to play.
     ///
@@ -61,6 +75,7 @@ enum HiveHaptic: Equatable, CaseIterable {
         case .longPress: .impact(.medium)
         case .delete: .notification(.warning)
         case .suggestionPicked: .selection
+        case .sectionToggled: .impact(.rigid)
         }
     }
 }
