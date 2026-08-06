@@ -282,10 +282,9 @@ struct SidebarContent {
         names: EntityNames,
         starred: Set<String> = []
     ) -> SidebarContent {
-        var grouped: [SidebarSection: [SidebarRow]] = [:]
-        for channel in channels {
+        let resolved = channels.map { channel -> SidebarRow in
             let conversation = names.conversation(for: channel)
-            let row = SidebarRow(
+            return SidebarRow(
                 channel: channel,
                 conversation: conversation,
                 indicator: .resolve(
@@ -300,6 +299,10 @@ struct SidebarContent {
                 ),
                 isStarred: starred.contains(channel.id)
             )
+        }
+
+        var grouped: [SidebarSection: [SidebarRow]] = [:]
+        for row in collapsingDuplicatePeers(resolved) {
             grouped[row.section, default: []].append(row)
         }
 

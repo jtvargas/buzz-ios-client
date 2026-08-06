@@ -7,8 +7,8 @@ import UIKit
 /// A haptic cannot be asserted by playing it, so what is held here is the thing that
 /// actually goes wrong: two different events settling on the same pattern. A reader learns
 /// these by feel and by feel alone — there is no label on a buzz — so "sending and reacting
-/// are told apart" is the whole contract, and it is one a later hand can break by adding a
-/// fifth case that reaches for `.light` because it was the obvious one.
+/// are told apart" is the whole contract, and it is one a later hand can break by adding
+/// another case that reaches for `.light` because it was the obvious one.
 @Suite("Haptic vocabulary")
 struct HapticVocabularyTests {
     @Test("no two events feel the same")
@@ -33,6 +33,9 @@ struct HapticVocabularyTests {
         // already `.impact(.light)`, so the owner's "light haptic" spelled literally would have
         // been indistinguishable from a message leaving — which `everyEventIsDistinct` forbids.
         #expect(HiveHaptic.suggestionPicked.pattern == .selection)
+        // The sixth, and rigid for the same reason spelled a second time: a sidebar section
+        // opening must not feel like a message being sent.
+        #expect(HiveHaptic.sectionToggled.pattern == .impact(.rigid))
     }
 
     @Test("only the destructive event plays a notification")
@@ -49,10 +52,10 @@ struct HapticVocabularyTests {
     @Test("the vocabulary stays closed")
     func vocabularyIsSmall() {
         // Not a style rule. A haptic is information only while it is rare, and the way an
-        // app stops meaning anything by touch is one case at a time. A fifth is a decision,
-        // and this is where it gets made rather than noticed.
-        // Five since 2026-08-04. The number is asserted rather than the list so that adding one
+        // app stops meaning anything by touch is one case at a time. Each new one is a
+        // decision, and this is where it gets made rather than noticed.
+        // Six since 2026-08-06. The number is asserted rather than the list so that adding one
         // is a deliberate edit here with the paragraph on `HiveHaptic` in front of it.
-        #expect(HiveHaptic.allCases.count == 5)
+        #expect(HiveHaptic.allCases.count == 6)
     }
 }
