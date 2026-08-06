@@ -14,6 +14,7 @@ struct InAppNotificationHost<Content: View>: View {
 
     init(
         store: BuzzEventStore,
+        engine: SyncEngine,
         selfPubkey: String?,
         isForeground: Bool,
         visibleLocation: InAppNotificationLocation?,
@@ -22,6 +23,7 @@ struct InAppNotificationHost<Content: View>: View {
     ) {
         _model = State(initialValue: InAppNotificationModel(
             store: store,
+            engine: engine,
             selfPubkey: selfPubkey,
             isForeground: isForeground,
             visibleLocation: visibleLocation

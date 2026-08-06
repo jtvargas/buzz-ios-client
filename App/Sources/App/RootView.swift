@@ -115,6 +115,7 @@ struct RootView: View {
     private func tabs(engine: SyncEngine, store: BuzzEventStore) -> some View {
         InAppNotificationHost(
             store: store,
+            engine: engine,
             selfPubkey: environment.selfPubkeyHex,
             isForeground: scenePhase == .active,
             visibleLocation: tab == .home ? visibleHomeLocation : nil

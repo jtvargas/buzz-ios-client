@@ -201,6 +201,8 @@ public actor SyncEngine {
     private var nextObserverID = 0
     var directoryStatusObservers: [Int: AsyncStream<ChannelDirectoryStatus>.Continuation] = [:]
     private var nextDirectoryStatusObserverID = 0
+    private var liveMessageObservers: [Int: AsyncStream<[String]>.Continuation] = [:]
+    private var nextLiveMessageObserverID = 0
 
     // MARK: - Sync state
 
@@ -392,6 +394,27 @@ public actor SyncEngine {
         return stream
     }
 
+    /// IDs inserted from the standing subscription after its stored-event boundary.
+    /// Backfill and reconciliation never enter this stream, which makes it the app's
+    /// authoritative seam for foreground-only new-message presentation.
+    public func liveMessageInsertions() -> AsyncStream<[String]> {
+        let (stream, continuation) = AsyncStream.makeStream(of: [String].self)
+        let id = nextLiveMessageObserverID
+        nextLiveMessageObserverID += 1
+        liveMessageObservers[id] = continuation
+        continuation.onTermination = { [weak self] _ in
+            Task { await self?.removeLiveMessageObserver(id) }
+        }
+        return stream
+    }
+
+    func publishLiveMessageInsertions(_ eventIDs: [String]) {
+        guard !eventIDs.isEmpty else { return }
+        for continuation in liveMessageObservers.values {
+            continuation.yield(eventIDs)
+        }
+    }
+
     /// The current sync state of a channel — ``ChannelSync/unsynced`` for any
     /// channel the engine has not reconciled on this socket.
     public func channelSyncState(_ channel: String) -> ChannelSync {
@@ -412,6 +435,10 @@ public actor SyncEngine {
 
     private func removeDirectoryStatusObserver(_ id: Int) {
         directoryStatusObservers.removeValue(forKey: id)
+    }
+
+    private func removeLiveMessageObserver(_ id: Int) {
+        liveMessageObservers.removeValue(forKey: id)
     }
 
     // MARK: - Lifecycle
