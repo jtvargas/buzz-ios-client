@@ -567,8 +567,10 @@ private extension ChannelListView {
                     if expansion(for: section.section).wrappedValue {
                         if section.rows.isEmpty {
                             emptySectionRow(section.section)
+                                .transition(Self.sectionDisclosureTransition)
                         } else {
                             rows(of: section, resumable: resumable)
+                                .transition(Self.sectionDisclosureTransition)
                         }
                     }
                 }
@@ -577,6 +579,13 @@ private extension ChannelListView {
             .refreshable { await engine.refresh() }
         }
     }
+
+    /// Makes a section's rows follow its disclosure chevron instead of appearing as an
+    /// instantaneous list diff. `List` still owns each row's stable identity and animates
+    /// the vacated height; the transition supplies the short vertical slide and fade.
+    static let sectionDisclosureTransition = AnyTransition
+        .move(edge: .top)
+        .combined(with: .opacity)
 
     /// What a section's `+` does, or `nil` for a section that nothing is added to from here.
     /// Channels opens the browser rather than the create form: search, join, and create
