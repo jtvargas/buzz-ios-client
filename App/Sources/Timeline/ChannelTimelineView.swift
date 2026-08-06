@@ -362,6 +362,16 @@ struct ChannelTimelineView: View {
     /// exhaustion is latched on the relay's own answer, so the spinner ends in the
     /// beginning-of-conversation line, and a failed reach replaces it with a retry rather
     /// than spinning over it.
+    ///
+    /// ``ChannelTimelineModel/hasReachedForOlder`` is the other half of that answer, and
+    /// without it the objection was right after all — in exactly the conversations where the
+    /// slot can be seen. "There is more above" is true from the first commit of any
+    /// non-empty conversation, but the fetch that would settle it only runs once the reader
+    /// has taken hold of the list, and a conversation that fits on one screen gives them no
+    /// reason to. So this slot sat on screen spinning for a fetch nobody had asked for and
+    /// nothing was going to start; it looked stuck because it *was*. The long conversations
+    /// hid it, since the slot is a whole viewport above the visible rect until scrolling
+    /// brings it down, by which time paging is live and the spinner means what it says.
     @ViewBuilder
     private var topSentinel: some View {
         if model.olderFailed {
@@ -372,7 +382,7 @@ struct ChannelTimelineView: View {
             }
             .buttonStyle(.plain)
             .frame(height: Self.topSentinelHeight)
-        } else if model.hasMoreOlder {
+        } else if model.hasMoreOlder, model.hasReachedForOlder {
             ProgressView()
                 .frame(height: Self.topSentinelHeight)
                 .accessibilityLabel("Loading older messages")

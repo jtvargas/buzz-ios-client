@@ -71,6 +71,21 @@ final class ChannelTimelineModel {
     /// failure into "exhausted" is what ends scrollback for the life of a screen with
     /// nothing on it to retry.
     private(set) var olderFailed = false
+    /// Whether the reader has reached for older history in this conversation yet.
+    ///
+    /// Not the same fact as ``isLoadingOlder``, and it exists because ``hasMoreOlder`` is
+    /// not evidence of anything happening. With a relay pager, `mayHaveOlder` answers
+    /// `!loaded.isEmpty` — every non-empty conversation offers paging until the relay
+    /// itself says otherwise — so "there is more above" is true from the first commit and
+    /// stays true whether or not anybody is fetching.
+    ///
+    /// What closes the gap is that the fetch is deliberately gated on the reader having
+    /// taken hold of the list (`ConversationScaffold`, `place.hasMoved`): reaching for
+    /// history is a gesture, and a page that lands before one has been made snaps a reader
+    /// to the newest message under their own thumb. So in a conversation short enough to
+    /// need no scrolling, nothing ever asks — and a sentinel bound to ``hasMoreOlder``
+    /// alone sat there spinning for a fetch that was never going to start.
+    private(set) var hasReachedForOlder = false
 
     /// The composer's wire text plus identity-bearing selected mention tokens. Every
     /// change is written through to this channel's draft — see
@@ -358,6 +373,11 @@ final class ChannelTimelineModel {
     /// older. A short local page is where the *device* runs out, which is not the same
     /// fact and was being treated as if it were.
     func loadOlder() async {
+        // Ahead of the guard, because this records the *reach* and not the fetch. The
+        // scaffold only calls here once the reader has taken hold of the list, so the first
+        // call is the moment paging becomes a thing that happens — even on the passes the
+        // guard turns away, which are the repeat reports of one level crossing.
+        if !hasReachedForOlder { hasReachedForOlder = true }
         guard hasMoreOlder, !isLoadingOlder, let cursor = earliest else { return }
         isLoadingOlder = true
         defer { isLoadingOlder = false }

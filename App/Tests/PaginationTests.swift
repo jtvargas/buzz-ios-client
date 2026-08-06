@@ -103,7 +103,84 @@ struct PaginationTests {
         #expect(model.rows.last?.content == "arrival")
     }
 
+    /// The conversation that fits on one screen, which is where the spinner was stuck.
+    ///
+    /// Reported from a phone 2026-08-06: the loading indicator at the top of a short
+    /// conversation never went away, while the same indicator in a conversation long
+    /// enough to scroll behaved. Both halves are held here — the flag is true for a
+    /// conversation nobody has touched, and only a reach turns the sentinel on.
+    @Test("a conversation nobody has reached into is not claiming to load")
+    func unreachedConversationIsNotLoading() async throws {
+        let temp = TempStore()
+        defer { temp.remove() }
+        let store = try temp.open()
+        let author = try Fixture()
+
+        // Far fewer than one page, so the whole conversation is on screen at once and the
+        // reader is given no reason to scroll — the condition the defect needed.
+        var batch: [NostrEvent] = []
+        for index in 0 ..< 5 {
+            batch.append(try author.message("m\(index)", in: "room-1", at: 1_000 + Int64(index)))
+        }
+        _ = try await store.ingest(batch: batch, phase: .backfill)
+
+        let model = ChannelTimelineModel(
+            channel: "room-1",
+            store: store,
+            sender: StubSender(),
+            history: ReachablePager(),
+            pageSize: 50
+        )
+        let run = Task { await model.run() }
+        defer { run.cancel() }
+        await waitUntil { model.rows.count == 5 }
+
+        // Once a relay can be asked, a short local page proves nothing, so paging stays on
+        // offer for every non-empty conversation. This is the fact the sentinel used to
+        // spin on all by itself — true here, and true forever without a reach.
+        #expect(model.hasMoreOlder)
+        #expect(!model.hasReachedForOlder)
+
+        await model.loadOlder()
+        #expect(model.hasReachedForOlder)
+    }
+
+    @Test("the reach is recorded even when there is nothing to page from")
+    func reachIsRecordedBeforeTheGuard() async throws {
+        let temp = TempStore()
+        defer { temp.remove() }
+        let store = try temp.open()
+
+        // Empty: `earliest` is nil, so `loadOlder` turns straight around at its guard. The
+        // flag is deliberately set ahead of that, because it records the reader reaching
+        // rather than a fetch happening — the scaffold reports one level crossing several
+        // times, and the guard absorbs all but the first.
+        let model = ChannelTimelineModel(
+            channel: "room-1",
+            store: store,
+            sender: StubSender(),
+            history: ReachablePager(),
+            pageSize: 50
+        )
+        let run = Task { await model.run() }
+        defer { run.cancel() }
+
+        #expect(!model.hasReachedForOlder)
+        await model.loadOlder()
+        #expect(model.hasReachedForOlder)
+    }
+
     private func cursor(of event: NostrEvent) -> TimelineCursor {
         TimelineCursor(createdAt: event.createdAt, id: event.id)
+    }
+}
+
+/// A relay that is reachable and always says there is more, but never lands a row.
+///
+/// Enough to put the model on the "there is more above" branch that only a relay pager
+/// opens — which is the branch the stuck spinner lived on — without simulating a page.
+private actor ReachablePager: ChannelHistoryPaging {
+    func loadOlderHistory(channel _: String, before _: WindowCursor) async throws -> SyncEngine.OlderHistoryPage {
+        SyncEngine.OlderHistoryPage(hasMore: true, ingested: 0)
     }
 }
