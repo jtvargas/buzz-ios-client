@@ -552,25 +552,7 @@ private extension ChannelListView {
             List {
                 shortcuts
                 ForEach(sidebarContent(names: names).sections) { section in
-                    SidebarSectionHeader(
-                        section: section.section,
-                        count: section.count,
-                        isExpanded: expansion(for: section.section),
-                        // Channels and Direct Messages are the two things this app makes. A
-                        // `+` on Starred would be a second way to spell a star, and an agent
-                        // is not something made on the phone at all.
-                        create: create(for: section.section)
-                    )
-                    .listRowInsets(Self.headerInsets)
-                    .listRowSeparator(.hidden)
-                    .listRowBackground(Color.clear)
-                    if expansion(for: section.section).wrappedValue {
-                        if section.rows.isEmpty {
-                            emptySectionRow(section.section)
-                        } else {
-                            rows(of: section, resumable: resumable)
-                        }
-                    }
+                    sectionCell(section, resumable: resumable)
                 }
             }
             .listStyle(.plain)
@@ -706,6 +688,44 @@ private extension ChannelListView {
         }
     }
 
+    /// A heading and the rows it introduces, in **one** list cell.
+    ///
+    /// One cell and not one per row: a `List` will not size a cell to nothing, so a section of
+    /// rows that each kept their own cell could not close. ``SidebarAccordion`` holds the
+    /// measurements and the rest of the reasoning.
+    @ViewBuilder
+    func sectionCell(_ section: SidebarSectionContent, resumable: String?) -> some View {
+        let isExpanded = expansion(for: section.section).wrappedValue
+        VStack(spacing: 0) {
+            SidebarSectionHeader(
+                section: section.section,
+                count: section.count,
+                isExpanded: expansion(for: section.section),
+                // Channels and Direct Messages are the two things this app makes. A
+                // `+` on Starred would be a second way to spell a star, and an agent
+                // is not something made on the phone at all.
+                create: create(for: section.section)
+            )
+            .padding(.horizontal, Self.headerInsetH)
+            SidebarAccordion(isExpanded: isExpanded) {
+                VStack(spacing: 0) {
+                    if section.rows.isEmpty {
+                        emptySectionLine(section.section)
+                    } else {
+                        rows(of: section, resumable: resumable)
+                    }
+                }
+            }
+        }
+        // No spacing of its own: the heading and the rows hold theirs, and an inset here is one
+        // the collapsed section could not give back.
+        .listRowInsets(EdgeInsets())
+        // No list rule: each heading draws its own, and ruled rows read as a form.
+        .listRowSeparator(.hidden)
+        // Clear and not nothing: a row given no background falls back to `systemBackground`.
+        .listRowBackground(Color.clear)
+    }
+
     /// The conversations of one section.
     ///
     /// A `Button` and not a `NavigationLink`, which is the only way the trailing `>` goes: a
@@ -735,15 +755,17 @@ private extension ChannelListView {
                     .padding(.vertical, SidebarRowMetrics.labelPaddingV)
             }
             .buttonStyle(.hivePress(.row, in: .rect(cornerRadius: SidebarRowMetrics.radius, style: .continuous)))
-            .listRowInsets(SidebarRowMetrics.rowInsets)
-            // No per-row rule: sections of ruled rows read as a form, not as one
-            // navigation surface. The section headings do the separating.
-            .listRowSeparator(.hidden)
-            .listRowBackground(resumeMark(isResumable: row.id == resumable))
+            // Behind the button and no longer behind the cell, which the section now owns: the
+            // same rectangle, and the wash and the mark are two `background`s on one view
+            // rather than two drawings agreeing by arithmetic.
+            .background { resumeMark(isResumable: row.id == resumable) }
             // Spoken, because the highlight is the only thing that says so and a colour
             // says nothing to VoiceOver. A hint rather than part of the label: it describes
             // a second way to get here, not what this row is.
             .accessibilityHint(row.id == resumable ? Self.resumeHint : "")
+            // What the cell used to inset the row by — outside both drawings, so each keeps
+            // the rectangle `SidebarRowMetrics` places it in.
+            .padding(SidebarRowMetrics.rowInsets)
             // Starring is a long press only. It had a leading swipe as well, and that swipe
             // is gone deliberately: a `List` row's swipe actions claim horizontal panning
             // for the row, which is the one axis this sidebar needs for navigating between
@@ -767,26 +789,19 @@ private extension ChannelListView {
     /// already says with weight and colour — unread, and mentioned. A tinted row reads as *place*,
     /// which is what it means, and nothing else in the sidebar is trying to say that.
     ///
-    /// Inset from the row's own bounds so it reads as a marked row rather than a full-width
-    /// band, and rounded to match the glyph beside it.
-    /// `Color.clear` and not nothing when there is no mark: this is a row's *whole*
-    /// background, and a `List` row that is given none falls back to `systemBackground` —
-    /// opaque black, over the ground the sidebar draws. Every row in this list says clear
-    /// for that reason.
+    /// Rounded to match the glyph beside it, and inset from the row by nothing at all: it is
+    /// the `background` of the row's `Button`, whose frame ``SidebarRowMetrics`` already places
+    /// where this rectangle belongs. It was the cell's `listRowBackground` and subtracted
+    /// ``SidebarRowMetrics/insetH``/``SidebarRowMetrics/insetV`` itself to get there; the row
+    /// has no cell of its own now that the section is one, so that spacing is real padding
+    /// outside both drawings instead.
     @ViewBuilder
     func resumeMark(isResumable: Bool) -> some View {
         if isResumable {
             RoundedRectangle(cornerRadius: SidebarRowMetrics.radius, style: .continuous)
                 .fill(PressFeedback.fillColor.opacity(SidebarRowMetrics.opacity))
-                .padding(.horizontal, SidebarRowMetrics.insetH)
-                .padding(.vertical, SidebarRowMetrics.insetV)
-        } else {
-            Color.clear
         }
     }
-
-    // The numbers behind both of those rectangles are not here — they are internal, in this
-    // file's last extension, so the test that holds them to each other can read them.
 
     /// Star or unstar one conversation — the long press's only item, and the one place the
     /// wording of it is decided.
@@ -831,15 +846,13 @@ private extension ChannelListView {
     /// It is not a button. Nothing on this phone starts a direct message — a DM begins
     /// from a person, on their profile — so an empty DMs heading that offered a tap
     /// would be offering a dead end.
-    func emptySectionRow(_ section: SidebarSection) -> some View {
+    func emptySectionLine(_ section: SidebarSection) -> some View {
         Text(section.emptyMessage)
             .font(.subheadline)
             .foregroundStyle(.secondary)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.vertical, 6)
-            .listRowInsets(SidebarRowMetrics.contentInsets)
-            .listRowSeparator(.hidden)
-            .listRowBackground(Color.clear)
+            .padding(.vertical, 6 + SidebarRowMetrics.contentInsetV)
+            .padding(.horizontal, SidebarRowMetrics.contentInsetH)
             .accessibilityIdentifier("sidebar-section-empty-\(section.rawValue)")
     }
 
@@ -870,7 +883,9 @@ private extension ChannelListView {
         .accessibilityIdentifier("channel-directory-unreachable")
     }
 
-    static let headerInsets = EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16)
+    /// How far a heading sits in from the screen's edges. Padding rather than `listRowInsets`,
+    /// since the heading shares its cell with the rows — the same 16pt either way.
+    static let headerInsetH: CGFloat = 16
     /// The cards sit slightly clear of the first heading's rule below them.
     static let cardsInsets = EdgeInsets(top: 8, leading: 16, bottom: 10, trailing: 16)
 }
