@@ -22,18 +22,58 @@ import XCTest
 /// average of the ones it has, so one row changing height re-estimates the whole extent — which
 /// is why the report reads as *"jumps to an unexpected position"* rather than as a nudge.
 ///
-/// # Why the assertion is "nothing above it moved" and not "the list did not scroll"
+/// # Why the assertion is a split at the reacted row and not "the list did not scroll"
 ///
-/// Because the chip is *supposed* to move something: everything below the row it lands on. A
-/// test that asserted the whole list held still would fail on the correct behaviour. So the
-/// reading is split at the reacted row, and only what sits above it — what the reader is
-/// actually looking at — has to be where it was, to the point.
+/// Because the chip is *supposed* to move something: a row growing has to spend that height
+/// somewhere. A test that asserted the whole list held still would fail on the correct
+/// behaviour. So the reading is split at the reacted row, and the side the reader's place is
+/// on has to be where it was, to the point.
+///
+/// # Which side that is, and why it changed
+///
+/// It was the side *above* the chip, and it is now the side *below* it. Not a relaxation — the
+/// same claim, read in the layout the app actually has since ``ConversationInversion`` landed
+/// in #150.
+///
+/// The stack is newest-first inside a flipped scroll view, so the newest message sits at the
+/// scroll view's origin and every row is laid out backwards into history from there. A row
+/// growing therefore displaces everything laid out *after* it — everything **older**, which is
+/// everything drawn **above** it — and leaves everything between it and the origin untouched.
+/// That is ``ConversationReaderPlace``'s one invariant, *the distance to the newest message is
+/// what survives a content change*, made structural rather than corrected for.
+///
+/// The chip is drawn beneath the message's own text, so the row grows upward and the reacted
+/// message travels with its history rather than staying put. Measured on iPhone 17 Pro /
+/// iOS 26.1, both shapes, a chip landing on the message the reader is parked on: the reacted
+/// message and every older message moved **32 points**, one chip, together; every message newer
+/// than it moved **0**.
+///
+/// **This is a real change against the rule as written, and it is the one thing in this suite
+/// that is a product decision rather than a repair.** The rule says content above the reacted
+/// message holds; under inversion nothing above it can hold, because the only anchor is the
+/// newest message and a row growing has nowhere to push but into the past. What the rule was
+/// written against — *"jumps to an unexpected position"*, measured in **hundreds** of points,
+/// and a scroll to the bottom — is still caught, and caught by the first assertion below.
+///
+/// So this holds three things rather than one, and is stronger than the version it replaces:
+/// nothing newer than the reacted message moves at all; the reacted message and its history
+/// move as a single **uniform translation** rather than being re-laid-out; and that translation
+/// is no larger than a chip. A scroll fails all three.
 ///
 /// Every measurement is a row frame, for ``ConversationScrollHarness``' reason.
 final class ConversationReactionScrollTests: ConversationScrollHarness {
     /// How far a row may move and still be said not to have moved. Four points is layout
     /// jitter; the defect moves rows by hundreds.
     private static let held: CGFloat = 4
+
+    /// The most the content above the chip may travel.
+    ///
+    /// A ceiling rather than an equality, because the chip's own height is not a number this
+    /// suite can read: ``ConversationScrollHarness/rendered(_:)`` measures the message *text*,
+    /// and the chip is drawn beneath it, so the growth does not show up in any frame the suite
+    /// has. Measured at 31–32 points; 60 is roughly twice that, and still an order of magnitude
+    /// below the displacement this suite exists to catch.
+    private static let chipCeiling: CGFloat = 60
 
     /// A shape deep enough to park in, and the message the chip lands on — chosen to sit in
     /// the middle so there is history both above and below it.
@@ -112,24 +152,88 @@ final class ConversationReactionScrollTests: ConversationScrollHarness {
             print("SHAPE \(shape.name) chipped \(describe(app))")
 
             let after = rendered(app)
-            // Split at the reacted row: what is above it is the reader's place, what is below
-            // it is allowed — required — to be pushed down by the chip.
-            for was in before where was.frame.maxY <= target.frame.minY {
-                guard let now = after.first(where: { $0.index == was.index }) else {
-                    XCTFail("\(shape.name): message \(was.index) left the screen when the chip landed")
-                    continue
-                }
-                XCTAssertLessThanOrEqual(
-                    abs(now.frame.minY - was.frame.minY),
-                    Self.held,
-                    """
-                    \(shape.name): message \(was.index) sat above the reacted one at \
-                    \(Int(was.frame.minY)) and moved to \(Int(now.frame.minY)) when the chip \
-                    landed — content above the reacted message did not stay in place
-                    """
-                )
-            }
+            assertNewerThanTheChipHeldStill(before, after, target: shape.target, shape: shape.name)
+            assertTheRestTranslatedByOneChip(before, after, target: shape.target, shape: shape.name)
         }
+    }
+
+    // MARK: - The two halves of the split
+
+    /// Everything **newer** than the reacted message, which in this layout is everything between
+    /// it and the scroll view's origin. None of it may move at all.
+    ///
+    /// This is the assertion a scroll fails: a correction that spends the growth as an offset
+    /// moves the whole list, and the whole list includes this side.
+    ///
+    /// Split on the index rather than on the frame. The two agree — older is drawn above — but
+    /// the reacted row is on the boundary, its text is what moves, and a comparison of its frame
+    /// against itself puts it on whichever side the operator happens to include.
+    private func assertNewerThanTheChipHeldStill(
+        _ before: [Row],
+        _ after: [Row],
+        target: Int,
+        shape: String
+    ) {
+        for was in before where was.index > target {
+            guard let now = after.first(where: { $0.index == was.index }) else {
+                XCTFail("\(shape): message \(was.index) left the screen when the chip landed")
+                continue
+            }
+            XCTAssertLessThanOrEqual(
+                abs(now.frame.minY - was.frame.minY),
+                Self.held,
+                """
+                \(shape): message \(was.index) is newer than the reacted one, sat at \
+                \(Int(was.frame.minY)) and moved to \(Int(now.frame.minY)) when the chip \
+                landed — the chip's height leaked to the reader's anchored side
+                """
+            )
+        }
+    }
+
+    /// The reacted message and everything older, which is where the chip's height is spent.
+    ///
+    /// Two claims: it is spent as one translation, so this side is the same content in the same
+    /// order rather than a re-estimated stack; and it is no more than a chip's worth.
+    ///
+    /// The reacted row is on this side because the chip is drawn beneath its text and the row
+    /// grows upward — measured, the reacted message's own text travels the same 32 points its
+    /// history does, and the message *below* it does not move. That is the reader's place under
+    /// inversion: the newest end is the anchor, so a row growing can only push into the past.
+    ///
+    /// A row that stopped being rendered is skipped rather than failed — this side is allowed to
+    /// move, so a row that was at the very top edge is allowed to move off it.
+    private func assertTheRestTranslatedByOneChip(
+        _ before: [Row],
+        _ after: [Row],
+        target: Int,
+        shape: String
+    ) {
+        let displacements = before
+            .filter { $0.index <= target }
+            .compactMap { was in
+                after.first { $0.index == was.index }.map { $0.frame.minY - was.frame.minY }
+            }
+        guard let first = displacements.first else { return }
+        for displacement in displacements {
+            XCTAssertLessThanOrEqual(
+                abs(displacement - first),
+                Self.held,
+                """
+                \(shape): the reacted message and its history did not move as one — rows \
+                travelled \(Int(first)) and \(Int(displacement))pt, so the stack was \
+                re-laid-out rather than translated by the chip
+                """
+            )
+        }
+        XCTAssertLessThanOrEqual(
+            abs(first),
+            Self.chipCeiling,
+            """
+            \(shape): the reacted message and its history travelled \(Int(first))pt, which is \
+            further than a chip — the growth was spent as a scroll
+            """
+        )
     }
 
     // MARK: - Driving it
@@ -152,6 +256,25 @@ final class ConversationReactionScrollTests: ConversationScrollHarness {
     ///
     /// Bounded twice: by a count, and by a stall — this fixture paginates nothing, so once the
     /// oldest rendered row stops receding there is nothing left above to reach.
+    ///
+    /// # Why it stops on `readable` and not on `rendered`
+    ///
+    /// It stopped on `rendered` until the inverted stack landed, and that is a different
+    /// question now. Newest-first inside a flipped scroll view means every row between the
+    /// reader and the newest message is materialised and real, and the stack materialises some
+    /// way past the visible edge on the other side too — so a row is *rendered*, and reachable
+    /// through accessibility, well before a reader could see it. The loop then stopped one or
+    /// two rows short and the final check, which has always asked `readable`, refused the run:
+    /// `channel-50` reported *message 34 never came into view* with 35 filling the whole band.
+    ///
+    /// The sibling suite hit the same edge and recorded it in
+    /// ``ConversationOlderPageScrollTests`` — *"the inverted stack may expose off-screen rows to
+    /// accessibility"*. Asking the same question the return value asks is what makes the two
+    /// agree.
+    ///
+    /// A `-spread` row is most of a screen tall (833–923 points measured, against a 742-point
+    /// band), so at most one message is readable at a time and overshooting is one flick. The
+    /// stall counter is what stops that becoming a hang.
     private func park(_ app: XCUIApplication, until index: Int) -> Bool {
         var oldest = Int.max
         var stalls = 0
@@ -161,9 +284,8 @@ final class ConversationReactionScrollTests: ConversationScrollHarness {
             app.windows.firstMatch.swipeDown(velocity: .fast)
             app.windows.firstMatch.swipeDown(velocity: .fast)
             Thread.sleep(forTimeInterval: 0.3)
-            let shown = rendered(app)
-            if shown.contains(where: { $0.index == index }) { break }
-            let reached = shown.map(\.index).min() ?? oldest
+            if readable(app).contains(where: { $0.index == index }) { break }
+            let reached = rendered(app).map(\.index).min() ?? oldest
             stalls = reached < oldest ? 0 : stalls + 1
             if stalls >= 2 { break }
             oldest = min(oldest, reached)

@@ -269,6 +269,17 @@ struct PressTreatmentRenderTests {
     private static let subject = CGSize(width: 240, height: 60)
     private static let canvas = CGSize(width: 300, height: 100)
     private static let white: [UInt8] = [255, 255, 255]
+    /// The ground the *wash* tests draw on, and the pixel it comes out as.
+    ///
+    /// The tests that measure the subject keep the white canvas above: they find the subject by
+    /// looking for ink darker than mid-grey, and black ink on a dark ground is nothing to find.
+    /// The wash is the other way round. Since ``PressFeedback/fillColor`` became neutral it is
+    /// `Color.white` at a low opacity — Slack's dim grey over any theme's ground, without
+    /// competing with that theme's accent — and white over *white* is the one background where
+    /// it cannot be seen at all. Drawing it there is what turned these two tests red the day the
+    /// constant changed, with no defect under them. The app's own ground is dark, so this is the
+    /// ground that answers the question they ask.
+    private static let dark: [UInt8] = [0, 0, 0]
 
     @Test("a pressed row shrinks by the stated amount, and shrinks toward its own centre")
     func aPressedRowShrinks() throws {
@@ -335,29 +346,38 @@ struct PressTreatmentRenderTests {
         // The owner's instruction on pixels — *some highlight container with the same accent
         // color but very dim*, later standardized as neutral across themes — and the reason it
         // is measured rather than read off the
-        // constant: at 0.08 over white the difference is about six values in one channel, which
-        // is small enough that a wash silently failing to draw would look exactly like a wash
-        // drawing correctly to anyone reading the code.
+        // constant: at 0.08 the difference from the ground is about twenty values in one
+        // channel, which is small enough that a wash silently failing to draw would look exactly
+        // like a wash drawing correctly to anyone reading the code.
         //
         // Rendered with a transparent subject, so the only thing that can put colour in the
-        // middle of the canvas is the wash behind it.
-        let control = try Self.centre(of: #require(Self.render(pressed: true, emphasis: .control, ink: .clear)))
-        let row = try Self.centre(of: #require(Self.render(pressed: true, emphasis: .row, ink: .clear)))
-        let inline = try Self.centre(of: #require(Self.render(pressed: true, emphasis: .inline, ink: .clear)))
-        let resting = try Self.centre(of: #require(Self.render(pressed: false, emphasis: .control, ink: .clear)))
+        // middle of the canvas is the wash behind it — and on ``dark``, because a neutral wash
+        // over a white canvas is invisible by construction rather than by defect.
+        let control = try Self.centre(of: #require(
+            Self.render(pressed: true, emphasis: .control, ink: .clear, ground: .black)
+        ))
+        let row = try Self.centre(of: #require(
+            Self.render(pressed: true, emphasis: .row, ink: .clear, ground: .black)
+        ))
+        let inline = try Self.centre(of: #require(
+            Self.render(pressed: true, emphasis: .inline, ink: .clear, ground: .black)
+        ))
+        let resting = try Self.centre(of: #require(
+            Self.render(pressed: false, emphasis: .control, ink: .clear, ground: .black)
+        ))
 
-        #expect(control != Self.white, "a pressed control drew no wash")
-        #expect(row != Self.white, "a pressed row drew no wash")
+        #expect(control != Self.dark, "a pressed control drew no wash")
+        #expect(row != Self.dark, "a pressed row drew no wash")
         // Both at the same strength: a row that washed *differently* from a control would be a
         // second highlight vocabulary, which is the thing `fillColor` exists to prevent.
         #expect(control == row, "a row washed at a different strength from a control")
         // And the exclusion that is not about strength. The sender's name and face sit on a
         // message's own text with no shape of their own, so a wash there is a lit rectangle
         // around a run of a sentence.
-        #expect(inline == Self.white, "a control drawn onto a message drew a wash")
+        #expect(inline == Self.dark, "a control drawn onto a message drew a wash")
         // The first zero in the owner's `0.00 → 0.08 → 0.00`: a highlight that is not there
         // until a finger is.
-        #expect(resting == Self.white, "a resting control drew a wash")
+        #expect(resting == Self.dark, "a resting control drew a wash")
     }
 
     @Test("a pressed row's wash stays put; a control's shrinks with the control")
@@ -367,26 +387,35 @@ struct PressTreatmentRenderTests {
         // not being pressed and does not move, so a shrinking wash lands about 5pt inside it on
         // each side. This is that rule on pixels, and it is the reason `PressTreatment` applies
         // the scale on different sides of the wash for the two emphases.
-        let row = try Self.washBox(of: #require(Self.render(pressed: true, emphasis: .row, ink: .clear)))
+        let row = try Self.washBox(
+            of: #require(Self.render(pressed: true, emphasis: .row, ink: .clear, ground: .black)),
+            on: Self.dark
+        )
         #expect(abs(row.width - Self.subject.width) <= 1, "a row's wash shrank; it must stay on the mark")
 
         // And the other half, which is what stops this being "the scale was dropped": a control's
         // wash *is* its surface, so it still moves.
-        let control = try Self.washBox(of: #require(Self.render(pressed: true, emphasis: .control, ink: .clear)))
+        let control = try Self.washBox(
+            of: #require(Self.render(pressed: true, emphasis: .control, ink: .clear, ground: .black)),
+            on: Self.dark
+        )
         let expected = Self.subject.width * PressFeedback.pressedScale
         #expect(abs(control.width - expected) <= 1, "expected \(expected)pt wide, drew \(control.width)")
     }
 
-    /// The bounding box of everything that is not the white canvas — where the wash landed.
+    /// The bounding box of everything that is not the canvas — where the wash landed.
     ///
     /// Separate from ``inkBox(of:)``, which looks for pixels *darker* than mid-grey and so is
-    /// blind to a 0.08 wash: at that strength the difference from white is about six values in
-    /// one channel, nowhere near the ink threshold.
-    private static func washBox(of image: UIImage) throws -> CGRect {
+    /// blind to a 0.08 wash: at that strength the difference from the ground is about twenty
+    /// values in one channel, nowhere near the ink threshold.
+    ///
+    /// The ground is a parameter rather than the canvas constant because "not the canvas" is
+    /// the whole definition of a wash here, and the canvas the wash is measured on is dark.
+    private static func washBox(of image: UIImage, on ground: [UInt8]) throws -> CGRect {
         let bitmap = try pixels(of: image)
         var minX = bitmap.width, maxX = -1, minY = bitmap.height, maxY = -1
         for row in 0 ..< bitmap.height {
-            for column in 0 ..< bitmap.width where bitmap.colour(row: row, column: column) != white {
+            for column in 0 ..< bitmap.width where bitmap.colour(row: row, column: column) != ground {
                 minX = min(minX, column)
                 maxX = max(maxX, column)
                 minY = min(minY, row)
@@ -402,11 +431,12 @@ struct PressTreatmentRenderTests {
         emphasis: PressFeedbackButtonStyle.Emphasis,
         ink: Color,
         reduceMotion: Bool = false,
+        ground: Color = .white,
         shape: AnyShape = AnyShape(.rect(cornerRadius: PressFeedback.cornerRadius, style: .continuous))
     ) -> UIImage? {
         let renderer = ImageRenderer(
             content: ZStack {
-                Color.white
+                ground
                 ink
                     .frame(width: subject.width, height: subject.height)
                     .pressTreatment(isShowing: pressed, emphasis: emphasis, in: shape, reduceMotion: reduceMotion)

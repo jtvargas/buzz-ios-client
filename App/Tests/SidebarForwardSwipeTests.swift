@@ -238,7 +238,12 @@ struct SidebarRowMarkTests {
         // the opacity is the *only* thing left telling a press apart from the conversation you
         // were last in — so the inequality that was a preference elsewhere is load-bearing here.
         #expect(PressFeedback.pressedFill < SidebarRowMetrics.opacity)
-        #expect(PressFeedback.fillColor == Color.hiveAccent)
+        // The hue itself moved off the accent in #151: both are now `PressFeedback.fillColor`,
+        // a neutral white that reads as dim grey over any theme's ground. Asserted as *not* the
+        // accent rather than as white, because the regression this guards is a later hand
+        // re-tinting the wash — which would put the place mark back in competition with
+        // whichever accent the reader has chosen, on the one surface where they share a shape.
+        #expect(PressFeedback.fillColor != Color.hiveAccent)
     }
 
     @Test("the empty-section line keeps the content position, not the highlight's")
