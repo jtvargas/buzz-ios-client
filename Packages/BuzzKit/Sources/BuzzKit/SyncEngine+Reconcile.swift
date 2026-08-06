@@ -81,14 +81,18 @@ extension SyncEngine {
         guard isCurrent(generation) else { return }
         let known = (try? await store.knownChannels()) ?? []
         guard isCurrent(generation) else { return }
-        let channels = discovered.union(known)
+        var channels = discovered.union(known)
+        if let activeChannel { channels.insert(activeChannel) }
 
         await ensureChannelSubscriptions(channels)
         guard isCurrent(generation) else { return }
 
+        await recoverRecentThreads(allowedChannels: channels, generation: generation)
+        guard isCurrent(generation) else { return }
+
         Task { [weak self] in await self?.requestPresenceSnapshot(generation: generation) }
 
-        for channel in channels.sorted() {
+        for channel in recentChannelOrder(among: channels) {
             guard isCurrent(generation) else { return }
             await reconcile(channel, generation: generation)
         }

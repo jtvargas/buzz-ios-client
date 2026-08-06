@@ -51,6 +51,9 @@ struct ThreadView: View {
     /// non-member still gets the bar and its explanation — the button is simply not
     /// offered, which is the honest answer on a surface with nothing to join through.
     private let joiner: (any ChannelJoining)?
+    /// Reports this exact thread as a recent recovery destination. Optional so the real
+    /// conversation surface remains mountable with protocol fakes in UI tests.
+    private let lifecycleEngine: SyncEngine?
 
     /// The mark on a thread's heading. `text.append` rather than a bubble or an arrow: it is
     /// the symbol for adding a line to something already written, which is what a thread is.
@@ -95,6 +98,7 @@ struct ThreadView: View {
             uploader: uploader,
             selfPubkey: selfPubkey,
             joiner: engine,
+            lifecycleEngine: engine,
             landingOn: landing,
             focusingComposer: focusesComposer
         )
@@ -123,12 +127,14 @@ struct ThreadView: View {
         uploader: @escaping MediaUploaderProvider,
         selfPubkey: String?,
         joiner: (any ChannelJoining)? = nil,
+        lifecycleEngine: SyncEngine? = nil,
         landingOn landing: ThreadLanding = .latestReply,
         focusingComposer focusesComposer: Bool = false
     ) {
         channelID = channel
         presenceStore = presence
         self.joiner = joiner
+        self.lifecycleEngine = lifecycleEngine
         self.landing = landing
         self.focusesComposer = focusesComposer
         _model = State(initialValue: ThreadModel(
@@ -231,6 +237,7 @@ struct ThreadView: View {
         // and the bump is a transition it sees — see ``ThreadModel/landOnOpener()``.
         .task { if landing == .opener { model.landOnOpener() } }
         .task { await model.run() }
+        .task { await lifecycleEngine?.setActiveThread(channel: channelID, root: model.root) }
         .task { await presence.run() }
         // Here rather than inside ``TypingIndicatorView``, which is absent from the view
         // tree until somebody is typing and so could never start its own model — see the

@@ -85,7 +85,7 @@ extension SyncEngine {
         // subscriptions and head windows are not. Reconcile only against the
         // socket generation current after the fetch, and abandon immediately if
         // a reconnect supersedes it.
-        await reconcileAuthoritativeChannels(result.joined)
+        await reconcileAuthoritativeChannels(result)
         guard generation == directoryRefreshGeneration else { return }
 
         directoryContext.attemptTask = nil
@@ -162,20 +162,32 @@ extension SyncEngine {
         }
     }
 
-    private func reconcileAuthoritativeChannels(_ joined: Set<String>) async {
+    private func reconcileAuthoritativeChannels(_ result: ChannelDirectoryRefreshResult) async {
         guard state == .running, !isStopped else { return }
         let generation = readyGeneration
         guard isCurrent(generation) else { return }
 
-        let live = liveChannels(joined: joined)
+        let live = liveChannels(joined: result.joined)
         await reconcileChannelSubscriptions(live)
+        guard isCurrent(generation) else { return }
+
+        // A recent open-but-unjoined channel earns one head refresh without expanding the
+        // resting subscription set. The active channel is always eligible because the reader
+        // is looking at it now, even if the last directory snapshot is cached.
+        let visibleRecent = Set(
+            recentConversationDestinations
+                .map(\.channelID)
+                .filter { result.channels.contains($0) }
+        )
+        let headChannels = live.union(visibleRecent)
+        await recoverRecentThreads(allowedChannels: headChannels, generation: generation)
         guard isCurrent(generation) else { return }
 
         Task { [weak self] in
             await self?.requestPresenceSnapshot(generation: generation)
         }
 
-        for channel in live.sorted() {
+        for channel in recentChannelOrder(among: headChannels) {
             guard isCurrent(generation) else { return }
             await reconcile(channel, generation: generation)
         }
@@ -193,7 +205,7 @@ extension SyncEngine {
         // behind it covers every other channel the reader is in, which nothing on this path
         // did before. See ``SyncEngine/settleThreadPrefetch(generation:)``.
         guard isCurrent(generation) else { return }
-        await settleStarterChannels(joined: joined, generation: generation)
+        await settleStarterChannels(joined: result.joined, generation: generation)
 
         guard isCurrent(generation) else { return }
         await settleThreadPrefetch(generation: generation)

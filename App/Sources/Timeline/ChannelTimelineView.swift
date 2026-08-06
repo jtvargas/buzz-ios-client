@@ -263,6 +263,7 @@ struct ChannelTimelineView: View {
                 // channel the reader has not joined offers the same way in rather than a
                 // dead bar.
                 joiner: lifecycleEngine,
+                lifecycleEngine: lifecycleEngine,
                 focusingComposer: route.focusesComposer
             )
         }
@@ -287,6 +288,12 @@ struct ChannelTimelineView: View {
         // Not cleared when the view goes away: the engine's preference is advisory, and
         // the channel just left is the one most likely to be opened again.
         .task { await lifecycleEngine?.setActiveChannel(channelID) }
+        // Popping a thread reveals this already-mounted channel without restarting its
+        // `.task`, so record that return explicitly and move the channel back to MRU front.
+        .onChange(of: openedThread) { _, thread in
+            guard thread == nil else { return }
+            Task { await lifecycleEngine?.setActiveChannel(channelID) }
+        }
     }
 
     /// How this conversation presents itself — a channel, or the person on the other
