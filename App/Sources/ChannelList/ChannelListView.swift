@@ -95,6 +95,9 @@ struct ChannelListView: View {
     /// tap, and the panel's own strip.
     @State private var workspacePanel = WorkspacePanelState()
 
+    @Binding private var notificationRoute: InAppNotificationRoute?
+    @Binding private var visibleNotificationLocation: InAppNotificationLocation?
+
     // Expansion persists across launches, one `UserDefaults` flag per section. The keys
     // come from ``SidebarSection/expansionStorageKey`` so the view and the tests that
     // pin those strings cannot drift apart.
@@ -110,9 +113,18 @@ struct ChannelListView: View {
     private let store: BuzzEventStore
     private let engine: SyncEngine
 
-    init(store: BuzzEventStore, engine: SyncEngine, drafts: ComposerDrafts? = nil, selfPubkey: String?) {
+    init(
+        store: BuzzEventStore,
+        engine: SyncEngine,
+        drafts: ComposerDrafts? = nil,
+        selfPubkey: String?,
+        notificationRoute: Binding<InAppNotificationRoute?> = .constant(nil),
+        visibleNotificationLocation: Binding<InAppNotificationLocation?> = .constant(nil)
+    ) {
         self.store = store
         self.engine = engine
+        _notificationRoute = notificationRoute
+        _visibleNotificationLocation = visibleNotificationLocation
         _draftsModel = State(initialValue: DraftsModel(store: store, drafts: drafts))
         _model = State(initialValue: ChannelListModel(store: store, selfPubkey: selfPubkey))
         _presence = State(initialValue: PresenceModel(store: engine.presenceStore))
@@ -332,6 +344,15 @@ struct ChannelListView: View {
         .onChange(of: path) { previous, current in
             resume.observe(path: current, previously: previous)
         }
+        .onChange(of: notificationLocation, initial: true) { _, location in
+            visibleNotificationLocation = location
+        }
+        .onChange(of: notificationRoute, initial: true) { _, route in
+            guard let route else { return }
+            notificationRoute = nil
+            openNotification(route)
+        }
+        .onDisappear { visibleNotificationLocation = nil }
         // A tapped reminder alert opens the app on the sidebar, and stops there.
         //
         // It used to push Later and light the row that had come due. The owner asked for it
@@ -857,6 +878,35 @@ private extension ChannelListView {
 // MARK: - Derivation
 
 private extension ChannelListView {
+    var notificationLocation: InAppNotificationLocation? {
+        if let openedThread {
+            return .thread(channelID: openedThread.channel, rootID: openedThread.root)
+        }
+        return path.last.map { .channel($0.channel.id) }
+    }
+
+    func openNotification(_ route: InAppNotificationRoute) {
+        workspacePanel.setOpen(false)
+        showAccount = false
+        showsBrowseChannels = false
+        showsCreateChannel = false
+        showsNewDirectMessage = false
+        showsDrafts = nil
+        showsThreads = nil
+        showsLater = nil
+
+        switch route.location {
+        case let .channel(channelID):
+            openedThread = nil
+            path = [ConversationRoute(
+                channel: conversationRow(for: channelID, fallback: route.fallbackChannel)
+            )]
+        case let .thread(channelID, rootID):
+            path = []
+            openedThread = ThreadRoute(root: rootID, channel: channelID, anchor: .latestReply)
+        }
+    }
+
     /// The resolver for this pass of the body: the live directory snapshot composed with
     /// the live channel list. Rebuilt only when one of those changes, and proportional to
     /// the identities that have *no* name, not to the roster.
