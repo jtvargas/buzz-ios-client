@@ -92,7 +92,8 @@ extension SyncEngine {
     /// Called on every authoritative pass with ``liveChannels(joined:)``, the same set
     /// the head reconcile iterates.
     func ensureChannelSubscriptions(_ desired: Set<String>) async {
-        for channel in desired.subtracting(Set(channelContentSubscriptions.keys)) {
+        let missing = desired.subtracting(Set(channelContentSubscriptions.keys))
+        for channel in recentChannelOrder(among: missing) {
             _ = try? await subscribeChannelContent(channel)
         }
     }
@@ -165,20 +166,17 @@ extension SyncEngine {
             return winner
         }
         channelContentSubscriptions[channel] = id
-        // A conversation can be on screen before discovery has registered its channel —
-        // opening one is itself a route into this method. Claim the re-arm priority now
-        // rather than waiting for the next ``setActiveChannel(_:)``, which for a channel
-        // already open would never come.
-        if channel == activeChannel {
-            await subscriptions.prioritise(id)
-        }
+        // A conversation can be recorded before discovery has registered its channel.
+        // Rebuild the full priority list now so a newly registered recent channel takes its
+        // intended place without waiting for its view to report itself a second time.
+        await updateSubscriptionPriorities()
         return id
     }
 
     // MARK: - Re-arm priority
 
-    /// Reports which channel the reader has on screen, so a reconnect restores that
-    /// channel's live traffic before every other channel's.
+    /// Reports which channel the reader has on screen, so reconnect and cold-start recovery
+    /// restore the six most recently used channels or threads before the ordinary pass.
     ///
     /// A reconnect re-`REQ`s every standing subscription and the engine keeps one per
     /// joined channel, so without a stated preference the open conversation took its
@@ -212,13 +210,57 @@ extension SyncEngine {
     /// Idempotent and cheap on the common path: a channel already subscribed — every
     /// channel the reader is a member of — takes the priority call and nothing else.
     public func setActiveChannel(_ channel: String?) async {
-        activeChannel = channel
-        if let channel, channelContentSubscriptions[channel] == nil {
+        await setActiveDestination(channel.map(RecentConversationDestination.channel))
+    }
+
+    /// Reports the exact thread on screen. Its channel remains the live-subscription
+    /// priority, while its root earns a direct reply query on the next fresh socket before
+    /// general channel reconciliation.
+    public func setActiveThread(channel: String, root: String) async {
+        guard !channel.isEmpty, !root.isEmpty else { return }
+        await setActiveDestination(.thread(channelID: channel, rootID: root))
+    }
+
+    private func setActiveDestination(_ destination: RecentConversationDestination?) async {
+        activeChannel = destination?.channelID
+        if let destination {
+            recentConversationDestinations = RecentConversationDestination.recording(
+                destination,
+                in: recentConversationDestinations
+            )
+            if let identity = selfPubkeyHex {
+                try? await store.saveRecentConversationDestinations(
+                    recentConversationDestinations,
+                    identity: identity
+                )
+            }
+        }
+
+        if let channel = destination?.channelID,
+           channelContentSubscriptions[channel] == nil
+        {
             _ = try? await subscribeChannelContent(channel)
             let generation = readyGeneration
             Task { [weak self] in await self?.reconcile(channel, generation: generation) }
         }
-        await subscriptions.prioritise(channel.flatMap { channelContentSubscriptions[$0] })
+        await updateSubscriptionPriorities()
+    }
+
+    /// Channel ids in mixed-destination MRU order, de-duplicated by channel, followed by
+    /// every remaining candidate in stable order.
+    func recentChannelOrder(among candidates: Set<String>) -> [String] {
+        var seen: Set<String> = []
+        let recent = recentConversationDestinations.compactMap { destination -> String? in
+            let channel = destination.channelID
+            guard candidates.contains(channel), seen.insert(channel).inserted else { return nil }
+            return channel
+        }
+        return recent + candidates.subtracting(seen).sorted()
+    }
+
+    private func updateSubscriptionPriorities() async {
+        let channelIDs = recentChannelOrder(among: Set(channelContentSubscriptions.keys))
+        await subscriptions.prioritise(channelIDs.compactMap { channelContentSubscriptions[$0] })
     }
 
     /// Drops the standing content subscription for `channel` with a `CLOSE`. A no-op

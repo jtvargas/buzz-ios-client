@@ -159,7 +159,7 @@ struct MessageActionsSheet: View {
                     .font(.hiveSymbol(fixedSize: 9, weight: .bold))
             }
             .font(.hiveSymbol(.title3))
-            .foregroundStyle(.secondary)
+            .foregroundStyle(.white)
             .frame(maxWidth: .infinity)
             .frame(height: Self.paletteHeight)
             .contentShape(.rect)

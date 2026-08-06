@@ -89,4 +89,47 @@ struct SyncEngineRestartTests {
 
         await harness2.engine.stop()
     }
+
+    @Test("Six mixed recent destinations persist in MRU order across a fresh engine")
+    func recentConversationPriorityPersistsAcrossRestart() async throws {
+        let database = TempDatabase()
+        defer { database.remove() }
+        let identity = try PrivateKey()
+        let harness1 = try EngineHarness(
+            path: database.path,
+            identity: identity,
+            relays: [ScriptedRelay()]
+        )
+
+        try await harness1.engine.start()
+        await harness1.engine.setActiveChannel("channel-a")
+        await harness1.engine.setActiveChannel("channel-b")
+        await harness1.engine.setActiveThread(channel: "channel-a", root: "thread-a-1")
+        await harness1.engine.setActiveThread(channel: "channel-b", root: "thread-b-1")
+        await harness1.engine.setActiveThread(channel: "channel-b", root: "thread-b-2")
+        await harness1.engine.setActiveChannel("channel-c")
+        await harness1.engine.setActiveThread(channel: "channel-c", root: "thread-c-1")
+        // Revisit an existing destination: it moves to the front rather than occupying a
+        // seventh slot, and the oldest channel falls out of the bounded list.
+        await harness1.engine.setActiveChannel("channel-b")
+
+        let expected: [RecentConversationDestination] = [
+            .channel("channel-b"),
+            .thread(channelID: "channel-c", rootID: "thread-c-1"),
+            .channel("channel-c"),
+            .thread(channelID: "channel-b", rootID: "thread-b-2"),
+            .thread(channelID: "channel-b", rootID: "thread-b-1"),
+            .thread(channelID: "channel-a", rootID: "thread-a-1"),
+        ]
+        #expect(
+            try await harness1.store.recentConversationDestinations(identity: harness1.selfPubkey)
+                == expected
+        )
+        await harness1.engine.stop()
+
+        let harness2 = try harness1.reopen(relays: [ScriptedRelay()])
+        try await harness2.engine.start()
+        #expect(await harness2.engine.recentConversationDestinations == expected)
+        await harness2.engine.stop()
+    }
 }

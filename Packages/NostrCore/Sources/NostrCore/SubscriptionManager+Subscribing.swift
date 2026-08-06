@@ -62,19 +62,19 @@ extension SubscriptionManager {
         await rateLimitGate.reset()
     }
 
-    /// Every registered subscription id, with ``SubscriptionManager/prioritySubscriptionID``
-    /// first when it still names a live one.
+    /// Every registered subscription id, with the live entries from
+    /// ``SubscriptionManager/prioritySubscriptionIDs`` first in their stated order.
     ///
     /// The rest keep `Dictionary`'s order. That order is arbitrary, and for them it is
-    /// also of no consequence — what mattered was that the subscription a reader is
-    /// watching was somewhere in it, taking its chances against every other channel's
+    /// also of no consequence — what matters is that the handful of conversations a reader
+    /// is most likely to return to do not take their chances against every other channel's
     /// re-`REQ`.
     private func armOrder() -> [SubscriptionID] {
         let ids = Array(subscriptions.keys)
-        guard let priority = prioritySubscriptionID, subscriptions[priority] != nil else {
-            return ids
-        }
-        return [priority] + ids.filter { $0 != priority }
+        let priorities = prioritySubscriptionIDs.filter { subscriptions[$0] != nil }
+        guard !priorities.isEmpty else { return ids }
+        let prioritised = Set(priorities)
+        return priorities + ids.filter { !prioritised.contains($0) }
     }
 
     /// Sends the `REQ` for a subscription under a readiness epoch, at most once

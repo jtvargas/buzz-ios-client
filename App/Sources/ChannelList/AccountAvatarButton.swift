@@ -32,14 +32,22 @@ struct AccountAvatarButton: View {
 
     var body: some View {
         Button(action: action) {
-            AvatarView(url: picture, seed: seed, monogram: monogram, size: Self.size)
+            AvatarView(
+                url: picture,
+                seed: seed,
+                monogram: monogram,
+                size: Self.size,
+                shape: .circle
+            )
                 .overlay(alignment: .bottomTrailing) { dot }
+                .padding(8)
         }
-        // In the circle the picture is already drawn in. The wash lands behind an opaque
+        // The picture already supplies its own artwork. The wash lands behind an opaque
         // avatar and is rarely the part anyone sees; what answers the finger here is the
         // shrink, and naming the shape is what stops the state dot's corner catching a
         // rounded-rectangle edge on the one frame the picture has not loaded.
-        .buttonStyle(.hivePress(.control, in: .circle))
+        .buttonStyle(.hivePress(.control, in: PointyHexagon()))
+        .glassEffect(.regular.interactive(), in: PointyHexagon())
         .accessibilityLabel("Account")
         // The state rides as the control's value rather than in its label, so VoiceOver
         // says "Account, live" and the button is still found by its name.

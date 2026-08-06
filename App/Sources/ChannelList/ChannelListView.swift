@@ -223,9 +223,9 @@ struct ChannelListView: View {
                             .allowsHitTesting(workspacePanel.progress < 0.5)
                             .accessibilityHidden(workspacePanel.progress >= 0.5)
                     }
-                    // And its glass circle with it — see the same call in
-                    // ``ConversationTitleBar``. The face faded and left the ring behind.
-                    .sharedBackgroundVisibility(workspacePanel.isOpen ? .hidden : .automatic)
+                    // The account button draws its own hexagonal glass, so the toolbar's
+                    // automatic circular background must stay hidden.
+                    .sharedBackgroundVisibility(.hidden)
                 }
                 .sheet(isPresented: $showAccount) {
                     AccountView(store: store, engine: engine, selfPubkey: environment.selfPubkeyHex)
@@ -741,9 +741,9 @@ private extension ChannelListView {
 
     /// The mark on the row a leftward drag would reopen — where you just were.
     ///
-    /// A wash of the accent behind the whole row rather than a bar, a dot or a badge: it has
-    /// to be legible at a glance without competing with the two things this list already
-    /// says with weight and colour — unread, and mentioned. A tinted row reads as *place*,
+    /// A wash of the theme's row highlight behind the whole row rather than a bar, a dot or a
+    /// badge: it has to be legible at a glance without competing with the two things this list
+    /// already says with weight and colour — unread, and mentioned. A tinted row reads as *place*,
     /// which is what it means, and nothing else in the sidebar is trying to say that.
     ///
     /// Inset from the row's own bounds so it reads as a marked row rather than a full-width
@@ -756,7 +756,7 @@ private extension ChannelListView {
     func resumeMark(isResumable: Bool) -> some View {
         if isResumable {
             RoundedRectangle(cornerRadius: SidebarRowMetrics.radius, style: .continuous)
-                .fill(Color.hiveAccent.opacity(SidebarRowMetrics.opacity))
+                .fill(PressFeedback.fillColor.opacity(SidebarRowMetrics.opacity))
                 .padding(.horizontal, SidebarRowMetrics.insetH)
                 .padding(.vertical, SidebarRowMetrics.insetV)
         } else {

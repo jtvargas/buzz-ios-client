@@ -124,17 +124,19 @@ public actor SubscriptionManager {
     /// every live subscription must be re-`REQ`ed onto exactly once.
     var readyEpoch = 0
 
-    /// The subscription to re-`REQ` first when the connection returns to `ready`.
+    /// The subscriptions to re-`REQ` first when the connection returns to `ready`, in
+    /// caller-supplied order.
     ///
     /// Re-arming walks every live subscription, and until this existed it walked them
     /// in `Dictionary`'s order — so the conversation a reader is actually looking at
     /// could be restored last, and its channel stayed silent for the whole replay. A
-    /// consumer that knows which subscription is on screen names it here.
+    /// consumer that knows which subscriptions are most likely to be read next names them
+    /// here.
     ///
     /// Advisory, never load-bearing. A stale id — its subscription unsubscribed, or
     /// closed by the relay — is skipped and the remaining order is unchanged, so no
     /// caller has to clear it to keep re-arming correct.
-    var prioritySubscriptionID: SubscriptionID?
+    var prioritySubscriptionIDs: [SubscriptionID] = []
 
     /// The authenticated identity's hex pubkey, resolved from the signer once and
     /// cached — only pubkey-gated filters need it, and only the first time.
@@ -206,7 +208,7 @@ public actor SubscriptionManager {
         subscriptions.removeAll()
         connectionIsReady = false
         started = false
-        prioritySubscriptionID = nil
+        prioritySubscriptionIDs.removeAll()
     }
 
     // MARK: - Re-arm priority
@@ -218,7 +220,15 @@ public actor SubscriptionManager {
     /// subscription asks for nor what it receives, so naming a subscription that is
     /// gone, or naming none, costs only the ordering it asked for.
     public func prioritise(_ id: SubscriptionID?) {
-        prioritySubscriptionID = id
+        prioritise(id.map { [$0] } ?? [])
+    }
+
+    /// Names the subscriptions to re-`REQ` first on the next return to `ready`, most
+    /// important first. Duplicates are removed without changing the first occurrence's
+    /// position; stale ids remain harmless and are skipped when the order is consumed.
+    public func prioritise(_ ids: [SubscriptionID]) {
+        var seen: Set<SubscriptionID> = []
+        prioritySubscriptionIDs = ids.filter { seen.insert($0).inserted }
     }
 
     // MARK: - Registration

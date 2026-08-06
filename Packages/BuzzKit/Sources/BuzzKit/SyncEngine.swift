@@ -283,6 +283,17 @@ public actor SyncEngine {
     /// ``setActiveChannel(_:)``.
     var activeChannel: String?
 
+    /// The six channels or threads this identity used most recently, newest first.
+    /// Loaded before the socket opens and written on every visible-conversation change, so
+    /// both reconnect and a killed-app restart can spend their first work where the reader
+    /// is most likely to return.
+    var recentConversationDestinations: [RecentConversationDestination] = []
+
+    /// The ready generation whose direct recent-thread queries have already run. Directory
+    /// refreshes may repeat within one socket; warming the same six roots every minute would
+    /// turn a launch priority into permanent background traffic.
+    var recentRecoveryGeneration: Int?
+
     // MARK: - Tasks
 
     private var stateObserverTask: Task<Void, Never>?
@@ -416,6 +427,9 @@ public actor SyncEngine {
 
         let pubkey = try await signer.publicKey().hex
         selfPubkeyHex = pubkey
+        recentConversationDestinations =
+            (try? await store.recentConversationDestinations(identity: pubkey)) ?? []
+        recentRecoveryGeneration = nil
         // Access becomes authoritative only when this engine has a directory
         // client capable of immediately revalidating the one-time offline seed.
         // Package harnesses that intentionally exercise the legacy discovery
@@ -506,6 +520,8 @@ public actor SyncEngine {
         // Named an id in the table just cleared; a later session re-reports whatever
         // is on screen then.
         activeChannel = nil
+        recentConversationDestinations.removeAll()
+        recentRecoveryGeneration = nil
         state = .stopped
     }
 

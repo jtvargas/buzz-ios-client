@@ -32,7 +32,8 @@ import SwiftUI
 ///
 /// Light is the rest of the answer, and it moved the same way the next day: he asked for
 /// *"some highlight container with the same accent color but very dim — 0.00 → 0.08 → 0.00"*,
-/// so a **control** and a **row** both wash the accent inside their own shape at
+/// later standardized as a neutral gray across themes. A **control** and a **row** both wash
+/// that neutral color inside their own shape at
 /// ``pressedFill``, a **row** dims a few per cent as well, an **inline** control only dims and
 /// dims further, and a **message** answers nothing at all.
 ///
@@ -68,7 +69,7 @@ enum PressFeedback {
     /// It was 0.14, and that number was not a taste call either: it was
     /// ``ChannelListView/resumeMark(isResumable:)``, the mark on the conversation you were last
     /// in, to the number. **Being exactly that mark is why it had to come off a row.** The
-    /// amber is the app's *place* mark, and a list that flashes the place mark under every
+    /// stronger fill is the app's *place* mark, and a list that flashes the place mark under every
     /// finger is a list saying *this one* about whatever you happened to touch.
     ///
     /// 0.08 is a little over half of it, which is what lets the wash go back on a row: it is
@@ -78,11 +79,9 @@ enum PressFeedback {
     /// come off again.
     static let pressedFill: Double = 0.08
 
-    /// The colour of that wash. Named here so the sidebar's mark and every press in the app
-    /// cannot drift apart without this line changing.
-    /// Computed, not stored: a `static let` captures the accent at first touch and would keep
-    /// drawing the theme that was in force then.
-    static var fillColor: Color { .hiveAccent }
+    /// The neutral wash shared by every press and every theme. White at the low opacities below
+    /// becomes Slack's dim gray over any dark theme without competing with that theme's accent.
+    static let fillColor = Color.white
 
     /// How long a press stays on screen at the very least — **zero, now that a spring draws it.**
     ///
@@ -111,7 +110,7 @@ enum PressFeedback {
     /// Two depths. A row now answers with three things at once — the shrink, this dim, and the
     /// wash — where a round ago it had only this one. That is deliberate rather than
     /// accumulated: the owner asked for the shrink and the highlight back in consecutive
-    /// messages, and 0.08 of accent is faint enough that dropping the dim to compensate would
+    /// messages, and 0.08 of neutral white is faint enough that dropping the dim to compensate would
     /// leave a row answering more quietly than it did before either was asked for. **It is the
     /// first thing to take off if a pressed row now reads as too loud** — set it to 1 and the
     /// row keeps the shrink and the wash, which is exactly what a ``control`` does.
@@ -259,9 +258,9 @@ struct PressFeedbackButtonStyle: PrimitiveButtonStyle {
     /// How much of the treatment a control takes.
     enum Emphasis {
         /// Something with edges of its own: a button, a chip, a shortcut card, an avatar.
-        /// Washes the accent inside its own shape.
+        /// Washes neutral gray inside its own shape.
         case control
-        /// A full-width row in a list. Washes the accent like a control, and dims very
+        /// A full-width row in a list. Washes neutral gray like a control, and dims very
         /// slightly on top of it. Both of those were off for a while — the owner had the amber
         /// taken off the sidebar when it was drawn at the resume mark's own 0.14, and then the
         /// shrink off everything — and both came back at his ask, the wash at a strength that

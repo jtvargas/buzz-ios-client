@@ -157,7 +157,7 @@ private struct AddReactionButton: View {
                     .font(.hiveSymbol(fixedSize: 8, weight: .bold))
             }
             .font(.hiveSymbol(.caption))
-            .foregroundStyle(.secondary)
+            .foregroundStyle(.white)
             .padding(.horizontal, 8)
             .frame(height: height)
             .background(Capsule().fill(Color.secondary.opacity(0.12)))

@@ -256,6 +256,39 @@ struct SubscriptionManagerTests {
         await connection.stop()
     }
 
+    @Test("Multiple priorities re-REQ in their stated order before the rest", .timeLimit(.minutes(1)))
+    func prioritisedSubscriptionsPreserveOrder() async throws {
+        let signer = try InMemorySigner()
+        let first = FakeRelay()
+        let second = FakeRelay()
+        let transports = TransportQueue([first, second])
+        let connection = makeInertConnection(signer: signer, transports: transports)
+        let manager = SubscriptionManager(connection: connection, signer: signer)
+
+        try await connection.connect()
+        try await driveAuthToReady(connection, first, authSendIndex: 0)
+
+        var ids: [SubscriptionID] = []
+        for kind in [
+            EventKind.channelMessage, .richMessage, .reaction, .deletion,
+        ] {
+            ids.append(try await manager.register(filters: [Filter(kinds: [kind])], sink: RecordingSink()))
+            _ = await first.awaitSend(index: ids.count)
+        }
+        await manager.prioritise([ids[2], ids[0], ids[2]])
+
+        await first.enqueueFailure(.connectionClosed)
+        try await driveAuthToReady(connection, second, authSendIndex: 0)
+
+        let firstReArmed = await second.awaitSend(index: 1)
+        let secondReArmed = await second.awaitSend(index: 2)
+        #expect(try reqSubscriptionID(from: firstReArmed) == ids[2].rawValue)
+        #expect(try reqSubscriptionID(from: secondReArmed) == ids[0].rawValue)
+
+        await manager.shutdown()
+        await connection.stop()
+    }
+
     @Test("A priority naming a subscription that is gone leaves re-arming intact", .timeLimit(.minutes(1)))
     func stalePriorityDoesNotStrandReArming() async throws {
         let signer = try InMemorySigner()
