@@ -27,6 +27,8 @@ struct ThreadActivityRow: View {
     let onOpenProfile: (String) -> Void
 
     @Environment(\.openConversation) private var openConversation
+    /// The app-wide markdown reader, installed above the tabs. `nil` in a preview.
+    @Environment(\.openMarkdownDocument) private var openMarkdownDocument
     @Environment(\.openURL) private var openURL
 
     /// The gutter the two messages indent their content by, so the **Reply** button under
@@ -100,6 +102,12 @@ struct ThreadActivityRow: View {
                 onOpenProfile(pubkey)
             case let .conversation(channelID):
                 openConversation?(channelID)
+            case let .markdownDocument(document):
+                if let openMarkdownDocument {
+                    openMarkdownDocument(document)
+                } else {
+                    openURL(document.url)
+                }
             case let .external(url):
                 openURL(url)
             case .none:

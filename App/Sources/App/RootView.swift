@@ -12,6 +12,10 @@ struct RootView: View {
     @State private var tab: HomeTab = .home
     @State private var pendingNotificationRoute: InAppNotificationRoute?
     @State private var visibleHomeLocation: InAppNotificationLocation?
+    /// The markdown file being read, or `nil`. Held at the root because the press that opens it
+    /// happens inside a message row, which is recycled by a lazy list and cannot own a sheet —
+    /// see ``OpenMarkdownDocumentAction``.
+    @State private var readingDocument: MarkdownDocument?
 
     var body: some View {
         @Bindable var environment = environment
@@ -54,6 +58,13 @@ struct RootView: View {
                 Button("OK", role: .cancel) { environment.notice = nil }
             } message: { notice in
                 Text(notice.message)
+            }
+            // A markdown file pressed anywhere below — a channel, a thread, a DM, the Activity
+            // list — opens here. One sheet and one installer, above every surface that draws a
+            // message, because a message row is recycled by its list and cannot hold either.
+            .environment(\.openMarkdownDocument, OpenMarkdownDocumentAction { readingDocument = $0 })
+            .sheet(item: $readingDocument) { document in
+                MarkdownDocumentSheet(document: document)
             }
     }
 

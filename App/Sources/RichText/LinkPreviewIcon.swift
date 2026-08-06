@@ -25,6 +25,7 @@ enum LinkPreviewIcon {
         case .googleDocument: "doc.text"
         case .googleSpreadsheet: "tablecells"
         case .googlePresentation: "rectangle.on.rectangle"
+        case .markdownDocument: "doc.richtext"
         case .web: "network"
         }
     }
