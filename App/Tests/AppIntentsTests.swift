@@ -56,11 +56,11 @@ import Testing
     /// hear it, and it is still there when the navigation surface finally appears.
     @Test func holdsARequestUntilItIsConsumed() {
         let navigator = AppNavigator()
-        navigator.request(.threads)
+        navigator.request(.destination(.threads))
         // No consumer yet — this stands in for the app still being at the identity gate or
         // bootstrapping, which is exactly when Siri launches it.
-        #expect(navigator.pending == .threads)
-        #expect(navigator.pending == .threads)  // reading does not clear it
+        #expect(navigator.pending == .destination(.threads))
+        #expect(navigator.pending == .destination(.threads))  // reading does not clear it
         navigator.consume()
         #expect(navigator.pending == nil)
     }
@@ -69,7 +69,7 @@ import Testing
     /// re-pushing a screen the reader has already navigated away from.
     @Test func aConsumedRequestDoesNotReturn() {
         let navigator = AppNavigator()
-        navigator.request(.later)
+        navigator.request(.destination(.later))
         navigator.consume()
         navigator.consume()
         #expect(navigator.pending == nil)
@@ -79,8 +79,8 @@ import Testing
     /// second screen, not a stop at the first on the way.
     @Test func aLaterRequestReplacesAnUnconsumedOne() {
         let navigator = AppNavigator()
-        navigator.request(.threads)
-        navigator.request(.drafts)
-        #expect(navigator.pending == .drafts)
+        navigator.request(.destination(.threads))
+        navigator.request(.destination(.drafts))
+        #expect(navigator.pending == .destination(.drafts))
     }
 }

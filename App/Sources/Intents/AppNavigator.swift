@@ -1,5 +1,12 @@
 import Observation
 
+/// Anything the app can be asked to navigate to from outside its view tree.
+enum AppTarget: Hashable, Sendable {
+    case destination(AppDestination)
+    case conversation(EntityID)
+    case thread(channelID: String, rootID: String)
+}
+
 /// Holds a screen the system has asked for until the app is in a state to show it.
 ///
 /// # Why a queue and not a function call
@@ -34,7 +41,7 @@ final class AppNavigator {
     /// Read-only from outside: an intent asks with ``request(_:)`` and the navigation
     /// surface clears with ``consume()``, so "who is allowed to set this" is answered by the
     /// two method names rather than by a convention nobody can see.
-    private(set) var pending: AppDestination?
+    private(set) var pending: AppTarget?
 
     init() {}
 
@@ -43,8 +50,8 @@ final class AppNavigator {
     /// A later request replaces an earlier unconsumed one rather than queueing behind it:
     /// two "open X" commands in a row mean the person changed their mind, and arriving at
     /// the first screen on the way to the second would be a flicker, not a feature.
-    func request(_ destination: AppDestination) {
-        pending = destination
+    func request(_ target: AppTarget) {
+        pending = target
     }
 
     /// Marks the outstanding request as handled.

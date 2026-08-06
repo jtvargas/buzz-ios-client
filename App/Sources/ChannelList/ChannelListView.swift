@@ -379,10 +379,10 @@ struct ChannelListView: View {
         // *launches* the app writes its destination while this view does not exist yet, and
         // there is no second signal. Without it, "Open Threads in Hive" from a cold start
         // opens the app onto the sidebar and stops.
-        .onChange(of: environment.navigator.pending, initial: true) { _, destination in
-            guard let destination else { return }
+        .onChange(of: environment.navigator.pending, initial: true) { _, target in
+            guard let target else { return }
             environment.navigator.consume()
-            open(destination)
+            open(target)
         }
         // The router hands back an opened conversation once; this is the one place that turns
         // it into a push, and it clears the value so an unrelated body pass cannot re-push.
@@ -880,6 +880,24 @@ private extension ChannelListView {
 // MARK: - Derivation
 
 private extension ChannelListView {
+    /// Opens one navigation request originating outside this view tree.
+    func open(_ target: AppTarget) {
+        let route: InAppNotificationRoute
+        switch target {
+        case let .destination(destination): return open(destination)
+        case let .conversation(id):
+            let fallback = ConversationEntitySnapshotStore().fallbackRow(id: id)
+                ?? Self.conversationRow(for: id.native, in: [], fallback: nil)
+            route = InAppNotificationRoute(location: .channel(id.native), fallbackChannel: fallback)
+        case let .thread(channelID, rootID):
+            let fallback = Self.conversationRow(for: channelID, in: [], fallback: nil)
+            route = InAppNotificationRoute(
+                location: .thread(channelID: channelID, rootID: rootID), fallbackChannel: fallback
+            )
+        }
+        openNotification(route)
+    }
+
     var notificationLocation: InAppNotificationLocation? {
         if let openedThread {
             return .thread(channelID: openedThread.channel, rootID: openedThread.root)

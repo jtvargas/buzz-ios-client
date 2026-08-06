@@ -25,6 +25,8 @@ struct HiveApp: App {
         // it, so this line is what stands between "Open Threads in Hive" and a crash on a
         // cold launch. See ``AppNavigator``.
         AppDependencyManager.shared.add(dependency: environment.navigator)
+        AppDependencyManager.shared.add(dependency: environment)
+        AppDependencyManager.shared.add(dependency: environment.conversationEntityIndex)
     }
 
     var body: some Scene {

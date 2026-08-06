@@ -163,6 +163,9 @@ final class AppEnvironment {
     /// ``AppNavigator`` for why the request is held rather than delivered.
     let navigator = AppNavigator()
 
+    /// The active community's Siri/Spotlight index and the status Settings renders.
+    let conversationEntityIndex = ConversationEntityIndex()
+
     /// The community a pairing session has just committed a key into, held between the
     /// import and ``completePairing()``.
     ///
@@ -257,6 +260,7 @@ final class AppEnvironment {
     /// Resolves launch state: if the active community has a key, start its engine;
     /// otherwise rest on the identity gate.
     func bootstrap() async {
+        await conversationEntityIndex.reconcileLaunch()
         guard let active = communities.active, Self.hasStoredKey(account: active.keychainAccount) else {
             phase = .needsIdentity
             return
@@ -338,16 +342,12 @@ final class AppEnvironment {
         // *different* key (this community re-paired to another identity) is wiped first; a
         // same-key return keeps its history. A community with nothing stored yet has no
         // recorded owner and keeps whatever is there, which is nothing.
-        let intendedPubkey = try? await signer.publicKey().hex
-        if let intendedPubkey {
-            if StoreOwnership.shouldWipe(recordedOwner: community.ownerPubkeyHex, incoming: intendedPubkey) {
-                try await store.wipe()
-                // Beside the wipe, so "a different key never sees the last one's drafts"
-                // holds in memory wherever the handover happens, not only on sign-out.
-                drafts.reset()
-            }
-            recordOwner(intendedPubkey, of: community)
-        }
+        let intendedPubkey = try await prepareStoreOwnership(
+            store: store,
+            signer: signer,
+            community: community,
+            drafts: drafts
+        )
 
         let engine = makeEngine(store: store, signer: signer, websocketURL: websocketURL, queryURL: queryURL)
         self.engine = engine
@@ -377,7 +377,7 @@ final class AppEnvironment {
             if await engine.directoryRefusedMembership {
                 throw CompositionError.relayMembershipRequired
             }
-            phase = .running
+            await mountSession(store: store, selfPubkey: intendedPubkey, community: community)
             heartbeat?.startForeground()
             return
         }
@@ -386,7 +386,7 @@ final class AppEnvironment {
         // into the sidebar's connecting state, which draws no conversation the relay has not
         // confirmed — and the engine comes up underneath it. There is no longer a window in
         // which a cached list is the best thing on hand, because it is never drawn.
-        phase = .running
+        await mountSession(store: store, selfPubkey: intendedPubkey, community: community)
         isStartingEngine = true
         engineStartTask = Task { [weak self] in
             defer { self?.isStartingEngine = false }
@@ -430,6 +430,7 @@ final class AppEnvironment {
             await engineStartTask.value
         }
         engineStartTask = nil
+        await conversationEntityIndex.teardown()
         // Before the store goes: unsent text is written through as it is typed, but a
         // keystroke landing in the same moment as a switch would otherwise be dropped with
         // the database it was on its way into.
@@ -454,6 +455,57 @@ final class AppEnvironment {
         engineState = .stopped
         hasConnectedBefore = false
         channelDirectoryStatus = .checking
+    }
+
+    /// Applies the active community's per-community Siri preference immediately.
+    func setSiriIndexingEnabled(_ enabled: Bool) async {
+        guard var community = communities.active else { return }
+        community.siriIndexingEnabled = enabled
+        updateCommunities { $0.update(community) }
+
+        guard sessionCommunityID == community.id, let store else {
+            if !enabled { await conversationEntityIndex.teardown(nextState: .off) }
+            return
+        }
+        if enabled {
+            await conversationEntityIndex.rebuild(
+                store: store,
+                selfPubkey: selfPubkeyHex,
+                community: community
+            )
+        } else {
+            await conversationEntityIndex.teardown(nextState: .off)
+        }
+    }
+
+    private func mountSession(
+        store: BuzzEventStore,
+        selfPubkey: String?,
+        community: Community
+    ) async {
+        phase = .running
+        await conversationEntityIndex.rebuild(
+            store: store,
+            selfPubkey: selfPubkey,
+            community: community
+        )
+    }
+
+    private func prepareStoreOwnership(
+        store: BuzzEventStore,
+        signer: KeychainSigner,
+        community: Community,
+        drafts: ComposerDrafts
+    ) async throws -> String? {
+        let intendedPubkey = try? await signer.publicKey().hex
+        guard let intendedPubkey else { return nil }
+        if StoreOwnership.shouldWipe(recordedOwner: community.ownerPubkeyHex, incoming: intendedPubkey) {
+            try await store.wipe()
+            // Beside the wipe, so a different key never sees the last one's drafts in memory.
+            drafts.reset()
+        }
+        recordOwner(intendedPubkey, of: community)
+        return intendedPubkey
     }
 
     private func observeEngineState(of engine: SyncEngine) {

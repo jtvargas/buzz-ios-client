@@ -35,7 +35,7 @@ struct OpenDestinationIntent: AppIntent {
 
     @MainActor
     func perform() async throws -> some IntentResult {
-        navigator.request(destination)
+        navigator.request(.destination(destination))
         return .result()
     }
 }
@@ -63,7 +63,7 @@ struct OpenThreadsIntent: AppIntent {
 
     @MainActor
     func perform() async throws -> some IntentResult {
-        navigator.request(.threads)
+        navigator.request(.destination(.threads))
         return .result()
     }
 }
@@ -85,7 +85,7 @@ struct OpenLaterIntent: AppIntent {
 
     @MainActor
     func perform() async throws -> some IntentResult {
-        navigator.request(.later)
+        navigator.request(.destination(.later))
         return .result()
     }
 }
@@ -107,7 +107,7 @@ struct OpenDraftsIntent: AppIntent {
 
     @MainActor
     func perform() async throws -> some IntentResult {
-        navigator.request(.drafts)
+        navigator.request(.destination(.drafts))
         return .result()
     }
 }
