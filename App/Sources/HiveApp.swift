@@ -25,6 +25,12 @@ struct HiveApp: App {
         // it, so this line is what stands between "Open Threads in Hive" and a crash on a
         // cold launch. See ``AppNavigator``.
         AppDependencyManager.shared.add(dependency: environment.navigator)
+        // Registering the whole environment reads like the thing review warned against —
+        // handing the dependency graph a reference that outlives what it describes. It does
+        // not here: `environment` is already `@State` on the `App` and lives for the process,
+        // and the per-community graph hangs off it and is released by `teardownSession()`. So
+        // this pins nothing that was not immortal already. `OpenConversationIntent` needs it
+        // for the one thing only live state can answer — which community is active.
         AppDependencyManager.shared.add(dependency: environment)
         AppDependencyManager.shared.add(dependency: environment.conversationEntityIndex)
     }

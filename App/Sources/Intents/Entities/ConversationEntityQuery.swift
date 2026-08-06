@@ -40,12 +40,21 @@ struct ConversationEntityQuery: EntityQuery {
         self.snapshots = snapshots
     }
 
+    /// Foreign ids are dropped rather than failing the batch, and the refusal is spoken only
+    /// when dropping them leaves nothing.
+    ///
+    /// The system may ask for several at once, and a stale id from a saved shortcut sitting
+    /// beside live ones must not take the live ones down with it — an id this community does
+    /// not own resolving to nothing *is* the framework's own not-found contract. The single-id
+    /// case, which is what a spoken request actually is, still gets the sentence; and
+    /// `perform()` re-checks against live state, which is where §4 says the boundary lives.
     func entities(for identifiers: [EntityID]) async throws -> [ConversationEntity] {
         guard let snapshot = snapshots.load() else { return [] }
-        guard identifiers.allSatisfy({ $0.community == snapshot.communityID }) else {
+        let requested = Set(identifiers.filter { $0.community == snapshot.communityID })
+        guard !requested.isEmpty else {
+            if identifiers.isEmpty { return [] }
             throw ConversationEntityError.otherCommunity
         }
-        let requested = Set(identifiers)
         return snapshot.entries.lazy
             .filter { requested.contains($0.id) }
             .map(\.entity)

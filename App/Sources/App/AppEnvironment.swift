@@ -260,7 +260,11 @@ final class AppEnvironment {
     /// Resolves launch state: if the active community has a key, start its engine;
     /// otherwise rest on the identity gate.
     func bootstrap() async {
-        await conversationEntityIndex.reconcileLaunch()
+        // Queued, not awaited. The delete is a Core Spotlight round trip, and every launch —
+        // including a returning user's, which `init` already refuses to spend a frame on — sits
+        // behind whatever comes first here. Ordering against the build is the index's own
+        // guarantee (``ConversationEntityIndex``), not this call's.
+        conversationEntityIndex.reconcileLaunch()
         guard let active = communities.active, Self.hasStoredKey(account: active.keychainAccount) else {
             phase = .needsIdentity
             return
@@ -381,7 +385,7 @@ final class AppEnvironment {
             if await engine.directoryRefusedMembership {
                 throw CompositionError.relayMembershipRequired
             }
-            await mountSession(store: store, selfPubkey: intendedPubkey, community: community)
+            mountSession(store: store, selfPubkey: intendedPubkey, community: community)
             heartbeat?.startForeground()
             return
         }
@@ -390,7 +394,7 @@ final class AppEnvironment {
         // into the sidebar's connecting state, which draws no conversation the relay has not
         // confirmed — and the engine comes up underneath it. There is no longer a window in
         // which a cached list is the best thing on hand, because it is never drawn.
-        await mountSession(store: store, selfPubkey: intendedPubkey, community: community)
+        mountSession(store: store, selfPubkey: intendedPubkey, community: community)
         isStartingEngine = true
         engineStartTask = Task { [weak self] in
             defer { self?.isStartingEngine = false }
@@ -472,27 +476,25 @@ final class AppEnvironment {
             return
         }
         if enabled {
-            await conversationEntityIndex.rebuild(
-                store: store,
-                selfPubkey: selfPubkeyHex,
-                community: community
-            )
+            conversationEntityIndex.rebuild(store: store, selfPubkey: selfPubkeyHex, community: community)
         } else {
             await conversationEntityIndex.teardown(nextState: .off)
         }
     }
 
+    /// Declares the session running and asks for its Siri index.
+    ///
+    /// The index pass is queued rather than awaited, so neither the websocket start below nor
+    /// the gate's heartbeat waits on Core Spotlight. What §4 wanted from an `await` here — that
+    /// a fast double switch cannot interleave two rebuilds — is provided by the index's own
+    /// ordering instead, and `teardownSession()` drains it before releasing the store.
     private func mountSession(
         store: BuzzEventStore,
         selfPubkey: String?,
         community: Community
-    ) async {
+    ) {
         phase = .running
-        await conversationEntityIndex.rebuild(
-            store: store,
-            selfPubkey: selfPubkey,
-            community: community
-        )
+        conversationEntityIndex.rebuild(store: store, selfPubkey: selfPubkey, community: community)
     }
 
     private func observeEngineState(of engine: SyncEngine) {
