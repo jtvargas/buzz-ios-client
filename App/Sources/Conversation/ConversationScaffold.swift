@@ -146,16 +146,6 @@ struct ConversationScaffold<Content: View, Bar: View, Accessory: View>: View {
     /// entirely rows this device already held, and so added no height) has nothing left to
     /// ask again with, and paging stops for good with no gesture able to restart it.
     @State private var isNearTop = false
-    /// The room the screen's own chrome takes at each end, measured rather than assumed.
-    ///
-    /// Needed because the flip mirrors the scroll view's content insets along with everything
-    /// else inside it: the clearance SwiftUI reserves for the status bar arrives at the visual
-    /// bottom, and the composer's at the visual top. Left alone that is not cosmetic — the top
-    /// row renders *under* the status bar, and a composer that grows no longer pushes the
-    /// newest message out of its way, which is
-    /// `ComposerGrowthTests/testAttachingAPictureKeepsTheNewestMessageAboveTheComposer`
-    /// failing by 72 points.
-    @State private var chrome = EdgeInsets()
 
     /// The band that counts as *at* the bottom — releasing the owner's frozen tail.
     /// Tight, because releasing grows the content by every held row, and a
@@ -206,15 +196,6 @@ struct ConversationScaffold<Content: View, Bar: View, Accessory: View>: View {
                 apply(place.composerRoomDidChange(isAtBottom: isAtBottom), using: proxy)
             }
         }
-        // Read here, outside the scroll view, because the scroll view's *own* insets are the
-        // thing being replaced — reading them there and feeding them back would be a loop that
-        // converges on nothing. This is the screen's chrome as the shell sees it, and it does
-        // not depend on any margin set below.
-        .onGeometryChange(for: EdgeInsets.self) { geometry in
-            geometry.safeAreaInsets
-        } action: { insets in
-            if chrome != insets { chrome = insets }
-        }
         // The app's one dark, the same one the sidebar this was pushed from draws. Both
         // conversation surfaces come through here, so the channel and a thread take it
         // together — see ``View/hiveScreenGround()``.
@@ -259,12 +240,7 @@ struct ConversationScaffold<Content: View, Bar: View, Accessory: View>: View {
         // composer needs is set as a *top* margin and the status bar's as a *bottom* one.
         // Replacing the automatic safe-area margins rather than adding to them is the point:
         // the automatic pair is the pair that arrives on the wrong ends.
-        .contentMargins(.top, chrome.bottom + barHeight, for: .scrollContent)
-        .contentMargins(.bottom, chrome.top, for: .scrollContent)
-        // The indicator rides the same mirror, and reads as travelling against the content
-        // without this.
-        .contentMargins(.top, chrome.bottom + barHeight, for: .scrollIndicators)
-        .contentMargins(.bottom, chrome.top, for: .scrollIndicators)
+
         // Innermost, and before `safeAreaBar`: this modifier binds to the *first*
         // scroll view it finds and logs a runtime issue when more than one is in the
         // hierarchy — the suggestion panel has its own. The projection is three `Bool`s
