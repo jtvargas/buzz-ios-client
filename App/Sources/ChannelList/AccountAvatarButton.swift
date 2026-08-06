@@ -32,7 +32,13 @@ struct AccountAvatarButton: View {
 
     var body: some View {
         Button(action: action) {
-            AvatarView(url: picture, seed: seed, monogram: monogram, size: Self.size)
+            AvatarView(
+                url: picture,
+                seed: seed,
+                monogram: monogram,
+                size: Self.size,
+                shape: .circle
+            )
                 .overlay(alignment: .bottomTrailing) { dot }
                 .padding(8)
         }
