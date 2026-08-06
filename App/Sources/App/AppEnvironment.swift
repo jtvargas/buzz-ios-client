@@ -255,6 +255,19 @@ final class AppEnvironment {
         if let active = directory.active {
             RelayEndpoint.storedURLString = active.relayURLString
         }
+        // What a tapped reminder alert *means*. Said here because this is the only object
+        // that owns both halves — the notification-centre delegate and the navigator — and
+        // because a tap is then indistinguishable from "Open Later in Hive": one queue, one
+        // tab selection, one push, and the cold-launch case already solved. See
+        // ``ReminderAlerts``.
+        //
+        // The reminder's id is deliberately dropped. The alert has already said what came
+        // due, so the tap is a request for the screen; lighting the row that came due is a
+        // separate feature, and `AppDestination` has no room for an argument. The id reaches
+        // this closure, which is where that feature would start.
+        reminderAlerts.onOpen = { [navigator] _ in
+            navigator.request(.destination(.later))
+        }
     }
 
     /// Resolves launch state: if the active community has a key, start its engine;

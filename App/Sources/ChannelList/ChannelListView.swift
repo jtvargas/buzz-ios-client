@@ -353,32 +353,20 @@ struct ChannelListView: View {
             openNotification(route)
         }
         .onDisappear { visibleNotificationLocation = nil }
-        // A tapped reminder alert opens the app on the sidebar, and stops there.
+        // A tapped reminder alert is not read here any more. It arrives as a destination on
+        // ``AppNavigator``, through the very same observer — see ``ReminderAlerts``. It used
+        // to pop to the sidebar and stop there, which the owner asked for in #121 and then
+        // asked to change back: the tap is a request for the Later screen after all.
         //
-        // It used to push Later and light the row that had come due. The owner asked for it
-        // and then asked for it back: the alert has already said what came due, so the tap is
-        // a way *into the app* rather than a request for a particular screen — and a tap that
-        // takes over the navigation is one that has to be undone before anything else can be
-        // done. So this pops whatever was open and leaves the reader where the app starts.
+        // A screen asked for from outside the view tree — Siri, Spotlight, the Shortcuts app,
+        // a reminder alert. The request names a destination and knows nothing else; this is
+        // the one place that turns it into a push, and it clears the request as it acts so an
+        // unrelated body pass cannot re-push. ``RootView`` has already selected the tab.
         //
-        // `initial: true` because the tap that *launches* the app sets this before this view
-        // exists, and that is the only signal there will be.
-        .onChange(of: environment.reminderAlerts.opened, initial: true) { _, reminderID in
-            guard reminderID != nil else { return }
-            environment.reminderAlerts.opened = nil
-            openedThread = nil
-            showsLater = nil
-            path = []
-        }
-        // A screen asked for by Siri, Spotlight or the Shortcuts app. The intent names a
-        // destination and knows nothing else; this is the one place that turns it into a
-        // push, and it clears the request as it acts so an unrelated body pass cannot
-        // re-push. ``RootView`` has already selected the tab.
-        //
-        // `initial: true` for the reason the reminder above needs it: an intent that
-        // *launches* the app writes its destination while this view does not exist yet, and
-        // there is no second signal. Without it, "Open Threads in Hive" from a cold start
-        // opens the app onto the sidebar and stops.
+        // `initial: true` because a request that *launches* the app is written while this
+        // view does not exist yet, and there is no second signal. Without it, "Open Threads
+        // in Hive" from a cold start opens the app onto the sidebar and stops — and so does
+        // a reminder alert tapped from the lock screen.
         .onChange(of: environment.navigator.pending, initial: true) { _, target in
             guard let target else { return }
             environment.navigator.consume()
