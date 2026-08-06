@@ -1,10 +1,11 @@
+import AppIntents
 import SwiftUI
 
 @main
 struct HiveApp: App {
     /// The composition root, created exactly once and owned by the app. `@State`
     /// (never `@StateObject`) is the iOS 17+ home for an `@Observable`.
-    @State private var environment = AppEnvironment()
+    @State private var environment: AppEnvironment
 
     @Environment(\.scenePhase) private var scenePhase
 
@@ -13,6 +14,17 @@ struct HiveApp: App {
     /// font. See ``HiveTypography/applyUIKitAppearance()``.
     init() {
         HiveTypography.applyUIKitAppearance()
+        // Built here rather than in the property's initialiser so the one instance can be
+        // handed to App Intents below — the intents are not part of the view tree, so this
+        // is the only place both halves are in scope at once.
+        let environment = AppEnvironment()
+        _environment = State(initialValue: environment)
+        // Registered before any window exists, because an intent that *launches* the app
+        // runs its `perform()` as soon as the process is up — earlier than `.task`, earlier
+        // than the first `body`. An unregistered `@Dependency` traps when the intent reads
+        // it, so this line is what stands between "Open Threads in Hive" and a crash on a
+        // cold launch. See ``AppNavigator``.
+        AppDependencyManager.shared.add(dependency: environment.navigator)
     }
 
     var body: some Scene {

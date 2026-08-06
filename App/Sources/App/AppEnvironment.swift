@@ -155,6 +155,14 @@ final class AppEnvironment {
     /// ``AppSettings``.
     let settings = AppSettings()
 
+    /// A screen Siri, Spotlight or the Shortcuts app has asked for, waiting to be opened.
+    ///
+    /// Here for the same reason ``reminderAlerts`` is, and one more: an ``AppIntent`` is not
+    /// part of the view tree at all, so it needs something it can reach without one. It gets
+    /// this object through `@Dependency`, registered once in ``HiveApp/init()``. See
+    /// ``AppNavigator`` for why the request is held rather than delivered.
+    let navigator = AppNavigator()
+
     /// The community a pairing session has just committed a key into, held between the
     /// import and ``completePairing()``.
     ///

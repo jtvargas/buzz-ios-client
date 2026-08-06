@@ -146,6 +146,21 @@ struct RootView: View {
                     label(for: .activity)
                 }
             }
+            // A screen asked for from outside the app — Siri, Spotlight, the Shortcuts app —
+            // arrives as a destination on ``AppNavigator``. This half selects the tab that
+            // *holds* the screen; ``ChannelListView`` does the push and clears the request.
+            //
+            // Every destination today lives in the Home tab, so this is a constant rather
+            // than a mapping. It becomes `destination.tab` the day one of them lives in
+            // Activity — and the compiler will not remind anybody, so the day a destination
+            // is added, this line is the one to look at.
+            //
+            // `initial: true` because a cold launch writes the request before this view
+            // exists, and this is the only signal there will be. See ``AppNavigator``.
+            .onChange(of: environment.navigator.pending, initial: true) { _, destination in
+                guard destination != nil else { return }
+                tab = .home
+            }
         }
     }
 
