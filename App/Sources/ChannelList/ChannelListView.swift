@@ -21,6 +21,7 @@ import SwiftUI
 /// pushed view — see ``ChannelListTabBar``, which holds the measurements that put it here.
 struct ChannelListView: View {
     @Environment(AppEnvironment.self) private var environment
+    @Environment(\.hiveTheme) private var theme
 
     @State private var model: ChannelListModel
     @State private var presence: PresenceModel
@@ -713,7 +714,13 @@ private extension ChannelListView {
                     .padding(.horizontal, SidebarRowMetrics.labelPaddingH)
                     .padding(.vertical, SidebarRowMetrics.labelPaddingV)
             }
-            .buttonStyle(.hivePress(.row, in: .rect(cornerRadius: SidebarRowMetrics.radius, style: .continuous)))
+            .buttonStyle(
+                .hivePress(
+                    .row,
+                    in: .rect(cornerRadius: SidebarRowMetrics.radius, style: .continuous),
+                    fillColor: channelRowHighlight
+                )
+            )
             .listRowInsets(SidebarRowMetrics.rowInsets)
             // No per-row rule: sections of ruled rows read as a form, not as one
             // navigation surface. The section headings do the separating.
@@ -741,9 +748,9 @@ private extension ChannelListView {
 
     /// The mark on the row a leftward drag would reopen — where you just were.
     ///
-    /// A wash of the accent behind the whole row rather than a bar, a dot or a badge: it has
-    /// to be legible at a glance without competing with the two things this list already
-    /// says with weight and colour — unread, and mentioned. A tinted row reads as *place*,
+    /// A wash of the theme's row highlight behind the whole row rather than a bar, a dot or a
+    /// badge: it has to be legible at a glance without competing with the two things this list
+    /// already says with weight and colour — unread, and mentioned. A tinted row reads as *place*,
     /// which is what it means, and nothing else in the sidebar is trying to say that.
     ///
     /// Inset from the row's own bounds so it reads as a marked row rather than a full-width
@@ -756,12 +763,17 @@ private extension ChannelListView {
     func resumeMark(isResumable: Bool) -> some View {
         if isResumable {
             RoundedRectangle(cornerRadius: SidebarRowMetrics.radius, style: .continuous)
-                .fill(Color.hiveAccent.opacity(SidebarRowMetrics.opacity))
+                .fill(channelRowHighlight.opacity(SidebarRowMetrics.opacity))
                 .padding(.horizontal, SidebarRowMetrics.insetH)
                 .padding(.vertical, SidebarRowMetrics.insetV)
         } else {
             Color.clear
         }
+    }
+
+    /// Slack keeps navigation place and press states neutral even when controls use blue.
+    private var channelRowHighlight: Color {
+        theme.id == "slack-dark" ? .white : .hiveAccent
     }
 
     // The numbers behind both of those rectangles are not here — they are internal, in this

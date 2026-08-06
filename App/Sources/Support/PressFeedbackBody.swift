@@ -13,6 +13,7 @@ struct PressFeedbackBody: View {
     let configuration: PrimitiveButtonStyleConfiguration
     let emphasis: PressFeedbackButtonStyle.Emphasis
     let shape: AnyShape
+    let fillColor: Color
 
     /// Injected by an enclosing row that has a tap of its own to arbitrate — a message row,
     /// whose tap opens the thread and fires even when the touch landed on a control inside
@@ -68,7 +69,8 @@ struct PressFeedbackBody: View {
                 isShowing: isShowing,
                 emphasis: emphasis,
                 shape: shape,
-                reduceMotion: reduceMotion
+                reduceMotion: reduceMotion,
+                fillColor: fillColor
             )
         )
         .animation(curve, value: isShowing)

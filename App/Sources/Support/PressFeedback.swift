@@ -277,18 +277,22 @@ struct PressFeedbackButtonStyle: PrimitiveButtonStyle {
     /// The shape the wash is drawn in. A capsule chip and a rounded card want their own
     /// outline: a wash in the wrong shape is more visible than no wash at all.
     var shape: AnyShape
+    /// A surface-specific wash colour, or the app accent when the caller names none.
+    var fillColor: Color?
 
     /// The treatment in a named emphasis, washing in whatever shape that emphasis implies.
     init(_ emphasis: Emphasis = .control) {
         self.emphasis = emphasis
         self.shape = Self.defaultShape
+        self.fillColor = nil
     }
 
     /// The treatment in a named emphasis, washing in a shape the control names for itself —
     /// a capsule for a chip, a circle for a disc, its own radius for a card.
-    init(_ emphasis: Emphasis, in shape: some Shape) {
+    init(_ emphasis: Emphasis, in shape: some Shape, fillColor: Color? = nil) {
         self.emphasis = emphasis
         self.shape = AnyShape(shape)
+        self.fillColor = fillColor
     }
 
     /// The sidebar mark's own rounded rectangle, for a control that names no shape.
@@ -297,7 +301,12 @@ struct PressFeedbackButtonStyle: PrimitiveButtonStyle {
     )
 
     func makeBody(configuration: Configuration) -> some View {
-        PressFeedbackBody(configuration: configuration, emphasis: emphasis, shape: shape)
+        PressFeedbackBody(
+            configuration: configuration,
+            emphasis: emphasis,
+            shape: shape,
+            fillColor: fillColor ?? PressFeedback.fillColor
+        )
     }
 }
 
@@ -333,6 +342,7 @@ struct PressTreatment: ViewModifier {
     /// Whether the reader has asked the system for less movement. The shrink is the only part
     /// of this treatment that moves, so this drops it and leaves the light alone.
     var reduceMotion: Bool = false
+    var fillColor: Color = PressFeedback.fillColor
 
     private var scale: CGFloat {
         guard isShowing, !reduceMotion else { return 1 }
@@ -343,7 +353,7 @@ struct PressTreatment: ViewModifier {
     /// innermost, so it fades with the label rather than with the surface behind it.
     private var lit: some View {
         shape.fill(
-            PressFeedback.fillColor
+            fillColor
                 .opacity(isShowing ? PressFeedback.fill(for: emphasis) : 0)
         )
     }
@@ -372,10 +382,17 @@ extension View {
         isShowing: Bool,
         emphasis: PressFeedbackButtonStyle.Emphasis = .control,
         in shape: AnyShape = AnyShape(.rect(cornerRadius: PressFeedback.cornerRadius, style: .continuous)),
-        reduceMotion: Bool = false
+        reduceMotion: Bool = false,
+        fillColor: Color = PressFeedback.fillColor
     ) -> some View {
         modifier(
-            PressTreatment(isShowing: isShowing, emphasis: emphasis, shape: shape, reduceMotion: reduceMotion)
+            PressTreatment(
+                isShowing: isShowing,
+                emphasis: emphasis,
+                shape: shape,
+                reduceMotion: reduceMotion,
+                fillColor: fillColor
+            )
         )
     }
 }
@@ -405,9 +422,10 @@ extension PrimitiveButtonStyle where Self == PressFeedbackButtonStyle {
     /// for itself.
     static func hivePress(
         _ emphasis: PressFeedbackButtonStyle.Emphasis,
-        in shape: some Shape
+        in shape: some Shape,
+        fillColor: Color? = nil
     ) -> PressFeedbackButtonStyle {
-        PressFeedbackButtonStyle(emphasis, in: shape)
+        PressFeedbackButtonStyle(emphasis, in: shape, fillColor: fillColor)
     }
 }
 
