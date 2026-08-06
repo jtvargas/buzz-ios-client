@@ -33,9 +33,11 @@ struct HapticVocabularyTests {
         // already `.impact(.light)`, so the owner's "light haptic" spelled literally would have
         // been indistinguishable from a message leaving — which `everyEventIsDistinct` forbids.
         #expect(HiveHaptic.suggestionPicked.pattern == .selection)
-        // The sixth, and rigid for the same reason spelled a second time: a sidebar section
-        // opening must not feel like a message being sent.
-        #expect(HiveHaptic.sectionToggled.pattern == .impact(.rigid))
+        // The sixth, and rigid for the same reason spelled a second time: a disclosure
+        // opening must not feel like a message being sent. Named for the event rather than
+        // for the sidebar it started on, because the composer's attachment card plays it too
+        // — one feeling for one kind of thing is what the closed list is for.
+        #expect(HiveHaptic.disclosureToggled.pattern == .impact(.rigid))
     }
 
     @Test("only the destructive event plays a notification")

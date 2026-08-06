@@ -1,6 +1,13 @@
 import SwiftUI
 
-/// The row of pictures above the text field, each with an X to take it off again.
+/// The row of pictures above the text field, each with an X to take it off again, and a
+/// dashed `+` on the end for another.
+///
+/// The add tile is where a second picture is actually reached from. The bar's `+` is two
+/// taps away behind its card and, worse, reads as the way to start an attachment rather
+/// than to continue one — so an author who had already picked one had no obvious way to
+/// say "and this one". Putting the offer at the end of the row it extends is the mobile
+/// client's answer and the one the owner asked for.
 ///
 /// # Sized in points, not scaled
 ///
@@ -22,10 +29,21 @@ import SwiftUI
 struct ComposerAttachmentStrip: View {
     let attachments: [ComposerAttachment]
     let remove: (UUID) -> Void
+    /// Whether there is room for another picture. The add tile is dropped rather than
+    /// disabled at the cap: a dashed outline is an invitation, and one that refuses the
+    /// tap it invites is worse than the five pictures speaking for themselves.
+    var canAddMore = false
+    /// Opens the photo library for another picture. The strip does not present it —
+    /// see ``MessageComposerView``, which owns the keyboard this has to be handed back to.
+    var addMore: () -> Void = {}
 
     /// What ``ComposerAttachmentLayoutTests`` finds a tile by. A UI-testing bundle
     /// links none of this, so the string is the whole contract between the halves.
     static let tileIdentifier = "composerAttachment"
+    /// The add tile's own name, deliberately *not* ``tileIdentifier``: the layout test
+    /// measures a picture, and an empty outline answering to the same name would let it
+    /// pass against a composer holding no pictures at all.
+    static let addTileIdentifier = "composerAttachmentAdd"
 
     /// The drawn tile.
     private static let tile: CGFloat = 72
@@ -42,6 +60,7 @@ struct ComposerAttachmentStrip: View {
                 ForEach(attachments) { attachment in
                     tile(for: attachment)
                 }
+                if canAddMore { addTile }
             }
             // Lined up with the first glyph of the text field below, not with the
             // shell's edge — see ``TokenTextView/textInset``.
@@ -51,6 +70,35 @@ struct ComposerAttachmentStrip: View {
         // A picture wider than the bar is scrolled to, not squeezed: the row is as
         // tall as one tile and never more.
         .frame(height: Self.tile)
+    }
+
+    /// The invitation on the end of the row: another picture goes here.
+    ///
+    /// A dashed outline rather than a filled tile, because it is the one thing in the row
+    /// that is *not* a picture and the difference has to survive being glanced at next to
+    /// five of them. Nothing inside it but the `+`, at the same weight as the bar's own,
+    /// so the two read as the same offer made twice.
+    ///
+    /// The whole 72pt square is the target — well past the 44pt floor — so unlike the X
+    /// badge there is no drawn-versus-touched split to keep in step here.
+    private var addTile: some View {
+        Button(action: addMore) {
+            RoundedRectangle(cornerRadius: Self.corner)
+                .strokeBorder(
+                    .tertiary,
+                    style: StrokeStyle(lineWidth: 1.5, dash: [5, 4])
+                )
+                .frame(width: Self.tile, height: Self.tile)
+                .overlay {
+                    Image(systemName: "plus")
+                        .font(.hiveSymbol(.title3, weight: .medium))
+                        .foregroundStyle(.secondary)
+                }
+                .contentShape(.rect)
+        }
+        .buttonStyle(.hivePress)
+        .accessibilityLabel("Add another picture")
+        .accessibilityIdentifier(Self.addTileIdentifier)
     }
 
     private func tile(for attachment: ComposerAttachment) -> some View {

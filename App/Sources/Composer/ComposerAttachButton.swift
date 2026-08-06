@@ -48,6 +48,17 @@ struct ComposerAttachButton: View {
             Image(systemName: "plus")
                 .font(.hiveSymbol(.body, weight: .semibold))
                 .foregroundStyle(.secondary)
+                // A `+` turned an eighth of a turn *is* an X, so the control says what a
+                // second press will do rather than swapping to a different glyph and
+                // hoping the two are read as one thing. One shape, one rotation, and the
+                // card's own open/close is the only thing that drives it.
+                .rotationEffect(.degrees(isShowingMenu ? 45 : 0))
+                // Scoped to this value and to the glyph, which is what keeps it inside the
+                // composer's no-animation rule (see ``MessageComposerView``): a rotation is
+                // a render transform on a fixed frame, so it cannot change the bar's height
+                // or be caught by a keyboard-driven layout pass. An ambient `.animation`
+                // here could do both.
+                .animation(.snappy(duration: 0.22), value: isShowingMenu)
                 .frame(width: hitTarget, height: hitTarget)
         }
         // The app's own press treatment rather than a new one — and safe under the
@@ -67,19 +78,14 @@ struct ComposerAttachButton: View {
             ComposerAttachmentMenu(choose: choose)
                 .presentationCompactAdaptation(.popover)
         }
-        // Bounded by what is left rather than by the cap, so the picker itself stops the
-        // author at five instead of letting them choose pictures that are then dropped.
-        //
-        // `max(1, …)` guards a real trap: a `maxSelectionCount` of **0 means unlimited**, so a
-        // full composer would open an unbounded picker. The zero case never reaches here —
-        // ``present(_:)`` refuses it — and this is the belt to that bracing.
-        .photosPicker(
+        // The bounding and the hand-off live in the modifier, which the strip's add tile
+        // shares — see ``View/composerPhotosPicker(isPresented:selection:attachments:)``.
+        // The zero-capacity case never reaches it from here: ``present(_:)`` refuses first.
+        .composerPhotosPicker(
             isPresented: $isShowingPhotosPicker,
             selection: $pickedPhotos,
-            maxSelectionCount: max(1, attachments.remainingCapacity),
-            matching: .images
+            attachments: attachments
         )
-        .onChange(of: pickedPhotos) { _, items in attach(items) }
         // Fired by the card's *disappearance* — the earliest moment another modal
         // may be presented without racing it away. A card dismissed without a
         // choice (tapped outside) falls through to the focus handover instead.
@@ -113,6 +119,11 @@ struct ComposerAttachButton: View {
     // MARK: - Presenting
 
     private func presentMenu() {
+        // The one press in the bar that opens something over the conversation, and the
+        // glyph's turn into an X is the only other answer it gives — a tick lands at the
+        // tap, where the card has not drawn yet. Same entry the sidebar's headings play,
+        // because it is the same event: a disclosure opening.
+        HiveHaptics.play(.disclosureToggled)
         wasFocusedBeforePresentation = isComposerFocused()
         chosenSource = nil
         isShowingMenu = true
@@ -143,14 +154,6 @@ struct ComposerAttachButton: View {
             isShowingPhotosPicker = true
         case .camera: isShowingWorkInProgress = true
         }
-    }
-
-    /// Hands a pick to the model and empties the picker's own selection, so
-    /// choosing the same photo again is a second attachment rather than nothing.
-    private func attach(_ items: [PhotosPickerItem]) {
-        guard !items.isEmpty else { return }
-        pickedPhotos = []
-        attachments.add(items)
     }
 
     /// Hands the keyboard back to an author who had it before something was put in

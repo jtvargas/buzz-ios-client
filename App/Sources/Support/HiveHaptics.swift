@@ -40,20 +40,27 @@ enum HiveHaptic: Equatable, CaseIterable {
     /// of the impacts — so it satisfies the owner's "light" without colliding with ``send``,
     /// which is already `.impact(.light)` and which `everyEventIsDistinct` would have caught.
     case suggestionPicked
-    /// A sidebar section was opened or closed.
+    /// Something was disclosed or put away: a sidebar section, the composer's attachment
+    /// card.
     ///
     /// The sixth, added 2026-08-06 at the owner's ask, and it clears the same bar
-    /// ``suggestionPicked`` did: collapsing a heading is a *deliberate* act on a control the
-    /// reader aimed at, and not one anybody performs in a stream — the sidebar has a handful
-    /// of headings and they stay where they are left. It is also the only answer the gesture
-    /// has, because the header deliberately draws no press feedback (`.hiveNoPress`, so the
-    /// title and the chevron cannot disagree) and the rows underneath take 0.22s to arrive.
+    /// ``suggestionPicked`` did: opening a disclosure is a *deliberate* act on a control the
+    /// reader aimed at, and not one anybody performs in a stream. It is also the only answer
+    /// either gesture has at the moment of the tap — the sidebar heading draws no press
+    /// feedback (`.hiveNoPress`, so the title and the chevron cannot disagree) and its rows
+    /// take 0.22s to arrive; the composer's `+` turns into its X over the same 0.22s with
+    /// the card not yet drawn.
+    ///
+    /// Named for the event and not for the sidebar, which is where it started: a second call
+    /// site is exactly when a name that describes one screen becomes a lie. The vocabulary is
+    /// closed so that a new *feeling* is a decision — reusing one across two controls that
+    /// do the same thing is the vocabulary working, not a shortcut around it.
     ///
     /// `.rigid` rather than the literal reading of "light": ``send`` already holds
-    /// `.impact(.light)`, and `everyEventIsDistinct` is what would have caught a section
+    /// `.impact(.light)`, and `everyEventIsDistinct` is what would have caught a disclosure
     /// opening feeling exactly like a message leaving. Rigid is the crisper of the two — a
-    /// click against a stop, which is what an accordion reaching its end is.
-    case sectionToggled
+    /// click against a stop, which is what both of these reaching their end is.
+    case disclosureToggled
 
     /// What UIKit is asked to play.
     ///
@@ -75,7 +82,7 @@ enum HiveHaptic: Equatable, CaseIterable {
         case .longPress: .impact(.medium)
         case .delete: .notification(.warning)
         case .suggestionPicked: .selection
-        case .sectionToggled: .impact(.rigid)
+        case .disclosureToggled: .impact(.rigid)
         }
     }
 }

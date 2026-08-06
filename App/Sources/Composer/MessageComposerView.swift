@@ -1,4 +1,5 @@
 import BuzzKit
+import PhotosUI
 import SwiftUI
 
 /// The shared channel/thread composer: the floating bar, and nothing else.
@@ -68,6 +69,18 @@ struct MessageComposerView: View {
     let sendAccessibilityLabel: String
     var onTextChange: (String) -> Void = { _ in }
     let onSend: () -> Void
+
+    /// The strip's add tile opens the library from here rather than from the strip, for the
+    /// one reason the strip cannot answer: the keyboard. Focus is a single piece of state on
+    /// `autocomplete`, this view is where it lives, and a picker that covered the keyboard
+    /// has to hand it back on the way out. ``ComposerAttachButton`` keeps its own copy of
+    /// this state because its picker is chained behind a card and restores focus through a
+    /// longer path; what the two share is ``View/composerPhotosPicker(isPresented:selection:attachments:)``.
+    @State private var isShowingAddMorePicker = false
+    @State private var addMorePicks: [PhotosPickerItem] = []
+    /// Whether the keyboard was up when the add tile was tapped — read on the tap, because
+    /// by the time the picker has gone the answer has changed.
+    @State private var wasFocusedBeforeAddMore = false
 
     /// Drawn diameter of the send disc.
     ///
@@ -145,7 +158,9 @@ struct MessageComposerView: View {
                 if !attachments.isEmpty {
                     ComposerAttachmentStrip(
                         attachments: attachments.attachments,
-                        remove: attachments.remove
+                        remove: attachments.remove,
+                        canAddMore: attachments.remainingCapacity > 0,
+                        addMore: presentAddMorePicker
                     )
                 }
                 if let uploadError = attachments.uploadError {
@@ -169,6 +184,18 @@ struct MessageComposerView: View {
         // The float: 12pt in from each side, 8pt clear of the bottom.
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
+        .composerPhotosPicker(
+            isPresented: $isShowingAddMorePicker,
+            selection: $addMorePicks,
+            attachments: attachments
+        )
+        // Handed back on dismissal rather than from a pick, so an author who opens the
+        // library and changes their mind is not left mid-draft with no keyboard.
+        .onChange(of: isShowingAddMorePicker) { _, isPresented in
+            guard !isPresented, wasFocusedBeforeAddMore else { return }
+            wasFocusedBeforeAddMore = false
+            autocomplete.isComposerFocused = true
+        }
         .onChange(of: document) { _, newValue in
             autocomplete.update(for: newValue)
             onTextChange(newValue.text)
@@ -266,6 +293,23 @@ struct MessageComposerView: View {
             isComposerFocused: { autocomplete.isComposerFocused },
             restoreFocus: { autocomplete.isComposerFocused = true }
         )
+    }
+
+    /// Opens the library straight from the strip's add tile — no card in between.
+    ///
+    /// The card exists to choose *between* sources on an empty composer. Once there is a
+    /// picture in the row, "another one" has already answered that question, and making the
+    /// author answer it again is the two-tap detour this tile exists to remove.
+    ///
+    /// Guarded even though the tile is dropped at capacity: the two facts are read a frame
+    /// apart, and an unbounded picker is what a `maxSelectionCount` of zero would open.
+    private func presentAddMorePicker() {
+        guard attachments.remainingCapacity > 0 else {
+            attachments.reportAtCapacity()
+            return
+        }
+        wasFocusedBeforeAddMore = autocomplete.isComposerFocused
+        isShowingAddMorePicker = true
     }
 
     /// Hands a quick action to the model that owns the caret. The rule it applies — a space
