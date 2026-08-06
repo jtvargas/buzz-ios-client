@@ -552,6 +552,7 @@ private extension ChannelListView {
             List {
                 shortcuts
                 ForEach(sidebarContent(names: names).sections) { section in
+                    let isExpanded = expansion(for: section.section).wrappedValue
                     SidebarSectionHeader(
                         section: section.section,
                         count: section.count,
@@ -564,28 +565,19 @@ private extension ChannelListView {
                     .listRowInsets(Self.headerInsets)
                     .listRowSeparator(.hidden)
                     .listRowBackground(Color.clear)
-                    if expansion(for: section.section).wrappedValue {
-                        if section.rows.isEmpty {
-                            emptySectionRow(section.section)
-                                .transition(Self.sectionDisclosureTransition)
-                        } else {
-                            rows(of: section, resumable: resumable)
-                                .transition(Self.sectionDisclosureTransition)
-                        }
+                    if section.rows.isEmpty {
+                        emptySectionRow(section.section, isExpanded: isExpanded)
+                    } else {
+                        rows(of: section, resumable: resumable, isExpanded: isExpanded)
                     }
                 }
             }
             .listStyle(.plain)
+            // Lets hidden accordion rows reach zero instead of the system's 44-point minimum.
+            .environment(\.defaultMinListRowHeight, 0)
             .refreshable { await engine.refresh() }
         }
     }
-
-    /// Makes a section's rows follow its disclosure chevron instead of appearing as an
-    /// instantaneous list diff. `List` still owns each row's stable identity and animates
-    /// the vacated height; the transition supplies the short vertical slide and fade.
-    static let sectionDisclosureTransition = AnyTransition
-        .move(edge: .top)
-        .combined(with: .opacity)
 
     /// What a section's `+` does, or `nil` for a section that nothing is added to from here.
     /// Channels opens the browser rather than the create form: search, join, and create
@@ -725,26 +717,50 @@ private extension ChannelListView {
     /// The wash is the *button's* own press state and nothing else — UIKit cancels it when the
     /// forward swipe begins (``SidebarForwardSwipeView``), where a gesture reading press-down
     /// directly would leave every row it crossed dimmed behind the drag.
-    func rows(of section: SidebarSectionContent, resumable: String?) -> some View {
+    func rows(of section: SidebarSectionContent, resumable: String?, isExpanded: Bool) -> some View {
         ForEach(section.rows) { row in
             // No peer hint from here: a conversation reached from the sidebar is one the
             // channel list already knows, so its roster is in hand.
-            Button {
-                let route = ConversationRoute(channel: row.channel)
-                path = route.pushed(onto: path)
-            } label: {
-                ChannelRowView(row: row, presence: presence)
-                    // Inside the button, so the button's frame *is* `resumeMark`'s rectangle
-                    // and the wash drawn behind it lands exactly there. The row's spacing used
-                    // to be entirely `listRowInsets`, outside the button, which left the wash
-                    // 8pt narrower on each side than the mark beside it — and a `Shape` that
-                    // reached back out could not escape the cell's own inset container.
-                    // See ``SidebarRowMetrics``.
-                    .padding(.horizontal, SidebarRowMetrics.labelPaddingH)
-                    .padding(.vertical, SidebarRowMetrics.labelPaddingV)
+            SidebarAccordion(isExpanded: isExpanded) {
+                Button {
+                    let route = ConversationRoute(channel: row.channel)
+                    path = route.pushed(onto: path)
+                } label: {
+                    ChannelRowView(row: row, presence: presence)
+                        // Inside the button, so the button's frame *is* `resumeMark`'s rectangle
+                        // and the wash drawn behind it lands exactly there. The row's spacing used
+                        // to be entirely `listRowInsets`, outside the button, which left the wash
+                        // 8pt narrower on each side than the mark beside it — and a `Shape` that
+                        // reached back out could not escape the cell's own inset container.
+                        // See ``SidebarRowMetrics``.
+                        .padding(.horizontal, SidebarRowMetrics.labelPaddingH)
+                        .padding(.vertical, SidebarRowMetrics.labelPaddingV)
+                }
+                .buttonStyle(.hivePress(.row, in: .rect(cornerRadius: SidebarRowMetrics.radius, style: .continuous)))
+                // Keeps expanded geometry unchanged while allowing the whole cell to reach zero.
+                .padding(.vertical, SidebarRowMetrics.insetV)
+                // Starring is a long press only. It had a leading swipe as well, and that swipe
+                // is gone deliberately: a `List` row's swipe actions claim horizontal panning
+                // for the row, which is the one axis this sidebar needs for navigating between
+                // conversations. Losing it costs the fast path for someone who knew the flick
+                // was there; keeping it would cost every reader the gesture that gets them back
+                // to what they were reading.
+                .contextMenu {
+                    starAction(row)
+                    // Only a one-to-one conversation. It was never reachable by swipe even when
+                    // this row had one: putting a conversation-removing action under a flick, on
+                    // a row that is about to vanish, is how one gets pressed by accident.
+                    if row.conversation.isDirect { hideAction(row) }
+                }
             }
-            .buttonStyle(.hivePress(.row, in: .rect(cornerRadius: SidebarRowMetrics.radius, style: .continuous)))
-            .listRowInsets(SidebarRowMetrics.rowInsets)
+            .listRowInsets(
+                EdgeInsets(
+                    top: 0,
+                    leading: SidebarRowMetrics.insetH,
+                    bottom: 0,
+                    trailing: SidebarRowMetrics.insetH
+                )
+            )
             // No per-row rule: sections of ruled rows read as a form, not as one
             // navigation surface. The section headings do the separating.
             .listRowSeparator(.hidden)
@@ -753,19 +769,6 @@ private extension ChannelListView {
             // says nothing to VoiceOver. A hint rather than part of the label: it describes
             // a second way to get here, not what this row is.
             .accessibilityHint(row.id == resumable ? Self.resumeHint : "")
-            // Starring is a long press only. It had a leading swipe as well, and that swipe
-            // is gone deliberately: a `List` row's swipe actions claim horizontal panning
-            // for the row, which is the one axis this sidebar needs for navigating between
-            // conversations. Losing it costs the fast path for someone who knew the flick
-            // was there; keeping it would cost every reader the gesture that gets them back
-            // to what they were reading.
-            .contextMenu {
-                starAction(row)
-                // Only a one-to-one conversation. It was never reachable by swipe even when
-                // this row had one: putting a conversation-removing action under a flick, on
-                // a row that is about to vanish, is how one gets pressed by accident.
-                if row.conversation.isDirect { hideAction(row) }
-            }
         }
     }
 
@@ -840,16 +843,25 @@ private extension ChannelListView {
     /// It is not a button. Nothing on this phone starts a direct message — a DM begins
     /// from a person, on their profile — so an empty DMs heading that offered a tap
     /// would be offering a dead end.
-    func emptySectionRow(_ section: SidebarSection) -> some View {
-        Text(section.emptyMessage)
-            .font(.subheadline)
-            .foregroundStyle(.secondary)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.vertical, 6)
-            .listRowInsets(SidebarRowMetrics.contentInsets)
-            .listRowSeparator(.hidden)
-            .listRowBackground(Color.clear)
-            .accessibilityIdentifier("sidebar-section-empty-\(section.rawValue)")
+    func emptySectionRow(_ section: SidebarSection, isExpanded: Bool) -> some View {
+        SidebarAccordion(isExpanded: isExpanded) {
+            Text(section.emptyMessage)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.vertical, 6 + SidebarRowMetrics.contentInsetV)
+                .accessibilityIdentifier("sidebar-section-empty-\(section.rawValue)")
+        }
+        .listRowInsets(
+            EdgeInsets(
+                top: 0,
+                leading: SidebarRowMetrics.contentInsetH,
+                bottom: 0,
+                trailing: SidebarRowMetrics.contentInsetH
+            )
+        )
+        .listRowSeparator(.hidden)
+        .listRowBackground(Color.clear)
     }
 
     var emptyState: some View {
