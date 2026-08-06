@@ -67,7 +67,9 @@ final class ConversationOlderPageScrollTests: ConversationScrollHarness {
         var asked = false
         for _ in 0 ..< 20 where !asked {
             dragBack(app)
-            asked = olderHasLanded(app) || (rendered(app).map(\.index).min() ?? .max) <= 1
+            // The inverted stack may expose off-screen rows to accessibility, so the oldest
+            // seeded index no longer proves the viewport reached the history trigger.
+            asked = olderHasLanded(app)
         }
 
         if settleBeforeSampling { Thread.sleep(forTimeInterval: 0.4) }

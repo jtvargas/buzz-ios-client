@@ -75,15 +75,6 @@ struct ConversationScaffold<Content: View, Bar: View, Accessory: View>: View {
     /// one channel is the reported jump on a reaction — see
     /// ``ConversationReaderPlace/rowDidChangeInPlace()``.
     var rowRevision: Int = 0
-    /// Bumped by the owner when an older page went in *above* the reader. A third channel
-    /// rather than a flag on ``contentRevision``, because the two are announced in the same
-    /// update pass and nothing orders one before the other — see
-    /// ``ConversationReaderPlace/olderPageDidLand()``, which composes with
-    /// ``ConversationReaderPlace/contentDidChange()`` in either order.
-    ///
-    /// Defaulted, because only the channel surface pages older history: a thread is fetched
-    /// whole.
-    var olderPageRevision: Int = 0
     /// The id of the newest row the owner is rendering — the same id its `ForEach` gives that
     /// row.
     ///
@@ -236,11 +227,6 @@ struct ConversationScaffold<Content: View, Bar: View, Accessory: View>: View {
         // treatment back explicitly — a toolbar background, a composer background — composes
         // normally and is a separate piece of polish.
         .scrollEdgeEffectHidden(true, for: .all)
-        // The mirror, undone. The scroll view's own top is the visual bottom, so the room the
-        // composer needs is set as a *top* margin and the status bar's as a *bottom* one.
-        // Replacing the automatic safe-area margins rather than adding to them is the point:
-        // the automatic pair is the pair that arrives on the wrong ends.
-
         // Innermost, and before `safeAreaBar`: this modifier binds to the *first*
         // scroll view it finds and logs a runtime issue when more than one is in the
         // hierarchy — the suggestion panel has its own. The projection is three `Bool`s
@@ -321,11 +307,6 @@ struct ConversationScaffold<Content: View, Bar: View, Accessory: View>: View {
         // The same window, opened for the other kind of change; the difference between them
         // is decided where the window is read, not here.
         .onChange(of: rowRevision) { place.rowDidChangeInPlace() }
-        // And the third: content that went in above the reader, which is the one change whose
-        // correction is an offset delta rather than a distance to converge on, and the one that
-        // has to survive a moving finger — an older page is fetched *because* they are
-        // scrolling up.
-        .onChange(of: olderPageRevision) { place.olderPageDidLand() }
         // A change of *width* is the one content change the owner cannot declare, because it
         // did not make it: every row re-wraps, so every row's height is genuinely new. A
         // rotation, an iPad split, a Slide Over.
@@ -467,7 +448,8 @@ struct ConversationScaffold<Content: View, Bar: View, Accessory: View>: View {
         case .bottom:
             // The newest *row*, never the content's bottom edge: the edge put the reader past
             // the end of a largely invented extent, with nothing rendered (see ``newestID``).
-            if let newestID { proxy.scrollTo(newestID, anchor: .bottom) }
+            // Its `.top` edge in flipped space is its visual bottom edge.
+            if let newestID { proxy.scrollTo(newestID, anchor: .top) }
         case let .offset(target):
             position.scrollTo(y: target)
         }
@@ -487,7 +469,7 @@ struct ConversationScaffold<Content: View, Bar: View, Accessory: View>: View {
     /// The asymmetry that remains is real and is why this takes the proxy rather than
     /// `ScrollPosition`: the proxy honours its `anchor` argument in this hierarchy, whereas
     /// `ScrollPosition.scrollTo(id:anchor:)` loses the anchor to
-    /// `defaultScrollAnchor(.bottom, for: .alignment)` below — measured, `anchor: .top` landed
+    /// `defaultScrollAnchor(.top, for: .alignment)` below — measured, the unmirrored anchor landed
     /// the target hard against the bottom edge with everything the pill had just announced
     /// still below the fold. The `.alignment` anchor earns its place, so the proxy is the path
     /// that works alongside it.
@@ -495,16 +477,15 @@ struct ConversationScaffold<Content: View, Bar: View, Accessory: View>: View {
         withAnimation(.smooth(duration: 0.2)) {
             switch jumpTarget {
             case .bottom:
-                // Anchored at the bottom, where a conversation rests anyway; nothing reads the
-                // extent. The declaration stops the settling that follows from undoing this,
-                // and has the destination asserted again once the scroll comes to rest.
-                if let newestID { proxy.scrollTo(newestID, anchor: .bottom) }
+                // `.top` in flipped space is the newest row's visual bottom edge. The
+                // declaration stops the settling that follows from undoing this, and has the
+                // destination asserted again once the scroll comes to rest.
+                if let newestID { proxy.scrollTo(newestID, anchor: .top) }
                 place.jumpToNewestBegan()
             case let .message(id):
-                // Anchored at the top, so the first thing under the reader's eye is the first
-                // message they have not read; a target too near the end of the content lands as
-                // far as the scroll view can go, which is the bottom — where it is anyway.
-                proxy.scrollTo(id, anchor: .top)
+                // `.bottom` in flipped space is the target row's visual top edge, so the first
+                // thing under the reader's eye is the first message they have not read.
+                proxy.scrollTo(id, anchor: .bottom)
                 // Landing on a message is the reader choosing a place that is not the
                 // newest one, exactly as a drag is. Without this, the next content change
                 // would put them back at the bottom they deliberately left.

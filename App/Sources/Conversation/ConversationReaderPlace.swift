@@ -127,8 +127,8 @@ final class ConversationReaderPlace {
         let contentHeight: CGFloat
         /// The scroll view's own `contentOffset.y`.
         let offset: CGFloat
-        /// From the newest message: `contentSize.height - visibleRect.maxY`, the same
-        /// measure ``ConversationScaffold`` bands on.
+        /// From the newest message: `visibleRect.minY` in the inverted scroll space, the
+        /// same measure ``ConversationScaffold`` bands on.
         let distance: CGFloat
 
         /// Whether this reading is made of numbers at all. A scroll view mid-layout can
@@ -198,12 +198,6 @@ final class ConversationReaderPlace {
     /// What the open window was opened for. Read once, at the end of ``correction(for:atBottomSlack:)``,
     /// and only for the reader it separates.
     private var change: Change = .structural
-    /// Whether the next height change is an older page that went in *above* the reader.
-    ///
-    /// Armed by ``olderPageDidLand()`` and spent by the first reading that carries the new
-    /// height, because that reading is the only one that can measure how much went in.
-    private var insertedAbove = false
-
     /// Below this, a correction is not worth a frame.
     private static let tolerance: CGFloat = 0.5
     /// How long a settling window may stay open. A page load re-measures for a handful of
@@ -235,39 +229,6 @@ final class ConversationReaderPlace {
         // first reading — before the new content has been measured at all, which is the one
         // moment it exists to cover.
         stableRun = 0
-    }
-
-    /// An older page has been inserted above the reader.
-    ///
-    /// # Why this is not ``contentDidChange()``
-    ///
-    /// Every other structural change either arrives at the bottom or grows a row in place, so
-    /// preserving the *distance to the newest message* preserves the reader's place. A page
-    /// that lands above them is the one change where that invariant says the wrong thing: the
-    /// distance to the newest message grows by exactly the height that went in, and correcting
-    /// back to the old distance is a correction toward where they were **before** the insert
-    /// existed — which is the jump, not the fix for it.
-    ///
-    /// What has to hold instead is the offset: raise it by the height that went in, and the
-    /// rows under the reader's eye do not move. Applied as a one-shot delta rather than as a
-    /// converging target, so a page arriving in instalments corrects once per instalment and a
-    /// reader still dragging keeps every point they have travelled since.
-    ///
-    /// # And why it corrects mid-scroll, which nothing else here does
-    ///
-    /// ``isScrolling`` documents the reason nothing is corrected under a moving finger: *the
-    /// arrival that would want one cannot happen there*, because the tail freeze holds new
-    /// messages back for as long as the reader is away from the bottom. That was true of every
-    /// arrival this file was written for. It is not true of this one — an older page is fetched
-    /// *because* the reader is scrolling up, so it lands mid-flick by construction. Suppressing
-    /// its correction leaves them displaced with nothing able to recover it: the readings that
-    /// follow are stable, so the next one refreshes ``anchoredDistance`` to the displaced value
-    /// and the jump becomes their new place.
-    func olderPageDidLand() {
-        change = .structural
-        settling = Self.settlingReadings
-        stableRun = 0
-        insertedAbove = true
     }
 
     /// A row already in the list changed height where it stands — a reaction chip appeared or
@@ -412,25 +373,6 @@ final class ConversationReaderPlace {
         // switch — see the table above.
         guard settling > 0 else { return .none }
         settling -= 1
-        // The page that went in above the reader, measured: raise the offset by exactly what
-        // arrived and the rows under their eye do not move. Spent here whatever it decides, so
-        // the instalment after this one is measured against a height this reading has already
-        // accounted for rather than corrected for twice.
-        if insertedAbove {
-            insertedAbove = false
-            let inserted = span.contentHeight - previous.contentHeight
-            // Only when the framework left the offset alone, which is what the absent
-            // `defaultScrollAnchor(.bottom, for: .sizeChanges)` means here: the whole insert
-            // then shows up as distance to the newest message, and none of it as movement. A
-            // deployment that ever restores that anchor adjusts the offset itself, and this
-            // reading would double it.
-            let displaced = span.distance - previous.distance
-            guard inserted > 0, abs(inserted - displaced) <= Self.tolerance else { return .none }
-            // Their place has moved with them, so the reference the *next* window converges on
-            // has to be the one they are actually at once this lands.
-            anchoredDistance = previous.distance
-            return .offset(span.offset + inserted)
-        }
         guard !isScrolling else { return .none }
         // A conversation nobody has moved belongs at its newest message, and so does one
         // whose reader is already there. Both rules agree about them, and separate only
