@@ -107,6 +107,53 @@ extension ConversationFixture {
         }
     }
 
+    /// A relay that answers a scrollback request with a page of older messages.
+    ///
+    /// It writes them through the store, exactly as ``SyncEngine/loadOlderHistory(channel:before:)``
+    /// does, so the surface learns about them on the same observation and by the same path: the
+    /// model re-reads, prepends, and announces. Nothing about the correction under test is
+    /// simulated — only the relay is.
+    ///
+    /// Each page is stamped *before* everything already seeded, so it lands above the reader
+    /// wherever they are, and each subsequent page before the one before it.
+    actor HistoryPager: ChannelHistoryPaging {
+        private let store: BuzzEventStore
+        private let pageSize: Int
+        private let delay: Duration
+        private let key: PrivateKey
+        private var served = 0
+        private let pages: Int
+
+        init(store: BuzzEventStore, pages: Int, pageSize: Int = 20, delayMilliseconds: Int) throws {
+            self.store = store
+            self.pages = pages
+            self.pageSize = pageSize
+            delay = .milliseconds(delayMilliseconds)
+            key = try PrivateKey()
+        }
+
+        func loadOlderHistory(channel: String, before _: WindowCursor) async throws -> SyncEngine.OlderHistoryPage {
+            guard served < pages else { return SyncEngine.OlderHistoryPage(hasMore: false, ingested: 0) }
+            // The round trip. Without it the page is committed inside the same turn as the
+            // request and never lands under a moving finger, which is the whole shape.
+            try? await Task.sleep(for: delay)
+            served += 1
+            let events = try (0 ..< pageSize).map { index in
+                // Descending into the past, page by page, so page two sits above page one.
+                let step = (served - 1) * pageSize + index
+                return try NostrEvent.signed(
+                    kind: .channelMessage,
+                    content: "Older message \(pages * pageSize - step) from the relay",
+                    tags: [["h", channel]],
+                    createdAt: Date(timeIntervalSince1970: TimeInterval(1_700_000_000 - (step + 1) * 60)),
+                    with: key
+                )
+            }
+            let outcome = try await store.ingest(batch: events, phase: .backfill)
+            return SyncEngine.OlderHistoryPage(hasMore: served < pages, ingested: outcome.inserted.count)
+        }
+    }
+
     /// Holds the built conversation for the life of the process. A reference box because a
     /// mutable `static var` of a `Sendable` type is what strict concurrency refuses; only the
     /// main actor ever reaches it, from a `View`'s initialiser.

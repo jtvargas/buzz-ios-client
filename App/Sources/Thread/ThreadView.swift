@@ -34,7 +34,10 @@ struct ThreadView: View {
     /// This device's per-thread read marks. Absent on a surface reached without them (the
     /// conversation fixture), where nothing is recorded.
     @Environment(\.threadReadMarks) private var threadReads
-    @Environment(AppEnvironment.self) private var appEnvironment
+    /// Optional for ``ChannelTimelineView``'s reason: the non-optional form traps before any
+    /// `body` runs when this surface is mounted outside the app graph, which is what the
+    /// fixtures do.
+    @Environment(AppEnvironment.self) private var appEnvironment: AppEnvironment?
     private let channelID: String
     /// Kept so the participants sheet can start its own presence stream. The `presence`
     /// model above is this view's; a sheet is a separate lifetime and reads it from the
@@ -212,6 +215,7 @@ struct ThreadView: View {
             actions: model,
             isReadOnly: !access.allowsInteraction,
             onRemind: { row, due in
+                guard let appEnvironment else { return }
                 Task {
                     await ReminderCreation.set(
                         row,
@@ -250,14 +254,17 @@ struct ThreadView: View {
     private var list: some View {
         // The channel's rhythm, from the same constant, so a message does not change
         // size or spacing when a reader follows it into its thread.
+        // Newest first and each row flipped back, as the channel does — the scaffold is shared,
+        // so the inversion is not optional here. See ``View/conversationInverted()``.
         LazyVStack(spacing: MessageRowMetrics.withinGroup) {
             // The same grouped items the channel renders, so a thread that spans days
             // separates them the same way and stacks one person's consecutive replies the
             // same way; the model suppresses the separator that would otherwise sit above
             // the thread's own opener.
-            ForEach(model.items) { item in
+            ForEach(model.items.reversed()) { item in
                 itemView(item)
-                    .padding(.top, item.continuesGroup ? 0 : MessageRowMetrics.aboveNewGroup)
+                    .padding(.bottom, item.continuesGroup ? 0 : MessageRowMetrics.aboveNewGroup)
+                    .conversationInverted()
             }
         }
         .padding(.vertical, 8)

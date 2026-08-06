@@ -43,7 +43,6 @@ final class ChannelTimelineModel {
     /// ``contentRevision``, which is the reported jump on reacting to an older message: one
     /// channel could not say which of the two had happened.
     private(set) var rowRevision = 0
-
     /// Surviving reaction groups for each loaded row, keyed by message id. Re-read
     /// on the same observation as the rows, so a react, a withdrawal, or a peer's
     /// reaction updates the chips live without a second pipeline.

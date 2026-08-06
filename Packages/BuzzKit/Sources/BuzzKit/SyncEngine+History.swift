@@ -37,6 +37,15 @@ public extension SyncEngine {
         /// tell "nothing new *here*" from "nothing new anywhere", which are the same
         /// thing to a local read and are not the same thing at all.
         public let ingested: Int
+
+        /// Public so a fixture can stand in for the relay. The scroll shapes this surface is
+        /// measured by turn on a page landing *while the reader is moving*, and nothing in the
+        /// app can produce that without a pager — which is why the defect it exists to catch
+        /// was reported from a phone rather than caught here.
+        public init(hasMore: Bool, ingested: Int) {
+            self.hasMore = hasMore
+            self.ingested = ingested
+        }
     }
 
     /// Why an older page could not be fetched.

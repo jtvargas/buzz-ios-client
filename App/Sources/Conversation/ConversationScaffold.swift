@@ -206,17 +206,42 @@ struct ConversationScaffold<Content: View, Bar: View, Accessory: View>: View {
         ScrollView(.vertical) {
             content
         }
+        // The flip. See ``View/conversationInverted()`` for the measurements behind it and for
+        // the two halves the owner has to supply: newest-first items, and the same modifier on
+        // each row to draw it the right way up.
+        //
+        // Applied to the scroll view rather than to its content so the *scrolling* is what
+        // inverts: the newest message sits at the scroll view's origin, and an older page
+        // appends past the far end where the estimated rows are and the reader is not.
+        .conversationInverted()
+        // Ships with the flip, not after it. iOS 26's scroll edge effects composited against a
+        // flipped scroll view do not veil an edge — they veil the *whole surface*, a white wash
+        // over every row with the content barely legible; `.hard` is a near-total white-out.
+        // Measured in a probe replicating this chrome (inline navigation title plus
+        // `safeAreaBar` composer) on iPhone 17 / iOS 26.1, two runs, against a no-chrome control
+        // that renders pixel-perfect — so it is the bar edge effects compositing against the
+        // flipped surface, not the flip.
+        //
+        // The cost is real and bounded: this surface gives up automatic Liquid Glass at its
+        // edges. The bars themselves render *outside* the flip and stay upright, so putting the
+        // treatment back explicitly — a toolbar background, a composer background — composes
+        // normally and is a separate piece of polish.
+        .scrollEdgeEffectHidden(true, for: .all)
         // Innermost, and before `safeAreaBar`: this modifier binds to the *first*
         // scroll view it finds and logs a runtime issue when more than one is in the
         // hierarchy — the suggestion panel has its own. The projection is three `Bool`s
         // on purpose and never the raw distance: it keeps `Edges` cheap to compare, so
         // the action runs on a band crossing rather than on every scrolled frame.
         .onScrollGeometryChange(for: Edges.self) { geometry in
-            let distance = geometry.contentSize.height - geometry.visibleRect.maxY
+            // Both distances are read from the flipped space, where the newest message is at
+            // the origin and history runs away from it. `distance` is still "how far from the
+            // newest message" and `nearTop` still "how close to the oldest thing loaded" —
+            // the names describe the conversation, and only the geometry they read has moved.
+            let distance = geometry.visibleRect.minY
             return Edges(
                 atBottom: distance <= Self.atBottomSlack,
                 awayFromBottom: distance >= Self.awayFromBottomSlack,
-                nearTop: geometry.visibleRect.minY <= Self.topTrigger
+                nearTop: geometry.contentSize.height - geometry.visibleRect.maxY <= Self.topTrigger
             )
         } action: { _, edges in
             // Hysteresis, not a threshold: between the two bands the current state
@@ -237,7 +262,27 @@ struct ConversationScaffold<Content: View, Bar: View, Accessory: View>: View {
                 isAtBottom = false
             }
             if isNearTop != edges.nearTop { isNearTop = edges.nearTop }
-            if edges.nearTop { onReachedTop() }
+            // Not before the reader has taken hold of the list, and that guard is load-bearing
+            // rather than an optimisation.
+            //
+            // ``ConversationReaderPlace`` holds a conversation nobody has scrolled at its
+            // newest message: while ``ConversationReaderPlace/hasMoved`` is `false`, *any*
+            // structural change corrects to `.bottom` (`correction(for:atBottomSlack:)`). That
+            // was safe for as long as nothing produced a structural change in that window —
+            // and until scrollback learned to leave the device, nothing did. Paging older was
+            // a local read, and in a channel whose history is short it committed nothing at
+            // all.
+            //
+            // Now it is a relay fetch, and `topTrigger` is a whole viewport, so a channel
+            // whose local history is barely longer than the screen — every channel of a
+            // community joined a minute ago — is inside the band the moment it opens, with no
+            // gesture. The page lands a beat later, the reader has just started to scroll, and
+            // the snap-to-newest rule fires under their thumb. Each page that lands asks for
+            // the next one (below), so it repeats.
+            //
+            // Waiting for the reader costs nothing: reaching for history *is* a gesture, and
+            // the fetch it starts is the one they asked for.
+            if edges.nearTop, place.hasMoved { onReachedTop() }
         }
         // The owner's commit, ahead of the readings it produces: `onChange` runs in the
         // update pass and a scroll geometry callback runs after layout, so the window is
@@ -254,7 +299,10 @@ struct ConversationScaffold<Content: View, Bar: View, Accessory: View>: View {
             // `isNearTop`. It runs on for exactly as long as the pages are not moving
             // them, which is the case it exists for, and ends where the owner's own
             // guards do — nothing older left, or a failed reach.
-            if isNearTop { onReachedTop() }
+            //
+            // Behind the same gate as the reading above, and for the same reason: this is the
+            // half that would turn one premature fetch into a run of them.
+            if isNearTop, place.hasMoved { onReachedTop() }
         }
         // The same window, opened for the other kind of change; the difference between them
         // is decided where the window is read, not here.
@@ -312,8 +360,11 @@ struct ConversationScaffold<Content: View, Bar: View, Accessory: View>: View {
         // What it was there for is now done by the two corrections above — one for a declared
         // content change, one for the keyboard taking room at the bottom — both of which land on
         // a row instead of an edge.
-        .defaultScrollAnchor(.bottom, for: .initialOffset)
-        .defaultScrollAnchor(.bottom, for: .alignment)
+        // `.top` in the flipped space is the newest message, which is what both roles wanted
+        // when they said `.bottom`. The conversation still opens at its newest message and a
+        // short one still rests against the composer; the words changed, the behaviour did not.
+        .defaultScrollAnchor(.top, for: .initialOffset)
+        .defaultScrollAnchor(.top, for: .alignment)
         // Only the message list dismisses the keyboard, and this is applied inside
         // `safeAreaBar` so the bar's own scroll views do not inherit the mode.
         .scrollDismissesKeyboard(.interactively)
@@ -373,11 +424,18 @@ struct ConversationScaffold<Content: View, Bar: View, Accessory: View>: View {
 
     /// The three numbers ``ConversationReaderPlace`` reads, taken from one layout so they
     /// cannot disagree with each other.
+    /// Read from the flipped space for ``Edges``' reason: `distance` means *from the newest
+    /// message*, which is now the origin end.
+    ///
+    /// What this buys the type that consumes it: the distance to the newest message no longer
+    /// moves when an older page lands, because the page lands past the other end. Its
+    /// corrections are left in place for the changes they were written for — the keyboard
+    /// taking room, a row growing where it stands — which inversion does not address.
     private static func span(_ geometry: ScrollGeometry) -> ConversationReaderPlace.Span {
         ConversationReaderPlace.Span(
             contentHeight: geometry.contentSize.height,
             offset: geometry.contentOffset.y,
-            distance: geometry.contentSize.height - geometry.visibleRect.maxY
+            distance: geometry.visibleRect.minY
         )
     }
 
@@ -390,7 +448,8 @@ struct ConversationScaffold<Content: View, Bar: View, Accessory: View>: View {
         case .bottom:
             // The newest *row*, never the content's bottom edge: the edge put the reader past
             // the end of a largely invented extent, with nothing rendered (see ``newestID``).
-            if let newestID { proxy.scrollTo(newestID, anchor: .bottom) }
+            // Its `.top` edge in flipped space is its visual bottom edge.
+            if let newestID { proxy.scrollTo(newestID, anchor: .top) }
         case let .offset(target):
             position.scrollTo(y: target)
         }
@@ -410,7 +469,7 @@ struct ConversationScaffold<Content: View, Bar: View, Accessory: View>: View {
     /// The asymmetry that remains is real and is why this takes the proxy rather than
     /// `ScrollPosition`: the proxy honours its `anchor` argument in this hierarchy, whereas
     /// `ScrollPosition.scrollTo(id:anchor:)` loses the anchor to
-    /// `defaultScrollAnchor(.bottom, for: .alignment)` below — measured, `anchor: .top` landed
+    /// `defaultScrollAnchor(.top, for: .alignment)` below — measured, the unmirrored anchor landed
     /// the target hard against the bottom edge with everything the pill had just announced
     /// still below the fold. The `.alignment` anchor earns its place, so the proxy is the path
     /// that works alongside it.
@@ -418,16 +477,15 @@ struct ConversationScaffold<Content: View, Bar: View, Accessory: View>: View {
         withAnimation(.smooth(duration: 0.2)) {
             switch jumpTarget {
             case .bottom:
-                // Anchored at the bottom, where a conversation rests anyway; nothing reads the
-                // extent. The declaration stops the settling that follows from undoing this,
-                // and has the destination asserted again once the scroll comes to rest.
-                if let newestID { proxy.scrollTo(newestID, anchor: .bottom) }
+                // `.top` in flipped space is the newest row's visual bottom edge. The
+                // declaration stops the settling that follows from undoing this, and has the
+                // destination asserted again once the scroll comes to rest.
+                if let newestID { proxy.scrollTo(newestID, anchor: .top) }
                 place.jumpToNewestBegan()
             case let .message(id):
-                // Anchored at the top, so the first thing under the reader's eye is the first
-                // message they have not read; a target too near the end of the content lands as
-                // far as the scroll view can go, which is the bottom — where it is anyway.
-                proxy.scrollTo(id, anchor: .top)
+                // `.bottom` in flipped space is the target row's visual top edge, so the first
+                // thing under the reader's eye is the first message they have not read.
+                proxy.scrollTo(id, anchor: .bottom)
                 // Landing on a message is the reader choosing a place that is not the
                 // newest one, exactly as a drag is. Without this, the next content change
                 // would put them back at the bottom they deliberately left.

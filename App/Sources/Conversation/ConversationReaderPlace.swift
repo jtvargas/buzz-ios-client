@@ -127,8 +127,8 @@ final class ConversationReaderPlace {
         let contentHeight: CGFloat
         /// The scroll view's own `contentOffset.y`.
         let offset: CGFloat
-        /// From the newest message: `contentSize.height - visibleRect.maxY`, the same
-        /// measure ``ConversationScaffold`` bands on.
+        /// From the newest message: `visibleRect.minY` in the inverted scroll space, the
+        /// same measure ``ConversationScaffold`` bands on.
         let distance: CGFloat
 
         /// Whether this reading is made of numbers at all. A scroll view mid-layout can
@@ -198,7 +198,6 @@ final class ConversationReaderPlace {
     /// What the open window was opened for. Read once, at the end of ``correction(for:atBottomSlack:)``,
     /// and only for the reader it separates.
     private var change: Change = .structural
-
     /// Below this, a correction is not worth a frame.
     private static let tolerance: CGFloat = 0.5
     /// How long a settling window may stay open. A page load re-measures for a handful of

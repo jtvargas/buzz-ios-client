@@ -27,6 +27,10 @@ struct ConversationFixtureHost: View {
     private let failure: String?
 
     private let opener = ConversationFixture.InertOpener()
+    /// The fake relay a scrollback shape pages against, or `nil` for every other shape — in
+    /// which case the surface pages its local store and stops, which is what it did before
+    /// scrollback learned to leave the device.
+    private let pager: ConversationFixture.HistoryPager?
     /// So the composer's `+` can be driven all the way to a thumbnail on a simulator
     /// with no relay in reach — see ``ConversationFixture/InertUploader``.
     private let uploader = ConversationFixture.InertUploader()
@@ -48,6 +52,14 @@ struct ConversationFixtureHost: View {
         }
         prepared = built
         failure = problem
+        pager = built.flatMap { prepared in
+            guard options.olderPages > 0 else { return nil }
+            return try? ConversationFixture.HistoryPager(
+                store: prepared.store,
+                pages: options.olderPages,
+                delayMilliseconds: options.olderPageDelay
+            )
+        }
     }
 
     var body: some View {
@@ -111,6 +123,7 @@ struct ConversationFixtureHost: View {
                 sender: prepared.sender,
                 typing: NoopEphemeralPublisher(),
                 readStateMarking: nil,
+                history: pager,
                 opener: opener,
                 presence: presence,
                 uploader: { uploader },

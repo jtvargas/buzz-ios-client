@@ -29,7 +29,14 @@ struct ChannelTimelineView: View {
     /// only the in-flight moment between the tap and the roster commit.
     @State private var isJoining = false
     @Environment(\.entityNames) private var names
-    @Environment(AppEnvironment.self) private var appEnvironment
+    /// Optional, and that is what makes this surface mountable outside the app graph.
+    ///
+    /// The non-optional form traps in `EnvironmentBox.update` when nothing has been put in
+    /// the environment — before any `body` runs, so it is not reachable by guarding the one
+    /// call site below. ``ConversationFixtureHost`` mounts this view directly, so every
+    /// conversation UI shape has crashed on launch since this property was added; the suite is
+    /// not a pull-request gate, so nothing said so.
+    @Environment(AppEnvironment.self) private var appEnvironment: AppEnvironment?
     private let channel: ChannelListRow
     private let channelID: String
     private let store: BuzzEventStore
@@ -225,6 +232,9 @@ struct ChannelTimelineView: View {
             isReadOnly: !access.allowsInteraction,
             onReplyInThread: { open(thread: $0, focusingComposer: true) },
             onRemind: { row, due in
+                // Nothing to schedule against outside the app graph — a fixture has no store
+                // of reminders and no session to own them.
+                guard let appEnvironment else { return }
                 Task {
                     await ReminderCreation.set(
                         row,
@@ -298,16 +308,28 @@ struct ChannelTimelineView: View {
         // padding on each row: a row's height stays its content's height. Everything that
         // starts something — a new block, a day, a notice — pays the rest of the 12pt gap
         // itself, below. See ``MessageRowMetrics``.
+        // Newest first, and every row flipped back — the two halves the inverted scroll view
+        // needs from its owner. See ``View/conversationInverted()``.
         LazyVStack(spacing: MessageRowMetrics.withinGroup) {
-            topSentinel
             // Day separators and the grouping of consecutive messages are both items, not
             // row headers, so the channel, a thread, and a DM cannot each grow their own
             // copy of either rule. Grouped once per rows change in the model; this pass is
             // a read.
-            ForEach(model.items) { item in
+            //
+            // Reversed here rather than in the model: grouping is chronological — which row
+            // opens a block, where a day starts — and reversing before it would ask those
+            // rules to read backwards. The model stays oldest-first and only the drawing
+            // order turns around.
+            ForEach(model.items.reversed()) { item in
                 itemView(item)
-                    .padding(.top, item.continuesGroup ? 0 : MessageRowMetrics.aboveNewGroup)
+                    // `.bottom`, not `.top`: the gap belongs above the row that opens a block,
+                    // and this stack is drawn upside down.
+                    .padding(.bottom, item.continuesGroup ? 0 : MessageRowMetrics.aboveNewGroup)
+                    .conversationInverted()
             }
+            // Last, because the far end of a flipped stack is the top of history.
+            topSentinel
+                .conversationInverted()
         }
         .padding(.vertical, 8)
         .dismissesSuggestionsOnScroll(model.mentionAutocomplete)
