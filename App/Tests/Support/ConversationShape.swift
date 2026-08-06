@@ -44,7 +44,8 @@ func makeRow(
     content: String? = nil,
     pubkey: String = "author",
     parentID: String? = nil,
-    media: [MessageMedia] = []
+    media: [MessageMedia] = [],
+    namesSelf: Bool = false
 ) -> TimelineRow {
     TimelineRow(
         id: id,
@@ -61,7 +62,8 @@ func makeRow(
         rootID: parentID,
         replyCount: 0,
         lastReplyAt: nil,
-        media: media
+        media: media,
+        namesSelf: namesSelf
     )
 }
 

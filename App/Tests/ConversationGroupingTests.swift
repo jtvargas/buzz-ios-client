@@ -133,6 +133,34 @@ struct ConversationGroupingTests {
         #expect(groupedShape(grouped) == ["day", "one", "two", "+three"])
     }
 
+    @Test("a message that names the reader always names its author")
+    func mentionsAlwaysNameTheirAuthor() {
+        let grouped = items([
+            makeRow(id: "1", at: noon, content: "one"),
+            makeRow(id: "2", at: noon + 1, content: "two", namesSelf: true),
+            makeRow(id: "3", at: noon + 2, content: "three"),
+        ])
+
+        // The picture clause's reason, applied to being addressed: a message aimed at you
+        // is one you will scroll back to find, and it must not hang unattributed inside a
+        // block. "three" stacks under it — being named starts a block rather than ending
+        // grouping for the rest of the conversation.
+        #expect(groupedShape(grouped) == ["day", "one", "two", "+three"])
+    }
+
+    @Test("a run of messages that all name the reader is a run of blocks")
+    func everyMentionOpensItsOwnBlock() {
+        let grouped = items([
+            makeRow(id: "1", at: noon, content: "one", namesSelf: true),
+            makeRow(id: "2", at: noon + 1, content: "two", namesSelf: true),
+        ])
+
+        // The shape an agent that names you on every message produces. It is the honest
+        // reading of the rule and the owner was shown the size of it before it shipped:
+        // each of these is separately addressed to the reader, so each says who wrote it.
+        #expect(groupedShape(grouped) == ["day", "one", "two"])
+    }
+
     @Test("a reply never stacks under an ordinary message, and stacks under a reply")
     func repliesOnlyGroupWithReplies() {
         let grouped = items([

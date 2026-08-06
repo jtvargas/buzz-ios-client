@@ -26,9 +26,9 @@ public extension BuzzEventStore {
     ///
     /// Synchronous and `nonisolated` for the reason the paging reads are — it runs on
     /// the concurrent reader, off the actor.
-    nonisolated func rows(for ids: [String]) throws -> [TimelineRow] {
+    nonisolated func rows(for ids: [String], selfPubkey: String? = nil) throws -> [TimelineRow] {
         guard !ids.isEmpty else { return [] }
-        return try reader.read { db in try Self.fetchRows(db, ids: ids) }
+        return try reader.read { db in try Self.fetchRows(db, ids: ids, selfPubkey: selfPubkey) }
     }
 }
 
@@ -59,7 +59,11 @@ extension BuzzEventStore {
     /// read has no `ORDER BY` at all and is driven by the id set through the primary key,
     /// so the kind predicate is a filter on already-located rows. Confirmed with
     /// `EXPLAIN QUERY PLAN` against this schema: the plan is unchanged either way.
-    static func fetchRows(_ db: Database, ids: [String]) throws -> [TimelineRow] {
+    static func fetchRows(
+        _ db: Database,
+        ids: [String],
+        selfPubkey: String? = nil
+    ) throws -> [TimelineRow] {
         guard !ids.isEmpty else { return [] }
         var arguments: [String: (any DatabaseValueConvertible)?] = [
             "kind": EventKind.channelMessage.rawValue,
@@ -81,7 +85,10 @@ extension BuzzEventStore {
                 """))
         )
         """
-        return makeRows(try Row.fetchAll(db, sql: sql, arguments: StatementArguments(arguments)))
+        return makeRows(
+            try Row.fetchAll(db, sql: sql, arguments: StatementArguments(arguments)),
+            selfPubkey: selfPubkey
+        )
     }
 
 }

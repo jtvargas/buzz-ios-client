@@ -49,6 +49,8 @@ extension ChannelTimelineModel {
     /// Reads one page off the main actor. `channel`, `store`, and `pageSize` are
     /// immutable, so this is safe to call from the `nonisolated` observation loop.
     nonisolated func fetch(before cursor: TimelineCursor?) -> [TimelineRow] {
-        (try? store.timeline(channel: channel, before: cursor, limit: pageSize)) ?? []
+        (try? store.timeline(
+            channel: channel, before: cursor, limit: pageSize, selfPubkey: selfPubkey
+        )) ?? []
     }
 }
