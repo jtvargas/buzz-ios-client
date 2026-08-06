@@ -23,13 +23,24 @@ enum IndexingState: Equatable {
 /// are two unstructured tasks — and it fails toward the wrong side, leaving a community's
 /// channel names in Spotlight under a switch that reads off.
 ///
-/// So the four hooks do not run their own work. They append it to ``work``, a chain in which
-/// each task awaits its predecessor, and the enqueue itself happens with no suspension in
-/// between — so the order passes run in is the order they were requested in, whatever order
-/// the calling tasks happen to start in. Last request wins because it runs last, not because
-/// anything raced.
+/// So no hook performs its own Spotlight work. It appends it to ``work``, a chain in which each
+/// task awaits its predecessor. Last request wins because it runs last, not because anything
+/// raced.
 ///
-/// Two consequences worth stating, since they are what let the callers stop waiting:
+/// # The split: the snapshot is written here, only Spotlight is queued
+///
+/// Each hook does its ``ConversationEntitySnapshotStore`` half **synchronously, at call time**,
+/// and queues only the `CSSearchableIndex` calls. That is deliberate on both counts:
+///
+/// - The snapshot is what an intent's push reads for a name, and `phase = .running` is set in
+///   the same turn as hook 1 — so a snapshot written inside a queued pass lands *after* the
+///   sidebar has mounted and consumed the pending conversation. An earlier draft queued both
+///   halves and put hook 0's clear and hook 1's save in different entries with an XPC round
+///   trip between them, which left the flagship cold-launch push with no name to draw.
+/// - Doing it at call time is also what orders the snapshot at all: MainActor, no suspension,
+///   so the later caller wins in the snapshot exactly as it wins in the chain.
+///
+/// # What the callers get for not waiting
 ///
 /// - ``teardown(nextState:)`` is the one hook that **awaits its own entry**. Everything before
 ///   it in the chain reads the store, and `teardownSession()` releases the store the moment
@@ -37,6 +48,12 @@ enum IndexingState: Equatable {
 /// - The others return as soon as the work is queued. Ordering no longer depends on the caller
 ///   awaiting, which is what keeps a Core Spotlight round trip off the launch path and off the
 ///   websocket's.
+///
+/// One honest limit on the ordering claim: the chain orders *enqueues*, and a hook reached from
+/// an unstructured `Task` enqueues when that task starts running, which is the executor's
+/// business. The property that matters survives — a caller writes its preference and enqueues
+/// in one synchronous span, so a reorder moves both together and the two can never disagree.
+/// What a reorder costs is that the earlier tap wins, visibly and recoverably.
 @MainActor
 @Observable
 final class ConversationEntityIndex {
@@ -56,8 +73,8 @@ final class ConversationEntityIndex {
     /// It deliberately leaves `state` alone; there is not yet an active community to report.
     func reconcileLaunch() {
         stopObserving()
-        enqueue { [self] in
-            snapshots.clear()
+        snapshots.clear()
+        enqueue {
             try? await Self.deleteAll()
             HiveShortcuts.updateAppShortcutParameters()
         }
@@ -67,29 +84,31 @@ final class ConversationEntityIndex {
     func rebuild(store: BuzzEventStore, selfPubkey: String?, community: Community) {
         stopObserving()
         guard community.isSiriIndexingEnabled else {
+            // The one write to `state` from outside a pass. Safe because nothing can be queued
+            // at this moment — a switch drains through `teardown()` first, and on launch the
+            // chain holds only hook 0, which leaves `state` alone by design. A fifth caller
+            // would break that, so it is stated rather than left to be inferred.
             state = .off
             return
         }
-        enqueue { [self] in
-            await indexCurrent(store: store, selfPubkey: selfPubkey, community: community, forcePhrases: true)
-        }
+        indexCurrent(store: store, selfPubkey: selfPubkey, community: community, forcePhrases: true)
         observeChanges(in: store, selfPubkey: selfPubkey, community: community)
     }
 
     /// Hook 3: replaces the whole small set so a leave or archive cannot strand one entity.
     func refresh(store: BuzzEventStore, selfPubkey: String?, community: Community) {
-        enqueue { [self] in
-            await indexCurrent(store: store, selfPubkey: selfPubkey, community: community, forcePhrases: false)
-        }
+        indexCurrent(store: store, selfPubkey: selfPubkey, community: community, forcePhrases: false)
     }
 
     /// Hook 2: removes every entity of Hive's type before the outgoing store is released.
     ///
     /// Awaits the whole chain, so no earlier pass is still holding the store when this returns.
+    /// The cost of that is worth knowing: a wedged `corespotlightd` blocks a switch or a
+    /// sign-out for as long as it stays wedged, where before it blocked them for one call.
     func teardown(nextState: IndexingState = .idle) async {
         stopObserving()
+        snapshots.clear()
         await enqueue { [self] in
-            snapshots.clear()
             do {
                 try await Self.deleteAll()
                 state = nextState
@@ -141,12 +160,21 @@ final class ConversationEntityIndex {
         try await CSSearchableIndex.default().indexAppEntities(entities)
     }
 
+    /// Derives the set, writes the snapshot, and queues the Spotlight half.
+    ///
+    /// **Synchronous, and that is the point.** The snapshot is what an intent's push reads for a
+    /// name, and `phase = .running` is set in the same turn as the call above — so a snapshot
+    /// written inside a queued pass is written *after* the sidebar has already mounted and
+    /// consumed the pending conversation, which is the untitled placeholder §8 added it to
+    /// prevent. Queueing only the Core Spotlight calls keeps every snapshot write on the
+    /// MainActor with no suspension in it, which is also what orders the snapshot against hook
+    /// 0's clear: both happen at call time, so the later caller wins in both halves.
     private func indexCurrent(
         store: BuzzEventStore,
         selfPubkey: String?,
         community: Community,
         forcePhrases: Bool
-    ) async {
+    ) {
         let published = snapshots.load().flatMap { $0.communityID == community.id ? $0.entries : nil }
         // `uniquingKeysWith` rather than `uniqueKeysWithValues`: the latter traps on a repeated
         // key, and a duplicate channel row would turn a stale index into a crash.
@@ -166,19 +194,18 @@ final class ConversationEntityIndex {
             let nextPairs = Dictionary(
                 entries.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first }
             )
-            state = .indexing
-            // Persisted before the first suspension, not between the two calls. Hook 0 clears
-            // the snapshot on every launch, and `phase = .running` is set ahead of this pass —
-            // so an intent's push can land while it is in flight, and a snapshot restored only
-            // after the delete round trip leaves that push with no name to draw. It is also
-            // the safer end to be interrupted at: a snapshot naming channels Spotlight has not
-            // published yet resolves conversations that genuinely exist.
+            let refreshesPhrases = forcePhrases || previousPairs != nextPairs
             snapshots.save(communityID: community.id, entities: entities)
-            try await Self.deleteAll()
-            try await Self.publish(entities)
-            state = .indexed(count: entities.count, at: Date())
-            if forcePhrases || previousPairs != nextPairs {
-                HiveShortcuts.updateAppShortcutParameters()
+            state = .indexing
+            enqueue { [self] in
+                do {
+                    try await Self.deleteAll()
+                    try await Self.publish(entities)
+                    state = .indexed(count: entities.count, at: Date())
+                    if refreshesPhrases { HiveShortcuts.updateAppShortcutParameters() }
+                } catch {
+                    state = .failed(error.localizedDescription)
+                }
             }
         } catch {
             state = .failed(error.localizedDescription)
