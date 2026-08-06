@@ -162,6 +162,7 @@ struct MessageComposerView: View {
             // and cannot come up shorter. See ``minRowsHeight``.
             .frame(minHeight: minRowsHeight, alignment: .top)
             .padding(Self.shellPadding)
+            .background(.ultraThinMaterial, in: .rect(cornerRadius: Self.cornerRadius))
             // The *only* glass in this view, now that the two controls have given theirs
             // up — see the note at the top.
             .glassEffect(.clear.interactive(), in: .rect(cornerRadius: Self.cornerRadius))
