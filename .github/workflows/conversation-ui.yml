@@ -26,6 +26,14 @@ jobs:
   conversation-ui:
     name: Conversation UI tests (iOS Simulator)
     runs-on: macos-26
+    # The longest ceiling in the repo, for the longest job: three measured runs at
+    # 17m26s, 18m12s and 34m51s, so 60 is roughly twice the worst rather than a
+    # guess. It matters most here despite being dispatch-only — this job boots a
+    # simulator and drives a real keyboard, which is the machinery that hangs
+    # rather than fails, and being run by hand means nobody is watching a
+    # progress bar for it. Without a ceiling the default is 360 minutes on a
+    # macOS runner, which bills at 10x.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - name: Select Xcode 26

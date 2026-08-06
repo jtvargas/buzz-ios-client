@@ -11,6 +11,11 @@ jobs:
   lint-title:
     name: Lint PR title (Conventional Commits)
     runs-on: ubuntu-latest
+    # Seconds of work reading one string, so this ceiling is not about the job —
+    # it is so that *every* workflow in the repo has one and a new job cannot
+    # inherit the 360-minute default by being written next to a file that never
+    # mentions the setting. Cheap here: ubuntu, and it bills at 1x.
+    timeout-minutes: 5
     permissions:
       pull-requests: read
     steps:
