@@ -65,6 +65,12 @@ extension SyncEngine: EventSink {
             if !messages.isEmpty {
                 await presence.messagesArrived(messages)
             }
+
+            if phase == .live {
+                publishLiveMessageInsertions(
+                    messages.filter { $0.kind == .channelMessage }.map(\.id)
+                )
+            }
         }
 
         // A membership change is group state that does not ride the live fan-out, so

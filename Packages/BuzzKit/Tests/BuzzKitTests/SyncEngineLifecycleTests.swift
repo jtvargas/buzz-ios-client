@@ -6,6 +6,35 @@ import Testing
 
 @Suite("SyncEngine lifecycle, discovery, and degradation", .timeLimit(.minutes(1)))
 struct SyncEngineLifecycleTests {
+    @Test("Live message insertions exclude stored replay")
+    func liveMessageInsertionsExcludeBackfill() async throws {
+        let database = TempDatabase()
+        defer { database.remove() }
+        let harness = try EngineHarness(
+            path: database.path,
+            identity: try PrivateKey(),
+            relays: [ScriptedRelay()]
+        )
+        let fixture = try EngineFixtures()
+        let historical = try fixture.message("historical", in: "room", at: 1_700_000_001)
+        let live = try fixture.message("live", in: "room", at: 1_700_000_002)
+        let insertions = await harness.engine.liveMessageInsertions()
+        var iterator = insertions.makeAsyncIterator()
+
+        await harness.engine.ingest(
+            batch: [historical],
+            subscription: SubscriptionID("room"),
+            phase: .backfill
+        )
+        await harness.engine.ingest(
+            batch: [live],
+            subscription: SubscriptionID("room"),
+            phase: .live
+        )
+
+        #expect(await iterator.next() == [live.id])
+    }
+
     // MARK: - State machine
 
     /// The engine state mirrors the connection: `stopped → starting → running`, a

@@ -6,9 +6,12 @@ import SwiftUI
 /// engine started) re-renders here automatically.
 struct RootView: View {
     @Environment(AppEnvironment.self) private var environment
+    @Environment(\.scenePhase) private var scenePhase
     /// Which tab is being read. Held here rather than persisted: an app returning from the
     /// background is the same session, and an app relaunched should open where the work is.
     @State private var tab: HomeTab = .home
+    @State private var pendingNotificationRoute: InAppNotificationRoute?
+    @State private var visibleHomeLocation: InAppNotificationLocation?
 
     var body: some View {
         @Bindable var environment = environment
@@ -110,25 +113,38 @@ struct RootView: View {
     /// per pushed view is what produced the jump the owner reported on the way back; the
     /// traces are in that property's documentation.
     private func tabs(engine: SyncEngine, store: BuzzEventStore) -> some View {
-        TabView(selection: $tab) {
-            Tab(value: HomeTab.home) {
-                ChannelListView(
-                    store: store,
-                    engine: engine,
-                    drafts: environment.drafts,
-                    selfPubkey: environment.selfPubkeyHex
-                )
-            } label: {
-                label(for: .home)
-            }
-            Tab(value: HomeTab.activity) {
-                ActivityView(
-                    store: store,
-                    engine: engine,
-                    selfPubkey: environment.selfPubkeyHex
-                )
-            } label: {
-                label(for: .activity)
+        InAppNotificationHost(
+            store: store,
+            engine: engine,
+            selfPubkey: environment.selfPubkeyHex,
+            isForeground: scenePhase == .active,
+            visibleLocation: tab == .home ? visibleHomeLocation : nil
+        ) { route in
+            tab = .home
+            pendingNotificationRoute = route
+        } content: {
+            TabView(selection: $tab) {
+                Tab(value: HomeTab.home) {
+                    ChannelListView(
+                        store: store,
+                        engine: engine,
+                        drafts: environment.drafts,
+                        selfPubkey: environment.selfPubkeyHex,
+                        notificationRoute: $pendingNotificationRoute,
+                        visibleNotificationLocation: $visibleHomeLocation
+                    )
+                } label: {
+                    label(for: .home)
+                }
+                Tab(value: HomeTab.activity) {
+                    ActivityView(
+                        store: store,
+                        engine: engine,
+                        selfPubkey: environment.selfPubkeyHex
+                    )
+                } label: {
+                    label(for: .activity)
+                }
             }
         }
     }

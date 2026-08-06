@@ -78,6 +78,8 @@ struct HiveApp: App {
         // ``ConversationFixture``.
         if let fixture = ConversationFixture.requested {
             ConversationFixtureHost(options: fixture)
+        } else if InAppNotificationFixture.requested {
+            InAppNotificationFixtureHost()
         } else if let picker = DirectMessagePickerFixture.requested {
             // The same idea for a sheet whose only input is a list of people, so its states
             // can be reviewed as pictures before the feature reaches a phone — see
