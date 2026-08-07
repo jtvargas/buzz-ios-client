@@ -14,6 +14,8 @@ import UIKit
 /// on (``OnboardingView``).
 struct WorkspacePanel: View {
     @Environment(AppEnvironment.self) private var environment
+    /// Read for ``background``, which has to be the sidebar's ground. See there.
+    @Environment(\.hiveTheme) private var theme
 
     let state: WorkspacePanelState
     /// The panel's width, resolved by the caller against the real screen.
@@ -115,11 +117,16 @@ struct WorkspacePanel: View {
     /// here: the heading is at the top and the two actions are at the bottom, over the calm
     /// end of the pattern.
     ///
-    /// The ground under it is ``ShapeStyle/hiveNight``, the app's one dark, which the panel
-    /// takes by taking the comb's default. It shares that colour with the sidebar it stands
-    /// over; what separates the two is ``WorkspacePanelScrim``, not a step in the ground.
+    /// The ground under it is the reader's own, handed to the comb rather than left at its
+    /// default. The rule this keeps is the one the panel has always had: it shares its ground
+    /// with the sidebar it stands over, and what separates the two is ``WorkspacePanelScrim``,
+    /// not a step in the ground. Leaving the comb on `hiveNight` broke that the moment the
+    /// default ground stopped being `hiveNight` — a black panel over a grey sidebar, separated
+    /// by a colour step nobody asked for on top of the scrim that was already doing the job.
+    ///
+    /// The lattice itself is unchanged: it is drawn over this, not out of it.
     private var background: some View {
-        HoneycombBackground(isAnimating: state.isOpen)
+        HoneycombBackground(base: theme.background, isAnimating: state.isOpen)
     }
 
     /// The two ways to gain a community, at the bottom because that is where the owner asked

@@ -47,6 +47,8 @@ struct LinkPreview: Equatable, Hashable, Sendable {
         case googleDocument
         case googleSpreadsheet
         case googlePresentation
+        /// A markdown file, which this app opens in its own reader rather than a browser.
+        case markdownDocument
         /// A URL from a host with no rules of its own.
         case web
     }
@@ -99,6 +101,16 @@ extension LinkPreview {
 
         if let known = Self.github(url) ?? Self.linear(url) ?? Self.googleDrive(url) ?? Self.googleDocs(url) {
             self = known
+            return
+        }
+        // Before the ordinary web card and after the named hosts, so a markdown file on GitHub
+        // still reads as GitHub's — the provider says more about `github.com/a/b/blob/main/README.md`
+        // than the extension does, and the *route* opens the reader either way.
+        if let document = MarkdownDocument(url: url) {
+            self.init(
+                kind: .markdownDocument, url: url, provider: "Markdown", typeLabel: "document",
+                title: document.name
+            )
             return
         }
         self.init(kind: .web, url: url, provider: nil, typeLabel: nil, title: Self.webTitle(url))

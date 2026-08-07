@@ -11,6 +11,14 @@ enum RichTextRoute: Equatable {
     case profile(pubkey: String)
     /// Navigate to this conversation.
     case conversation(channelID: String)
+    /// Open this markdown file in the app's own reader.
+    ///
+    /// Ahead of ``external(_:)`` and nothing else changes about the link: it is still an
+    /// ordinary `https` URL in the text, still autolinked, still carded. What differs is only
+    /// where the press goes — into a sheet that renders it, rather than out to a browser that
+    /// shows its source. A surface with nowhere to present a sheet falls back to the browser,
+    /// which is what pressing it always did.
+    case markdownDocument(MarkdownDocument)
     /// Hand back to the system's own link handling (Safari, Mail).
     case external(URL)
 
@@ -29,7 +37,13 @@ enum RichTextRoute: Equatable {
         // looks like it will land somewhere it cannot.
         case let .message(channel, _, _):
             self = .conversation(channelID: channel)
-        case let .web(url), let .mail(url):
+        // A web link that names a markdown file is the one `.web` that does not leave the app.
+        // Decided here rather than at each surface so the sheet opens from a channel, a thread
+        // and a DM by one rule — and decided *after* the internal schemes above, so nothing
+        // that is already an entity can be re-read as a file.
+        case let .web(url):
+            self = MarkdownDocument(url: url).map(RichTextRoute.markdownDocument) ?? .external(url)
+        case let .mail(url):
             self = .external(url)
         case nil:
             return nil
@@ -150,9 +164,34 @@ extension Optional where Wrapped == MessageTapAction {
     }
 }
 
+/// Opens a markdown file in the app's reader, from anywhere below the sheet that presents it.
+///
+/// An environment action for the reason ``OpenConversationAction`` is one: the press happens
+/// inside a message row, and a sheet cannot be presented from there — a sheet attached to a row
+/// dies with the row when the list recycles it, and one attached to the conversation would have
+/// to be repeated on every surface that draws a message. Installed once, above the tabs.
+///
+/// A surface without one hands the URL to the browser instead of doing nothing, which is the
+/// difference between this and `openConversation`: a channel pill with no navigator has nowhere
+/// sensible to go, and a file always has.
+struct OpenMarkdownDocumentAction {
+    private let handler: (MarkdownDocument) -> Void
+
+    init(_ handler: @escaping (MarkdownDocument) -> Void) {
+        self.handler = handler
+    }
+
+    func callAsFunction(_ document: MarkdownDocument) {
+        handler(document)
+    }
+}
+
 extension EnvironmentValues {
     /// Injected beside the navigation stack that owns the path. `nil` by default.
     @Entry var openConversation: OpenConversationAction?
+    /// Injected above the tabs, so one sheet serves every surface that draws a message.
+    /// `nil` outside the app's root, where a pressed file opens in the browser instead.
+    @Entry var openMarkdownDocument: OpenMarkdownDocumentAction?
     /// Injected by a row that arbitrates its own tap. `nil` on a surface that does not.
     @Entry var claimRowTap: ClaimRowTapAction?
     /// Injected by a row that resolves single taps against double ones. `nil` on a surface

@@ -16,7 +16,7 @@ import UIKit
 /// They are about the *asset* and the *wiring*, not about which theme is chosen. Reading
 /// ``HiveAccent/uiColor`` here made them assert "the app is amber" against a global the host
 /// app writes at launch from `UserDefaults.standard` — so a machine whose simulator had ever
-/// had a theme picked turned three of these red with Slack Dark's crimson, which is not a
+/// had a theme picked turned three of these red with that theme's own accent, which is not a
 /// defect in anything they test. Naming the default theme asks the question they actually
 /// mean. The live global has tests of its own, in ``AppSettingsTests``.
 @Suite("Accent", .timeLimit(.minutes(1)))

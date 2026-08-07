@@ -44,16 +44,19 @@ extension View {
     /// that scroll something other than a `List`.
     ///
     /// The same two halves as ``hiveScreenGround()``; the colour is the difference, and it is
-    /// the whole point. `systemGroupedBackground` is *dynamic*, and UIKit resolves it one step
-    /// lighter for a modally presented controller — `UIUserInterfaceLevel.elevated`. In this
-    /// app, which is dark always, that is `#1C1C1E` where the base level is `#000000`. A modal
-    /// sits visibly above the screen it covers without either of them naming a colour for the
-    /// occasion.
+    /// the whole point. A modal has to sit visibly above the screen it covers, so this is
+    /// ``HiveTheme/elevatedBackground`` — the reader's own ground, one step lighter.
     ///
-    /// ``ShapeStyle/hiveNight`` cannot do that. It is one fixed value, so a sheet wearing it
-    /// is the same near-black as the screen behind it and the modal reads as flat. That was
-    /// the regression in #124, which swept `hiveScreenGround()` across full screens — right —
-    /// and over the sheets with them, deleting exactly this colour from ``AccountView``.
+    /// It used to be `systemGroupedBackground`, which UIKit resolves one level up for a
+    /// modally presented controller: `#1C1C1E` where the base is `#000000`. That was right
+    /// while the app had exactly one ground and it was black. It broke the moment the default
+    /// ground became `#222222` (2026-08-06) — the system colour cannot see the theme, so every
+    /// sheet came out *darker* than the screen behind it and the elevation read backwards.
+    ///
+    /// The failure to avoid in the other direction is #124's: it swept the *screen* ground
+    /// across the sheets too, and `hiveNight` is one fixed value, so a modal became the same
+    /// near-black as the screen and read as flat. Naming a step off the theme rather than the
+    /// theme itself is what keeps both of those from happening.
     ///
     /// # Why a *grouped* `List` in a sheet says nothing at all instead of saying this
     ///
@@ -69,8 +72,7 @@ extension View {
     /// ``AccountCard``s, which has no ground of its own, or a `.plain` list whose rows are
     /// already `listRowBackground(Color.clear)` and so have no card to fall out of step with.
     func hiveSheetGround() -> some View {
-        scrollContentBackground(.hidden)
-            .background(Color(.systemGroupedBackground))
+        modifier(HiveSheetGround())
     }
 }
 
@@ -80,13 +82,43 @@ extension View {
 /// The colour animates rather than cutting: a ground is the largest surface on screen, and
 /// swapping it instantly reads as a flash. `animation(_:value:)` is scoped to the theme alone, so
 /// the crossfade cannot leak onto anything else the ground happens to be redrawn beside.
+/// # Why the colour ignores the safe area itself
+///
+/// `background(_:ignoresSafeAreaEdges:)` defaults to `.all`, which sounds like it covers this
+/// and does not: those edges are the *container* region only. The keyboard is its own region
+/// (`SafeAreaRegions.keyboard`), so a raised keyboard shrinks the ground with the layout and
+/// whatever the window is showing — black — comes through in the strip behind the keys and in
+/// the corners its rounded top cuts out of them. Handing the colour its own
+/// `ignoresSafeArea()`, whose default region set *does* include `.keyboard`, paints the whole
+/// window instead.
+///
+/// This moves no layout and is not the banned modifier: the ban in ``ConversationScaffold`` is
+/// on the *content* ignoring the keyboard, which drops the composer behind the keys. Only the
+/// painted layer ignores it here.
 private struct HiveScreenGround: ViewModifier {
     @Environment(\.hiveTheme) private var theme
 
     func body(content: Content) -> some View {
         content
             .scrollContentBackground(.hidden)
-            .background(theme.background)
+            .background { theme.background.ignoresSafeArea() }
             .animation(.easeInOut(duration: 0.35), value: theme)
+    }
+}
+
+/// The themed half of ``SwiftUI/View/hiveSheetGround()``, a modifier for the same reason
+/// ``HiveScreenGround`` is one: only a view can read the environment.
+///
+/// The colour ignores the safe area here too — a sheet gets a keyboard as often as a screen
+/// does, and the strip behind the keys is the same hole. It carries no `animation`: a sheet is
+/// presented over a theme change rather than living through one, and the crossfade the screen
+/// ground runs would fight the presentation transition.
+private struct HiveSheetGround: ViewModifier {
+    @Environment(\.hiveTheme) private var theme
+
+    func body(content: Content) -> some View {
+        content
+            .scrollContentBackground(.hidden)
+            .background { theme.elevatedBackground.ignoresSafeArea() }
     }
 }

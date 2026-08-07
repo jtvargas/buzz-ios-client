@@ -38,6 +38,11 @@ struct ConversationFixtureHost: View {
     /// `PresenceStore` with nothing in it is what a conversation looks like before the roster
     /// answers — a state the app has to render anyway.
     private let presence = PresenceStore()
+    /// The document a pressed `.md` link opened, mirroring ``RootView``. The installer lives
+    /// above every message surface in the real app, and a fixture that omitted it would send
+    /// the press to Safari — the documented behaviour when no reader is installed — so the
+    /// sheet under test would never appear.
+    @State private var readingDocument: MarkdownDocument?
 
     init(options: ConversationFixture.Options) {
         self.options = options
@@ -73,6 +78,10 @@ struct ConversationFixtureHost: View {
                 // made a long-name assertion about the navigation bar silently vacuous.
                 // The real app always injects one; the fixture now does too.
                 .environment(\.entityNames, EntityNames(channels: [channelRow]))
+                .environment(\.openMarkdownDocument, OpenMarkdownDocumentAction { readingDocument = $0 })
+                .sheet(item: $readingDocument) { document in
+                    MarkdownDocumentSheet(document: document)
+                }
             } else {
                 // Surfaced rather than crashed: a fixture that traps reads in CI as a crash in
                 // the app, which is the most expensive kind of false report.
