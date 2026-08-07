@@ -265,11 +265,18 @@ public struct MediaUploadClient: Sendable {
         filename: String?,
         matches actual: BlobDescriptor
     ) {
+        // Unit seams may use arbitrary bytes, but every supported image that can
+        // reach production must be predictable or this gate has found a defect.
+        guard let format = ImageByteFormat.detect(data), format.isStoredByRelay else { return }
         guard let predicted = BlobDescriptor.predicted(
             data: data,
             baseURL: baseURL,
             filename: filename
-        ) else { return }
+        ) else {
+            predictionLog.fault("Could not predict a supported image descriptor")
+            assertionFailure("Media descriptor prediction could not be constructed")
+            return
+        }
         let matches = predicted.url == actual.url
             && predicted.sha256 == actual.sha256
             && predicted.size == actual.size
