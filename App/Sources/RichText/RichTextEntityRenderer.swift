@@ -63,6 +63,7 @@ enum RichTextInline {
                 let at = styled.index(afterCharacter: head.lowerBound)
                 marked.append(
                     Text(AttributedString(styled[head.lowerBound ..< at]))
+                        .kerning(AgentGlyph.nameGap)
                         .customAttribute(RichTextEntityMarker(key: key, agentGlyph: true))
                 )
                 head = at ..< last
@@ -137,8 +138,8 @@ struct RichTextEntityRenderer: TextRenderer, Equatable {
     /// Draws ``AgentGlyph`` in the space `run` was laid out into, instead of `run`.
     ///
     /// The `@` is *not* drawn — that is the substitution. It keeps its place in the
-    /// string and its advance in the layout; only its ink is replaced, so nothing
-    /// around it moves and a copy of the message still says `@Name`.
+    /// string and its advance in the layout, while a layout-only kern opens the requested
+    /// gap before the name. A copy of the message still says `@Name`.
     ///
     /// Stroked, not filled: lucide's bot is an outline whose 2-unit stroke *is* the
     /// drawing (see ``AgentGlyph``). It takes ``RichTextStyle/tint`` directly rather
@@ -147,8 +148,10 @@ struct RichTextEntityRenderer: TextRenderer, Equatable {
     /// the two cannot drift.
     private static func drawAgentGlyph(replacing run: Text.Layout.Run, in context: inout GraphicsContext) {
         let bounds = run.typographicBounds
+        var glyphRect = bounds.rect
+        glyphRect.size.width = max(0, glyphRect.width - AgentGlyph.nameGap)
         let frame = AgentGlyph.frame(
-            in: bounds.rect,
+            in: glyphRect,
             ascent: bounds.ascent,
             descent: bounds.descent
         )
