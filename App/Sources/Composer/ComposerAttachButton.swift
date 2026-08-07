@@ -4,9 +4,8 @@ import SwiftUI
 /// The composer's `+`, and everything it puts on screen.
 ///
 /// Its own view rather than a member of ``MessageComposerView``, because the `+` is
-/// the only control in the bar with surfaces of its own — a card, a picker and a
-/// notice — and every one of them needs state the rest of the composer has no use
-/// for. Keeping them here also keeps the presentation *order* readable, which
+/// the only control in the bar that presents attachment surfaces — a card, a picker and
+/// the inline camera. Keeping their hand-off here also keeps the presentation *order* readable, which
 /// matters more than it looks: see ``chosenSource``.
 ///
 /// # A bare glyph, not a glass button
@@ -29,7 +28,6 @@ struct ComposerAttachButton: View {
 
     @State private var isShowingMenu = false
     @State private var isShowingPhotosPicker = false
-    @State private var isShowingWorkInProgress = false
     @State private var pickedPhotos: [PhotosPickerItem] = []
     @State private var wasFocusedBeforePresentation = false
 
@@ -43,22 +41,24 @@ struct ComposerAttachButton: View {
     /// disappearance.
     @State private var chosenSource: ComposerAttachmentSource?
 
+    private var isExpanded: Bool { isShowingMenu || attachments.isCameraPresented }
+
     var body: some View {
-        Button(action: presentMenu) {
+        Button(action: toggleAttachmentSurface) {
             Image(systemName: "plus")
                 .font(.hiveSymbol(.body, weight: .semibold))
                 .foregroundStyle(.secondary)
                 // A `+` turned an eighth of a turn *is* an X, so the control says what a
                 // second press will do rather than swapping to a different glyph and
                 // hoping the two are read as one thing. One shape, one rotation, and the
-                // card's own open/close is the only thing that drives it.
-                .rotationEffect(.degrees(isShowingMenu ? 45 : 0))
+                // card and camera share the same open/close state.
+                .rotationEffect(.degrees(isExpanded ? 45 : 0))
                 // Scoped to this value and to the glyph, which is what keeps it inside the
                 // composer's no-animation rule (see ``MessageComposerView``): a rotation is
                 // a render transform on a fixed frame, so it cannot change the bar's height
                 // or be caught by a keyboard-driven layout pass. An ambient `.animation`
                 // here could do both.
-                .animation(.snappy(duration: 0.22), value: isShowingMenu)
+                .animation(.snappy(duration: 0.22), value: isExpanded)
                 .frame(width: hitTarget, height: hitTarget)
         }
         // The app's own press treatment rather than a new one — and safe under the
@@ -68,7 +68,7 @@ struct ComposerAttachButton: View {
         // the `contentShape` that makes the whole frame tappable rather than just
         // the glyph.
         .buttonStyle(.hivePress)
-        .accessibilityLabel("More options")
+        .accessibilityLabel(attachments.isCameraPresented ? "Close camera" : "More options")
         // Anchored to this control with the arrow beneath the card, so it opens
         // upward over the conversation. `presentationCompactAdaptation(.popover)`
         // is what stops iPhone adapting it into a sheet from the bottom of the
@@ -102,21 +102,22 @@ struct ComposerAttachButton: View {
             guard !isPresented else { return }
             restoreFocusIfSettled()
         }
-        .alert("WIP", isPresented: $isShowingWorkInProgress) {
-            Button("OK", role: .cancel) {}
-        }
-        // Restored on *dismissal*, not from the OK action: an alert dismissed any
-        // other way (a hardware Escape, a programmatic dismissal) would otherwise
-        // leave the author mid-draft with no keyboard, and restoring after the
-        // alert's own window has gone is also the moment `becomeFirstResponder`
-        // can actually succeed.
-        .onChange(of: isShowingWorkInProgress) { _, isPresented in
+        .onChange(of: attachments.isCameraPresented) { _, isPresented in
             guard !isPresented else { return }
             restoreFocusIfSettled()
         }
     }
 
     // MARK: - Presenting
+
+    private func toggleAttachmentSurface() {
+        if attachments.isCameraPresented {
+            HiveHaptics.play(.disclosureToggled)
+            attachments.dismissCamera()
+        } else {
+            presentMenu()
+        }
+    }
 
     private func presentMenu() {
         // The one press in the bar that opens something over the conversation, and the
@@ -138,10 +139,6 @@ struct ComposerAttachButton: View {
 
     /// Acts on a choice, now that the card presenting it has been dismissed.
     private func present(_ source: ComposerAttachmentSource) {
-        guard source.isBuilt else {
-            isShowingWorkInProgress = true
-            return
-        }
         switch source {
         case .photos:
             // Full already: say so rather than opening a picker whose every choice would be
@@ -152,7 +149,13 @@ struct ComposerAttachButton: View {
                 return
             }
             isShowingPhotosPicker = true
-        case .camera: isShowingWorkInProgress = true
+        case .camera:
+            guard attachments.remainingCapacity > 0 else {
+                attachments.reportAtCapacity()
+                restoreFocusIfSettled()
+                return
+            }
+            attachments.presentCamera()
         }
     }
 
@@ -165,7 +168,7 @@ struct ComposerAttachButton: View {
     /// and the final one does the work.
     private func restoreFocusIfSettled() {
         guard wasFocusedBeforePresentation, !isShowingMenu, !isShowingPhotosPicker,
-              !isShowingWorkInProgress, chosenSource == nil
+              !attachments.isCameraPresented, chosenSource == nil
         else { return }
         wasFocusedBeforePresentation = false
         restoreFocus()

@@ -150,43 +150,60 @@ struct MessageComposerView: View {
         _ = autocomplete.isComposerFocused
 
         return GlassEffectContainer {
-            VStack(alignment: .leading, spacing: Self.rowSpacing) {
-                // Above the text, which is where the mobile client puts it and
-                // where it has to be: below the field it would sit between the
-                // text and the send button, and it would move every time the
-                // draft gained a line.
-                if !attachments.isEmpty {
-                    ComposerAttachmentStrip(
-                        attachments: attachments.attachments,
-                        remove: attachments.remove,
-                        canAddMore: attachments.remainingCapacity > 0,
-                        addMore: presentAddMorePicker
-                    )
+            VStack(spacing: 8) {
+                if attachments.isCameraPresented {
+                    cameraPanel
                 }
-                if let uploadError = attachments.uploadError {
-                    Text(uploadError)
-                        .font(.hive(.footnote))
-                        .foregroundStyle(.red)
-                        // Aligned with the text it is about.
-                        .padding(.horizontal, TokenTextView.textInset.width)
+                VStack(alignment: .leading, spacing: Self.rowSpacing) {
+                    // Above the text, which is where the mobile client puts it and
+                    // where it has to be: below the field it would sit between the
+                    // text and the send button, and it would move every time the
+                    // draft gained a line.
+                    if !attachments.isEmpty {
+                        ComposerAttachmentStrip(
+                            attachments: attachments.attachments,
+                            remove: attachments.remove,
+                            canAddMore: attachments.remainingCapacity > 0,
+                            addMore: presentAddMorePicker
+                        )
+                    }
+                    if let uploadError = attachments.uploadError {
+                        // The shape ``ChannelAccessBanner`` already uses for something said
+                        // above a conversation, so this reads as the same app rather than a
+                        // second idea about how to say something went wrong. Red where that
+                        // one is secondary, because this is a failure and that is a status.
+                        //
+                        // No transition on it, deliberately: this banner changes the bar's
+                        // height, and the bar's height is the keyboard's dismissal band (see
+                        // the note at the top of this file). Animating it would run the
+                        // composer's height on a different clock from the keyboard's.
+                        Label(uploadError, systemImage: "exclamationmark.circle.fill")
+                            .font(.hive(.caption, weight: .medium))
+                            .foregroundStyle(.red)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(.thinMaterial, in: .rect(cornerRadius: 12))
+                            .accessibilityLabel(uploadError)
+                    }
+                    field()
+                    controls
                 }
-                field()
-                controls
+                // The floor the owner asked for: the bar rests at one line over a control row
+                // and cannot come up shorter. See ``minRowsHeight``.
+                .frame(minHeight: minRowsHeight, alignment: .top)
+                .padding(Self.shellPadding)
+                // The *only* glass in this view, now that the two controls have given theirs
+                // up — see the note at the top. `.regular` rather than `.clear` at the owner's
+                // word (2026-08-06): `.clear` let a dense conversation read straight through the
+                // bar and fight the text in it. `.regular` is still Liquid Glass — it lenses and
+                // it stays interactive — it just carries the frost that makes the field legible
+                // over anything scrolled under it.
+                .glassEffect(.regular.interactive(), in: .rect(cornerRadius: Self.cornerRadius))
             }
-            // The floor the owner asked for: the bar rests at one line over a control row
-            // and cannot come up shorter. See ``minRowsHeight``.
-            .frame(minHeight: minRowsHeight, alignment: .top)
-            .padding(Self.shellPadding)
-            // The *only* glass in this view, now that the two controls have given theirs
-            // up — see the note at the top. `.regular` rather than `.clear` at the owner's
-            // word (2026-08-06): `.clear` let a dense conversation read straight through the
-            // bar and fight the text in it. `.regular` is still Liquid Glass — it lenses and
-            // it stays interactive — it just carries the frost that makes the field legible
-            // over anything scrolled under it.
-            .glassEffect(.regular.interactive(), in: .rect(cornerRadius: Self.cornerRadius))
         }
         // The float: 12pt in from each side, 8pt clear of the bottom.
-        .padding(.horizontal, 12)
+        .padding(.horizontal, ComposerCameraPanel.horizontalInset)
         .padding(.vertical, 8)
         .composerPhotosPicker(
             isPresented: $isShowingAddMorePicker,
@@ -296,6 +313,17 @@ struct MessageComposerView: View {
             hitTarget: hitTarget,
             isComposerFocused: { autocomplete.isComposerFocused },
             restoreFocus: { autocomplete.isComposerFocused = true }
+        )
+    }
+
+    /// The live camera shares this safe-area bar and the attachment model's height revision,
+    /// so opening it takes real room from the conversation rather than covering messages.
+    private var cameraPanel: some View {
+        ComposerCameraPanel(
+            canCapture: attachments.remainingCapacity > 0,
+            onCapture: { attachments.add([$0]) },
+            atCapacity: attachments.reportAtCapacity,
+            close: attachments.dismissCamera
         )
     }
 

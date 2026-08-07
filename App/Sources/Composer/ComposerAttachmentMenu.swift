@@ -28,13 +28,11 @@ enum ComposerAttachmentSource: String, CaseIterable, Identifiable {
         }
     }
 
-    /// Whether choosing this does the thing it says. `false` shows the work-in-progress
-    /// notice instead, which is what the owner asked for while the camera is unbuilt:
-    /// the entry is visible so the shape of the menu is the shape it will keep.
+    /// Whether choosing this does the thing it says. Kept with the source vocabulary so a
+    /// future menu item cannot silently present a route that has not been built yet.
     var isBuilt: Bool {
         switch self {
-        case .photos: true
-        case .camera: false
+        case .photos, .camera: true
         }
     }
 }

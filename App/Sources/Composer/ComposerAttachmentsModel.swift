@@ -39,9 +39,16 @@ final class ComposerAttachmentsModel {
     /// Every attachment in the order it was picked, uploading and uploaded alike.
     private(set) var attachments: [ComposerAttachment] = []
 
-    /// Why the last pick did not become an attachment, for the line under the
-    /// strip. Cleared by the next pick.
-    var uploadError: String?
+    /// Why the last pick did not become an attachment, for the banner above the
+    /// strip. Cleared by the next pick, and by its own countdown — see ``report(_:)``.
+    ///
+    /// Written only through ``report(_:)`` and ``clearError()``. A direct assignment
+    /// would leave whatever countdown is running pointed at it, and that countdown
+    /// would then clear the *next* error early.
+    private(set) var uploadError: String?
+
+    /// Whether the live camera is occupying the panel above this composer's bar.
+    private(set) var isCameraPresented = false
 
     /// At most this many uploads at once. Three, the ceiling the mobile client
     /// uses (`_maxConcurrentImageUploads`), and it bounds memory as much as
@@ -83,10 +90,23 @@ final class ComposerAttachmentsModel {
     /// mean an old phone re-encoding a large HEIC losing a picture that was going to arrive.
     static let uploadDeadline: Duration = .seconds(270)
 
+    /// How long an error stays on screen before it takes itself off.
+    ///
+    /// The owner's ask: a composer carrying a stale complaint about a pick from five minutes
+    /// ago is noise, and none of these errors describe something the author can still act on
+    /// — the pick they refer to is already over. Five seconds is long enough to read the
+    /// longest of them (the animation one, at fourteen words) about twice.
+    static let errorDuration: Duration = .seconds(5)
+
     /// The app environment can build this after a conversation screen exists, so this is
     /// resolved at pick time rather than captured when the model is constructed. A pick with
     /// no uploader fails with a reason rather than silently doing nothing.
     private let uploader: MediaUploaderProvider
+
+    /// The countdown clearing ``uploadError``, held so the next error can cancel it.
+    ///
+    /// Not observable: nothing renders it, and it changes on every error.
+    @ObservationIgnored private var errorDismissal: Task<Void, Never>?
 
     /// The in-flight pick batches, so a sign-out or a send can stop them. Not
     /// observable: nothing renders them.
@@ -100,15 +120,20 @@ final class ComposerAttachmentsModel {
     /// constants documented above.
     private let sourceDeadline: Duration
     private let uploadDeadline: Duration
+    /// Injected for the same reason as the deadlines above: a suite that waited out the
+    /// shipped five seconds per error would be a suite nobody runs.
+    private let errorDuration: Duration
 
     init(
         uploader: @escaping MediaUploaderProvider = { nil },
         sourceDeadline: Duration = ComposerAttachmentsModel.sourceDeadline,
-        uploadDeadline: Duration = ComposerAttachmentsModel.uploadDeadline
+        uploadDeadline: Duration = ComposerAttachmentsModel.uploadDeadline,
+        errorDuration: Duration = ComposerAttachmentsModel.errorDuration
     ) {
         self.uploader = uploader
         self.sourceDeadline = sourceDeadline
         self.uploadDeadline = uploadDeadline
+        self.errorDuration = errorDuration
     }
 
     // MARK: - What the composer asks
@@ -129,17 +154,12 @@ final class ComposerAttachmentsModel {
     /// Deliberately **not** the number of attachments. Ten pictures are the same 72-point row
     /// as one, because the strip scrolls sideways rather than wrapping, so a count would
     /// declare a height change on every pick after the first and never on the failure that
-    /// swaps the strip for a line of red text. What actually moves the bar is those two facts:
-    /// whether there is a strip at all, and whether there is an error line under it.
+    /// swaps the strip for a line of red text. What actually moves the bar is those facts:
+    /// whether there is a strip, an error line, or the inline camera panel.
     ///
-    /// Computed rather than stored, which costs the conversation a body pass on every
-    /// attachment write — a preview decoding, an upload landing — and not only on the ones that
-    /// change the bar's height. Accepted for ``ConversationScaffold/contentRevision``' reason:
-    /// the events behind it are a picked photo, not a frame. A stored version would need a
-    /// `didSet` on both properties feeding it, and a path that forgot one would lose the
-    /// declaration silently.
+    /// Computed so every path changing a height-bearing property declares the change.
     var barRevision: Int {
-        (isEmpty ? 0 : 1) + (uploadError == nil ? 0 : 2)
+        (isEmpty ? 0 : 1) + (uploadError == nil ? 0 : 2) + (isCameraPresented ? 4 : 0)
     }
 
     /// Whether these attachments alone are enough to justify a send — a picture
@@ -153,7 +173,46 @@ final class ComposerAttachmentsModel {
 
     /// Says the composer is full, for a caller that declined to offer a picker at all.
     func reportAtCapacity() {
-        uploadError = Self.describe(ComposerAttachmentError.tooMany)
+        report(ComposerAttachmentError.tooMany)
+    }
+
+    /// Puts one error on screen and starts its countdown, replacing anything already there.
+    ///
+    /// The countdown is restarted rather than left alone, so a second error gets its own
+    /// five seconds instead of inheriting what was left of the first one's. That is the
+    /// case that shows up in practice: tapping a full composer twice.
+    private func report(_ error: Error) {
+        uploadError = Self.describe(error)
+        errorDismissal?.cancel()
+        let duration = errorDuration
+        errorDismissal = Task { [weak self] in
+            try? await Task.sleep(for: duration)
+            guard !Task.isCancelled else { return }
+            self?.uploadError = nil
+        }
+    }
+
+    /// Takes the error off screen now, and stops the countdown still pointed at it.
+    ///
+    /// Cancelling matters even though the countdown would only write `nil` over `nil`: the
+    /// next error along would otherwise be cleared by *this* error's timer.
+    private func clearError() {
+        errorDismissal?.cancel()
+        errorDismissal = nil
+        uploadError = nil
+    }
+
+    /// Opens the inline camera when the message still has room for a photo.
+    func presentCamera() {
+        guard remainingCapacity > 0 else {
+            reportAtCapacity()
+            return
+        }
+        isCameraPresented = true
+    }
+
+    func dismissCamera() {
+        isCameraPresented = false
     }
 
     /// Takes a pick and starts uploading it.
@@ -163,13 +222,13 @@ final class ComposerAttachmentsModel {
     /// touched.
     func add(_ items: [any ComposerPickedItem]) {
         guard !items.isEmpty else { return }
-        uploadError = nil
+        clearError()
 
         // The cap is enforced here rather than at the picker alone: a paste comes in through
         // this same call, and the picker's own limit cannot see attachments already held.
         let accepted = Array(items.prefix(remainingCapacity))
         if accepted.count < items.count {
-            uploadError = Self.describe(ComposerAttachmentError.tooMany)
+            report(ComposerAttachmentError.tooMany)
         }
         guard !accepted.isEmpty else { return }
 
@@ -203,7 +262,7 @@ final class ComposerAttachmentsModel {
     func takeForSend() -> [BlobDescriptor] {
         let descriptors = readyDescriptors
         attachments.removeAll()
-        uploadError = nil
+        clearError()
         return descriptors
     }
 
@@ -224,7 +283,8 @@ final class ComposerAttachmentsModel {
         for batch in batches { batch.cancel() }
         batches.removeAll()
         attachments.removeAll()
-        uploadError = nil
+        clearError()
+        isCameraPresented = false
     }
 
     // MARK: - Uploading
@@ -281,7 +341,7 @@ final class ComposerAttachmentsModel {
             attachments.removeAll { $0.id == id }
         } catch {
             attachments.removeAll { $0.id == id }
-            uploadError = Self.describe(error)
+            report(error)
         }
     }
 
