@@ -6,16 +6,11 @@ import UIKit
 
 /// What the composer does with a picture between picking it and sending it.
 ///
-/// Local preparation and send-time upload are asserted separately. ``StubUploader``
-/// parks every relay request so the suite can inspect the retry window precisely.
+/// Local preparation remains in the composer; send transfers exact scrubbed bytes
+/// to the durable outbox staging path.
 @MainActor
 @Suite("Composer attachments", .timeLimit(.minutes(1)))
 struct ComposerAttachmentsTests {
-    @MainActor
-    private final class UploaderSlot {
-        var value: (any MediaUploading)?
-    }
-
     /// Spins until `condition` holds or the deadline passes, so a test never waits
     /// on a fixed sleep for work that crosses actors.
     static func waitUntil(
@@ -51,26 +46,9 @@ struct ComposerAttachmentsTests {
         await Self.waitUntil { !model.isAttaching }
 
         #expect(model.hasSendableContent)
-        #expect(model.readyDescriptors.isEmpty)
+        #expect(model.attachments.first?.localPayload != nil)
         #expect(model.attachments.first?.preview != nil)
         #expect(await uploader.requests.isEmpty)
-    }
-
-    @Test("send-time upload turns local bytes into a descriptor")
-    func sendTimeUploadLands() async throws {
-        let uploader = StubUploader()
-        let model = ComposerAttachmentsModel(uploader: { uploader })
-        await Self.prepare(1, in: model)
-
-        let sending = Task { await model.prepareForSend() }
-        await Self.waitUntil { await uploader.parkedCount == 1 }
-        #expect(model.isUploadingForSend)
-        await uploader.releaseAll()
-
-        #expect(await sending.value)
-        #expect(!model.isUploadingForSend)
-        #expect(model.hasSendableContent)
-        #expect(model.readyDescriptors.count == 1)
     }
 
     @Test("a pick that yields no bytes never reaches the uploader")
@@ -108,17 +86,12 @@ struct ComposerAttachmentsTests {
         let model = ComposerAttachmentsModel(uploader: { uploader })
 
         await Self.prepare(2, in: model)
-        let sending = Task { await model.prepareForSend() }
-        await Self.waitUntil { await uploader.parkedCount == 2 }
-        await uploader.releaseAll()
-        #expect(await sending.value)
-
-        let taken = model.takeForSend()
+        let taken = try #require(model.takeForSend())
         #expect(taken.count == 2)
         #expect(model.attachments.isEmpty)
         #expect(!model.hasSendableContent)
         // A second send carries nothing — the pictures went with the first.
-        #expect(model.takeForSend().isEmpty)
+        #expect(try #require(model.takeForSend()).isEmpty)
     }
 
     /// A send refused before it left the device gives the text back; it has to give
@@ -126,47 +99,15 @@ struct ComposerAttachmentsTests {
     @Test("a refused send puts the pictures back")
     func restoreAfterRefusal() async throws {
         let model = ComposerAttachmentsModel(uploader: { StubUploader() })
-        let descriptor = StubUploader.descriptor(key: "one", mimeType: "image/png", size: 10)
+        await Self.prepare(1, in: model)
+        let payload = try #require(model.attachments.first?.localPayload)
 
-        model.restore([descriptor])
+        _ = model.takeForSend()
+        model.restore([payload])
 
-        #expect(model.readyDescriptors == [descriptor])
+        #expect(model.attachments.first?.localPayload == payload)
+        #expect(model.attachments.first?.preview != nil)
         #expect(!model.isAttaching)
-    }
-
-    @Test("with no session mounted, send says so and keeps the local picture")
-    func noUploaderIsReported() async throws {
-        let model = ComposerAttachmentsModel(uploader: { nil })
-
-        await Self.prepare(1, in: model)
-        #expect(await !model.prepareForSend())
-
-        #expect(model.attachments.count == 1)
-        #expect(model.uploadError == "This conversation isn't ready for pictures yet — try again in a moment.")
-    }
-
-    /// The conversation model is allowed to exist before the session finishes mounting.
-    /// The provider must therefore be read when the author sends, not when the screen is
-    /// constructed — this is the regression seam for the stale-uploader defect.
-    @Test("a screen built before its session mounts resolves the uploader at send")
-    func uploaderIsResolvedAtSendTime() async throws {
-        let slot = UploaderSlot()
-        let model = ComposerAttachmentsModel(uploader: { slot.value })
-
-        #expect(slot.value == nil)
-
-        await Self.prepare(1, in: model)
-        #expect(slot.value == nil)
-
-        let uploader = StubUploader()
-        slot.value = uploader
-        let sending = Task { await model.prepareForSend() }
-        await Self.waitUntil { await uploader.parkedCount == 1 }
-        await uploader.releaseAll()
-
-        #expect(await sending.value)
-        #expect(model.hasSendableContent)
-        #expect(model.uploadError == nil)
     }
 
     // MARK: - The cap
@@ -296,28 +237,6 @@ struct ComposerAttachmentsTests {
         #expect(model.uploadError == "That picture took too long to load — it may still be in iCloud.")
     }
 
-    /// The other half: the relay accepts the connection and stops answering. `URLSession`'s
-    /// own resource timeout is seven days by default, so without this the tile spins there too.
-    @Test("a relay that never answers gives up instead of spinning for ever")
-    func uploadDeadlineFires() async throws {
-        let uploader = StubUploader()
-        let model = ComposerAttachmentsModel(
-            uploader: { uploader },
-            uploadDeadline: .milliseconds(40)
-        )
-
-        // Parked and never released — the stub's whole purpose.
-        await Self.prepare(1, in: model)
-        let sending = Task { await model.prepareForSend() }
-        await Self.waitUntil { model.uploadError != nil }
-
-        #expect(await !sending.value)
-        #expect(model.attachments.count == 1)
-        #expect(!model.isAttaching)
-        #expect(!model.isUploadingForSend)
-        #expect(model.uploadError == "That picture took too long to upload.")
-    }
-
     /// The race's own contract, which every deadline above rests on: the loser answers too —
     /// a cancelled fetch throws `CancellationError` a moment after the deadline has already
     /// spoken — and a second answer must be dropped rather than resume the waiter twice.
@@ -328,26 +247,9 @@ struct ComposerAttachmentsTests {
 
         await race.settle(.success(1))
         await race.settle(.success(2))
-        await race.settle(.failure(ComposerAttachmentError.uploadTimedOut))
+        await race.settle(.failure(ComposerAttachmentError.sourceTimedOut))
 
         #expect(try await race.value().get() == 1)
-    }
-
-    /// A deadline that fires on a picture that would have succeeded is worse than no deadline,
-    /// so this pins the other direction.
-    @Test("an upload that lands inside the deadline is unaffected")
-    func deadlineDoesNotFireOnASuccess() async throws {
-        let uploader = StubUploader()
-        let model = ComposerAttachmentsModel(uploader: { uploader }, uploadDeadline: .seconds(30))
-
-        await Self.prepare(1, in: model)
-        let sending = Task { await model.prepareForSend() }
-        await Self.waitUntil { await uploader.parkedCount == 1 }
-        await uploader.releaseAll()
-
-        #expect(await sending.value)
-        #expect(model.hasSendableContent)
-        #expect(model.uploadError == nil)
     }
 
     /// What the conversation is told, so its bottom inset can move with the bar —
@@ -375,17 +277,4 @@ struct ComposerAttachmentsTests {
         #expect(model.barRevision == resting, "the strip going away did not declare a height change")
     }
 
-    /// The other half of the same contract, and the one a count could not have
-    /// expressed: a failed send-time upload keeps the strip and adds a line of text.
-    @Test("a failed upload declares its own height change")
-    func barRevisionCoversTheErrorLine() async throws {
-        let model = ComposerAttachmentsModel(uploader: { nil })
-        let resting = model.barRevision
-
-        await Self.prepare(1, in: model)
-        #expect(await !model.prepareForSend())
-
-        #expect(model.attachments.count == 1)
-        #expect(model.barRevision != resting, "the error line did not declare a height change")
-    }
 }

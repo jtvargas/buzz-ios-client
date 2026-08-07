@@ -17,42 +17,37 @@ extension ChannelTimelineModel {
     func send() {
         let document = mentionDraft
         let text = document.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        // A picture with no words is a message. Local preparation must finish first,
-        // and a second send cannot overlap the network batch started by the first.
-        guard !attachments.isAttaching, !attachments.isUploadingForSend else { return }
+        // A picture with no words is a message. Local preparation must finish first.
+        guard !attachments.isAttaching else { return }
         guard !text.isEmpty || attachments.hasSendableContent else { return }
-        // Read at the tap, then acted on only after uploads succeed. `enqueue` commits the
-        // outbox row and then waits for the drain — a publish round trip for every queued
-        // row — so the jump still happens before that await, without moving the reader for
-        // an upload that was refused before a message existed.
+        // Read at the tap, then stage and enqueue as one durable operation. The pending row
+        // appears before its background upload finishes, so the jump happens immediately
+        // and the composer is free for the next message.
         //
-        // The cost is that a send refused at the door — over the 64 KiB ceiling, the one thing
-        // `enqueue` throws for — has already moved the reader. That refusal raises an alert and
-        // hands the draft back, so it is neither silent nor lost, and it is not reachable by
-        // typing.
+        // A send refused before the outbox transaction commits has already moved the reader.
+        // That refusal raises an alert and hands the draft and local bytes back, so it is
+        // neither silent nor lost.
         let isChasingOwnSend = shouldJumpToOwnSend
         let mentionPubkeys = document.mentionedPubkeys(sender: selfPubkey)
         let selfPubkey = self.selfPubkey
+        guard let media = attachments.takeForSend() else { return }
+        guard !text.isEmpty || !media.isEmpty else { return }
+        mentionDraft = MentionDraft()
+        sendError = nil
+        if isChasingOwnSend { jumpToLatest() }
         Task { [weak self] in
-            guard await self?.attachments.prepareForSend() == true else { return }
             guard let self else { return }
-            let media = self.attachments.takeForSend()
-            guard !text.isEmpty || !media.isEmpty else { return }
-            self.mentionDraft = MentionDraft()
-            self.sendError = nil
-            if isChasingOwnSend { self.jumpToLatest() }
 
             do {
-                let entry = try await self.sender.enqueue(
-                    kind: .channelMessage,
-                    content: OutboundAttachments.content(text, attaching: media),
+                let entry = try await self.sender.enqueueComposerMessage(
+                    text: text,
                     in: self.channel,
                     tags: OutboundTags.message(
                         channel: self.channel,
                         mentioning: mentionPubkeys,
                         sender: selfPubkey
-                    ) + OutboundAttachments.tags(attaching: media),
-                    maxContentBytes: OutboxPolicy.maxContentBytes
+                    ),
+                    media: media.map { OutboundMediaPayload(data: $0.data, filename: $0.filename) }
                 )
                 // The message has an id now, so the trip that started at the tap can finish
                 // on the message itself rather than on whatever was newest when it began.
@@ -106,12 +101,14 @@ extension ChannelTimelineModel {
         Task { await typing.publishEphemeral(kind: .typing, content: "", tags: tags) }
     }
 
-    private func restore(document: MentionDraft, media: [BlobDescriptor], error: Error) {
+    private func restore(
+        document: MentionDraft,
+        media: [ComposerAttachment.LocalPayload],
+        error: Error
+    ) {
         // Preserve whatever the user has since typed, only restoring if untouched.
         if mentionDraft.text.isEmpty { mentionDraft = document }
-        // The blobs are still on the relay, so their descriptors are still good:
-        // any pre-commit refusal that took the text back must take the pictures too,
-        // or the failed send silently loses them.
+        // No outbox row committed, so the local bytes return to the composer.
         attachments.restore(media)
         if let outboxError = error as? OutboxError {
             sendError = Self.describe(outboxError)
@@ -126,6 +123,10 @@ extension ChannelTimelineModel {
             "Message is too large (\(bytes) bytes; limit \(limit))."
         case .invalidEvent, .notQueued, .notRetryable, .encodingFailed:
             "Couldn't send that message."
+        case .mediaUnavailable:
+            "Media upload isn't available right now."
+        case .mediaStagingFailed:
+            "Couldn't save those pictures for sending. Check device storage and try again."
         }
     }
 }

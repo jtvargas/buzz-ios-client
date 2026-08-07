@@ -182,7 +182,7 @@ public enum Delivery: Sendable, Hashable {
     /// compile error here, not a silently mis-rendered message.
     init(state: String, lastError: String?) {
         switch OutboxState(rawValue: state) {
-        case .pending, .sending, .awaitingReauth: self = .pending
+        case .pending, .sending, .awaitingMedia, .awaitingReauth: self = .pending
         case .failed: self = .failed(lastError)
         case nil: self = .sent
         }

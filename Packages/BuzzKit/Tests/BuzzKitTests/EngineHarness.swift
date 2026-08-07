@@ -61,6 +61,9 @@ struct EngineHarness {
         threadPrefetchReplyLimit: Int = 20,
         threadPrefetchLaunchPasses: Int = 3,
         threadSweepRootLimit: Int = 40,
+        mediaUploader: (any MediaUploading)? = nil,
+        mediaBaseURL: URL? = nil,
+        mediaStagingStore: MediaStagingStore? = nil,
         // The engine's own clock, when a test needs to move it. Defaults to the fixed
         // `nowSeconds` instant every other engine test runs on; the thread sweep's brake is
         // a comparison of times, so proving a fresh socket re-arms it needs a clock that
@@ -132,6 +135,9 @@ struct EngineHarness {
                 windowClient: windowClient,
                 directoryClient: directoryClient,
                 signer: signer,
+                mediaUploader: mediaUploader,
+                mediaBaseURL: mediaBaseURL,
+                mediaStagingStore: mediaStagingStore,
                 config: engineConfig,
                 now: engineNow
             )
@@ -143,6 +149,9 @@ struct EngineHarness {
                 presence: presence,
                 windowClient: windowClient,
                 signer: signer,
+                mediaUploader: mediaUploader,
+                mediaBaseURL: mediaBaseURL,
+                mediaStagingStore: mediaStagingStore,
                 config: engineConfig,
                 now: engineNow
             )

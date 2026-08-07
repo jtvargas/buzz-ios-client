@@ -47,6 +47,7 @@ public extension BuzzEventStore {
         let channel = entry.channelID
         let oldID = entry.event.id
         try await writer.write { db in
+            try db.execute(sql: "DELETE FROM outbox_media WHERE event_id = ?", arguments: [oldID])
             try db.execute(sql: "DELETE FROM outbox WHERE event_id = ?", arguments: [oldID])
             try Self.insertOutboxRow(fresh, channel: channel, state: .pending, into: db)
         }
@@ -70,8 +71,8 @@ public extension BuzzEventStore {
         }
     }
 
-    /// Everything still awaiting delivery, in enqueue order: `pending`, `sending`, and
-    /// `awaitingReauth`, but never `failed`.
+    /// Everything ready for relay delivery, in enqueue order: `pending`, `sending`,
+    /// and `awaitingReauth`, but never `failed` or `awaitingMedia`.
     ///
     /// **Ordered by `rowid`, not `created_at`.** The drain sends these one at a time,
     /// awaiting each relay verdict before the next, so their order *is* the wire order.
@@ -95,14 +96,18 @@ public extension BuzzEventStore {
         let channelFilter = channel == nil ? "" : "AND channel_id = :channel"
         let sql = """
         SELECT * FROM outbox
-        WHERE state <> :failed \(channelFilter)
+        WHERE state NOT IN (:failed, :awaitingMedia) \(channelFilter)
         ORDER BY rowid ASC
         """
         return try await reader.read { db in
             try Row.fetchAll(
                 db,
                 sql: sql,
-                arguments: ["failed": OutboxState.failed.rawValue, "channel": channel]
+                arguments: [
+                    "failed": OutboxState.failed.rawValue,
+                    "awaitingMedia": OutboxState.awaitingMedia.rawValue,
+                    "channel": channel,
+                ]
             ).compactMap(Self.decodeOutbox)
         }
     }

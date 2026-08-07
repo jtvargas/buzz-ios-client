@@ -46,6 +46,8 @@ actor RemoteImageLoader {
     /// The signed grant relay media is fetched with, once there is an identity to sign
     /// one. `nil` until a session mounts, and again after it ends.
     private var authorization: (any MediaReadAuthorizing)?
+    /// The active community's exact staged bytes, keyed by the predicted URL's filename.
+    private var stagingDirectory: URL?
 
     init(session: URLSession = RemoteImageLoader.makeSession(), cache: RemoteImageCache = RemoteImageCache()) {
         self.session = session
@@ -62,6 +64,11 @@ actor RemoteImageLoader {
     /// blank for minutes after the thing that fixes it landed.
     func setAuthorization(_ provider: (any MediaReadAuthorizing)?) {
         authorization = provider
+        failures.removeAll()
+    }
+
+    func setStagingDirectory(_ directory: URL?) {
+        stagingDirectory = directory
         failures.removeAll()
     }
 
@@ -144,10 +151,12 @@ actor RemoteImageLoader {
         // progress and start a duplicate fetch.
         let session = session
         let authorization = authorization
+        let stagingDirectory = stagingDirectory
         let task = Task<Outcome, Never> {
             await Self.resolve(
                 url, thumbnail: thumbnail, pixelSize: pixelSize,
-                session: session, authorization: authorization
+                session: session, authorization: authorization,
+                stagingDirectory: stagingDirectory
             )
         }
         inFlight[key] = task
@@ -254,13 +263,20 @@ extension RemoteImageLoader {
         thumbnail: URL?,
         pixelSize: CGFloat,
         session: URLSession,
-        authorization: (any MediaReadAuthorizing)? = nil
+        authorization: (any MediaReadAuthorizing)? = nil,
+        stagingDirectory: URL? = nil
     ) async -> Outcome {
         if let dataURI = DataURI(url: url) {
             guard let image = decode(dataURI, pixelSize: pixelSize) else {
                 // The URI *is* the source, so it is also the URL the failure belongs to.
                 return .failed(.undecodable, url: url)
             }
+            return .image(image)
+        }
+        if let stagingDirectory,
+           url.pathComponents.contains("media"),
+           let data = try? Data(contentsOf: stagingDirectory.appendingPathComponent(url.lastPathComponent)),
+           let image = downsample(data, maxPixelSize: pixelSize) {
             return .image(image)
         }
         return await fetch(

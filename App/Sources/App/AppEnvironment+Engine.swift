@@ -15,7 +15,9 @@ extension AppEnvironment {
         store: BuzzEventStore,
         signer: KeychainSigner,
         websocketURL: URL,
-        queryURL: URL
+        queryURL: URL,
+        mediaUploader: (any MediaUploading)?,
+        mediaStagingStore: MediaStagingStore
     ) -> SyncEngine {
         let connection = RelayConnection(url: websocketURL, signer: signer)
         let subscriptions = SubscriptionManager(connection: connection, signer: signer)
@@ -37,20 +39,19 @@ extension AppEnvironment {
                     signer: signer
                 )
             ),
-            signer: signer
+            signer: signer,
+            mediaUploader: mediaUploader,
+            mediaBaseURL: RelayEndpoint.httpBaseURL(for: websocketURL),
+            mediaStagingStore: mediaStagingStore
         )
     }
 
     /// The blob-store client for the same relay, or `nil` if that URL has no HTTP
-    /// form — in which case the composer's `+` reports having nowhere to upload to
-    /// rather than failing on the request.
+    /// form — in which case media staging refuses the send before the composer clears.
     ///
-    /// **Not part of the engine, deliberately.** This is an HTTP `PUT` to the relay's
-    /// blob store; the engine is the socket and the store. Handed to a conversation
-    /// alongside `drafts` instead, which keeps that boundary and keeps a conversation
-    /// testable without either. It is built beside the engine and dropped with it
-    /// because both are bound to one relay URL and one key — an uploader outliving a
-    /// sign-out would sign an upload for an identity that no longer exists.
+    /// Owned by the engine because durable uploads must outlive a conversation view.
+    /// It is built and dropped with that engine because both are bound to one relay
+    /// URL and one key — an uploader outliving sign-out would sign as a dead session.
     ///
     /// Its own `URLSessionHTTPTransport` rather than the engine's: this one does
     /// `PUT`s of whole photographs, and sharing a session with the signed query
@@ -83,9 +84,8 @@ extension AppEnvironment {
     /// one this is fixing, because the author cannot tell it from a broken app. A trickle that
     /// runs out the ceiling is still recoverable by hand: the tile has an X on it.
     ///
-    /// ``ComposerAttachmentsModel/uploadDeadline`` sits just outside this, so a well-behaved
-    /// failure comes back as a network error naming itself rather than as the composer giving
-    /// up on it.
+    /// The durable media pump owns this transfer after the composer clears. Its eventual
+    /// failure is persisted on the media row rather than holding the author's next draft.
     func makeMediaUploader(signer: KeychainSigner, websocketURL: URL) -> (any MediaUploading)? {
         guard let baseURL = RelayEndpoint.httpBaseURL(for: websocketURL) else { return nil }
         let configuration = URLSessionConfiguration.default
@@ -118,6 +118,12 @@ extension AppEnvironment {
     func installMediaReadAuthorizer(_ authorizer: MediaReadAuthorizer?) async {
         await RemoteImageLoader.shared.setAuthorization(authorizer)
         await RemoteImageLoader.messageMedia.setAuthorization(authorizer)
+    }
+
+    /// Lets predicted relay URLs resolve from this community's staged bytes until
+    /// the pump has made the same URL real on the relay.
+    func installMediaStagingDirectory(_ directory: URL?) async {
+        await RemoteImageLoader.messageMedia.setStagingDirectory(directory)
     }
 
     // MARK: - Store location

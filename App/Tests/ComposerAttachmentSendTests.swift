@@ -13,8 +13,7 @@ import Testing
 @MainActor
 @Suite("Sending with attachments", .timeLimit(.minutes(1)))
 struct ComposerAttachmentSendTests {
-    /// The closure is `async` so a condition may read an actor — the recorded sends
-    /// and the parked uploads both live on one.
+    /// The closure is `async` so a condition may read the actor-backed sender.
     static func waitUntil(
         _ condition: @MainActor () async -> Bool,
         within seconds: Double = 5
@@ -27,15 +26,29 @@ struct ComposerAttachmentSendTests {
         }
     }
 
-    /// Attaches `count` named pictures and waits for local preparation. The names
-    /// make the eventual descriptors distinguishable — see
-    /// ``StubUploader/descriptor(key:mimeType:size:)``.
-    static func attach(_ count: Int, to model: ComposerAttachmentsModel, through uploader: StubUploader) async {
-        model.add((0 ..< count).map { StubPickedItem(data: TestPicture.png(), suggestedFilename: "pic-\($0)") })
+    /// Attaches distinguishable pictures and waits for local preparation.
+    static func attach(_ count: Int, to model: ComposerAttachmentsModel) async {
+        model.add((0 ..< count).map {
+            StubPickedItem(
+                data: TestPicture.png(width: 40 + $0, height: 24),
+                suggestedFilename: "pic-\($0).png"
+            )
+        })
         while model.isAttaching {
-            await uploader.releaseAll()
             await Task.yield()
             try? await Task.sleep(for: .milliseconds(5))
+        }
+    }
+
+    static func descriptors(in model: ComposerAttachmentsModel) throws -> [BlobDescriptor] {
+        let baseURL = try #require(URL(string: "https://relay.example.com"))
+        return try model.attachments.map { attachment in
+            let payload = try #require(attachment.localPayload)
+            return try #require(BlobDescriptor.predicted(
+                data: payload.data,
+                baseURL: baseURL,
+                filename: payload.filename
+            ))
         }
     }
 
@@ -47,23 +60,15 @@ struct ComposerAttachmentSendTests {
         defer { temp.remove() }
         let store = try temp.open()
         let sender = try RecordingSender()
-        let uploader = StubUploader()
-        let model = ChannelTimelineModel(
-            channel: "room-1", store: store, sender: sender, uploader: { uploader }
-        )
+        let model = ChannelTimelineModel(channel: "room-1", store: store, sender: sender)
 
-        await Self.attach(2, to: model.attachments, through: uploader)
+        await Self.attach(2, to: model.attachments)
+        let urls = try Self.descriptors(in: model.attachments).map(\.url)
         model.mentionDraft = MentionDraft(text: "look at these")
         model.send()
-        await Self.waitUntil { await uploader.parkedCount == 2 }
-        await uploader.releaseAll()
         await Self.waitUntil { await !sender.sent.isEmpty }
 
         let sent = try #require(await sender.sent.first)
-        let urls = ["pic-0", "pic-1"].map {
-            StubUploader.descriptor(key: $0, mimeType: "image/png", size: 0).url
-        }
-
         // The body: the author's words, then one reference per picture, in the
         // order they were picked — not the order their uploads happened to finish.
         #expect(sent.content == "look at these\n![image](\(urls[0]))\n![image](\(urls[1]))")
@@ -73,7 +78,7 @@ struct ComposerAttachmentSendTests {
         #expect(imeta.count == 2)
         #expect(imeta[0].contains("url \(urls[0])"))
         #expect(imeta[0].contains("m image/png"))
-        #expect(imeta[0].contains("dim 800x600"))
+        #expect(imeta[0].contains("dim 40x24"))
         #expect(imeta[1].contains("url \(urls[1])"))
 
         // The channel tag the message always carried is still there.
@@ -91,51 +96,16 @@ struct ComposerAttachmentSendTests {
         defer { temp.remove() }
         let store = try temp.open()
         let sender = try RecordingSender()
-        let uploader = StubUploader()
-        let model = ChannelTimelineModel(
-            channel: "room-1", store: store, sender: sender, uploader: { uploader }
-        )
+        let model = ChannelTimelineModel(channel: "room-1", store: store, sender: sender)
 
-        await Self.attach(1, to: model.attachments, through: uploader)
+        await Self.attach(1, to: model.attachments)
+        let url = try #require(Self.descriptors(in: model.attachments).first?.url)
         model.send()
-        await Self.waitUntil { await uploader.parkedCount == 1 }
-        await uploader.releaseAll()
         await Self.waitUntil { await !sender.sent.isEmpty }
 
         let sent = try #require(await sender.sent.first)
-        let url = StubUploader.descriptor(key: "pic-0", mimeType: "image/png", size: 0).url
         #expect(sent.content == "![image](\(url))")
         #expect(sent.content.first != "\n")
-    }
-
-    @Test("a failed upload keeps the draft and pictures ready to send again")
-    func failedUploadPreservesDraftForRetry() async throws {
-        let temp = TempStore()
-        defer { temp.remove() }
-        let store = try temp.open()
-        let sender = try RecordingSender()
-        let uploader = StubUploader()
-        let model = ChannelTimelineModel(
-            channel: "room-1", store: store, sender: sender, uploader: { uploader }
-        )
-
-        await Self.attach(1, to: model.attachments, through: uploader)
-        model.mentionDraft = MentionDraft(text: "too soon")
-        model.send()
-        await Self.waitUntil { await uploader.parkedCount == 1 }
-        await uploader.releaseAll(.failure(.rejectedByPolicy))
-        await Self.waitUntil { model.attachments.uploadError != nil }
-
-        #expect(await sender.sent.isEmpty)
-        #expect(model.mentionDraft.text == "too soon")
-        #expect(model.attachments.attachments.count == 1)
-
-        // Sending again uploads only the row that returned to local-ready.
-        model.send()
-        await Self.waitUntil { await uploader.parkedCount == 1 }
-        await uploader.releaseAll()
-        await Self.waitUntil { await !sender.sent.isEmpty }
-        #expect(await sender.sent.count == 1)
     }
 
     @Test("an empty draft with nothing attached still sends nothing")
@@ -159,26 +129,22 @@ struct ComposerAttachmentSendTests {
         defer { temp.remove() }
         let store = try temp.open()
         let sender = try RecordingSender()
-        let uploader = StubUploader()
         let model = ThreadModel(
             root: "root-1",
             channel: "room-1",
             store: store,
             sender: sender,
             opener: StubThreadOpener(store: store, events: []),
-            uploader: { uploader },
             selfPubkey: nil
         )
 
-        await Self.attach(1, to: model.attachments, through: uploader)
+        await Self.attach(1, to: model.attachments)
+        let url = try #require(Self.descriptors(in: model.attachments).first?.url)
         model.mentionDraft = MentionDraft(text: "here")
         model.sendReply()
-        await Self.waitUntil { await uploader.parkedCount == 1 }
-        await uploader.releaseAll()
         await Self.waitUntil { await !sender.sent.isEmpty }
 
         let sent = try #require(await sender.sent.first)
-        let url = StubUploader.descriptor(key: "pic-0", mimeType: "image/png", size: 0).url
         #expect(sent.content == "here\n![image](\(url))")
         #expect(sent.tags.filter { $0.first == "imeta" }.count == 1)
         // The NIP-10 marker the reply cannot go without. One, not two: a reply

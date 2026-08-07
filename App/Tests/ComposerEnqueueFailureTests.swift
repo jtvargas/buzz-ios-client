@@ -31,6 +31,21 @@ private actor ThrowingSender: MessageSending {
         tags _: [[String]],
         maxContentBytes _: Int
     ) async throws -> OutboxEntry {
+        try await waitAndThrow()
+    }
+
+    func enqueueMediaMessage(
+        kind _: EventKind,
+        text _: String,
+        in _: String,
+        tags _: [[String]],
+        media _: [OutboundMediaPayload],
+        maxContentBytes _: Int
+    ) async throws -> OutboxEntry {
+        try await waitAndThrow()
+    }
+
+    private func waitAndThrow() async throws -> OutboxEntry {
         isWaiting = true
         await withCheckedContinuation { (waiting: CheckedContinuation<Void, Never>) in
             continuation = waiting
@@ -80,16 +95,11 @@ struct ComposerEnqueueFailureTests {
         defer { temp.remove() }
         let store = try temp.open()
         let sender = ThrowingSender(failure: .generic)
-        let uploader = StubUploader()
-        let model = ChannelTimelineModel(
-            channel: "room-1", store: store, sender: sender, uploader: { uploader }
-        )
+        let model = ChannelTimelineModel(channel: "room-1", store: store, sender: sender)
         await Self.attach(to: model.attachments)
         model.mentionDraft = MentionDraft(text: "keep this")
 
         model.send()
-        await Self.waitUntil { await uploader.parkedCount == 1 }
-        await uploader.releaseAll()
         await Self.waitUntil { await sender.isWaiting }
 
         model.attachments.add([StubPickedItem(data: TestPicture.png())])
@@ -100,8 +110,8 @@ struct ComposerEnqueueFailureTests {
         #expect(model.mentionDraft.text == "keep this")
         #expect(model.sendError == "Couldn't send that message.")
         #expect(model.attachments.attachments.count == 2)
-        #expect(model.attachments.attachments.first?.descriptor?.url.contains("pic-0") == true)
-        #expect(model.attachments.attachments.last?.descriptor == nil)
+        #expect(model.attachments.attachments.allSatisfy { $0.localPayload != nil })
+        #expect(model.attachments.attachments.allSatisfy { $0.preview != nil })
     }
 
     @Test("content-too-large restores a thread reply and its media")
@@ -110,28 +120,26 @@ struct ComposerEnqueueFailureTests {
         defer { temp.remove() }
         let store = try temp.open()
         let sender = ThrowingSender(failure: .contentTooLarge)
-        let uploader = StubUploader()
         let model = ThreadModel(
             root: "root-1",
             channel: "room-1",
             store: store,
             sender: sender,
             opener: StubThreadOpener(store: store, events: []),
-            uploader: { uploader },
             selfPubkey: nil
         )
         await Self.attach(to: model.attachments)
         model.mentionDraft = MentionDraft(text: "keep this reply")
 
         model.sendReply()
-        await Self.waitUntil { await uploader.parkedCount == 1 }
-        await uploader.releaseAll()
         await Self.waitUntil { await sender.isWaiting }
         await sender.release()
         await Self.waitUntil { model.sendError != nil }
 
         #expect(model.mentionDraft.text == "keep this reply")
         #expect(model.sendError == "Reply is too large (70000 bytes; limit 65536).")
-        #expect(model.attachments.readyDescriptors.count == 1)
+        #expect(model.attachments.attachments.count == 1)
+        #expect(model.attachments.attachments.first?.localPayload != nil)
+        #expect(model.attachments.attachments.first?.preview != nil)
     }
 }

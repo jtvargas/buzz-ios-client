@@ -18,25 +18,23 @@ extension ThreadModel {
         let document = mentionDraft
         let text = document.text.trimmingCharacters(in: .whitespacesAndNewlines)
         // The same rules the channel's send states: a picture alone is a reply,
-        // preparation must be done, and send-time uploads cannot overlap.
-        guard !attachments.isAttaching, !attachments.isUploadingForSend else { return }
+        // preparation must be done.
+        guard !attachments.isAttaching else { return }
         guard !text.isEmpty || attachments.hasSendableContent else { return }
         let isChasingOwnSend = shouldJumpToOwnSend
         let mentionPubkeys = document.mentionedPubkeys(sender: selfPubkey)
         let selfPubkey = self.selfPubkey
+        guard let media = attachments.takeForSend() else { return }
+        guard !text.isEmpty || !media.isEmpty else { return }
+        mentionDraft = MentionDraft()
+        sendError = nil
+        if isChasingOwnSend { jumpToLatest() }
         Task { [weak self] in
-            guard await self?.attachments.prepareForSend() == true else { return }
             guard let self else { return }
-            let media = self.attachments.takeForSend()
-            guard !text.isEmpty || !media.isEmpty else { return }
-            self.mentionDraft = MentionDraft()
-            self.sendError = nil
-            if isChasingOwnSend { self.jumpToLatest() }
 
             do {
-                let entry = try await self.sender.enqueue(
-                    kind: .channelMessage,
-                    content: OutboundAttachments.content(text, attaching: media),
+                let entry = try await self.sender.enqueueComposerMessage(
+                    text: text,
                     in: self.channel,
                     tags: OutboundTags.reply(
                         channel: self.channel,
@@ -44,8 +42,8 @@ extension ThreadModel {
                         parent: self.root,
                         mentioning: mentionPubkeys,
                         sender: selfPubkey
-                    ) + OutboundAttachments.tags(attaching: media),
-                    maxContentBytes: OutboxPolicy.maxContentBytes
+                    ),
+                    media: media.map { OutboundMediaPayload(data: $0.data, filename: $0.filename) }
                 )
                 // The reply has an id now, so the trip that started at the tap can finish on
                 // the reply itself rather than on whatever was newest when it began.

@@ -19,25 +19,23 @@ typealias MediaUploaderProvider = @MainActor @Sendable () -> (any MediaUploading
 ///
 /// 1. **Prepare on pick.** Loading, metadata scrubbing, colour conversion, and the
 ///    preview happen locally while the author is still composing.
-/// 2. **Upload on send.** The relay is untouched until send is pressed, and every
-///    upload finishes before the event is signed with its blob descriptors.
-/// 3. **Retry only what failed.** A partial batch keeps successful descriptors;
-///    failed rows return to local-ready bytes, so sending again cannot orphan a
-///    second copy of a blob that already landed.
+/// 2. **Stage on send.** Exact scrubbed bytes are written beside the signed outbox
+///    row before the composer clears; the engine owns upload progress from there.
+/// 3. **Keep authored intent durable.** A conversation screen may disappear while
+///    the outbox row and its staged bytes continue toward the relay.
 ///
 /// # What is not here
 ///
-/// No persistence. Unlike the text draft — which survives leaving the conversation
-/// (`ComposerDrafts`) — attachments are dropped when the model goes. Restoring
-/// them would mean holding relay URLs for pictures the author may never send, and
-/// deciding when those stop being theirs; the text draft has no such question.
+/// Before send there is no persistence. Unlike the text draft — which survives
+/// leaving the conversation (`ComposerDrafts`) — uncommitted pictures are dropped
+/// when the model goes. Send transfers them to the durable outbox staging store.
 @MainActor
 @Observable
 final class ComposerAttachmentsModel {
     /// Every attachment in the order it was picked, from local preparation onward.
     private(set) var attachments: [ComposerAttachment] = []
 
-    /// Why the last preparation or send-time upload failed, for the banner above
+    /// Why the last preparation or send-time staging failed, for the banner above
     /// the strip. Cleared by the next attempt and by its own countdown.
     ///
     /// Written only through ``report(_:)`` and ``clearError()``. A direct assignment
@@ -48,8 +46,8 @@ final class ComposerAttachmentsModel {
     /// Whether the live camera is occupying the panel above this composer's bar.
     private(set) var isCameraPresented = false
 
-    /// At most this many preparations or uploads at once. Three bounds both the
-    /// working bitmap memory at pick-time and relay bandwidth at send-time.
+    /// At most this many preparations at once. The engine applies the same ceiling
+    /// to staged relay uploads.
     static let maxConcurrentUploads = 3
 
     /// The most pictures one message may carry.
@@ -68,7 +66,8 @@ final class ComposerAttachmentsModel {
     /// finite, because "for ever" is not a state an author can do anything about.
     static let sourceDeadline: Duration = .seconds(60)
 
-    /// How long the relay has to accept the bytes.
+    /// Legacy upload deadline retained in the initializer while callers move upload
+    /// ownership to the engine. The composer itself no longer uses this value.
     ///
     /// `URLSession`'s own resource timeout defaults to **seven days**, and its request
     /// timeout only fires when a connection goes completely silent — so a trickling upload is
@@ -93,9 +92,8 @@ final class ComposerAttachmentsModel {
     /// locally ready rows remain available after the banner clears.
     static let errorDuration: Duration = .seconds(5)
 
-    /// The app environment can build this after a conversation screen exists, so this is
-    /// resolved at send time rather than captured when the model is constructed. A send with
-    /// no uploader fails with a reason rather than silently doing nothing.
+    /// Legacy provider retained for source compatibility while upload ownership lives
+    /// on ``SyncEngine``. The composer never resolves it.
     let uploader: MediaUploaderProvider
 
     /// The countdown clearing ``uploadError``, held so the next error can cancel it.
@@ -136,12 +134,6 @@ final class ComposerAttachmentsModel {
     /// Whether anything is still being prepared locally — the send gate.
     var isAttaching: Bool { attachments.contains(where: \.isPreparing) }
 
-    /// Whether a send-triggered upload batch is running.
-    var isUploadingForSend: Bool { attachments.contains(where: \.isUploading) }
-
-    /// The descriptors a message would carry, in pick order.
-    var readyDescriptors: [BlobDescriptor] { attachments.compactMap(\.descriptor) }
-
     /// Whether there is anything to draw above the text field.
     var isEmpty: Bool { attachments.isEmpty }
 
@@ -158,7 +150,6 @@ final class ComposerAttachmentsModel {
     /// Computed so every path changing a height-bearing property declares the change.
     var barRevision: Int {
         (isEmpty ? 0 : 1) + (uploadError == nil ? 0 : 2) + (isCameraPresented ? 4 : 0)
-            + (isUploadingForSend ? 8 : 0)
     }
 
     /// Whether these attachments alone are enough to justify a send — a picture
@@ -203,7 +194,6 @@ final class ComposerAttachmentsModel {
 
     /// Opens the inline camera when the message still has room for a photo.
     func presentCamera() {
-        guard !isUploadingForSend else { return }
         guard remainingCapacity > 0 else {
             reportAtCapacity()
             return
@@ -220,7 +210,7 @@ final class ComposerAttachmentsModel {
     /// Returns immediately: every tile appears at once and fills in as its preview
     /// is prepared, without touching the network.
     func add(_ items: [any ComposerPickedItem]) {
-        guard !items.isEmpty, !isUploadingForSend else { return }
+        guard !items.isEmpty else { return }
         clearError()
 
         // The cap is enforced here rather than at the picker alone: a paste comes in through
@@ -251,7 +241,6 @@ final class ComposerAttachmentsModel {
     /// instead would save a few kilobytes of upstream and cost a race worth more
     /// than that.
     func remove(_ id: UUID) {
-        guard !isUploadingForSend else { return }
         attachments.removeAll { $0.id == id }
     }
 
@@ -259,27 +248,37 @@ final class ComposerAttachmentsModel {
     ///
     /// One call rather than "read, then clear" so there is no window in which a
     /// second send could carry the same pictures twice.
-    func takeForSend() -> [BlobDescriptor] {
-        let descriptors = readyDescriptors
-        guard descriptors.count == attachments.count else { return [] }
+    func takeForSend() -> [ComposerAttachment.LocalPayload]? {
+        guard attachments.count <= Self.selectionLimit else {
+            report(ComposerAttachmentError.tooMany)
+            return nil
+        }
+        let payloads = attachments.compactMap(\.localPayload)
+        guard payloads.count == attachments.count else { return nil }
         attachments.removeAll()
         clearError()
-        return descriptors
+        return payloads
     }
 
-    /// Puts attachments back after a send that was refused before it left the
-    /// device. The blobs are still on the relay, so the descriptors are still good
-    /// — restoring them is what makes a refusal recoverable rather than a silent
-    /// loss of the pictures along with the text. They precede anything newly added
-    /// while enqueue was in flight, preserving the order of the earlier send.
-    func restore(_ descriptors: [BlobDescriptor]) {
-        attachments.insert(contentsOf: descriptors.map {
-            ComposerAttachment(id: UUID(), preview: nil, state: .uploaded($0))
+    /// Puts local attachments back after staging or enqueue was refused. They
+    /// precede anything newly added while enqueue was in flight, preserving the
+    /// earlier send's order. If that would exceed the cap, the newest rows are
+    /// trimmed and the existing capacity error is surfaced.
+    func restore(_ payloads: [ComposerAttachment.LocalPayload]) {
+        attachments.insert(contentsOf: payloads.map { payload in
+            ComposerAttachment(
+                id: UUID(),
+                preview: UIImage(data: payload.data),
+                state: .ready(payload)
+            )
         }, at: 0)
+        guard attachments.count > Self.selectionLimit else { return }
+        attachments.removeLast(attachments.count - Self.selectionLimit)
+        report(ComposerAttachmentError.tooMany)
     }
 
-    /// Drops everything and stops local preparation still being read. A send-time
-    /// upload is not in `batches`; leaving during that accepted window cannot cancel it.
+    /// Drops everything and stops local preparation still being read. Durable
+    /// send-time uploads are engine-owned and are not in `batches`.
     func reset() {
         for batch in batches { batch.cancel() }
         batches.removeAll()
@@ -356,7 +355,7 @@ final class ComposerAttachmentsModel {
         attachments[index].state = state
     }
 
-    /// One line, in the author's terms, for local preparation or send-time upload.
+    /// One line, in the author's terms, for local preparation failures.
     static func describe(_ error: Error) -> String {
         switch error {
         case MediaUploadError.rejectedByPolicy:

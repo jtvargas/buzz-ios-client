@@ -16,6 +16,9 @@ public enum OutboxState: String, Sendable, Equatable, CaseIterable {
     /// returns to after a transient (`retryable`) rejection, so the next drain
     /// picks it up again.
     case pending
+    /// Signed and visible locally, while one or more staged pictures still have to
+    /// reach the media store. The ordinary relay drain must not publish this row.
+    case awaitingMedia
     /// Handed to the relay, awaiting its `OK`. A row found here at drain time is
     /// resent as-is: the outcome is unknown, and the relay deduplicates by event
     /// id, so a resend either lands or comes back `duplicate:` — both success.
@@ -131,4 +134,8 @@ public enum OutboxError: Error, Equatable {
     /// practice — `JSONEncoder` always emits UTF-8 — but surfaced as an honest
     /// failure path rather than force-unwrapped.
     case encodingFailed
+    /// The session has no media store configured for a message that carries pictures.
+    case mediaUnavailable
+    /// The exact descriptor or durable staged bytes could not be prepared locally.
+    case mediaStagingFailed
 }

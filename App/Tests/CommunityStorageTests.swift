@@ -1,3 +1,4 @@
+import BuzzKit
 import Foundation
 @testable import Hive
 import Testing

@@ -128,10 +128,10 @@ struct MessageComposerView: View {
     /// Whether the draft will go.
     ///
     /// A picture on its own is a message, so text is not required once something is
-    /// attached. Local preparation must be finished, and a send-time upload already
-    /// under way cannot be started twice.
+    /// attached. Only local preparation must finish; once staging commits, upload
+    /// progress belongs to the timeline row and this composer is immediately reusable.
     private var canSend: Bool {
-        guard isEnabled, !attachments.isAttaching, !attachments.isUploadingForSend else {
+        guard isEnabled, !attachments.isAttaching else {
             return false
         }
         return !document.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -148,11 +148,6 @@ struct MessageComposerView: View {
 
         return GlassEffectContainer {
             VStack(spacing: 8) {
-                if attachments.isUploadingForSend {
-                    ConversationAccessoryCapsule(label: "Uploading pictures…") {
-                        TypingDots()
-                    }
-                }
                 Group {
                     if attachments.isCameraPresented {
                         cameraPanel
@@ -195,7 +190,6 @@ struct MessageComposerView: View {
                     // over anything scrolled under it.
                     .glassEffect(.regular.interactive(), in: .rect(cornerRadius: Self.cornerRadius))
                 }
-                .disabled(attachments.isUploadingForSend)
             }
         }
         // The float: 12pt in from each side, 8pt clear of the bottom.
@@ -248,10 +242,10 @@ struct MessageComposerView: View {
             document: $document,
             isFocused: $autocomplete.isComposerFocused,
             // A pasted picture goes through the same door as a picked one, so it inherits the
-            // scrub, send-time upload and five-picture cap without any of them being restated.
+            // scrub, durable staging and five-picture cap without restating any of them.
             onPasteImages: { attachments.add($0.map(PastedPicture.init)) },
             placeholder: placeholder,
-            isEditable: isEnabled && !attachments.isUploadingForSend,
+            isEditable: isEnabled,
             onSelectionChange: autocomplete.updateSelection
         )
         .frame(maxWidth: .infinity)

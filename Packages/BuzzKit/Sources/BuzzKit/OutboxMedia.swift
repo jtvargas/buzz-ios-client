@@ -18,6 +18,17 @@ public struct OutboxMedia: Sendable, Equatable {
     }
 }
 
+/// Scrubbed bytes handed from the composer to the durable send path.
+public struct OutboundMediaPayload: Sendable, Equatable {
+    public let data: Data
+    public let filename: String?
+
+    public init(data: Data, filename: String? = nil) {
+        self.data = data
+        self.filename = filename
+    }
+}
+
 /// The durable upload state of one staged blob.
 public enum OutboxMediaState: String, Sendable, Equatable {
     case staged
@@ -35,6 +46,15 @@ public struct StagedMediaKey: Sendable, Hashable {
         self.sha256 = sha256
         self.fileExtension = fileExtension
     }
+}
+
+/// One persisted media row the pump can upload without consulting the composer.
+public struct OutboxMediaRecord: Sendable, Equatable {
+    public let eventID: String
+    public let key: StagedMediaKey
+    public let mimeType: String
+    public let size: Int
+    public let state: OutboxMediaState
 }
 
 /// The on-disk store for scrubbed media waiting for its outbox upload.
@@ -57,6 +77,12 @@ public struct MediaStagingStore: Sendable {
 
     public func data(for key: StagedMediaKey) throws -> Data {
         try Data(contentsOf: fileURL(for: key))
+    }
+
+    public func remove(_ key: StagedMediaKey) throws {
+        let url = try fileURL(for: key)
+        guard FileManager.default.fileExists(atPath: url.path) else { return }
+        try FileManager.default.removeItem(at: url)
     }
 
     public func removeAll() throws {
@@ -98,6 +124,79 @@ public struct MediaStagingStore: Sendable {
 }
 
 public extension BuzzEventStore {
+    func outboxMedia(eventID: String, unfinishedOnly: Bool = false) async throws -> [OutboxMediaRecord] {
+        try await reader.read { db in
+            let unfinished = unfinishedOnly ? "AND state <> :uploaded" : ""
+            return try Row.fetchAll(
+                db,
+                sql: """
+                SELECT event_id, sha256, ext, mime, size, state
+                FROM outbox_media
+                WHERE event_id = :eventID \(unfinished)
+                ORDER BY ordinal ASC
+                """,
+                arguments: [
+                    "eventID": eventID,
+                    "uploaded": OutboxMediaState.uploaded.rawValue,
+                ]
+            ).compactMap(Self.decodeOutboxMedia)
+        }
+    }
+
+    func markOutboxMediaUploading(_ record: OutboxMediaRecord) async throws {
+        try await writer.write { db in
+            try db.execute(
+                sql: """
+                UPDATE outbox_media
+                SET state = ?, attempts = attempts + 1, last_error = NULL
+                WHERE event_id = ? AND sha256 = ?
+                """,
+                arguments: [
+                    OutboxMediaState.uploading.rawValue,
+                    record.eventID,
+                    record.key.sha256,
+                ]
+            )
+        }
+    }
+
+    func markOutboxMediaUploaded(_ record: OutboxMediaRecord) async throws {
+        try await setOutboxMediaState(.uploaded, error: nil, record: record)
+    }
+
+    func markOutboxMediaFailed(_ record: OutboxMediaRecord, error: String) async throws {
+        try await setOutboxMediaState(.failed, error: error, record: record)
+    }
+
+    /// Releases a signed event to the ordinary drain only after every media row landed.
+    func releaseAwaitingMedia(_ eventID: String) async throws -> Bool {
+        try await writer.write { db in
+            let unfinished = try Int.fetchOne(
+                db,
+                sql: "SELECT COUNT(*) FROM outbox_media WHERE event_id = ? AND state <> ?",
+                arguments: [eventID, OutboxMediaState.uploaded.rawValue]
+            ) ?? 0
+            guard unfinished == 0 else { return false }
+            try db.execute(
+                sql: "UPDATE outbox SET state = ? WHERE event_id = ? AND state = ?",
+                arguments: [OutboxState.pending.rawValue, eventID, OutboxState.awaitingMedia.rawValue]
+            )
+            return db.changesCount > 0
+        }
+    }
+
+    /// Whether every surviving reference to this content-addressed file is uploaded.
+    func canRemoveStagedFile(_ key: StagedMediaKey) async throws -> Bool {
+        try await reader.read { db in
+            let unfinished = try Int.fetchOne(
+                db,
+                sql: "SELECT COUNT(*) FROM outbox_media WHERE sha256 = ? AND state <> ?",
+                arguments: [key.sha256, OutboxMediaState.uploaded.rawValue]
+            ) ?? 0
+            return unfinished == 0
+        }
+    }
+
     /// Deletes database rows whose signed event no longer exists and returns the
     /// file keys still referenced by a live outbox row.
     func reconcileOutboxMedia() async throws -> Set<StagedMediaKey> {
@@ -108,6 +207,21 @@ public extension BuzzEventStore {
                 SELECT 1 FROM outbox WHERE outbox.event_id = outbox_media.event_id
             )
             """)
+            try db.execute(
+                sql: """
+                UPDATE outbox
+                SET state = ?, last_error = ?, is_retryable = 0
+                WHERE state = ?
+                  AND NOT EXISTS (
+                      SELECT 1 FROM outbox_media WHERE outbox_media.event_id = outbox.event_id
+                  )
+                """,
+                arguments: [
+                    OutboxState.failed.rawValue,
+                    "Staged media is missing.",
+                    OutboxState.awaitingMedia.rawValue,
+                ]
+            )
             return try Row.fetchAll(db, sql: "SELECT DISTINCT sha256, ext FROM outbox_media")
                 .reduce(into: Set<StagedMediaKey>()) { keys, row in
                     keys.insert(StagedMediaKey(sha256: row["sha256"], fileExtension: row["ext"]))
@@ -139,5 +253,32 @@ public extension BuzzEventStore {
                 ]
             )
         }
+    }
+
+    private func setOutboxMediaState(
+        _ state: OutboxMediaState,
+        error: String?,
+        record: OutboxMediaRecord
+    ) async throws {
+        try await writer.write { db in
+            try db.execute(
+                sql: """
+                UPDATE outbox_media SET state = ?, last_error = ?
+                WHERE event_id = ? AND sha256 = ?
+                """,
+                arguments: [state.rawValue, error, record.eventID, record.key.sha256]
+            )
+        }
+    }
+
+    private static func decodeOutboxMedia(_ row: Row) -> OutboxMediaRecord? {
+        guard let state = OutboxMediaState(rawValue: row["state"]) else { return nil }
+        return OutboxMediaRecord(
+            eventID: row["event_id"],
+            key: StagedMediaKey(sha256: row["sha256"], fileExtension: row["ext"]),
+            mimeType: row["mime"],
+            size: row["size"],
+            state: state
+        )
     }
 }

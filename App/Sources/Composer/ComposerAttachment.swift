@@ -5,16 +5,11 @@ import UIKit
 /// One picture the composer is holding, from the moment it is picked to the moment
 /// the message carrying it goes.
 ///
-/// # Prepared when picked, uploaded when sent
+/// # Prepared when picked, staged when sent
 ///
-/// Picking loads, scrubs, and previews the picture entirely on-device. Uploading
-/// starts only after the author presses send, before the event is signed, so an
-/// abandoned draft never leaves a blob behind on the relay. A successful upload
-/// is retained as a descriptor and skipped on retry.
-///
-/// One narrow orphan window remains: if an author leaves while a send-time upload
-/// is in flight, a blob may land without the following enqueue. Closing that window
-/// requires relay-side deletion, which the current upload contract does not offer.
+/// Picking loads, scrubs, and previews the picture entirely on-device. Send writes
+/// those exact bytes beside a signed outbox row, clears the composer, and lets the
+/// engine-owned pump upload them without tying progress to a conversation screen.
 ///
 /// # The preview is local
 ///
@@ -36,10 +31,6 @@ struct ComposerAttachment: Identifiable {
         case preparing
         /// Scrubbed bytes held until the author sends.
         case ready(LocalPayload)
-        /// On its way to the relay after send was pressed.
-        case uploading(LocalPayload)
-        /// Stored, and ready to be named by a message.
-        case uploaded(BlobDescriptor)
     }
 
     /// Identity is assigned here rather than taken from the picture, because a
@@ -52,11 +43,6 @@ struct ComposerAttachment: Identifiable {
     var preview: UIImage?
     var state: State
 
-    var descriptor: BlobDescriptor? {
-        guard case let .uploaded(descriptor) = state else { return nil }
-        return descriptor
-    }
-
     var localPayload: LocalPayload? {
         guard case let .ready(payload) = state else { return nil }
         return payload
@@ -67,14 +53,8 @@ struct ComposerAttachment: Identifiable {
         return false
     }
 
-    var isUploading: Bool {
-        if case .uploading = state { return true }
-        return false
-    }
-
     var isReady: Bool {
         if case .ready = state { return true }
-        if case .uploaded = state { return true }
         return false
     }
 }
