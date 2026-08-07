@@ -305,6 +305,18 @@ struct TimelineRowView: View {
         return row.content
     }
 
+    /// The agents among *this message's* mentions, so a mention of one draws the bot
+    /// glyph in place of its `@`.
+    ///
+    /// Scoped to the refs rather than handed the whole directory: `EntityNames.isAgent`
+    /// is a dictionary hit, the list is a message's `p` tags rather than a roster, and
+    /// the result feeds ``MessageMentionResolver/identity`` — a set that grew with every
+    /// agent in the community would re-key every cached render whenever any of them
+    /// joined a channel.
+    var agentPubkeys: Set<String> {
+        Set(mentions.map(\.pubkey).filter(names.isAgent))
+    }
+
     /// The per-message resolver: mentions from this row's own `p`-tag refs, channels
     /// from the app-wide injected map, self from the local identity.
     ///
@@ -317,7 +329,8 @@ struct TimelineRowView: View {
         MessageMentionResolver(
             mentions: names.aliased(mentions),
             channels: channelNameMap,
-            selfPubkey: selfPubkey
+            selfPubkey: selfPubkey,
+            agentPubkeys: agentPubkeys
         )
     }
 }

@@ -77,7 +77,12 @@ struct ConversationFixtureHost: View {
                 // fixture conversation is titled "Untitled conversation" — which is what
                 // made a long-name assertion about the navigation bar silently vacuous.
                 // The real app always injects one; the fixture now does too.
-                .environment(\.entityNames, EntityNames(channels: [channelRow]))
+                // The snapshot is `.empty` for every shape that mentions nobody, so this
+                // is the same directory as before for all of them.
+                .environment(
+                    \.entityNames,
+                    EntityNames(snapshot: prepared.directory, channels: [channelRow])
+                )
                 .environment(\.openMarkdownDocument, OpenMarkdownDocumentAction { readingDocument = $0 })
                 .sheet(item: $readingDocument) { document in
                     MarkdownDocumentSheet(document: document)
