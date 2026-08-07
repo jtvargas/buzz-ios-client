@@ -64,6 +64,7 @@ struct EngineHarness {
         mediaUploader: (any MediaUploading)? = nil,
         mediaBaseURL: URL? = nil,
         mediaStagingStore: MediaStagingStore? = nil,
+        mediaUploadDeadline: Duration = .seconds(270),
         // The engine's own clock, when a test needs to move it. Defaults to the fixed
         // `nowSeconds` instant every other engine test runs on; the thread sweep's brake is
         // a comparison of times, so proving a fresh socket re-arms it needs a clock that
@@ -123,7 +124,8 @@ struct EngineHarness {
             threadPrefetchRootLimit: threadPrefetchRootLimit,
             threadPrefetchReplyLimit: threadPrefetchReplyLimit,
             threadPrefetchLaunchPasses: threadPrefetchLaunchPasses,
-            threadSweepRootLimit: threadSweepRootLimit
+            threadSweepRootLimit: threadSweepRootLimit,
+            mediaUploadDeadline: mediaUploadDeadline
         )
         let engineNow = engineClock ?? { Date(timeIntervalSince1970: TimeInterval(seconds)) }
         if let directoryClient {

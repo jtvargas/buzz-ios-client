@@ -92,6 +92,42 @@ struct OutboxMediaTests {
         #expect(reconciled.lastError == "Staged media is missing.")
     }
 
+    @Test("mount reconciliation recovers interrupted uploads and exposes recorded failures")
+    func reconciliationRecoversPumpStates() async throws {
+        let harness = try OutboxHarness()
+        defer { harness.remove() }
+        let media = OutboxMedia(
+            sha256: String(repeating: "d", count: 64),
+            ordinal: 0,
+            fileExtension: "jpg",
+            mimeType: "image/jpeg",
+            size: 3
+        )
+        let entry = try await harness.store.enqueue(
+            content: "photo",
+            in: "room-1",
+            with: harness.signer,
+            media: [media],
+            state: .awaitingMedia
+        )
+        let record = try #require(try await harness.store.outboxMedia(eventID: entry.id).first)
+        try await harness.store.markOutboxMediaUploading(record)
+
+        _ = try await harness.store.reconcileOutboxMedia()
+        #expect(try await harness.store.outboxMedia(eventID: entry.id).first?.state == .staged)
+
+        try await harness.store.markOutboxMediaFailed(record, error: "offline")
+        _ = try await harness.store.reconcileOutboxMedia()
+        let failed = try #require(try await harness.store.entry(id: entry.id))
+        #expect(failed.state == .failed)
+        #expect(failed.isRetryable)
+
+        #expect(try await harness.store.retryOutboxMedia(entry.id))
+        let retried = try #require(try await harness.store.entry(id: entry.id))
+        #expect(retried.state == .awaitingMedia)
+        #expect(try await harness.store.outboxMedia(eventID: entry.id).first?.state == .staged)
+    }
+
     @Test("awaiting media stays out of the drain until the pump uploads it")
     func awaitingMediaPump() async throws {
         let database = TempDatabase()
@@ -129,6 +165,120 @@ struct OutboxMediaTests {
 
         #expect(try await harness.store.pendingSends().map(\.id) == [entry.id])
         #expect(try FileManager.default.contentsOfDirectory(atPath: directory.path).isEmpty)
+    }
+
+    @Test("a drain resumes awaiting media that was not enqueued by this engine")
+    func drainResumesAwaitingMedia() async throws {
+        let database = TempDatabase()
+        defer { database.remove() }
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("media-resume-tests-\(UUID().uuidString)", isDirectory: true)
+        let staging = MediaStagingStore(directory: directory)
+        defer { try? staging.removeAll() }
+        let uploader = GatedMediaUploader()
+        let harness = try EngineHarness(
+            path: database.path,
+            identity: try PrivateKey(),
+            relays: [],
+            mediaUploader: uploader,
+            mediaBaseURL: URL(string: "https://relay.example.com"),
+            mediaStagingStore: staging
+        )
+        let picture = try #require(ImageFixture.png(width: 40, height: 24))
+        let descriptor = try #require(BlobDescriptor.predicted(
+            data: picture,
+            baseURL: URL(string: "https://relay.example.com")!
+        ))
+        let key = StagedMediaKey(sha256: descriptor.sha256, fileExtension: "png")
+        _ = try staging.write(picture, for: key)
+        let media = OutboxMedia(
+            sha256: key.sha256,
+            ordinal: 0,
+            fileExtension: key.fileExtension,
+            mimeType: descriptor.type,
+            size: descriptor.size
+        )
+        let entry = try await harness.store.enqueue(
+            content: descriptor.markdownReference(),
+            in: "room-1",
+            with: harness.signer,
+            media: [media],
+            state: .awaitingMedia
+        )
+
+        await harness.engine.drainOutbox()
+        await waitUntil { await uploader.isWaiting }
+        await uploader.release()
+        await waitUntil { (try? await harness.store.entry(id: entry.id)?.state) == .pending }
+
+        #expect(try await harness.store.pendingSends().map(\.id) == [entry.id])
+    }
+
+    @Test("a failed enqueue cleans only media staged by that call")
+    func failedEnqueueCleanupIsScoped() async throws {
+        let database = TempDatabase()
+        defer { database.remove() }
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("media-cleanup-tests-\(UUID().uuidString)", isDirectory: true)
+        let staging = MediaStagingStore(directory: directory)
+        defer { try? staging.removeAll() }
+        let harness = try EngineHarness(
+            path: database.path,
+            identity: try PrivateKey(),
+            relays: [],
+            mediaUploader: GatedMediaUploader(),
+            mediaBaseURL: URL(string: "https://relay.example.com"),
+            mediaStagingStore: staging
+        )
+        let unrelated = StagedMediaKey(
+            sha256: String(repeating: "e", count: 64),
+            fileExtension: "jpg"
+        )
+        _ = try staging.write(Data([9]), for: unrelated)
+        let picture = try #require(ImageFixture.png(width: 40, height: 24))
+
+        await #expect(throws: (any Error).self) {
+            _ = try await harness.engine.enqueueMediaMessage(
+                text: "too large",
+                in: "room-1",
+                media: [OutboundMediaPayload(data: picture)],
+                maxContentBytes: 1
+            )
+        }
+
+        #expect(try staging.data(for: unrelated) == Data([9]))
+    }
+
+    @Test("an upload deadline becomes a retryable failed send")
+    func uploadDeadline() async throws {
+        let database = TempDatabase()
+        defer { database.remove() }
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("media-deadline-tests-\(UUID().uuidString)", isDirectory: true)
+        let staging = MediaStagingStore(directory: directory)
+        defer { try? staging.removeAll() }
+        let harness = try EngineHarness(
+            path: database.path,
+            identity: try PrivateKey(),
+            relays: [],
+            mediaUploader: NeverFinishingMediaUploader(),
+            mediaBaseURL: URL(string: "https://relay.example.com"),
+            mediaStagingStore: staging,
+            mediaUploadDeadline: .milliseconds(10)
+        )
+        let picture = try #require(ImageFixture.png(width: 40, height: 24))
+        let entry = try await harness.engine.enqueueMediaMessage(
+            text: "picture",
+            in: "room-1",
+            media: [OutboundMediaPayload(data: picture)]
+        )
+
+        await waitUntil { (try? await harness.store.entry(id: entry.id)?.state) == .failed }
+
+        let failed = try #require(try await harness.store.entry(id: entry.id))
+        #expect(failed.isRetryable)
+        #expect(failed.lastError == "A picture upload timed out.")
+        #expect(try await harness.store.pendingSends().isEmpty)
     }
 
     @Test("discard removes an awaiting row and its unshared staged bytes inline")
@@ -183,5 +333,12 @@ private actor GatedMediaUploader: MediaUploading {
     func release() {
         continuation?.resume()
         continuation = nil
+    }
+}
+
+private struct NeverFinishingMediaUploader: MediaUploading {
+    func upload(data _: Data, mimeType _: String, filename _: String?) async throws -> BlobDescriptor {
+        try await Task.sleep(for: .seconds(3600))
+        throw CancellationError()
     }
 }
