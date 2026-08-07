@@ -37,7 +37,7 @@ enum MarkdownDocumentHTML {
 
     private static func baseCSS(_ palette: Palette) -> String {
         """
-        :root { color-scheme: (palette.colorScheme); }
+        :root { color-scheme: \(palette.colorScheme); }
         * { box-sizing: border-box; }
         html, body { background: \(palette.background); }
         body {
