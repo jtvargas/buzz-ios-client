@@ -15,6 +15,13 @@ extension ConversationFixture {
         let sender: StoringSender
         /// The message a thread hangs off, or `nil` for a channel.
         let rootID: String?
+        /// What the surface should be told about the identities this shape mentions —
+        /// `.empty` for every shape that mentions nobody.
+        ///
+        /// It comes back with the store rather than being rebuilt by the view because it
+        /// is keyed to *these* ephemeral keys, and the keys only exist inside
+        /// ``prepare(_:)``. See ``ConversationFixture/directory(for:keys:)``.
+        let directory: DirectorySnapshot
     }
 
     /// Builds the conversation — or hands back the one already built.
@@ -54,7 +61,8 @@ extension ConversationFixture {
             // people already talking — which would fold it into their block and take away the
             // avatar and name a newly arrived message is supposed to carry.
             sender: StoringSender(store: store, signer: InMemorySigner(try PrivateKey())),
-            rootID: options.surface == .thread ? events.first?.id : nil
+            rootID: options.surface == .thread ? events.first?.id : nil,
+            directory: directory(for: options, keys: keys)
         )
         preparation.value = prepared
         return prepared

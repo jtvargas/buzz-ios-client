@@ -61,7 +61,9 @@ enum ActivityFixtures {
     ) throws -> NostrEvent {
         let tags = [["d", channel]]
             + people.map { ["p", $0] }
-            + bots.map { ["p", $0, "bot"] }
+            // Four elements, because that is what the relay signs: the role sits in the
+            // petname slot with an empty relay hint ahead of it.
+            + bots.map { ["p", $0, "", "bot"] }
         return try relay.event(.groupMembers, "", tags: tags, at: seconds)
     }
 

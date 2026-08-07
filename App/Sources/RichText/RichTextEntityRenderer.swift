@@ -14,6 +14,16 @@ struct RichTextEntityMarker: TextAttribute {
     /// range carries it, so a range that wraps keeps a full-width fill on every line
     /// but the last.
     var trailingAdvance: CGFloat = 0
+    /// Set on the single `@` opening a mention of an agent: draw ``AgentGlyph`` in this
+    /// run's place instead of its glyphs.
+    ///
+    /// A flag on the run rather than a substitution in the text, because the `@` has to
+    /// stay in the string. It is what a copy of the message yields, what VoiceOver
+    /// reads, and what the receiving client re-scans as a mention — the desktop client
+    /// makes the same choice for the same reason, collapsing its `@` to zero width
+    /// rather than deleting it (`.agent-mention-at-hidden`). Here it keeps its advance
+    /// too, which is what pays for the glyph's space.
+    var agentGlyph: Bool = false
 }
 
 /// Builds the `Text` one inline is drawn as.
@@ -39,15 +49,38 @@ enum RichTextInline {
             // it carries the trailing gap's advance inside its own typographic bounds
             // — the renderer needs to know which run to take that width back out of.
             let last = styled.index(beforeCharacter: segment.range.upperBound)
-            let head = segment.range.lowerBound ..< last
-            let marked = head.isEmpty
-                ? text
-                : text + Text(AttributedString(styled[head]))
-                    .customAttribute(RichTextEntityMarker(key: key))
-            return marked + Text(AttributedString(styled[last ..< segment.range.upperBound]))
-                .customAttribute(
-                    RichTextEntityMarker(key: key, trailingAdvance: RichTextStyle.pillAdvance)
+            var head = segment.range.lowerBound ..< last
+            // Collected rather than accumulated with `+=`: `Text` has `+` and no
+            // compound form of it, so appending in place is not expressible.
+            var marked: [Text] = []
+
+            // An agent's `@` is split off ahead of the rest for the same mechanical
+            // reason the last character is: a `TextRenderer` can only act on a whole
+            // run, so anything needing its own treatment needs its own `Text`. Marking
+            // it carries the same `key` as its siblings, so the pill still merges
+            // straight through it and draws as one shape.
+            if styled[segment.range].mention?.isAgent == true, !head.isEmpty {
+                let at = styled.index(afterCharacter: head.lowerBound)
+                marked.append(
+                    Text(AttributedString(styled[head.lowerBound ..< at]))
+                        .customAttribute(RichTextEntityMarker(key: key, agentGlyph: true))
                 )
+                head = at ..< last
+            }
+
+            if !head.isEmpty {
+                marked.append(
+                    Text(AttributedString(styled[head]))
+                        .customAttribute(RichTextEntityMarker(key: key))
+                )
+            }
+            marked.append(
+                Text(AttributedString(styled[last ..< segment.range.upperBound]))
+                    .customAttribute(
+                        RichTextEntityMarker(key: key, trailingAdvance: RichTextStyle.pillAdvance)
+                    )
+            )
+            return marked.reduce(text) { $0 + $1 }
         }
     }
 }
@@ -92,9 +125,39 @@ struct RichTextEntityRenderer: TextRenderer, Equatable {
         // here, so the glyphs go down after the fills, in layout order.
         for line in layout {
             for run in line {
-                context.draw(run)
+                if run[RichTextEntityMarker.self]?.agentGlyph == true {
+                    Self.drawAgentGlyph(replacing: run, in: &context)
+                } else {
+                    context.draw(run)
+                }
             }
         }
+    }
+
+    /// Draws ``AgentGlyph`` in the space `run` was laid out into, instead of `run`.
+    ///
+    /// The `@` is *not* drawn — that is the substitution. It keeps its place in the
+    /// string and its advance in the layout; only its ink is replaced, so nothing
+    /// around it moves and a copy of the message still says `@Name`.
+    ///
+    /// Stroked, not filled: lucide's bot is an outline whose 2-unit stroke *is* the
+    /// drawing (see ``AgentGlyph``). It takes ``RichTextStyle/tint`` directly rather
+    /// than the run's own colour, which a `Text.Layout.Run` does not expose — the same
+    /// value ``RichTextStyle/styled(_:base:interactive:)`` gave the run it replaces, so
+    /// the two cannot drift.
+    private static func drawAgentGlyph(replacing run: Text.Layout.Run, in context: inout GraphicsContext) {
+        let bounds = run.typographicBounds
+        let frame = AgentGlyph.frame(
+            in: bounds.rect,
+            ascent: bounds.ascent,
+            descent: bounds.descent
+        )
+        guard frame.width > 0 else { return }
+        context.stroke(
+            AgentGlyph.path(in: frame),
+            with: .color(RichTextStyle.tint),
+            style: AgentGlyph.strokeStyle(side: frame.width)
+        )
     }
 
     /// One laid-out run, reduced to what the merge needs. A value rather than a

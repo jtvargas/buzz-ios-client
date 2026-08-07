@@ -5,6 +5,15 @@ import Foundation
 struct MentionMatch: Hashable, Sendable {
     let pubkey: String
     let isSelf: Bool
+    /// Whether this pubkey is an agent. See ``MentionToken/isAgent`` for why this is
+    /// the one field here that does not come from the message.
+    let isAgent: Bool
+
+    init(pubkey: String, isSelf: Bool, isAgent: Bool = false) {
+        self.pubkey = pubkey
+        self.isSelf = isSelf
+        self.isAgent = isAgent
+    }
 }
 
 /// Resolves the entity tokens the parser can only *see* as text into identity.
@@ -81,29 +90,53 @@ struct MessageMentionResolver: MentionResolver {
     let selfPubkey: String?
     let identity: String
 
-    init(mentions: [MentionRef], channels: ChannelNameMap, selfPubkey: String?) {
+    /// - Parameter agentPubkeys: every pubkey the app currently knows to be an agent.
+    ///   Passed whole rather than pre-filtered so the caller does not have to know
+    ///   which of its refs survive aliasing; only the ones this message actually
+    ///   mentions reach ``identity``, so an unrelated agent joining a channel does not
+    ///   invalidate every cached render in the app.
+    init(
+        mentions: [MentionRef],
+        channels: ChannelNameMap,
+        selfPubkey: String?,
+        agentPubkeys: Set<String> = []
+    ) {
         var byName: [String: MentionMatch] = [:]
+        func match(_ ref: MentionRef) -> MentionMatch {
+            MentionMatch(
+                pubkey: ref.pubkey,
+                isSelf: ref.pubkey == selfPubkey,
+                isAgent: agentPubkeys.contains(ref.pubkey)
+            )
+        }
 
         // Full names first, so a multi-word name owns its key before any alias.
         for ref in mentions {
             let key = RichTextName.normalized(ref.displayName)
             guard !key.isEmpty, byName[key] == nil else { continue }
-            byName[key] = MentionMatch(pubkey: ref.pubkey, isSelf: ref.pubkey == selfPubkey)
+            byName[key] = match(ref)
         }
         // First-name aliases, never overwriting an established key.
         for ref in mentions {
             let full = RichTextName.normalized(ref.displayName)
             guard let first = full.split(separator: " ").first.map(String.init),
                   !first.isEmpty, first != full, byName[first] == nil else { continue }
-            byName[first] = MentionMatch(pubkey: ref.pubkey, isSelf: ref.pubkey == selfPubkey)
+            byName[first] = match(ref)
         }
 
         mentionsByName = byName
         self.channels = channels
         self.selfPubkey = selfPubkey
 
+        // The agent flag is part of the key, not just of the value. It is the one term
+        // here that can change while the message, the channel map and the identity all
+        // stay put — a roster promotion or the agent directory landing — and a memo
+        // keyed without it would keep serving the render made before the glyph existed.
         let mentionIdentity = mentions
-            .map { "\($0.pubkey):\(RichTextName.normalized($0.displayName))" }
+            .map { ref in
+                let agent = agentPubkeys.contains(ref.pubkey) ? "*" : ""
+                return "\(ref.pubkey)\(agent):\(RichTextName.normalized(ref.displayName))"
+            }
             .sorted()
             .joined(separator: ",")
         identity = "\(channels.identity)|\(mentionIdentity)|\(selfPubkey ?? "-")"

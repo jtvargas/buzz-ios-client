@@ -13,6 +13,23 @@ struct MentionToken: Hashable, Sendable {
     /// Whether the mentioned pubkey is the local identity — the stronger-treatment
     /// gate (bolder + stronger accent).
     let isSelf: Bool
+    /// Whether the mentioned pubkey is an agent — the gate for drawing the
+    /// ``AgentGlyph`` in place of the `@`, matching both official clients.
+    ///
+    /// Unlike `pubkey` and `isSelf` this is not a fact about the *message*: a `p` tag
+    /// says who was mentioned, never what they are. It is resolved from the roster and
+    /// the agent directory at the same seam `isSelf` reads the local identity through,
+    /// and ``MessageMentionResolver`` folds it into its memo key so a render is not
+    /// reused across a change to it.
+    let isAgent: Bool
+
+    /// Defaulted because the overwhelming majority of mentions are of people, and
+    /// every call site that predates the glyph means exactly that.
+    init(pubkey: String?, isSelf: Bool, isAgent: Bool = false) {
+        self.pubkey = pubkey
+        self.isSelf = isSelf
+        self.isAgent = isAgent
+    }
 }
 
 /// The semantic payload of a resolved `#`-channel run.

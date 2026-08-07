@@ -96,7 +96,10 @@ enum RichTextEntities {
             let end = wordEnds[count - 1]
             let name = String(chars[nameStart ..< end])
             if let match = resolver.mention(forName: name) {
-                return (at ..< end, MentionToken(pubkey: match.pubkey, isSelf: match.isSelf))
+                return (
+                    at ..< end,
+                    MentionToken(pubkey: match.pubkey, isSelf: match.isSelf, isAgent: match.isAgent)
+                )
             }
         }
         return nil

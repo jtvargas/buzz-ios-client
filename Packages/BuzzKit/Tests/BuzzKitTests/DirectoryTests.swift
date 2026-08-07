@@ -24,7 +24,9 @@ struct DirectoryTests {
                 ["d", "room-1"],
                 ["p", me.pubkey],
                 ["p", peer.pubkey],
-                ["p", bot.pubkey, "bot"],
+                // The relay's real shape: the role rides the petname slot and the relay
+                // hint before it is empty. See `BuzzProjector.projectRoster`.
+                ["p", bot.pubkey, "", "bot"],
             ], at: 1_001),
             try relay.event(.groupMetadata, #"{"name":"dm"}"#, tags: [["d", "dm-1"]], at: 1_002),
             try relay.event(.groupMembers, "", tags: [
@@ -110,6 +112,41 @@ struct DirectoryTests {
         #expect(blankEntity != nil)
         #expect(blankEntity?.profileName == nil)
         #expect(blankEntity?.picture == nil)
+    }
+
+    /// The regression this suite could not previously fail.
+    ///
+    /// Both roster shapes have to name an agent, and neither may leave `role` as the
+    /// empty string: `Directory` tests it with `== "bot"` and the Activity feed with
+    /// `LOWER(cm.role) = 'bot'`, so `""` reads as "this is a person" everywhere at
+    /// once. Only the four-element form appears on the live relay — 5,078 of 5,078
+    /// member tags — and it is the one the old reader got wrong.
+    @Test("takes the roster role from the petname slot, and from the relay slot when that is all there is")
+    func rosterRoleFromEitherTagShape() async throws {
+        let database = TempDatabase()
+        defer { database.remove() }
+        let store = try database.open()
+        let relay = try Fixture()
+        let wireBot = try Fixture()
+        let shortBot = try Fixture()
+        let person = try Fixture()
+
+        _ = try await store.ingest(batch: [
+            try relay.event(.groupMetadata, #"{"name":"room"}"#, tags: [["d", "room-1"]], at: 1_000),
+            try relay.event(.groupMembers, "", tags: [
+                ["d", "room-1"],
+                // What the relay signs.
+                ["p", wireBot.pubkey, "", "bot"],
+                // The short form kind 39001 uses, tolerated rather than required.
+                ["p", shortBot.pubkey, "bot"],
+                ["p", person.pubkey, "", "member"],
+            ], at: 1_001),
+        ], phase: .backfill)
+
+        let snapshot = try store.directorySnapshot()
+        #expect(snapshot.entity(wireBot.pubkey)?.isAgent == true)
+        #expect(snapshot.entity(shortBot.pubkey)?.isAgent == true)
+        #expect(snapshot.entity(person.pubkey)?.isAgent == false)
     }
 
     @Test("an empty store yields an empty snapshot")

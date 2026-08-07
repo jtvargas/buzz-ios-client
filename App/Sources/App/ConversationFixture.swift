@@ -91,6 +91,17 @@ enum ConversationFixture {
         /// Measured, twice. One picture per launch is a conversation that never has to be
         /// scrolled, so the tap is the only interaction in the test.
         var imageShape: String?
+        /// Adds a closing message that mentions an agent *and* a person, so the two
+        /// treatments can be compared in one row.
+        ///
+        /// Both halves are needed and neither is free: a mention needs a `p` tag before
+        /// it resolves at all, and "is this pubkey an agent" is answered from the
+        /// directory rather than from the message — so the fixture also has to hand the
+        /// surface a ``BuzzKit/DirectorySnapshot`` saying so
+        /// (``ConversationFixture/Prepared/directory``). Without that second half the row
+        /// renders, resolves, and draws an ordinary `@` — a passing-looking screenshot of
+        /// the thing not working.
+        var agentMention = false
         /// Which message a reaction lands on, counted the way the rows are labelled, or `nil`
         /// for none. The chip arrives through the store's own observation, which is the path a
         /// peer's reaction takes and the path the reader's own takes a moment after the tap.
@@ -147,6 +158,7 @@ enum ConversationFixture {
             options.markdownSampler = arguments.contains("-markdownSampler")
             options.markdownDocument = arguments.contains("-markdownDocument")
             options.images = arguments.contains("-images")
+            options.agentMention = arguments.contains("-agentMention")
             options.imageShape = arguments
                 .first { $0.hasPrefix("-imageShape=") }
                 .map { String($0.dropFirst("-imageShape=".count)) }
@@ -243,7 +255,63 @@ enum ConversationFixture {
                 ))
             }
         }
+        if options.agentMention {
+            var tags: [[String]] = [
+                ["h", channelID],
+                // A mention is a `p` tag first and text second: without these the names
+                // below are ordinary words and nothing resolves.
+                ["p", keys[agentKeyIndex].publicKey.hex],
+                ["p", keys[personKeyIndex].publicKey.hex],
+            ]
+            if let rootID {
+                tags.append(["e", rootID, "", "root"])
+                tags.append(["e", rootID, "", "reply"])
+            }
+            events.append(try NostrEvent.signed(
+                kind: .channelMessage,
+                content: "@\(agentMentionName) can you take this one? @\(personMentionName) will review.",
+                tags: tags,
+                // Far past the last ordinary message, so this row is the newest whatever
+                // else the shape asked for and lands where the reader is already looking.
+                createdAt: Date(timeIntervalSince1970: TimeInterval(1_700_000_000 + (options.messages + 100) * 60)),
+                with: keys[personKeyIndex]
+            ))
+        }
         return events
+    }
+
+    // MARK: - The agent-mention shape
+
+    /// Which of the two fixture authors stands in as the agent, and which as the person.
+    /// Named rather than inlined because ``prepare(_:)`` has to describe the same two
+    /// keys to the directory that ``events(for:keys:)`` tagged.
+    static let agentKeyIndex = 1
+    static let personKeyIndex = 0
+    /// The agent's directory name. What the message's text says, so the entity scan
+    /// resolves it — see ``EntityNames/aliased(_:)`` for why the directory spelling has
+    /// to be registered alongside the store's.
+    static let agentMentionName = "Bumble"
+    /// The person's, for the same reason. Two words on purpose: a multi-word name is the
+    /// case where the longest-span scan matters.
+    static let personMentionName = "Ada Lovelace"
+
+    /// The directory a shape needs on top of its events, or `.empty`.
+    ///
+    /// `isAgent` is not in the message and cannot be — a `p` tag says *who*, never *what*.
+    /// In the app it comes from the roster's `bot` role or the relay's agent directory;
+    /// here it is stated directly, which is the smallest thing that puts the surface in
+    /// the state those two produce.
+    static func directory(for options: Options, keys: [PrivateKey]) -> DirectorySnapshot {
+        guard options.agentMention else { return .empty }
+        let agent = keys[agentKeyIndex].publicKey.hex
+        let person = keys[personKeyIndex].publicKey.hex
+        return DirectorySnapshot(
+            entities: [
+                agent: DirectoryEntity(pubkey: agent, agentName: agentMentionName, isAgent: true),
+                person: DirectoryEntity(pubkey: person, profileName: personMentionName, isAgent: false),
+            ],
+            memberPubkeysByChannel: [channelID: [agent, person]]
+        )
     }
 
     /// Deterministic and deliberately uneven: a real conversation runs from a one-word reply
