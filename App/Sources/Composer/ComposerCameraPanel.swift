@@ -262,8 +262,8 @@ private final class ComposerCameraViewController: UIViewController {
     }
 
     func capture(using delegate: ComposerCameraPreview.Coordinator) {
-        let session = session
-        let output = photoOutput
+        nonisolated(unsafe) let session = session
+        nonisolated(unsafe) let output = photoOutput
         sessionQueue.async {
             guard session.isRunning else { return }
             if let connection = output.connection(with: .video),
@@ -275,8 +275,8 @@ private final class ComposerCameraViewController: UIViewController {
     }
 
     private func configureSession() {
-        let session = session
-        let output = photoOutput
+        nonisolated(unsafe) let session = session
+        nonisolated(unsafe) let output = photoOutput
         let availabilityChanged = availabilityChanged
         sessionQueue.async {
             session.beginConfiguration()
@@ -300,7 +300,7 @@ private final class ComposerCameraViewController: UIViewController {
     }
 
     private func start() {
-        let session = session
+        nonisolated(unsafe) let session = session
         sessionQueue.async {
             guard !session.inputs.isEmpty, !session.isRunning else { return }
             session.startRunning()
@@ -308,7 +308,7 @@ private final class ComposerCameraViewController: UIViewController {
     }
 
     private func stop() {
-        let session = session
+        nonisolated(unsafe) let session = session
         sessionQueue.async {
             guard session.isRunning else { return }
             session.stopRunning()
