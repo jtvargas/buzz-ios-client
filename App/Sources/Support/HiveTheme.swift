@@ -27,7 +27,7 @@ import UIKit
 /// # Hive, Hive Dark, and why their ids read wrong
 ///
 /// Upstream's catalogue carries a `slack-dark` whose `#222222` ground ``all`` took verbatim like
-/// every other one. The owner then chose that grey as Hive's own and darkened it to `#1A1A1A`
+/// every other one. The owner then chose that grey as Hive's own and darkened it to `#141414`
 /// (2026-08-06), so it is no longer a Slack entry at all: it is **Hive**, first in the list and
 /// the default, and the near-black the app shipped with before the picker existed is **Hive
 /// Dark** beside it. The two are a real step apart deliberately — the default is the lighter
@@ -106,15 +106,17 @@ extension HiveTheme {
     /// honey amber from the asset catalogue on it. First in the list, so an install that has
     /// never opened Settings gets this one. Its id is historical; see this type's note.
     ///
-    /// `#1A1A1A` is upstream's `slack-dark` `#222222` taken down one notch at the owner's word
-    /// (2026-08-06, *"a little bit dark, not too much"*). It is the one ground here that is no
-    /// longer the catalogue's number, which is the whole reason it stopped being a Slack entry.
-    /// It stays well clear of ``hiveDark``'s near-black, so the two read as different choices
-    /// rather than two attempts at the same one.
+    /// `#141414` is upstream's `slack-dark` `#222222` taken down two notches at the owner's
+    /// word (2026-08-06, *"a little bit dark, not too much"*, then *"a little bit more
+    /// darker"* — `#222222` → `#1A1A1A` → `#141414`, judged on his own device each time). It
+    /// is the one ground here that is no longer the catalogue's number, which is the whole
+    /// reason it stopped being a Slack entry. It stays clear of ``hiveDark``'s `#050607`, so
+    /// the two still read as different choices rather than two attempts at the same one —
+    /// which is what limits how much further this can go.
     static let hive = HiveTheme(
         id: "slack-dark",
         name: "Hive",
-        background: .hex(0x1A1A1A),
+        background: .hex(0x141414),
         accentHex: nil
     )
 
