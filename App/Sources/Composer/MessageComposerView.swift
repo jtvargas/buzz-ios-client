@@ -168,11 +168,23 @@ struct MessageComposerView: View {
                         )
                     }
                     if let uploadError = attachments.uploadError {
-                        Text(uploadError)
-                            .font(.hive(.footnote))
+                        // The shape ``ChannelAccessBanner`` already uses for something said
+                        // above a conversation, so this reads as the same app rather than a
+                        // second idea about how to say something went wrong. Red where that
+                        // one is secondary, because this is a failure and that is a status.
+                        //
+                        // No transition on it, deliberately: this banner changes the bar's
+                        // height, and the bar's height is the keyboard's dismissal band (see
+                        // the note at the top of this file). Animating it would run the
+                        // composer's height on a different clock from the keyboard's.
+                        Label(uploadError, systemImage: "exclamationmark.circle.fill")
+                            .font(.hive(.caption, weight: .medium))
                             .foregroundStyle(.red)
-                            // Aligned with the text it is about.
-                            .padding(.horizontal, TokenTextView.textInset.width)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(.thinMaterial, in: .rect(cornerRadius: 12))
+                            .accessibilityLabel(uploadError)
                     }
                     field()
                     controls

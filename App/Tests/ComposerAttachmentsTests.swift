@@ -299,6 +299,71 @@ struct ComposerAttachmentsTests {
         #expect(model.remainingCapacity == 1)
     }
 
+    // MARK: - The error's own lifetime
+
+    /// The owner's ask: a composer still showing a complaint about a pick from five minutes
+    /// ago is noise. Also asserts ``barRevision`` comes back down, because the bar's height
+    /// is what the scaffold reads — an error that vanished visually while still declaring
+    /// its height would leave a gap over the conversation.
+    @Test("an error takes itself off screen after its time")
+    func errorClearsItself() async {
+        let model = ComposerAttachmentsModel(errorDuration: .milliseconds(50))
+        let quiet = model.barRevision
+
+        model.reportAtCapacity()
+        #expect(model.uploadError != nil)
+        #expect(model.barRevision != quiet)
+
+        await Self.waitUntil { model.uploadError == nil }
+
+        #expect(model.uploadError == nil)
+        #expect(model.barRevision == quiet)
+    }
+
+    /// The case that makes this a funnel rather than a timer per call site: tapping a full
+    /// composer twice. If the second error inherited what was left of the first one's
+    /// countdown it would flash away early, and the reader would blame the tap.
+    ///
+    /// The two dwells here are the assertion, not a settling delay — this proves a clear
+    /// did *not* happen at a moment, and polling for absence returns instantly and proves
+    /// nothing. Do not replace them with a poll.
+    @Test("a second error gets its own countdown, not the remains of the first")
+    func secondErrorRestartsTheCountdown() async {
+        let model = ComposerAttachmentsModel(errorDuration: .milliseconds(500))
+
+        model.reportAtCapacity()
+        try? await Task.sleep(for: .milliseconds(400))
+        model.reportAtCapacity()
+
+        // 700ms in: 200ms past the first error's deadline, 300ms short of the second's.
+        try? await Task.sleep(for: .milliseconds(300))
+        #expect(model.uploadError != nil)
+
+        await Self.waitUntil { model.uploadError == nil }
+        #expect(model.uploadError == nil)
+    }
+
+    /// A pick landing is the other way an error goes, and it has to stop the countdown as
+    /// well as blank the text — otherwise the *next* error is cleared by this one's timer.
+    @Test("a countdown stopped by a successful pick cannot clear a later error")
+    func clearingStopsTheCountdown() async {
+        let model = ComposerAttachmentsModel(
+            uploader: { StubUploader() },
+            errorDuration: .milliseconds(300)
+        )
+
+        model.reportAtCapacity()
+        model.add([Self.item()])
+        #expect(model.uploadError == nil)
+
+        // Past the first countdown's deadline, so it has fired by now if it survived.
+        try? await Task.sleep(for: .milliseconds(400))
+        model.reportAtCapacity()
+        try? await Task.sleep(for: .milliseconds(100))
+
+        #expect(model.uploadError != nil)
+    }
+
     // MARK: - The deadlines
 
     /// The owner's report: attach several and one spins for ever.
