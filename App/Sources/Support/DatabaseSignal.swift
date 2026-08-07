@@ -88,6 +88,21 @@ enum DatabaseSignal {
                     token = token &+ eventID.hashValue &+ state.hashValue &+ lastError.hashValue
                 }
 
+                // `outbox_media` changes in place exactly as `outbox` does — `staged →
+                // uploading → uploaded`, and a retry back again — and it is what the
+                // pending row's "Sending… (2/5)" counts. Without these columns in the
+                // region the count is fetched once and then frozen: pictures land, the
+                // outbox row does not move until the *last* one does, and the reader
+                // watches a number that is already wrong. A frozen count is worse than
+                // no count, so this is load-bearing rather than tidy.
+                let media = try Row.fetchAll(db, sql: "SELECT event_id, sha256, state FROM outbox_media")
+                for row in media {
+                    let eventID: String = row["event_id"] ?? ""
+                    let sha: String = row["sha256"] ?? ""
+                    let state: String = row["state"] ?? ""
+                    token = token &+ eventID.hashValue &+ sha.hashValue &+ state.hashValue
+                }
+
                 // `read_state` collapses replaceable per slot, so a mark advances a
                 // `read_at` in place rather than adding a row — a COUNT would miss it.
                 // Fold each `(context, read_at)` into the token so the channel list's

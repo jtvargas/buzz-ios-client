@@ -55,7 +55,7 @@ final class ThreadModel {
     /// Where that draft is kept between visits. `nil` in tests, which then keep nothing.
     let drafts: ComposerDrafts?
     let mentionAutocomplete: MentionAutocompleteModel
-    /// The pictures the reply composer is carrying, uploaded as they are picked and
+    /// The pictures the reply composer is carrying, prepared locally as they are picked and
     /// cleared by the reply that names them. This thread's own — the channel behind
     /// it keeps a separate list.
     let attachments: ComposerAttachmentsModel

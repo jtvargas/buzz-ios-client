@@ -145,6 +145,9 @@ public actor SyncEngine {
     let directoryContext: ChannelDirectoryContext?
     let signer: any EventSigner
     let config: SyncEngineConfig
+    let mediaUploader: (any MediaUploading)?
+    let mediaBaseURL: URL?
+    let mediaStagingStore: MediaStagingStore?
 
     /// The engine's notion of wall-clock "now", injected so the live content
     /// filter's `since = now − window` is a value a test can pin. Defaults to the
@@ -257,6 +260,12 @@ public actor SyncEngine {
     var drainInFlight = false
     var drainPending = false
 
+    /// Event ids whose media pumps are already running. Mount, drain, and enqueue
+    /// may all discover the same held row; only one pump may own it at a time.
+    var mediaPumpsInFlight: Set<String> = []
+    /// Explicit retries that arrived while the old pump was still unwinding.
+    var mediaPumpRetriesPending: Set<String> = []
+
     // MARK: - Identity and subscription
 
     /// The authenticated identity's hex pubkey, resolved once at ``start()`` for
@@ -323,6 +332,9 @@ public actor SyncEngine {
         presence: PresenceStore,
         windowClient: WindowClient,
         signer: any EventSigner,
+        mediaUploader: (any MediaUploading)? = nil,
+        mediaBaseURL: URL? = nil,
+        mediaStagingStore: MediaStagingStore? = nil,
         config: SyncEngineConfig = .default,
         now: @escaping @Sendable () -> Date = { Date() },
         sleepFor: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
@@ -334,6 +346,9 @@ public actor SyncEngine {
         self.windowClient = windowClient
         directoryContext = nil
         self.signer = signer
+        self.mediaUploader = mediaUploader
+        self.mediaBaseURL = mediaBaseURL
+        self.mediaStagingStore = mediaStagingStore
         self.config = config
         self.now = now
         self.sleepFor = sleepFor
@@ -348,6 +363,9 @@ public actor SyncEngine {
         windowClient: WindowClient,
         directoryClient: AnyChannelDirectoryFetcher,
         signer: any EventSigner,
+        mediaUploader: (any MediaUploading)? = nil,
+        mediaBaseURL: URL? = nil,
+        mediaStagingStore: MediaStagingStore? = nil,
         config: SyncEngineConfig = .default,
         now: @escaping @Sendable () -> Date = { Date() },
         sleepFor: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
@@ -359,6 +377,9 @@ public actor SyncEngine {
         self.windowClient = windowClient
         directoryContext = ChannelDirectoryContext(client: directoryClient)
         self.signer = signer
+        self.mediaUploader = mediaUploader
+        self.mediaBaseURL = mediaBaseURL
+        self.mediaStagingStore = mediaStagingStore
         self.config = config
         self.now = now
         self.sleepFor = sleepFor

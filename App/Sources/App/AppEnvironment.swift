@@ -352,6 +352,7 @@ final class AppEnvironment {
         self.signer = signer
         let store = try Self.makeStore(filename: community.storeFilename)
         self.store = store
+        let mediaStagingStore = try Self.makeMediaStagingStore(filename: community.storeFilename)
         let drafts = ComposerDrafts(persistence: StoredComposerDrafts(store: store))
         self.drafts = drafts
 
@@ -363,6 +364,7 @@ final class AppEnvironment {
         if let intendedPubkey {
             if StoreOwnership.shouldWipe(recordedOwner: community.ownerPubkeyHex, incoming: intendedPubkey) {
                 try await store.wipe()
+                try mediaStagingStore.removeAll()
                 // Beside the wipe, so "a different key never sees the last one's drafts"
                 // holds in memory wherever the handover happens, not only on sign-out.
                 drafts.reset()
@@ -370,11 +372,24 @@ final class AppEnvironment {
             recordOwner(intendedPubkey, of: community)
         }
 
-        let engine = makeEngine(store: store, signer: signer, websocketURL: websocketURL, queryURL: queryURL)
+        let retainedMedia = try await store.reconcileOutboxMedia()
+        try mediaStagingStore.sweep(retaining: retainedMedia)
+
+        let mediaUploader = makeMediaUploader(signer: signer, websocketURL: websocketURL)
+        self.mediaUploader = mediaUploader
+        let engine = makeEngine(
+            store: store,
+            signer: signer,
+            websocketURL: websocketURL,
+            queryURL: queryURL,
+            mediaUploader: mediaUploader,
+            mediaStagingStore: mediaStagingStore
+        )
         self.engine = engine
-        mediaUploader = makeMediaUploader(signer: signer, websocketURL: websocketURL)
         mediaReadAuthorizer = makeMediaReadAuthorizer(signer: signer, websocketURL: websocketURL)
         await installMediaReadAuthorizer(mediaReadAuthorizer)
+        await installMediaStagingDirectory(mediaStagingStore.directory)
+        await engine.resumeMediaUploads()
         heartbeat = PresenceHeartbeat(publisher: engine)
 
         observeEngineState(of: engine)
@@ -465,6 +480,7 @@ final class AppEnvironment {
         mediaUploader = nil
         mediaReadAuthorizer = nil
         await installMediaReadAuthorizer(nil)
+        await installMediaStagingDirectory(nil)
         // Held in memory otherwise — see ``ComposerDrafts/reset()``.
         drafts?.reset()
         drafts = nil

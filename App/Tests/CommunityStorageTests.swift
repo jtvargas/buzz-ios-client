@@ -1,3 +1,4 @@
+import BuzzKit
 import Foundation
 @testable import Hive
 import Testing
@@ -150,7 +151,8 @@ struct CommunityStorageTests {
         #expect(FileManager.default.fileExists(atPath: directory.appendingPathComponent(second).path))
     }
 
-    /// Removing a community takes the write-ahead log and shared-memory file with it. A
+    /// Removing a community takes its staged media, write-ahead log, and shared-memory
+    /// file with it. A
     /// `-wal` left behind holds committed pages the main file never received, and a later
     /// database of the same name would be asked to recover from it.
     @MainActor
@@ -159,6 +161,12 @@ struct CommunityStorageTests {
         let directory = try AppEnvironment.storeDirectory()
         defer { AppEnvironment.deleteStore(filename: filename) }
         _ = try AppEnvironment.makeStore(filename: filename)
+        let staging = try AppEnvironment.makeMediaStagingStore(filename: filename)
+        let stagedKey = StagedMediaKey(
+            sha256: String(repeating: "a", count: 64),
+            fileExtension: "jpg"
+        )
+        _ = try staging.write(Data([1]), for: stagedKey)
         for suffix in ["-wal", "-shm"] {
             FileManager.default.createFile(
                 atPath: directory.appendingPathComponent(filename + suffix).path,
@@ -175,6 +183,7 @@ struct CommunityStorageTests {
                 )
             )
         }
+        #expect(!FileManager.default.fileExists(atPath: staging.directory.path))
     }
 
     @Test func adoptionNeverRunsOverAListThatAlreadyExists() {

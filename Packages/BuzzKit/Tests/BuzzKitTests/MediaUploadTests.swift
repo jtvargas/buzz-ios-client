@@ -1,4 +1,5 @@
 @testable import BuzzKit
+import CryptoKit
 import Foundation
 import NostrCore
 import Testing
@@ -181,14 +182,14 @@ struct MediaUploadTests {
 
     // MARK: - The answer
 
-    @Test("the relay's own measurements are carried onto the message's imeta tag")
+    @Test("the relay's measurements are carried onto the message's imeta tag")
     func imetaCarriesRelayMeasurements() async throws {
         let transport = RecordingTransport(answers: [(Data(Self.descriptorJSON.utf8), 200)])
         let descriptor = try await Self.client(transport: transport)
             .upload(data: Data("hello".utf8), mimeType: "image/jpeg")
 
-        // Nothing in this client measured or blurred anything — every one of
-        // these came back from the relay.
+        // The upload result remains the source of truth even though the client
+        // also predicts these fields in DEBUG.
         #expect(descriptor.dim == "800x600")
         #expect(descriptor.blurhash == "L00000")
         #expect(descriptor.imetaTag() == [
@@ -201,6 +202,48 @@ struct MediaUploadTests {
             "blurhash L00000",
             "thumb https://relay.example/media/abc.thumb.jpg",
         ])
+    }
+
+    @Test("an image descriptor is predicted from the exact local bytes")
+    func predictsImageDescriptor() throws {
+        let picture = try #require(ImageFixture.png(width: 40, height: 24))
+        let descriptor = try #require(BlobDescriptor.predicted(
+            data: picture,
+            baseURL: #require(URL(string: "https://tenant.example:8443/socket?old=1"))
+        ))
+        let digest = SHA256.hash(data: picture).map { String(format: "%02x", $0) }.joined()
+
+        #expect(descriptor.url == "https://tenant.example:8443/media/\(digest).png")
+        #expect(descriptor.sha256 == digest)
+        #expect(descriptor.size == picture.count)
+        #expect(descriptor.type == "image/png")
+        #expect(descriptor.dim == "40x24")
+        #expect(descriptor.blurhash?.count == 28)
+        #expect(descriptor.thumb == "https://tenant.example:8443/media/\(digest).thumb.jpg")
+    }
+
+    @Test(
+        "prediction uses the relay's exact four image extensions",
+        arguments: [
+            (ImageByteFormat.jpeg, "image/jpeg", "jpg"),
+            (ImageByteFormat.png, "image/png", "png"),
+            (ImageByteFormat.gif, "image/gif", "gif"),
+            (ImageByteFormat.webp, "image/webp", "webp"),
+        ]
+    )
+    func predictionExtension(
+        format: ImageByteFormat,
+        mimeType: String,
+        fileExtension: String
+    ) throws {
+        let mapping = try #require(BlobDescriptor.predictedTypeAndExtension(for: format))
+        #expect(mapping.mimeType == mimeType)
+        #expect(mapping.extension == fileExtension)
+    }
+
+    @Test("HEIC has no predicted relay extension")
+    func predictionRefusesHEIC() {
+        #expect(BlobDescriptor.predictedTypeAndExtension(for: .heic) == nil)
     }
 
     @Test("a blob with nothing optional produces the four required entries only")

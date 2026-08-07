@@ -8,10 +8,7 @@ import UniformTypeIdentifiers
 /// A ``MediaUploading`` double a test drives by hand.
 ///
 /// Uploads do not complete on their own — each one parks until the test releases
-/// it. That is what makes "send is refused while a picture is still going up" and
-/// "removing a tile mid-upload does not bring it back" assertable at all: both are
-/// about the window *during* an upload, which a double that answers immediately
-/// never opens.
+/// it. That is what makes send-time failure and concurrency windows assertable.
 actor StubUploader: MediaUploading {
     /// What a released upload answers with.
     enum Answer: Sendable {
@@ -79,10 +76,30 @@ actor StubUploader: MediaUploading {
     }
 }
 
+/// Parks a picked item's local load so a test can remove its tile before
+/// preparation resumes and tries to write the preview and ready state.
+actor StubPickedItemGate {
+    private var continuation: CheckedContinuation<Void, Never>?
+    private(set) var isWaiting = false
+
+    func wait() async {
+        isWaiting = true
+        await withCheckedContinuation { (waiting: CheckedContinuation<Void, Never>) in
+            continuation = waiting
+        }
+    }
+
+    func release() {
+        continuation?.resume()
+        continuation = nil
+    }
+}
+
 /// A pick that hands over bytes the test chose.
 struct StubPickedItem: ComposerPickedItem {
     let data: Data
     var suggestedFilename: String?
+    var gate: StubPickedItemGate?
     /// Fails the *load*, before anything reaches the uploader — what a picker
     /// returning an item it cannot produce bytes for looks like.
     var failsToLoad = false
@@ -93,6 +110,7 @@ struct StubPickedItem: ComposerPickedItem {
     var neverReturns = false
 
     func loadData() async throws -> Data {
+        if let gate { await gate.wait() }
         if failsToLoad { throw ComposerAttachmentError.emptyPick }
         if neverReturns {
             // Long enough to be indistinguishable from for ever at test speed, and

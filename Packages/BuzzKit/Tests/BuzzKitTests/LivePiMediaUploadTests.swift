@@ -14,10 +14,9 @@ import Testing
 /// look identical from the client side. This suite is the only thing that can tell
 /// the difference.
 ///
-/// It also pins the half the client does *not* compute. The relay measures the
-/// picture — `dim`, `blurhash`, `thumb` — and the composer puts those straight into
-/// the `imeta` tag it sends, so "the relay returns them" is load-bearing for a
-/// message rendering at the right size on someone else's phone.
+/// It also pins the relay's measurements against the descriptor the client can
+/// now predict. The returned descriptor remains authoritative in the blocking
+/// flow; the DEBUG gate proves its URL, hash, size, type, and thumbnail agree.
 ///
 /// Disabled unless `BUZZKIT_INTEGRATION_URL` names a relay, like the rest of the live
 /// suite. Run:
@@ -99,7 +98,7 @@ struct LivePiMediaUploadTests {
         #expect(descriptor.url.hasPrefix("http"))
         #expect(descriptor.isImage)
 
-        // The half the client does not compute, and the composer sends on trust.
+        // The relay still returns its own measurements in the authoritative answer.
         let dimensions = try #require(descriptor.dim)
         #expect(dimensions == "1x1")
         #expect(descriptor.blurhash?.isEmpty == false)

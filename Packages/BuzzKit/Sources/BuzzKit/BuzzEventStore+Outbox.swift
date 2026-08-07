@@ -34,6 +34,8 @@ public extension BuzzEventStore {
     ///     Read-state sends pass one strictly newer than their slot's last blob so
     ///     the addressable replace never ties on `created_at` (NIP-RS clock skew);
     ///     ordinary sends leave it `nil` and take the wall clock.
+    ///   - media: staged blobs to commit beside the signed outbox row. The default
+    ///     preserves the existing blocking send path until the media pump lands.
     /// - Returns: the queued entry.
     @discardableResult
     func enqueue(
@@ -43,7 +45,9 @@ public extension BuzzEventStore {
         tags: [[String]] = [],
         with signer: any EventSigner,
         maxContentBytes: Int = OutboxPolicy.maxContentBytes,
-        createdAt: Date? = nil
+        createdAt: Date? = nil,
+        media: [OutboxMedia] = [],
+        state: OutboxState = .pending
     ) async throws -> OutboxEntry {
         let byteCount = content.utf8.count
         guard byteCount <= maxContentBytes else {
@@ -52,9 +56,10 @@ public extension BuzzEventStore {
 
         let event = try await signer.sign(kind: kind, content: content, tags: tags, createdAt: createdAt ?? clock())
         try await writer.write { db in
-            try Self.insertOutboxRow(event, channel: channel, state: .pending, into: db)
+            try Self.insertOutboxRow(event, channel: channel, state: state, into: db)
+            try Self.insertOutboxMedia(media, eventID: event.id, into: db)
         }
-        return OutboxEntry(event: event, channelID: channel, state: .pending, attempts: 0, lastError: nil)
+        return OutboxEntry(event: event, channelID: channel, state: state, attempts: 0, lastError: nil)
     }
 
     // MARK: - Transitions
@@ -93,6 +98,7 @@ public extension BuzzEventStore {
         let projector = projector
         try await writer.write { db in
             _ = try Self.write(event, receivedAt: receivedAt, projector: projector, into: db)
+            try db.execute(sql: "DELETE FROM outbox_media WHERE event_id = ?", arguments: [event.id])
             try db.execute(sql: "DELETE FROM outbox WHERE event_id = ?", arguments: [event.id])
         }
     }
@@ -120,10 +126,26 @@ public extension BuzzEventStore {
         }
     }
 
-    /// Drops a queued send without delivering it — a user-cancelled retry.
-    func discard(_ eventID: String) async throws {
+    /// Drops a queued send without delivering it — a user-cancelled retry — and
+    /// returns staged files no surviving outbox row references.
+    @discardableResult
+    func discard(_ eventID: String) async throws -> Set<StagedMediaKey> {
         try await writer.write { db in
+            let candidates = try Row.fetchAll(
+                db,
+                sql: "SELECT DISTINCT sha256, ext FROM outbox_media WHERE event_id = ?",
+                arguments: [eventID]
+            ).map { StagedMediaKey(sha256: $0["sha256"], fileExtension: $0["ext"]) }
+            try db.execute(sql: "DELETE FROM outbox_media WHERE event_id = ?", arguments: [eventID])
             try db.execute(sql: "DELETE FROM outbox WHERE event_id = ?", arguments: [eventID])
+            return try candidates.reduce(into: Set<StagedMediaKey>()) { removable, key in
+                let unfinishedReferences = try Int.fetchOne(
+                    db,
+                    sql: "SELECT COUNT(*) FROM outbox_media WHERE sha256 = ? AND state <> ?",
+                    arguments: [key.sha256, OutboxMediaState.uploaded.rawValue]
+                ) ?? 0
+                if unfinishedReferences == 0 { removable.insert(key) }
+            }
         }
     }
 

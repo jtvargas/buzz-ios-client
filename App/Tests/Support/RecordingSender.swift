@@ -48,6 +48,35 @@ actor RecordingSender: MessageSending {
         return OutboxEntry(event: event, channelID: channel, state: .pending, attempts: 0, lastError: nil)
     }
 
+    @discardableResult
+    func enqueueMediaMessage(
+        kind: EventKind,
+        text: String,
+        in channel: String,
+        tags: [[String]],
+        media: [OutboundMediaPayload],
+        maxContentBytes _: Int
+    ) async throws -> OutboxEntry {
+        guard let baseURL = URL(string: "https://relay.example.com") else {
+            throw OutboxError.mediaStagingFailed
+        }
+        let descriptors = try media.map { payload in
+            guard let descriptor = BlobDescriptor.predicted(
+                data: payload.data,
+                baseURL: baseURL,
+                filename: payload.filename
+            ) else { throw OutboxError.mediaStagingFailed }
+            return descriptor
+        }
+        return try await enqueue(
+            kind: kind,
+            content: OutboundAttachments.content(text, attaching: descriptors),
+            in: channel,
+            tags: tags + OutboundAttachments.tags(attaching: descriptors),
+            maxContentBytes: OutboxPolicy.maxContentBytes
+        )
+    }
+
     func retry(_ eventID: String) async throws {
         retried.append(eventID)
     }

@@ -3,7 +3,7 @@ import Foundation
 import SwiftUI
 
 /// The small views a message row hangs off itself — the "N replies" affordance and the
-/// failed-send strip. Split out of `TimelineRowView.swift` so that file is about the row's
+/// delivery strips. Split out of `TimelineRowView.swift` so that file is about the row's
 /// own hierarchy.
 ///
 /// A third one used to live here: `MessagePreview`, the compact card the long-press context
@@ -119,33 +119,98 @@ enum ThreadSummaryDateFormatter {
     }
 }
 
-/// The "not delivered" strip on a failed send: the reason when the relay gave one,
-/// and a retry action that re-queues the message.
-struct RetryStrip: View {
-    let reason: String?
-    var canRetry = true
-    let onRetry: () -> Void
+/// The live counterpart to ``RetryStrip``: a media send still working above the
+/// relay drain, shown only where the row's authored media makes that wait visible.
+struct SendingStrip: View {
+    /// Pictures already on the relay, and how many the message carries.
+    ///
+    /// The count is shown only while more than one picture is going up: "(1/1)" tells
+    /// a reader nothing they cannot see, and a single number that only ever reads 0 or
+    /// 1 invites them to watch it rather than the conversation.
+    let uploaded: Int
+    let total: Int
+
+    private var progress: String? {
+        guard total > 1 else { return nil }
+        return "(\(uploaded)/\(total))"
+    }
 
     var body: some View {
-        Button(action: onRetry) {
-            HStack(spacing: 6) {
-                Image(systemName: "exclamationmark.circle.fill")
-                Text(label)
-                    .font(.hive(.caption))
-            }
-            .foregroundStyle(.red)
+        HStack(spacing: 6) {
+            ProgressView()
+                .controlSize(.mini)
+            Text(progress.map { "Sending… \($0)" } ?? "Sending…")
+                .font(.hive(.caption))
+                // The count changes width as it climbs; without this the spinner beside
+                // it steps sideways on every picture that lands.
+                .monospacedDigit()
         }
-        .buttonStyle(.plain)
-        .disabled(!canRetry)
-        .accessibilityHint(canRetry ? "Double tap to retry sending" : "This relay refusal is terminal")
+        .foregroundStyle(.secondary)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(
+            progress == nil
+                ? "Sending"
+                : "Sending, \(uploaded) of \(total) pictures uploaded"
+        )
+    }
+}
+
+/// The "not delivered" strip on a failed send: a retry action when the same send
+/// can succeed, or a direction to delete a terminal failure.
+struct RetryStrip: View {
+    let reason: String?
+    var isRetryable = true
+    var isEnabled = true
+    /// How many of the message's pictures failed, and how many it carries.
+    ///
+    /// Said here rather than drawn on the tile itself, deliberately. The pictures are
+    /// rendered by the shared markdown engine — the same one the channel list and every
+    /// other surface use — and marking one tile would mean passing upload state through
+    /// a text renderer that has no business knowing about the upload queue. Delivery
+    /// state belongs on the delivery strip, which is this.
+    ///
+    /// It matters because a partial failure is not a failed message: four pictures
+    /// arrived, and a reader told only "not delivered" will re-pick all five.
+    var failedMedia = 0
+    var totalMedia = 0
+    let onRetry: () -> Void
+
+    @ViewBuilder
+    var body: some View {
+        if isRetryable {
+            Button(action: onRetry) { content }
+                .buttonStyle(.plain)
+                .disabled(!isEnabled)
+                .accessibilityHint("Double tap to retry sending")
+        } else {
+            content
+        }
+    }
+
+    private var content: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "exclamationmark.circle.fill")
+            Text(label)
+                .font(.hive(.caption))
+        }
+        .foregroundStyle(.red)
     }
 
     private var label: String {
-        if let reason, !reason.isEmpty {
-            return canRetry
-                ? "Not delivered (\(reason)) — tap to retry"
-                : "Not delivered (\(reason))"
+        // A partial picture failure is its own sentence, and it displaces the generic
+        // one: "1 of 5 pictures didn't send" is what happened, where "Not delivered"
+        // reads as though the whole message is lost and the other four need re-picking.
+        if failedMedia > 0, totalMedia > 1 {
+            let subject = failedMedia == 1 ? "picture" : "pictures"
+            return isRetryable
+                ? "\(failedMedia) of \(totalMedia) \(subject) didn't send — tap to retry just \(failedMedia == 1 ? "that one" : "those")"
+                : "\(failedMedia) of \(totalMedia) \(subject) can't be sent — delete to dismiss"
         }
-        return canRetry ? "Not delivered — tap to retry" : "Not delivered"
+        if let reason, !reason.isEmpty {
+            return isRetryable
+                ? "Not delivered (\(reason)) — tap to retry"
+                : "Not delivered (\(reason)) — delete to dismiss"
+        }
+        return isRetryable ? "Not delivered — tap to retry" : "Not delivered — delete to dismiss"
     }
 }

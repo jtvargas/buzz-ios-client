@@ -3,7 +3,7 @@ import Foundation
 import Observation
 import UIKit
 
-/// Resolves the session's uploader when an attachment is picked.
+/// Resolves the session's uploader when prepared attachments are sent.
 ///
 /// The provider is deliberately main-actor isolated: it reads the app's observable
 /// environment, while ``MediaUploading`` remains `Sendable` for the actual request.
@@ -15,32 +15,28 @@ typealias MediaUploaderProvider = @MainActor @Sendable () -> (any MediaUploading
 /// send, so a channel and each of its threads carry their own — picking a photo in
 /// a thread cannot put it on the channel's next message.
 ///
-/// # Three rules, all of them the mobile client's
+/// # Three rules
 ///
-/// 1. **Upload on pick.** By send time every attachment is already on the relay.
-/// 2. **Send waits for the pick, not for the network.** While anything is still
-///    uploading, send is refused — see ``isAttaching``. This is the one place the
-///    author is made to wait, and it is the alternative to sending a message that
-///    is missing a picture they can see in the composer.
-/// 3. **A failed upload leaves nothing behind.** The tile goes and a line of text
-///    says why. Keeping a broken tile to retry was considered and dropped: the
-///    picture is still in the library, and "pick it again" is a shorter path than
-///    a retry affordance nothing else in this composer has.
+/// 1. **Prepare on pick.** Loading, metadata scrubbing, colour conversion, and the
+///    preview happen locally while the author is still composing.
+/// 2. **Stage on send.** Exact scrubbed bytes are written beside the signed outbox
+///    row before the composer clears; the engine owns upload progress from there.
+/// 3. **Keep authored intent durable.** A conversation screen may disappear while
+///    the outbox row and its staged bytes continue toward the relay.
 ///
 /// # What is not here
 ///
-/// No persistence. Unlike the text draft — which survives leaving the conversation
-/// (`ComposerDrafts`) — attachments are dropped when the model goes. Restoring
-/// them would mean holding relay URLs for pictures the author may never send, and
-/// deciding when those stop being theirs; the text draft has no such question.
+/// Before send there is no persistence. Unlike the text draft — which survives
+/// leaving the conversation (`ComposerDrafts`) — uncommitted pictures are dropped
+/// when the model goes. Send transfers them to the durable outbox staging store.
 @MainActor
 @Observable
 final class ComposerAttachmentsModel {
-    /// Every attachment in the order it was picked, uploading and uploaded alike.
+    /// Every attachment in the order it was picked, from local preparation onward.
     private(set) var attachments: [ComposerAttachment] = []
 
-    /// Why the last pick did not become an attachment, for the banner above the
-    /// strip. Cleared by the next pick, and by its own countdown — see ``report(_:)``.
+    /// Why the last preparation or send-time staging failed, for the banner above
+    /// the strip. Cleared by the next attempt and by its own countdown.
     ///
     /// Written only through ``report(_:)`` and ``clearError()``. A direct assignment
     /// would leave whatever countdown is running pointed at it, and that countdown
@@ -50,10 +46,8 @@ final class ComposerAttachmentsModel {
     /// Whether the live camera is occupying the panel above this composer's bar.
     private(set) var isCameraPresented = false
 
-    /// At most this many uploads at once. Three, the ceiling the mobile client
-    /// uses (`_maxConcurrentImageUploads`), and it bounds memory as much as
-    /// bandwidth: converting a 12-megapixel photo holds a bitmap of about 48 MB
-    /// while it does it, and ten of those at once is not a thing to do on a phone.
+    /// At most this many preparations at once. The engine applies the same ceiling
+    /// to staged relay uploads.
     static let maxConcurrentUploads = 3
 
     /// The most pictures one message may carry.
@@ -72,54 +66,31 @@ final class ComposerAttachmentsModel {
     /// finite, because "for ever" is not a state an author can do anything about.
     static let sourceDeadline: Duration = .seconds(60)
 
-    /// How long the relay has to accept the bytes.
-    ///
-    /// `URLSession`'s own resource timeout defaults to **seven days**, and its request
-    /// timeout only fires when a connection goes completely silent — so a trickling upload is
-    /// unbounded in practice. The uploader is handed a session with real ceilings
-    /// (``AppEnvironment/makeMediaUploader(websocketURL:)``); this is the belt to that
-    /// bracing, so a transport that somehow outlives its own timeout still ends here.
-    ///
-    /// Just outside the transport's own ceiling on purpose, so the error an author reads is
-    /// the network naming its own failure rather than this giving up first. Long, for the
-    /// reason set out there: killing a picture that was going to arrive is worse than the
-    /// spinner, and the spinner has an X on it.
-    ///
-    /// It covers the upload and nothing else. The conversion between the two deadlines is
-    /// deliberately left unbounded: it is CPU work that finishes, and a ceiling on it would
-    /// mean an old phone re-encoding a large HEIC losing a picture that was going to arrive.
-    static let uploadDeadline: Duration = .seconds(270)
-
     /// How long an error stays on screen before it takes itself off.
     ///
-    /// The owner's ask: a composer carrying a stale complaint about a pick from five minutes
-    /// ago is noise, and none of these errors describe something the author can still act on
-    /// — the pick they refer to is already over. Five seconds is long enough to read the
-    /// longest of them (the animation one, at fourteen words) about twice.
+    /// The owner's ask: a composer carrying a stale complaint from five minutes ago
+    /// is noise. Five seconds is long enough to read the longest one about twice;
+    /// locally ready rows remain available after the banner clears.
     static let errorDuration: Duration = .seconds(5)
 
-    /// The app environment can build this after a conversation screen exists, so this is
-    /// resolved at pick time rather than captured when the model is constructed. A pick with
-    /// no uploader fails with a reason rather than silently doing nothing.
-    private let uploader: MediaUploaderProvider
+    /// Legacy provider retained for source compatibility while upload ownership lives
+    /// on ``SyncEngine``. The composer never resolves it.
+    let uploader: MediaUploaderProvider
 
     /// The countdown clearing ``uploadError``, held so the next error can cancel it.
     ///
     /// Not observable: nothing renders it, and it changes on every error.
     @ObservationIgnored private var errorDismissal: Task<Void, Never>?
 
-    /// The in-flight pick batches, so a sign-out or a send can stop them. Not
+    /// The in-flight preparation batches, so a sign-out can stop them. Not
     /// observable: nothing renders them.
     @ObservationIgnored private var batches: [Task<Void, Never>] = []
 
-    /// The deadlines this model actually uses.
+    /// The deadline this model actually uses.
     ///
-    /// Instance rather than static so a test can prove the timeout *fires* — the shipped
-    /// values are a minute and a half, and a suite that waited them out would be a suite
-    /// nobody runs. The defaults are the shipped ones, so production reads exactly the
-    /// constants documented above.
+    /// Instance rather than static so a test can prove the source timeout *fires* without
+    /// waiting out the shipped value. Production reads the constant documented above.
     private let sourceDeadline: Duration
-    private let uploadDeadline: Duration
     /// Injected for the same reason as the deadlines above: a suite that waited out the
     /// shipped five seconds per error would be a suite nobody runs.
     private let errorDuration: Duration
@@ -127,22 +98,17 @@ final class ComposerAttachmentsModel {
     init(
         uploader: @escaping MediaUploaderProvider = { nil },
         sourceDeadline: Duration = ComposerAttachmentsModel.sourceDeadline,
-        uploadDeadline: Duration = ComposerAttachmentsModel.uploadDeadline,
         errorDuration: Duration = ComposerAttachmentsModel.errorDuration
     ) {
         self.uploader = uploader
         self.sourceDeadline = sourceDeadline
-        self.uploadDeadline = uploadDeadline
         self.errorDuration = errorDuration
     }
 
     // MARK: - What the composer asks
 
-    /// Whether anything is still on its way up — the send gate.
-    var isAttaching: Bool { attachments.contains(where: \.isUploading) }
-
-    /// The descriptors a message would carry, in pick order.
-    var readyDescriptors: [BlobDescriptor] { attachments.compactMap(\.descriptor) }
+    /// Whether anything is still being prepared locally — the send gate.
+    var isAttaching: Bool { attachments.contains(where: \.isPreparing) }
 
     /// Whether there is anything to draw above the text field.
     var isEmpty: Bool { attachments.isEmpty }
@@ -164,7 +130,7 @@ final class ComposerAttachmentsModel {
 
     /// Whether these attachments alone are enough to justify a send — a picture
     /// with no words is a message.
-    var hasSendableContent: Bool { !readyDescriptors.isEmpty }
+    var hasSendableContent: Bool { attachments.contains(where: \.isReady) }
 
     // MARK: - Picking
 
@@ -181,7 +147,7 @@ final class ComposerAttachmentsModel {
     /// The countdown is restarted rather than left alone, so a second error gets its own
     /// five seconds instead of inheriting what was left of the first one's. That is the
     /// case that shows up in practice: tapping a full composer twice.
-    private func report(_ error: Error) {
+    func report(_ error: Error) {
         uploadError = Self.describe(error)
         errorDismissal?.cancel()
         let duration = errorDuration
@@ -196,7 +162,7 @@ final class ComposerAttachmentsModel {
     ///
     /// Cancelling matters even though the countdown would only write `nil` over `nil`: the
     /// next error along would otherwise be cleared by *this* error's timer.
-    private func clearError() {
+    func clearError() {
         errorDismissal?.cancel()
         errorDismissal = nil
         uploadError = nil
@@ -215,11 +181,10 @@ final class ComposerAttachmentsModel {
         isCameraPresented = false
     }
 
-    /// Takes a pick and starts uploading it.
+    /// Takes a pick and starts preparing it locally.
     ///
-    /// Returns immediately: every tile appears at once and fills in as its upload
-    /// lands, so the strip reflects what was picked before the network has been
-    /// touched.
+    /// Returns immediately: every tile appears at once and fills in as its preview
+    /// is prepared, without touching the network.
     func add(_ items: [any ComposerPickedItem]) {
         guard !items.isEmpty else { return }
         clearError()
@@ -234,11 +199,11 @@ final class ComposerAttachmentsModel {
 
         let ids = accepted.map { _ in UUID() }
         attachments.append(contentsOf: ids.map {
-            ComposerAttachment(id: $0, preview: nil, state: .uploading)
+            ComposerAttachment(id: $0, preview: nil, state: .preparing)
         })
 
         let batch = Task { [weak self] in
-            await self?.upload(accepted, as: ids)
+            await self?.prepare(accepted, as: ids)
             return ()
         }
         batches.append(batch)
@@ -246,9 +211,9 @@ final class ComposerAttachmentsModel {
 
     /// Drops an attachment — the X on its tile.
     ///
-    /// An upload already in flight for it is left to finish and land nowhere:
+    /// Preparation already in flight for it is left to finish and land nowhere:
     /// ``applyState(_:to:)`` writes only into a row that is still here, so a
-    /// removed tile cannot come back when its upload completes. Cancelling the request
+    /// removed tile cannot come back when its preparation completes. Cancelling the work
     /// instead would save a few kilobytes of upstream and cost a race worth more
     /// than that.
     func remove(_ id: UUID) {
@@ -259,26 +224,37 @@ final class ComposerAttachmentsModel {
     ///
     /// One call rather than "read, then clear" so there is no window in which a
     /// second send could carry the same pictures twice.
-    func takeForSend() -> [BlobDescriptor] {
-        let descriptors = readyDescriptors
+    func takeForSend() -> [ComposerAttachment.LocalPayload]? {
+        guard attachments.count <= Self.selectionLimit else {
+            report(ComposerAttachmentError.tooMany)
+            return nil
+        }
+        let payloads = attachments.compactMap(\.localPayload)
+        guard payloads.count == attachments.count else { return nil }
         attachments.removeAll()
         clearError()
-        return descriptors
+        return payloads
     }
 
-    /// Puts attachments back after a send that was refused before it left the
-    /// device. The blobs are still on the relay, so the descriptors are still good
-    /// — restoring them is what makes an over-ceiling refusal recoverable rather
-    /// than a silent loss of the pictures along with the text.
-    func restore(_ descriptors: [BlobDescriptor]) {
-        guard attachments.isEmpty else { return }
-        attachments = descriptors.map {
-            ComposerAttachment(id: UUID(), preview: nil, state: .uploaded($0))
-        }
+    /// Puts local attachments back after staging or enqueue was refused. They
+    /// precede anything newly added while enqueue was in flight, preserving the
+    /// earlier send's order. If that would exceed the cap, the newest rows are
+    /// trimmed and the existing capacity error is surfaced.
+    func restore(_ payloads: [ComposerAttachment.LocalPayload]) {
+        attachments.insert(contentsOf: payloads.map { payload in
+            ComposerAttachment(
+                id: UUID(),
+                preview: UIImage(data: payload.data),
+                state: .ready(payload)
+            )
+        }, at: 0)
+        guard attachments.count > Self.selectionLimit else { return }
+        attachments.removeLast(attachments.count - Self.selectionLimit)
+        report(ComposerAttachmentError.tooMany)
     }
 
-    /// Drops everything and stops any pick still being read. Called when the
-    /// identity behind the composer goes.
+    /// Drops everything and stops local preparation still being read. Durable
+    /// send-time uploads are engine-owned and are not in `batches`.
     func reset() {
         for batch in batches { batch.cancel() }
         batches.removeAll()
@@ -287,7 +263,7 @@ final class ComposerAttachmentsModel {
         isCameraPresented = false
     }
 
-    // MARK: - Uploading
+    // MARK: - Preparing
 
     /// Runs a pick's items through the pipeline, at most
     /// ``maxConcurrentUploads`` at a time.
@@ -296,102 +272,47 @@ final class ComposerAttachmentsModel {
     /// completion starts the next. Two overlapping picks each get their own group,
     /// so the true ceiling is per pick — accepted, because the picker is modal and
     /// two picks can only overlap while one is still finishing.
-    private func upload(_ items: [any ComposerPickedItem], as ids: [UUID]) async {
+    private func prepare(_ items: [any ComposerPickedItem], as ids: [UUID]) async {
         await withTaskGroup(of: Void.self) { group in
             var next = 0
             while next < min(Self.maxConcurrentUploads, items.count) {
                 let index = next
-                group.addTask { [weak self] in await self?.upload(items[index], as: ids[index]) }
+                group.addTask { [weak self] in await self?.prepare(items[index], as: ids[index]) }
                 next += 1
             }
             while await group.next() != nil {
                 guard next < items.count else { continue }
                 let index = next
-                group.addTask { [weak self] in await self?.upload(items[index], as: ids[index]) }
+                group.addTask { [weak self] in await self?.prepare(items[index], as: ids[index]) }
                 next += 1
             }
         }
     }
 
-    /// One picture: bytes, conversion, thumbnail, upload.
+    /// One picture: bytes, conversion, and thumbnail, all local.
     ///
-    /// Both halves are bounded, and they are bounded *separately* so the reason a picture did
-    /// not make it is the reason the author is told. Waiting on iCloud and waiting on the
-    /// relay are different problems with different answers, and before this neither was
-    /// bounded at all.
-    private func upload(_ item: any ComposerPickedItem, as id: UUID) async {
+    /// Loading is bounded so an iCloud-backed pick cannot hold the composer forever;
+    /// conversion is finite local CPU work and deliberately has no deadline.
+    private func prepare(_ item: any ComposerPickedItem, as id: UUID) async {
         do {
-            guard let uploader = uploader() else { throw ComposerAttachmentError.noUploader }
             let data = try await Self.within(
                 sourceDeadline, or: .sourceTimedOut, item.loadData
             )
             let prepared = try await ComposerImagePreparation.prepare(data)
-            // Before the upload rather than after it, so the strip shows the
-            // picture while it is going up rather than a placeholder.
             applyPreview(UIImage(data: prepared.preview), to: id)
-            let descriptor = try await Self.within(uploadDeadline, or: .uploadTimedOut) {
-                try await uploader.upload(
+            applyState(
+                .ready(.init(
                     data: prepared.data,
                     mimeType: prepared.mimeType,
                     filename: item.suggestedFilename
-                )
-            }
-            applyState(.uploaded(descriptor), to: id)
+                )),
+                to: id
+            )
         } catch is CancellationError {
             attachments.removeAll { $0.id == id }
         } catch {
             attachments.removeAll { $0.id == id }
             report(error)
-        }
-    }
-
-    /// Runs `work`, or gives up on it.
-    ///
-    /// The loser is cancelled on the way out, so work nothing is waiting for any more stops
-    /// costing the device something. Whether it *honours* that cancellation is its business —
-    /// what matters here is that this call returns, the tile stops spinning, and the composer
-    /// stops being held shut by it.
-    ///
-    /// # Why this is unstructured, which it would rather not be
-    ///
-    /// The obvious way to write a race is `withThrowingTaskGroup`: add the work, add a sleep
-    /// that throws, take the first result. That version was written, and it does not work —
-    /// **a task group cannot return until every child has finished**, which is the guarantee
-    /// structured concurrency is built on. So the group waits for the loser, and the loser is
-    /// exactly the work that may never end: a transport parked on a
-    /// `withCheckedContinuation` is not cancellable, and cancelling a task suspended on one
-    /// changes nothing. The deadline fired, threw, and then the group sat there holding it —
-    /// a timeout defeated by the one thing it exists to defend against.
-    ///
-    /// ``ComposerAttachmentsTests/uploadDeadlineFires()`` is that case, and it failed against
-    /// the group version.
-    private static func within<T: Sendable>(
-        _ deadline: Duration,
-        or failure: ComposerAttachmentError,
-        _ work: @escaping @Sendable () async throws -> T
-    ) async throws -> T {
-        let answer = FirstAnswer<T>()
-        let working = Task {
-            do { await answer.settle(.success(try await work())) } catch {
-                await answer.settle(.failure(error))
-            }
-        }
-        let timing = Task {
-            // A cancelled sleep is this call having already been answered, not a deadline.
-            guard (try? await Task.sleep(for: deadline)) != nil else { return }
-            await answer.settle(.failure(failure))
-        }
-        defer {
-            working.cancel()
-            timing.cancel()
-        }
-        // Unstructured tasks do not inherit cancellation, so the composer being reset out
-        // from under this has to be forwarded by hand — otherwise a reset would wait out the
-        // full deadline before the tile went.
-        return try await withTaskCancellationHandler {
-            try await answer.value().get()
-        } onCancel: {
-            Task { await answer.settle(.failure(CancellationError())) }
         }
     }
 
@@ -401,17 +322,16 @@ final class ComposerAttachmentsModel {
         attachments[index].preview = preview
     }
 
-    /// Writes a landed upload into a row that is still there.
+    /// Writes a state transition into a row that is still there.
     ///
     /// The membership check is the whole point: an author who removed a tile while
-    /// its upload was in flight must not see it reappear when the relay answers.
-    private func applyState(_ state: ComposerAttachment.State, to id: UUID) {
+    /// its preparation was in flight must not see it reappear when that work answers.
+    func applyState(_ state: ComposerAttachment.State, to id: UUID) {
         guard let index = attachments.firstIndex(where: { $0.id == id }) else { return }
         attachments[index].state = state
     }
 
-    /// One line, in the author's terms, for something that went wrong between a
-    /// pick and an attachment.
+    /// One line, in the author's terms, for local preparation failures.
     static func describe(_ error: Error) -> String {
         switch error {
         case MediaUploadError.rejectedByPolicy:

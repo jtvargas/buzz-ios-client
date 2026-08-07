@@ -1,14 +1,15 @@
 import CryptoKit
 import Foundation
 import NostrCore
+import os
 
 /// What the relay says back when it has stored a blob.
 ///
-/// The shape is the relay's, not ours, and the fields that matter most are the
-/// ones **it** computed: `dim`, `blurhash` and `thumb`. A client does not measure
-/// or blur a picture before uploading it — it sends bytes and keeps this answer,
-/// which is why the whole of ``imetaTag()`` can be assembled without ever
-/// decoding the image on this device.
+/// The relay's answer remains authoritative, but an image descriptor is also
+/// predictable from the exact scrubbed bytes: the client hashes and measures the
+/// picture, derives its MIME type and thumbnail URL, and makes its own BlurHash.
+/// The relay's BlurHash is deliberately different because it resamples with a
+/// different image stack; every other field used by ``imetaTag()`` must agree.
 ///
 /// `duration`, `image` and `filename` are carried but unused by the image path.
 /// They are what a video or a file attachment will need, and dropping them here
@@ -96,15 +97,14 @@ public struct BlobDescriptor: Sendable, Equatable, Codable {
             .replacingOccurrences(of: "]", with: "\\]")
         return "[\(label)](\(url))"
     }
+
 }
 
-/// Putting bytes on the blob store, as a composer needs it.
+/// Putting staged bytes on the blob store.
 ///
 /// A seam in front of ``MediaUploadClient`` for the same reason `MessageSending`
-/// sits in front of the engine: the interesting half of attaching a picture is
-/// what the composer does either side of the upload — hold the pick, survive a
-/// refusal, refuse to send a message whose picture is still in flight — and none
-/// of that should need a relay to test.
+/// sits in front of the engine: a durable media pump must be testable without a
+/// relay while it resumes, bounds, and retries uploads independently of a composer.
 public protocol MediaUploading: Sendable {
     /// Uploads `data` and returns what the relay stored, throwing
     /// ``MediaUploadError`` when it will not.
@@ -132,6 +132,16 @@ public enum MediaUploadError: Error, Equatable, Sendable {
     /// failure a reader can do something about, and the one a client must not
     /// retry unchanged.
     case rejectedByPolicy
+    /// The relay is already carrying as many uploads as it will take from this
+    /// identity at once — a 429.
+    ///
+    /// Its own case because it is the one refusal that says *later*, not *no*:
+    /// the bytes are fine and the relay is willing, so the only correct response
+    /// is to wait and offer them again. Folding it into ``failed`` cost a picture
+    /// out of every five-picture message, because the relay's ceiling is two per
+    /// pubkey (`buzz-relay` `BUZZ_MEDIA_MAX_CONCURRENT_UPLOADS_PER_PUBKEY`) and
+    /// nothing here backed off.
+    case tooManyConcurrent
     /// The relay answered, and the answer was not success.
     case failed(status: Int, body: String)
     /// The relay answered with success and a body that is not a descriptor.
@@ -168,6 +178,10 @@ public struct MediaUploadClient: Sendable {
 
     /// How long an upload authorisation stays valid. Matches the mobile client.
     static let authorizationLifetime: TimeInterval = 600
+
+    #if DEBUG
+    static let predictionLog = Logger(subsystem: "BuzzKit", category: "MediaUpload.prediction")
+    #endif
 
     /// The types the relay stores as pictures.
     ///
@@ -233,6 +247,10 @@ public struct MediaUploadClient: Sendable {
             // speaking — the picture is intact and the wrong shape for it, which
             // is a different thing to tell a reader than "upload failed".
             if status == 415 || status == 422 { throw MediaUploadError.rejectedByPolicy }
+            // 429 is the relay saying "not right now", not "not this picture" —
+            // see ``MediaUploadError/tooManyConcurrent``. The caller waits and
+            // offers the same bytes again rather than failing the message.
+            if status == 429 { throw MediaUploadError.tooManyConcurrent }
             throw MediaUploadError.failed(
                 status: status,
                 body: String(data: body, encoding: .utf8) ?? ""
@@ -244,8 +262,48 @@ public struct MediaUploadClient: Sendable {
         if let filename, descriptor.filename == nil {
             descriptor = descriptor.withFilename(filename)
         }
+        #if DEBUG
+        Self.assertPrediction(of: data, at: baseURL, filename: filename, matches: descriptor)
+        #endif
         return descriptor
     }
+
+    #if DEBUG
+    /// The one-line P1 gate: the relay's answer still wins, while a mismatch is
+    /// impossible to miss before a later phase signs the prediction into an event.
+    static func assertPrediction(
+        of data: Data,
+        at baseURL: URL,
+        filename: String?,
+        matches actual: BlobDescriptor
+    ) {
+        // Unit seams may use arbitrary bytes, but every supported image that can
+        // reach production must be predictable or this gate has found a defect.
+        guard let format = ImageByteFormat.detect(data), format.isStoredByRelay else { return }
+        guard let predicted = BlobDescriptor.predicted(
+            data: data,
+            baseURL: baseURL,
+            filename: filename
+        ) else {
+            predictionLog.fault("Could not predict a supported image descriptor")
+            assertionFailure("Media descriptor prediction could not be constructed")
+            return
+        }
+        let matches = predicted.url == actual.url
+            && predicted.sha256 == actual.sha256
+            && predicted.size == actual.size
+            && predicted.type == actual.type
+            && predicted.thumb == actual.thumb
+        guard !matches else { return }
+
+        let expected = String(describing: predicted)
+        let received = String(describing: actual)
+        predictionLog.fault("Media descriptor prediction mismatch")
+        predictionLog.fault("Predicted: \(expected, privacy: .public)")
+        predictionLog.fault("Relay returned: \(received, privacy: .public)")
+        assertionFailure("Media descriptor prediction did not match the relay")
+    }
+    #endif
 
     /// The three headers an upload carries.
     func headers(sha256: String, mimeType: String) async throws -> [String: String] {

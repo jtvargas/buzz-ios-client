@@ -6,18 +6,11 @@ import UIKit
 
 /// What the composer does with a picture between picking it and sending it.
 ///
-/// The interesting behaviour is all in the window *during* an upload — send
-/// refused, a tile removed, a refusal surfaced — so ``StubUploader`` parks every
-/// upload until this suite releases it. A double that answered immediately would
-/// close that window before anything could be asserted in it.
+/// Local preparation remains in the composer; send transfers exact scrubbed bytes
+/// to the durable outbox staging path.
 @MainActor
 @Suite("Composer attachments", .timeLimit(.minutes(1)))
 struct ComposerAttachmentsTests {
-    @MainActor
-    private final class UploaderSlot {
-        var value: (any MediaUploading)?
-    }
-
     /// Spins until `condition` holds or the deadline passes, so a test never waits
     /// on a fixed sleep for work that crosses actors.
     static func waitUntil(
@@ -36,108 +29,26 @@ struct ComposerAttachmentsTests {
         StubPickedItem(data: TestPicture.png(), suggestedFilename: filename)
     }
 
-    @Test("a picked photo uploads and becomes an attachment")
-    func pickUploadsAndLands() async throws {
+    static func prepare(_ count: Int, in model: ComposerAttachmentsModel) async {
+        model.add((0 ..< count).map { Self.item("pic-\($0)") })
+        await waitUntil { !model.isAttaching }
+    }
+
+    @Test("a picked photo is scrubbed locally without uploading")
+    func pickPreparesWithoutUploading() async throws {
         let uploader = StubUploader()
         let model = ComposerAttachmentsModel(uploader: { uploader })
 
         model.add([Self.item()])
-
-        // The tile is there before the network has been touched.
         #expect(model.attachments.count == 1)
         #expect(model.isAttaching)
         #expect(!model.hasSendableContent)
-
-        // Waited on the upload being *parked*, not on the preview appearing. The model
-        // applies the preview before it calls `upload`, and the call it then makes is
-        // spawned unstructured — so a preview says only that the work is coming, and
-        // `releaseAll()` reached for on that signal can release an empty set and leave the
-        // upload parked for the rest of the test. Every other wait in this suite already
-        // uses `parkedCount`; this was the one that did not, and it is the one that failed.
-        await Self.waitUntil { await uploader.parkedCount == 1 }
-        await uploader.releaseAll()
         await Self.waitUntil { !model.isAttaching }
 
         #expect(model.hasSendableContent)
-        #expect(model.readyDescriptors.count == 1)
-        // Asserted rather than waited on, now that the wait above is about the upload. The
-        // model writing the preview onto the row is what draws the strip thumbnail while
-        // the upload is still in flight, and nothing else in this target covers it —
-        // `ComposerImagePreparationTests` covers `prepare()` producing one, not the model
-        // applying it. As a wait it never guarded anything: the bounded helper falls
-        // through, so a preview that never arrived cost five seconds and still passed.
+        #expect(model.attachments.first?.localPayload != nil)
         #expect(model.attachments.first?.preview != nil)
-        // A PNG is a format the relay stores, so it went up as it was.
-        let requests = await uploader.requests
-        #expect(requests.map(\.mimeType) == ["image/png"])
-    }
-
-    /// The flag the send gate is built on — its effect on an actual send is
-    /// asserted in ``ComposerAttachmentSendTests``.
-    @Test("the in-flight window opens on the pick and closes on the answer")
-    func attachingWindow() async throws {
-        let uploader = StubUploader()
-        let model = ComposerAttachmentsModel(uploader: { uploader })
-
-        model.add([Self.item()])
-        #expect(model.isAttaching)
-
-        // Wait for the upload to actually arrive before releasing it: the pick is
-        // decoded and possibly converted first, so releasing straight away releases
-        // nothing and the upload parks for good.
-        await Self.waitUntil { await uploader.parkedCount == 1 }
-        await uploader.releaseAll()
-        await Self.waitUntil { !model.isAttaching }
-        #expect(!model.isAttaching)
-    }
-
-    /// The rule that makes a photo message possible at all.
-    @Test("an uploaded picture alone is enough to send")
-    func pictureAloneIsSendable() async throws {
-        let uploader = StubUploader()
-        let model = ComposerAttachmentsModel(uploader: { uploader })
-
-        model.add([Self.item()])
-        await Self.waitUntil { await uploader.parkedCount == 1 }
-        await uploader.releaseAll()
-        await Self.waitUntil { model.hasSendableContent }
-
-        #expect(model.hasSendableContent)
-    }
-
-    /// The defect this guards is the one the Drafts screen already taught: a row
-    /// deleted while its write was in flight came back when the write landed.
-    @Test("a tile removed mid-upload does not come back when the upload lands")
-    func removalDuringUploadSticks() async throws {
-        let uploader = StubUploader()
-        let model = ComposerAttachmentsModel(uploader: { uploader })
-
-        model.add([Self.item()])
-        let id = try #require(model.attachments.first?.id)
-        await Self.waitUntil { await uploader.parkedCount == 1 }
-
-        model.remove(id)
-        #expect(model.attachments.isEmpty)
-
-        await uploader.releaseAll()
-        // Give the landed upload every chance to write itself back in.
-        for _ in 0 ..< 50 { await Task.yield() }
-        #expect(model.attachments.isEmpty)
-        #expect(!model.hasSendableContent)
-    }
-
-    @Test("a refused upload leaves no tile and says why")
-    func refusedUploadSurfaces() async throws {
-        let uploader = StubUploader()
-        let model = ComposerAttachmentsModel(uploader: { uploader })
-
-        model.add([Self.item()])
-        await Self.waitUntil { await uploader.parkedCount == 1 }
-        await uploader.releaseAll(.failure(.rejectedByPolicy))
-        await Self.waitUntil { model.uploadError != nil }
-
-        #expect(model.attachments.isEmpty)
-        #expect(model.uploadError == "The relay wouldn't store that picture.")
+        #expect(await uploader.requests.isEmpty)
     }
 
     @Test("a pick that yields no bytes never reaches the uploader")
@@ -169,51 +80,18 @@ struct ComposerAttachmentsTests {
         #expect(requests.isEmpty)
     }
 
-    /// A full composer's worth picked at once must not become five simultaneous
-    /// conversions — each one holds a full-size bitmap while it runs.
-    @Test("no more than three uploads run at once")
-    func concurrencyIsCapped() async throws {
-        let uploader = StubUploader()
-        let model = ComposerAttachmentsModel(uploader: { uploader })
-        let picked = ComposerAttachmentsModel.selectionLimit
-
-        model.add((0 ..< picked).map { _ in Self.item() })
-        #expect(model.attachments.count == picked)
-
-        await Self.waitUntil { await uploader.parkedCount == ComposerAttachmentsModel.maxConcurrentUploads }
-        let parked = await uploader.parkedCount
-        #expect(parked == ComposerAttachmentsModel.maxConcurrentUploads)
-
-        // Drain the rest, releasing whatever is parked until every one has landed.
-        while model.isAttaching {
-            await uploader.releaseAll()
-            await Task.yield()
-            try? await Task.sleep(for: .milliseconds(5))
-        }
-
-        #expect(model.readyDescriptors.count == picked)
-        let peak = await uploader.peakConcurrent
-        #expect(peak <= ComposerAttachmentsModel.maxConcurrentUploads)
-    }
-
     @Test("taking attachments for a send empties the composer")
     func takeForSendEmpties() async throws {
         let uploader = StubUploader()
         let model = ComposerAttachmentsModel(uploader: { uploader })
 
-        model.add([Self.item(), Self.item()])
-        while model.isAttaching {
-            await uploader.releaseAll()
-            await Task.yield()
-            try? await Task.sleep(for: .milliseconds(5))
-        }
-
-        let taken = model.takeForSend()
+        await Self.prepare(2, in: model)
+        let taken = try #require(model.takeForSend())
         #expect(taken.count == 2)
         #expect(model.attachments.isEmpty)
         #expect(!model.hasSendableContent)
         // A second send carries nothing — the pictures went with the first.
-        #expect(model.takeForSend().isEmpty)
+        #expect(try #require(model.takeForSend()).isEmpty)
     }
 
     /// A send refused before it left the device gives the text back; it has to give
@@ -221,45 +99,15 @@ struct ComposerAttachmentsTests {
     @Test("a refused send puts the pictures back")
     func restoreAfterRefusal() async throws {
         let model = ComposerAttachmentsModel(uploader: { StubUploader() })
-        let descriptor = StubUploader.descriptor(key: "one", mimeType: "image/png", size: 10)
+        await Self.prepare(1, in: model)
+        let payload = try #require(model.attachments.first?.localPayload)
 
-        model.restore([descriptor])
+        _ = model.takeForSend()
+        model.restore([payload])
 
-        #expect(model.readyDescriptors == [descriptor])
+        #expect(model.attachments.first?.localPayload == payload)
+        #expect(model.attachments.first?.preview != nil)
         #expect(!model.isAttaching)
-    }
-
-    @Test("with no session mounted, a pick says so rather than doing nothing")
-    func noUploaderIsReported() async throws {
-        let model = ComposerAttachmentsModel(uploader: { nil })
-
-        model.add([Self.item()])
-        await Self.waitUntil { model.uploadError != nil }
-
-        #expect(model.attachments.isEmpty)
-        #expect(model.uploadError == "This conversation isn't ready for pictures yet — try again in a moment.")
-    }
-
-    /// The conversation model is allowed to exist before the session finishes mounting.
-    /// The provider must therefore be read when the author picks, not when the screen is
-    /// constructed — this is the regression seam for the stale-uploader defect.
-    @Test("a screen built before its session mounts can attach once the uploader exists")
-    func uploaderIsResolvedAtPickTime() async throws {
-        let slot = UploaderSlot()
-        let model = ComposerAttachmentsModel(uploader: { slot.value })
-
-        #expect(slot.value == nil)
-
-        let uploader = StubUploader()
-        slot.value = uploader
-        model.add([Self.item()])
-
-        await Self.waitUntil { await uploader.parkedCount == 1 }
-        await uploader.releaseAll()
-        await Self.waitUntil { !model.isAttaching }
-
-        #expect(model.hasSendableContent)
-        #expect(model.uploadError == nil)
     }
 
     // MARK: - The cap
@@ -389,25 +237,6 @@ struct ComposerAttachmentsTests {
         #expect(model.uploadError == "That picture took too long to load — it may still be in iCloud.")
     }
 
-    /// The other half: the relay accepts the connection and stops answering. `URLSession`'s
-    /// own resource timeout is seven days by default, so without this the tile spins there too.
-    @Test("a relay that never answers gives up instead of spinning for ever")
-    func uploadDeadlineFires() async throws {
-        let uploader = StubUploader()
-        let model = ComposerAttachmentsModel(
-            uploader: { uploader },
-            uploadDeadline: .milliseconds(40)
-        )
-
-        // Parked and never released — the stub's whole purpose.
-        model.add([Self.item()])
-        await Self.waitUntil { model.uploadError != nil }
-
-        #expect(model.attachments.isEmpty)
-        #expect(!model.isAttaching)
-        #expect(model.uploadError == "That picture took too long to upload.")
-    }
-
     /// The race's own contract, which every deadline above rests on: the loser answers too —
     /// a cancelled fetch throws `CancellationError` a moment after the deadline has already
     /// spoken — and a second answer must be dropped rather than resume the waiter twice.
@@ -418,25 +247,9 @@ struct ComposerAttachmentsTests {
 
         await race.settle(.success(1))
         await race.settle(.success(2))
-        await race.settle(.failure(ComposerAttachmentError.uploadTimedOut))
+        await race.settle(.failure(ComposerAttachmentError.sourceTimedOut))
 
         #expect(try await race.value().get() == 1)
-    }
-
-    /// A deadline that fires on a picture that would have succeeded is worse than no deadline,
-    /// so this pins the other direction.
-    @Test("an upload that lands inside the deadline is unaffected")
-    func deadlineDoesNotFireOnASuccess() async throws {
-        let uploader = StubUploader()
-        let model = ComposerAttachmentsModel(uploader: { uploader }, uploadDeadline: .seconds(30))
-
-        model.add([Self.item()])
-        await Self.waitUntil { await uploader.parkedCount == 1 }
-        await uploader.releaseAll()
-        await Self.waitUntil { !model.isAttaching }
-
-        #expect(model.hasSendableContent)
-        #expect(model.uploadError == nil)
     }
 
     /// What the conversation is told, so its bottom inset can move with the bar —
@@ -464,19 +277,4 @@ struct ComposerAttachmentsTests {
         #expect(model.barRevision == resting, "the strip going away did not declare a height change")
     }
 
-    /// The other half of the same contract, and the one a count could not have
-    /// expressed: a failed upload takes the tile away *and* puts a line of text
-    /// under the strip, so the bar changes height twice over with the attachment
-    /// list empty at both ends.
-    @Test("a failed upload declares its own height change")
-    func barRevisionCoversTheErrorLine() async throws {
-        let model = ComposerAttachmentsModel(uploader: { nil })
-        let resting = model.barRevision
-
-        model.add([Self.item()])
-        await Self.waitUntil { model.uploadError != nil }
-
-        #expect(model.attachments.isEmpty)
-        #expect(model.barRevision != resting, "the error line did not declare a height change")
-    }
 }

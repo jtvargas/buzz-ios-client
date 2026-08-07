@@ -17,54 +17,45 @@ extension ChannelTimelineModel {
     func send() {
         let document = mentionDraft
         let text = document.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        // A picture with no words is a message; an upload still in flight is not
-        // ready to be one. The composer disables send in both cases — this is the
-        // same rule stated where it is enforced, so a send reaching here another
-        // way cannot post a message missing an attachment.
+        // A picture with no words is a message. Local preparation must finish first.
         guard !attachments.isAttaching else { return }
-        let media = attachments.takeForSend()
+        guard !text.isEmpty || attachments.hasSendableContent else { return }
+        // Read at the tap, then stage and enqueue as one durable operation. The pending row
+        // appears before its background upload finishes, so the jump happens immediately
+        // and the composer is free for the next message.
+        //
+        // A send refused before the outbox transaction commits has already moved the reader.
+        // That refusal raises an alert and hands the draft and local bytes back, so it is
+        // neither silent nor lost.
+        let isChasingOwnSend = shouldJumpToOwnSend
+        let mentionPubkeys = document.mentionedPubkeys(sender: selfPubkey)
+        let selfPubkey = self.selfPubkey
+        guard let media = attachments.takeForSend() else { return }
         guard !text.isEmpty || !media.isEmpty else { return }
         mentionDraft = MentionDraft()
         sendError = nil
-        // At the tap, and not behind the `await` below. `enqueue` commits the outbox row and
-        // then waits for the drain — a publish round trip for every queued row — so a jump
-        // issued after it returns lands whenever the relay answers, which on a slow socket is
-        // seconds after the author pressed send. The freeze has to come off here for the same
-        // reason and one more: the row this whole path is about is newer than the boundary, so
-        // while the freeze stands it is not rendered at all and there is nothing to land on.
-        //
-        // The cost is that a send refused at the door — over the 64 KiB ceiling, the one thing
-        // `enqueue` throws for — has already moved the reader. That refusal raises an alert and
-        // hands the draft back, so it is neither silent nor lost, and it is not reachable by
-        // typing.
-        let isChasingOwnSend = shouldJumpToOwnSend
         if isChasingOwnSend { jumpToLatest() }
-
-        let channel = self.channel
-        let sender = self.sender
-        let mentionPubkeys = document.mentionedPubkeys(sender: selfPubkey)
-        let selfPubkey = self.selfPubkey
         Task { [weak self] in
+            guard let self else { return }
+
             do {
-                let entry = try await sender.enqueue(
-                    kind: .channelMessage,
-                    content: OutboundAttachments.content(text, attaching: media),
-                    in: channel,
+                let entry = try await self.sender.enqueueComposerMessage(
+                    text: text,
+                    in: self.channel,
                     tags: OutboundTags.message(
-                        channel: channel,
+                        channel: self.channel,
                         mentioning: mentionPubkeys,
                         sender: selfPubkey
-                    ) + OutboundAttachments.tags(attaching: media),
-                    maxContentBytes: OutboxPolicy.maxContentBytes
+                    ),
+                    media: media.map { OutboundMediaPayload(data: $0.data, filename: $0.filename) }
                 )
                 // The message has an id now, so the trip that started at the tap can finish
                 // on the message itself rather than on whatever was newest when it began.
-                if isChasingOwnSend { self?.landOn(ownSend: entry.event.id) }
+                if isChasingOwnSend { self.landOn(ownSend: entry.event.id) }
             } catch let error as OutboxError {
-                self?.restore(document: document, media: media, error: error)
+                self.restore(document: document, media: media, error: error)
             } catch {
-                // A transient send failure leaves the row queued in the outbox for
-                // the next drain; nothing to surface and nothing to restore.
+                self.restore(document: document, media: media, error: error)
             }
         }
     }
@@ -110,14 +101,20 @@ extension ChannelTimelineModel {
         Task { await typing.publishEphemeral(kind: .typing, content: "", tags: tags) }
     }
 
-    private func restore(document: MentionDraft, media: [BlobDescriptor], error: OutboxError) {
+    private func restore(
+        document: MentionDraft,
+        media: [ComposerAttachment.LocalPayload],
+        error: Error
+    ) {
         // Preserve whatever the user has since typed, only restoring if untouched.
         if mentionDraft.text.isEmpty { mentionDraft = document }
-        // The blobs are still on the relay, so their descriptors are still good:
-        // a refusal that took the text back must take the pictures back with it,
-        // or a send over the ceiling silently loses them.
+        // No outbox row committed, so the local bytes return to the composer.
         attachments.restore(media)
-        sendError = Self.describe(error)
+        if let outboxError = error as? OutboxError {
+            sendError = Self.describe(outboxError)
+        } else {
+            sendError = "Couldn't send that message."
+        }
     }
 
     private static func describe(_ error: OutboxError) -> String {
@@ -126,6 +123,10 @@ extension ChannelTimelineModel {
             "Message is too large (\(bytes) bytes; limit \(limit))."
         case .invalidEvent, .notQueued, .notRetryable, .encodingFailed:
             "Couldn't send that message."
+        case .mediaUnavailable:
+            "Media upload isn't available right now."
+        case .mediaStagingFailed:
+            "Couldn't save those pictures for sending. Check device storage and try again."
         }
     }
 }

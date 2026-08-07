@@ -5,14 +5,11 @@ import UIKit
 /// One picture the composer is holding, from the moment it is picked to the moment
 /// the message carrying it goes.
 ///
-/// # Uploaded before it is sent
+/// # Prepared when picked, staged when sent
 ///
-/// The upload happens at *pick* time. By the time an author presses send, every
-/// attachment here already exists on the relay and all the message has to carry is
-/// its ``BuzzKit/BlobDescriptor`` — so send is instant, a failure surfaces while
-/// the author is still looking at the composer, and a message can never half-go
-/// with a picture missing from it. That is the mobile client's model
-/// (`buzz/mobile/lib/features/channels/compose_bar.dart`), copied deliberately.
+/// Picking loads, scrubs, and previews the picture entirely on-device. Send writes
+/// those exact bytes beside a signed outbox row, clears the composer, and lets the
+/// engine-owned pump upload them without tying progress to a conversation screen.
 ///
 /// # The preview is local
 ///
@@ -23,11 +20,17 @@ import UIKit
 /// spinner.
 @MainActor
 struct ComposerAttachment: Identifiable {
+    struct LocalPayload: Equatable, Sendable {
+        let data: Data
+        let mimeType: String
+        let filename: String?
+    }
+
     enum State: Equatable {
-        /// On its way to the relay.
-        case uploading
-        /// Stored, and ready to be named by a message.
-        case uploaded(BlobDescriptor)
+        /// Being loaded and scrubbed locally.
+        case preparing
+        /// Scrubbed bytes held until the author sends.
+        case ready(LocalPayload)
     }
 
     /// Identity is assigned here rather than taken from the picture, because a
@@ -40,12 +43,20 @@ struct ComposerAttachment: Identifiable {
     var preview: UIImage?
     var state: State
 
-    var descriptor: BlobDescriptor? {
-        guard case let .uploaded(descriptor) = state else { return nil }
-        return descriptor
+    var localPayload: LocalPayload? {
+        guard case let .ready(payload) = state else { return nil }
+        return payload
     }
 
-    var isUploading: Bool { state == .uploading }
+    var isPreparing: Bool {
+        if case .preparing = state { return true }
+        return false
+    }
+
+    var isReady: Bool {
+        if case .ready = state { return true }
+        return false
+    }
 }
 
 /// Something a picker handed over, as the composer needs it.

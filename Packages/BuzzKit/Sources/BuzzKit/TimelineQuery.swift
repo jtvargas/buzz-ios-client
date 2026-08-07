@@ -74,7 +74,13 @@ extension BuzzEventStore {
                NULL                AS last_error,
                0                   AS is_retryable,
                e.tags              AS tags,
-               \(editedTags)       AS edited_tags
+               \(editedTags)       AS edited_tags,
+               -- Position-matched with the outbox branch's `uploaded_media`. A row in
+               -- the log is delivered, so every picture it names is already stored;
+               -- the count is never read for a `sent` row and 0 is the honest value
+               -- for "nothing is still going up".
+               0                   AS uploaded_media,
+               NULL                AS failed_media
         FROM event e
         LEFT JOIN rich_content rc ON rc.target_id = e.id
         LEFT JOIN profile p ON p.pubkey = e.pubkey
@@ -299,7 +305,19 @@ extension BuzzEventStore {
                -- The queue denormalizes the signed event's tags for exactly this: a
                -- message still in flight shows its own attachments, not none of them.
                o.tags      AS tags,
-               NULL        AS edited_tags
+               NULL        AS edited_tags,
+               -- How many of this message's pictures are already on the relay, for
+               -- the pending row's "Sending… (2/5)". In the SELECT list rather than
+               -- the WHERE clause deliberately: a correlated subquery in WHERE would
+               -- drop the index range bound this query depends on. Here it costs one
+               -- lookup per *outbox* row, of which a timeline page has nearly none.
+               (SELECT COUNT(*) FROM outbox_media m
+                 WHERE m.event_id = o.event_id AND m.state = 'uploaded') AS uploaded_media,
+               -- Which pictures failed, by content hash, so the row can mark the exact
+               -- tile rather than condemning the whole message. `imeta`'s `x` field is
+               -- the same hash, which is what joins these to what is on screen.
+               (SELECT group_concat(m.sha256) FROM outbox_media m
+                 WHERE m.event_id = o.event_id AND m.state = 'failed') AS failed_media
         FROM outbox o
         LEFT JOIN profile p ON p.pubkey = o.pubkey
         WHERE NOT EXISTS (SELECT 1 FROM event WHERE event.id = o.event_id)
@@ -353,6 +371,12 @@ extension BuzzEventStore {
             replyCount: row["reply_count"] ?? 0,
             lastReplyAt: row["last_reply_at"],
             media: MessageMedia.parse(tags: tags),
+            uploadedMediaCount: row["uploaded_media"] ?? 0,
+            failedMediaHashes: Set(
+                (row["failed_media"] as String?)?
+                    .split(separator: ",")
+                    .map(String.init) ?? []
+            ),
             notice: notice,
             isNotice: isNotice,
             // Either tag set, where `media` takes the edit's alone — and the asymmetry is

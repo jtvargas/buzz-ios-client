@@ -30,9 +30,10 @@ extension SyncEngine {
         return entry
     }
 
-    /// Drains the outbox now — the explicit user-retry entry point. A no-op unless
-    /// the engine is running; the next `.ready` drains otherwise.
+    /// Resumes HTTP media uploads immediately, then drains relay-bound rows when
+    /// the engine is running. The next `.ready` drains those rows otherwise.
     public func drainOutbox() async {
+        await resumeMediaUploads()
         guard state == .running else { return }
         await requestDrain(generation: readyGeneration)
     }
@@ -40,6 +41,10 @@ extension SyncEngine {
     /// Returns a failed send to the queue and drains, so an explicit human retry is
     /// a fresh start rather than a continuation of the backoff that gave up.
     public func retry(_ eventID: String) async throws {
+        if try await store.retryOutboxMedia(eventID) {
+            scheduleMediaPump(eventID: eventID, retryIfRunning: true)
+            return
+        }
         try await store.retry(eventID)
         await drainOutbox()
     }
@@ -49,7 +54,9 @@ extension SyncEngine {
     /// `sending` row the log holds it and it renders sent, which is the honest
     /// outcome; there is nothing left to unsend.
     public func discard(_ eventID: String) async throws {
-        try await store.discard(eventID)
+        let removable = try await store.discard(eventID)
+        guard let mediaStagingStore else { return }
+        for key in removable { try? mediaStagingStore.remove(key) }
     }
 
     /// Requests a drain, coalescing with any in-flight one. If a drain is already
@@ -72,10 +79,11 @@ extension SyncEngine {
         _ = generation
     }
 
-    /// Sends every queued row oldest-first: `pending`, `sending` (outcome unknown,
-    /// resent because the relay dedupes by id), and `awaitingReauth` (resent once
-    /// the connection re-authenticates and returns to `.ready`). `failed` rows are
-    /// left for an explicit retry.
+    /// Sends every drainable row oldest-first: `pending`, `sending` (outcome
+    /// unknown, resent because the relay dedupes by id), and `awaitingReauth`
+    /// (resent once the connection re-authenticates and returns to `.ready`).
+    /// `awaitingMedia` remains held for its upload pump; `failed` remains held for
+    /// an explicit retry.
     private func performDrain(generation: Int) async {
         guard state == .running, !isStopped else { return }
         let entries = (try? await store.pendingSends()) ?? []

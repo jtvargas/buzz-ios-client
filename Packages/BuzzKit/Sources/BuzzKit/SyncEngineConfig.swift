@@ -108,6 +108,10 @@ public struct SyncEngineConfig: Sendable {
     /// that can predate every message still in a channel.
     public var noticeBackfillLimit: Int
 
+    /// The longest one staged-media upload may hold an authored event before it
+    /// becomes an explicit, retryable send failure.
+    public var mediaUploadDeadline: Duration
+
     public init(
         liveSinceWindow: TimeInterval = 5,
         presenceSweepInterval: Duration = .seconds(1),
@@ -118,7 +122,8 @@ public struct SyncEngineConfig: Sendable {
         threadPrefetchLaunchPasses: Int = 3,
         threadSweepHorizon: TimeInterval = 14 * 24 * 60 * 60,
         threadSweepRootLimit: Int = 40,
-        noticeBackfillLimit: Int = 200
+        noticeBackfillLimit: Int = 200,
+        mediaUploadDeadline: Duration = .seconds(270)
     ) {
         self.liveSinceWindow = liveSinceWindow
         self.presenceSweepInterval = presenceSweepInterval
@@ -130,6 +135,7 @@ public struct SyncEngineConfig: Sendable {
         self.threadSweepHorizon = threadSweepHorizon
         self.threadSweepRootLimit = threadSweepRootLimit
         self.noticeBackfillLimit = noticeBackfillLimit
+        self.mediaUploadDeadline = mediaUploadDeadline
     }
 
     public static let `default` = SyncEngineConfig()

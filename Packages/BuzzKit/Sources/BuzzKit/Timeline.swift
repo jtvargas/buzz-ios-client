@@ -57,6 +57,22 @@ public struct TimelineRow: Sendable, Hashable, Identifiable {
     /// Empty for a message with no attachments, which is nearly all of them.
     public let media: [MessageMedia]
 
+    /// How many of ``media`` are already stored on the relay, while this row is still
+    /// on its way — the numerator of the pending row's "Sending… (2/5)".
+    ///
+    /// Meaningful only for a `.pending` row carrying media. A delivered row names only
+    /// pictures the relay already holds, so the query supplies 0 there rather than
+    /// counting: the answer would always equal ``media`` and nothing reads it.
+    public let uploadedMediaCount: Int
+
+    /// The content hashes of this message's pictures whose upload failed, matched
+    /// against ``MessageMedia/sha256``.
+    ///
+    /// Lets a row mark the one tile that did not make it rather than condemning the
+    /// whole message — four pictures that arrived are not a failed send, and telling a
+    /// reader otherwise makes them re-pick all five.
+    public let failedMediaHashes: Set<String>
+
     /// What the relay narrated here, when this row is a kind-40099 channel notice
     /// rather than something a person wrote.
     ///
@@ -120,6 +136,8 @@ public struct TimelineRow: Sendable, Hashable, Identifiable {
         replyCount: Int,
         lastReplyAt: Int64?,
         media: [MessageMedia] = [],
+        uploadedMediaCount: Int = 0,
+        failedMediaHashes: Set<String> = [],
         notice: SystemNotice? = nil,
         isNotice: Bool = false,
         namesSelf: Bool = false
@@ -140,6 +158,8 @@ public struct TimelineRow: Sendable, Hashable, Identifiable {
         self.replyCount = replyCount
         self.lastReplyAt = lastReplyAt
         self.media = media
+        self.uploadedMediaCount = uploadedMediaCount
+        self.failedMediaHashes = failedMediaHashes
         self.notice = notice
         // A decoded notice is a notice, whatever the caller passed: the two cannot
         // disagree, and a test that builds one by hand should not have to say so twice.
@@ -182,7 +202,7 @@ public enum Delivery: Sendable, Hashable {
     /// compile error here, not a silently mis-rendered message.
     init(state: String, lastError: String?) {
         switch OutboxState(rawValue: state) {
-        case .pending, .sending, .awaitingReauth: self = .pending
+        case .pending, .sending, .awaitingMedia, .awaitingReauth: self = .pending
         case .failed: self = .failed(lastError)
         case nil: self = .sent
         }

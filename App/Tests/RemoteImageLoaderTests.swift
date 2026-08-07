@@ -1,3 +1,4 @@
+import BuzzKit
 import Foundation
 @testable import Hive
 import Testing
@@ -35,6 +36,25 @@ struct RemoteImageLoaderTests {
 // MARK: - Fetch strategy
 
 extension RemoteImageLoaderTests {
+    @Test("staged message media renders locally before its predicted URL exists")
+    func resolvesStagedMedia() async throws {
+        let host = "staged" + StubAvatarProtocol.hostSuffix
+        StubAvatarProtocol.register(host: host, responses: [:])
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("remote-image-staging-\(UUID().uuidString)", isDirectory: true)
+        let staging = MediaStagingStore(directory: directory)
+        defer { try? staging.removeAll() }
+        let key = StagedMediaKey(sha256: Self.digest, fileExtension: "png")
+        try staging.write(AvatarRenderingTests.pngData(size: 256), for: key)
+        let loader = Self.makeLoader()
+        await loader.setStagingDirectory(directory)
+
+        let image = await loader.image(for: Self.url(host: "staged"), pixelSize: 108)
+
+        #expect(image != nil)
+        #expect(StubAvatarProtocol.requestedPaths(host: host).isEmpty)
+    }
+
     @Test("a small avatar is fetched from the thumbnail, and the original is never asked for")
     func prefersThumbnail() async throws {
         let host = "prefers-thumb" + StubAvatarProtocol.hostSuffix
