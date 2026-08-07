@@ -4,24 +4,21 @@ import UIKit
 
 /// A markdown file, rendered.
 ///
-/// Presented over whatever the reader was doing when they pressed the file. The shared parser
-/// still understands its markdown, while a document-only web surface gives headings, tables,
-/// code and lists native document layout and one selection range across block boundaries. See
-/// ``MarkdownDocumentContent`` for the two message-only stages a document deliberately skips.
+/// Presented over whatever the reader was doing when they pressed the file. In this POC the
+/// original source is handed directly to Textual, so the same package and selected preset draw
+/// both message bodies and full markdown documents.
 ///
-/// # Why the parse happens off the main actor
+/// # Why the file write happens off the main actor
 ///
-/// A README is a few thousand lines and the parse is a linear scan, but it is a scan of a
-/// string that has just arrived over the network, on the actor that is also animating the
-/// sheet up. Both halves — the fetch and the parse — run in the task; only the finished blocks
-/// come back. What the reader sees while that happens is a spinner in a sheet that has already
-/// finished presenting, rather than a sheet that hitches on the way in.
+/// A README is a few thousand lines and the source has just arrived over the network while the
+/// sheet is animating up. Persisting the shareable file stays off the main actor; Textual owns
+/// parsing and rendering when the loaded phase appears.
 struct MarkdownDocumentSheet: View {
     /// What the sheet is showing at any moment. One value rather than three flags: a document
     /// is loading, or it is a document, or it is a reason it is not — never two of those.
     private enum Phase {
         case loading
-        case loaded(RichMessage)
+        case loaded(String)
         case failed(String)
     }
 
@@ -135,8 +132,17 @@ struct MarkdownDocumentSheet: View {
             ProgressView()
                 .controlSize(.large)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-        case let .loaded(message):
-            MarkdownDocumentWebView(message: message, baseURL: document.url)
+        case let .loaded(markdown):
+            ScrollView {
+                TextualMarkdownView(
+                    markdown: markdown,
+                    baseURL: document.url,
+                    style: environment?.settings.textualRenderingStyle ?? .gitHub
+                )
+                .padding(.horizontal, 20)
+                .padding(.vertical, 16)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
         case let .failed(reason):
             failure(reason)
         }
@@ -173,19 +179,14 @@ struct MarkdownDocumentSheet: View {
             let text = try await MarkdownDocumentLoader.text(
                 for: document, authorization: authorization
             )
-            // The parse and the write are both off the main actor, and both are the same
-            // arrival: what the reader sees is a sheet that has already presented, not one
-            // that hitches while a few thousand lines are scanned and put on disk.
+            // The file write stays off the main actor. Textual owns parsing for this POC.
             let document = document
-            let (message, written) = await Task.detached(priority: .userInitiated) {
-                (
-                    MarkdownDocumentContent.message(for: text),
-                    MarkdownDocumentFile.write(text, for: document)
-                )
+            let written = await Task.detached(priority: .userInitiated) {
+                MarkdownDocumentFile.write(text, for: document)
             }.value
             file = written
             source = text
-            phase = .loaded(message)
+            phase = .loaded(text)
         } catch {
             let reason = (error as? LocalizedError)?.errorDescription
                 ?? MarkdownDocumentLoader.Failure.download.errorDescription
