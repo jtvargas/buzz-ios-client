@@ -37,7 +37,10 @@ struct MarkdownSelectableRichTextView: View {
     private func unitView(_ unit: Unit) -> some View {
         switch unit.content {
         case let .prose(blocks):
-            MarkdownTextEditorProbe(blocks: blocks)
+            proseText(blocks)
+                .font(.hive(.body))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .textSelection(.enabled)
         case let .isolated(block):
             RichTextView(RichMessage(blocks: [block]))
         }
