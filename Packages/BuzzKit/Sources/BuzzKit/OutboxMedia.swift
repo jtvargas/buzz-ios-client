@@ -124,6 +124,16 @@ public struct MediaStagingStore: Sendable {
 }
 
 public extension BuzzEventStore {
+    func awaitingMediaEventIDs() async throws -> [String] {
+        try await reader.read { db in
+            try String.fetchAll(
+                db,
+                sql: "SELECT event_id FROM outbox WHERE state = ? ORDER BY created_at ASC",
+                arguments: [OutboxState.awaitingMedia.rawValue]
+            )
+        }
+    }
+
     func outboxMedia(eventID: String, unfinishedOnly: Bool = false) async throws -> [OutboxMediaRecord] {
         try await reader.read { db in
             let unfinished = unfinishedOnly ? "AND state <> :uploaded" : ""
@@ -197,6 +207,46 @@ public extension BuzzEventStore {
         }
     }
 
+    /// Returns a failed media send to its held state for an explicit retry.
+    /// Uploaded rows stay uploaded, so a partial batch never creates duplicate blobs.
+    func retryOutboxMedia(_ eventID: String) async throws -> Bool {
+        try await writer.write { db in
+            let mediaCount = try Int.fetchOne(
+                db,
+                sql: "SELECT COUNT(*) FROM outbox_media WHERE event_id = ?",
+                arguments: [eventID]
+            ) ?? 0
+            guard mediaCount > 0 else { return false }
+            guard let retryable = try Bool.fetchOne(
+                db,
+                sql: "SELECT is_retryable FROM outbox WHERE event_id = ?",
+                arguments: [eventID]
+            ) else { throw OutboxError.notQueued(eventID) }
+            guard retryable else { throw OutboxError.notRetryable(eventID) }
+            try db.execute(
+                sql: """
+                UPDATE outbox_media
+                SET state = ?, attempts = 0, last_error = NULL
+                WHERE event_id = ? AND state <> ?
+                """,
+                arguments: [
+                    OutboxMediaState.staged.rawValue,
+                    eventID,
+                    OutboxMediaState.uploaded.rawValue,
+                ]
+            )
+            try db.execute(
+                sql: """
+                UPDATE outbox
+                SET state = ?, attempts = 0, last_error = NULL
+                WHERE event_id = ?
+                """,
+                arguments: [OutboxState.awaitingMedia.rawValue, eventID]
+            )
+            return true
+        }
+    }
+
     /// Deletes database rows whose signed event no longer exists and returns the
     /// file keys still referenced by a live outbox row.
     func reconcileOutboxMedia() async throws -> Set<StagedMediaKey> {
@@ -207,6 +257,41 @@ public extension BuzzEventStore {
                 SELECT 1 FROM outbox WHERE outbox.event_id = outbox_media.event_id
             )
             """)
+            // An upload interrupted by process death has an unknown outcome. The
+            // relay is content-addressed, so retrying the same bytes is idempotent.
+            try db.execute(
+                sql: "UPDATE outbox_media SET state = ? WHERE state = ?",
+                arguments: [OutboxMediaState.staged.rawValue, OutboxMediaState.uploading.rawValue]
+            )
+            // A crash can land between recording the blob failure and failing its
+            // owning event. Make that narrow state explicit and retryable at mount.
+            try db.execute(
+                sql: """
+                UPDATE outbox
+                SET state = ?,
+                    last_error = COALESCE(
+                        (SELECT last_error FROM outbox_media
+                         WHERE outbox_media.event_id = outbox.event_id
+                           AND outbox_media.state = ?
+                         LIMIT 1),
+                        ?
+                    ),
+                    is_retryable = 1
+                WHERE state = ?
+                  AND EXISTS (
+                      SELECT 1 FROM outbox_media
+                      WHERE outbox_media.event_id = outbox.event_id
+                        AND outbox_media.state = ?
+                  )
+                """,
+                arguments: [
+                    OutboxState.failed.rawValue,
+                    OutboxMediaState.failed.rawValue,
+                    "A picture could not be uploaded.",
+                    OutboxState.awaitingMedia.rawValue,
+                    OutboxMediaState.failed.rawValue,
+                ]
+            )
             try db.execute(
                 sql: """
                 UPDATE outbox

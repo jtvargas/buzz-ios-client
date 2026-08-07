@@ -389,6 +389,7 @@ final class AppEnvironment {
         mediaReadAuthorizer = makeMediaReadAuthorizer(signer: signer, websocketURL: websocketURL)
         await installMediaReadAuthorizer(mediaReadAuthorizer)
         await installMediaStagingDirectory(mediaStagingStore.directory)
+        await engine.resumeMediaUploads()
         heartbeat = PresenceHeartbeat(publisher: engine)
 
         observeEngineState(of: engine)

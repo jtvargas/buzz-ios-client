@@ -260,6 +260,12 @@ public actor SyncEngine {
     var drainInFlight = false
     var drainPending = false
 
+    /// Event ids whose media pumps are already running. Mount, drain, and enqueue
+    /// may all discover the same held row; only one pump may own it at a time.
+    var mediaPumpsInFlight: Set<String> = []
+    /// Explicit retries that arrived while the old pump was still unwinding.
+    var mediaPumpRetriesPending: Set<String> = []
+
     // MARK: - Identity and subscription
 
     /// The authenticated identity's hex pubkey, resolved once at ``start()`` for

@@ -100,13 +100,11 @@ public struct BlobDescriptor: Sendable, Equatable, Codable {
 
 }
 
-/// Putting bytes on the blob store, as a composer needs it.
+/// Putting staged bytes on the blob store.
 ///
 /// A seam in front of ``MediaUploadClient`` for the same reason `MessageSending`
-/// sits in front of the engine: the interesting half of attaching a picture is
-/// what the composer does either side of the upload — hold the pick, survive a
-/// refusal, refuse to send a message whose picture is still in flight — and none
-/// of that should need a relay to test.
+/// sits in front of the engine: a durable media pump must be testable without a
+/// relay while it resumes, bounds, and retries uploads independently of a composer.
 public protocol MediaUploading: Sendable {
     /// Uploads `data` and returns what the relay stored, throwing
     /// ``MediaUploadError`` when it will not.

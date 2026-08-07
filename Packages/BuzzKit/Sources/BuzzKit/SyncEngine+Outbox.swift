@@ -33,6 +33,7 @@ extension SyncEngine {
     /// Drains the outbox now — the explicit user-retry entry point. A no-op unless
     /// the engine is running; the next `.ready` drains otherwise.
     public func drainOutbox() async {
+        await resumeMediaUploads()
         guard state == .running else { return }
         await requestDrain(generation: readyGeneration)
     }
@@ -40,6 +41,10 @@ extension SyncEngine {
     /// Returns a failed send to the queue and drains, so an explicit human retry is
     /// a fresh start rather than a continuation of the backoff that gave up.
     public func retry(_ eventID: String) async throws {
+        if try await store.retryOutboxMedia(eventID) {
+            scheduleMediaPump(eventID: eventID, retryIfRunning: true)
+            return
+        }
         try await store.retry(eventID)
         await drainOutbox()
     }

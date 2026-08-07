@@ -66,25 +66,6 @@ final class ComposerAttachmentsModel {
     /// finite, because "for ever" is not a state an author can do anything about.
     static let sourceDeadline: Duration = .seconds(60)
 
-    /// Legacy upload deadline retained in the initializer while callers move upload
-    /// ownership to the engine. The composer itself no longer uses this value.
-    ///
-    /// `URLSession`'s own resource timeout defaults to **seven days**, and its request
-    /// timeout only fires when a connection goes completely silent — so a trickling upload is
-    /// unbounded in practice. The uploader is handed a session with real ceilings
-    /// (``AppEnvironment/makeMediaUploader(websocketURL:)``); this is the belt to that
-    /// bracing, so a transport that somehow outlives its own timeout still ends here.
-    ///
-    /// Just outside the transport's own ceiling on purpose, so the error an author reads is
-    /// the network naming its own failure rather than this giving up first. Long, for the
-    /// reason set out there: killing a picture that was going to arrive is worse than the
-    /// spinner, and the spinner has an X on it.
-    ///
-    /// It covers the upload and nothing else. The conversion between the two deadlines is
-    /// deliberately left unbounded: it is CPU work that finishes, and a ceiling on it would
-    /// mean an old phone re-encoding a large HEIC losing a picture that was going to arrive.
-    static let uploadDeadline: Duration = .seconds(270)
-
     /// How long an error stays on screen before it takes itself off.
     ///
     /// The owner's ask: a composer carrying a stale complaint from five minutes ago
@@ -105,14 +86,11 @@ final class ComposerAttachmentsModel {
     /// observable: nothing renders them.
     @ObservationIgnored private var batches: [Task<Void, Never>] = []
 
-    /// The deadlines this model actually uses.
+    /// The deadline this model actually uses.
     ///
-    /// Instance rather than static so a test can prove the timeout *fires* — the shipped
-    /// values are a minute and a half, and a suite that waited them out would be a suite
-    /// nobody runs. The defaults are the shipped ones, so production reads exactly the
-    /// constants documented above.
+    /// Instance rather than static so a test can prove the source timeout *fires* without
+    /// waiting out the shipped value. Production reads the constant documented above.
     private let sourceDeadline: Duration
-    let uploadDeadline: Duration
     /// Injected for the same reason as the deadlines above: a suite that waited out the
     /// shipped five seconds per error would be a suite nobody runs.
     private let errorDuration: Duration
@@ -120,12 +98,10 @@ final class ComposerAttachmentsModel {
     init(
         uploader: @escaping MediaUploaderProvider = { nil },
         sourceDeadline: Duration = ComposerAttachmentsModel.sourceDeadline,
-        uploadDeadline: Duration = ComposerAttachmentsModel.uploadDeadline,
         errorDuration: Duration = ComposerAttachmentsModel.errorDuration
     ) {
         self.uploader = uploader
         self.sourceDeadline = sourceDeadline
-        self.uploadDeadline = uploadDeadline
         self.errorDuration = errorDuration
     }
 
