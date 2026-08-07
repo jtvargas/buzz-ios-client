@@ -183,7 +183,7 @@ struct MarkdownDocumentSheet: View {
                 }
             } else {
                 ScrollView {
-                    RichTextView(message)
+                    MarkdownSelectableRichTextView(message: message)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 20)
                         .padding(.top, 12)
