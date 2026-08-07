@@ -27,11 +27,11 @@ import UIKit
 /// # Hive, Hive Dark, and why their ids read wrong
 ///
 /// Upstream's catalogue carries a `slack-dark` whose `#222222` ground ``all`` took verbatim like
-/// every other one. The owner then chose that grey as Hive's own (2026-08-06), so it is no
-/// longer a Slack entry at all: it is **Hive**, first in the list and the default, and the
-/// near-black the app shipped with before the picker existed is **Hive Dark** beside it. The
-/// two are one step apart deliberately — the default is the lighter grey, and the old black is
-/// one swatch away for anyone who preferred it.
+/// every other one. The owner then chose that grey as Hive's own and darkened it to `#1A1A1A`
+/// (2026-08-06), so it is no longer a Slack entry at all: it is **Hive**, first in the list and
+/// the default, and the near-black the app shipped with before the picker existed is **Hive
+/// Dark** beside it. The two are a real step apart deliberately — the default is the lighter
+/// grey, and the old near-black is one swatch away for anyone who preferred it.
 ///
 /// **Their ids did not move, and that is the point.** ``hive`` persists as `slack-dark` and
 /// ``hiveDark`` as `hive`, because an id is an opaque storage key and renaming one resets every
@@ -102,14 +102,19 @@ struct HiveTheme: Identifiable, Equatable, Sendable {
 }
 
 extension HiveTheme {
-    /// **The app's ground and the default** — upstream's `slack-dark` grey, which the owner
-    /// chose as Hive's own, with the honey amber from the asset catalogue on it. First in the
-    /// list, so an install that has never opened Settings gets this one. Its id is historical;
-    /// see this type's note.
+    /// **The app's ground and the default** — the grey the owner chose as Hive's own, with the
+    /// honey amber from the asset catalogue on it. First in the list, so an install that has
+    /// never opened Settings gets this one. Its id is historical; see this type's note.
+    ///
+    /// `#1A1A1A` is upstream's `slack-dark` `#222222` taken down one notch at the owner's word
+    /// (2026-08-06, *"a little bit dark, not too much"*). It is the one ground here that is no
+    /// longer the catalogue's number, which is the whole reason it stopped being a Slack entry.
+    /// It stays well clear of ``hiveDark``'s near-black, so the two read as different choices
+    /// rather than two attempts at the same one.
     static let hive = HiveTheme(
         id: "slack-dark",
         name: "Hive",
-        background: .hex(0x222222),
+        background: .hex(0x1A1A1A),
         accentHex: nil
     )
 
