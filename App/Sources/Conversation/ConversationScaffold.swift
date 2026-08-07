@@ -368,6 +368,11 @@ struct ConversationScaffold<Content: View, Bar: View, Accessory: View>: View {
         // Only the message list dismisses the keyboard, and this is applied inside
         // `safeAreaBar` so the bar's own scroll views do not inherit the mode.
         .scrollDismissesKeyboard(.interactively)
+        // The scroll edge effect, by hand, because `scrollEdgeEffectHidden` above had to turn
+        // the real one off. Here rather than anywhere else for two reasons, both in
+        // ``ConversationEdgeFades``: after the flip so the fade is not flipped with the list,
+        // and before `safeAreaBar` so the composer draws over it instead of under it.
+        .conversationEdgeFades(barHeight: barHeight)
         .safeAreaBar(edge: .bottom) {
             bar
                 .onGeometryChange(for: CGFloat.self) { geometry in
