@@ -115,6 +115,14 @@ enum AgentGlyph {
     /// thing both other clients scale by.
     static let emScale: CGFloat = 0.95
 
+    /// Clear space between the bot and the agent name inside the mention highlight.
+    ///
+    /// This is layout advance, not a character inserted into the message, so copying the
+    /// rendered mention still produces `@Name` for another client to resolve.
+    ///
+    /// 3 rather than 4 after a device round: JT judged both on the phone at default type.
+    static let nameGap: CGFloat = 3
+
     /// Where the glyph's square sits relative to one laid-out run of text.
     ///
     /// - Parameters:
