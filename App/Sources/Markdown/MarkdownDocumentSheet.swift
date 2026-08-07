@@ -60,6 +60,12 @@ struct MarkdownDocumentSheet: View {
     @State private var source: String?
     /// Set while the copied confirmation is showing, so the button can say it worked.
     @State private var copied = false
+    /// Whether the document's exact markdown is replacing the rendered reading view.
+    ///
+    /// The source is deliberately a mode, not a second renderer: one `Text` gives the
+    /// system a single selection range spanning the whole file, while the default path
+    /// remains ``RichTextView`` with its tables, code blocks, media and link treatment.
+    @State private var isShowingSource = false
 
     var body: some View {
         NavigationStack {
@@ -72,6 +78,7 @@ struct MarkdownDocumentSheet: View {
                     // Done stays exactly where a reader already found it.
                     ToolbarItem(placement: .topBarLeading) { shareButton }
                     ToolbarItem(placement: .topBarLeading) { copyButton }
+                    ToolbarItem(placement: .topBarLeading) { sourceButton }
                     ToolbarItem(placement: .confirmationAction) {
                         Button("Done") { dismiss() }
                     }
@@ -128,6 +135,29 @@ struct MarkdownDocumentSheet: View {
         .accessibilityIdentifier("markdown-copy-all")
     }
 
+    /// Switches between the faithful rich document and one selectable source string.
+    ///
+    /// A `UITextView` bridge cannot preserve both halves of the rich renderer: hosting
+    /// tables and code as attachments makes them opaque replacement characters when
+    /// copied, while flattening them into text loses their layout and horizontal scroll.
+    /// Source mode names that trade honestly. It gives cross-block selection without a
+    /// second markdown renderer to keep in step, and what is selected is exactly what the
+    /// file contains.
+    private var sourceButton: some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.2)) { isShowingSource.toggle() }
+        } label: {
+            Label(
+                isShowingSource ? "View rendered" : "View source",
+                systemImage: isShowingSource
+                    ? "doc.richtext"
+                    : "chevron.left.forwardslash.chevron.right"
+            )
+        }
+        .disabled(source == nil)
+        .accessibilityIdentifier("markdown-view-source")
+    }
+
     @ViewBuilder
     private var content: some View {
         switch phase {
@@ -139,16 +169,30 @@ struct MarkdownDocumentSheet: View {
                 .controlSize(.large)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         case let .loaded(message):
-            ScrollView {
-                RichTextView(message)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 20)
-                    .padding(.top, 12)
-                    .padding(.bottom, 40)
-                    // A document is read, not skimmed for who said it, so its text is
-                    // selectable where a message's deliberately is not — there is no row tap
-                    // and no thread underneath for a selection gesture to steal.
-                    .textSelection(.enabled)
+            if isShowingSource, let source {
+                ScrollView {
+                    Text(verbatim: source)
+                        .font(.hiveMono(.body))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 20)
+                        .padding(.top, 12)
+                        .padding(.bottom, 40)
+                        // One Text means one system selection range, so Select All and a
+                        // drag from a heading into the paragraph below both work here.
+                        .textSelection(.enabled)
+                }
+            } else {
+                ScrollView {
+                    RichTextView(message)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 20)
+                        .padding(.top, 12)
+                        .padding(.bottom, 40)
+                        // A document is read, not skimmed for who said it, so its text is
+                        // selectable where a message's deliberately is not — there is no row tap
+                        // and no thread underneath for a selection gesture to steal.
+                        .textSelection(.enabled)
+                }
             }
         case let .failed(reason):
             failure(reason)
