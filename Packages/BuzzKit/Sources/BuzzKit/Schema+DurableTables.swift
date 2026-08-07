@@ -1,6 +1,24 @@
 import GRDB
 
 extension Schema {
+    static func createOutboxMediaTable(_ db: Database) throws {
+        try db.execute(sql: """
+        CREATE TABLE outbox_media (
+            event_id   TEXT NOT NULL,
+            sha256     TEXT NOT NULL,
+            ordinal    INTEGER NOT NULL,
+            ext        TEXT NOT NULL,
+            mime       TEXT NOT NULL,
+            size       INTEGER NOT NULL,
+            state      TEXT NOT NULL,
+            attempts   INTEGER NOT NULL DEFAULT 0,
+            last_error TEXT,
+            PRIMARY KEY (event_id, sha256)
+        );
+        CREATE INDEX outbox_media_event ON outbox_media(event_id);
+        """)
+    }
+
     // MARK: - Log (source of truth)
 
     /// The append-only event log and its single-letter tag index.

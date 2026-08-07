@@ -413,6 +413,10 @@ enum Schema {
             try createThreadSweepTable(db)
         }
 
+        migrator.registerMigration("v13.outbox-media") { db in
+            try createOutboxMediaTable(db)
+        }
+
         return migrator
     }
 

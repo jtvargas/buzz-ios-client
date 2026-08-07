@@ -34,6 +34,8 @@ public extension BuzzEventStore {
     ///     Read-state sends pass one strictly newer than their slot's last blob so
     ///     the addressable replace never ties on `created_at` (NIP-RS clock skew);
     ///     ordinary sends leave it `nil` and take the wall clock.
+    ///   - media: staged blobs to commit beside the signed outbox row. The default
+    ///     preserves the existing blocking send path until the media pump lands.
     /// - Returns: the queued entry.
     @discardableResult
     func enqueue(
@@ -43,7 +45,8 @@ public extension BuzzEventStore {
         tags: [[String]] = [],
         with signer: any EventSigner,
         maxContentBytes: Int = OutboxPolicy.maxContentBytes,
-        createdAt: Date? = nil
+        createdAt: Date? = nil,
+        media: [OutboxMedia] = []
     ) async throws -> OutboxEntry {
         let byteCount = content.utf8.count
         guard byteCount <= maxContentBytes else {
@@ -53,6 +56,7 @@ public extension BuzzEventStore {
         let event = try await signer.sign(kind: kind, content: content, tags: tags, createdAt: createdAt ?? clock())
         try await writer.write { db in
             try Self.insertOutboxRow(event, channel: channel, state: .pending, into: db)
+            try Self.insertOutboxMedia(media, eventID: event.id, into: db)
         }
         return OutboxEntry(event: event, channelID: channel, state: .pending, attempts: 0, lastError: nil)
     }
