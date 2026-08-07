@@ -161,6 +161,18 @@ struct RetryStrip: View {
     let reason: String?
     var isRetryable = true
     var isEnabled = true
+    /// How many of the message's pictures failed, and how many it carries.
+    ///
+    /// Said here rather than drawn on the tile itself, deliberately. The pictures are
+    /// rendered by the shared markdown engine — the same one the channel list and every
+    /// other surface use — and marking one tile would mean passing upload state through
+    /// a text renderer that has no business knowing about the upload queue. Delivery
+    /// state belongs on the delivery strip, which is this.
+    ///
+    /// It matters because a partial failure is not a failed message: four pictures
+    /// arrived, and a reader told only "not delivered" will re-pick all five.
+    var failedMedia = 0
+    var totalMedia = 0
     let onRetry: () -> Void
 
     @ViewBuilder
@@ -185,6 +197,15 @@ struct RetryStrip: View {
     }
 
     private var label: String {
+        // A partial picture failure is its own sentence, and it displaces the generic
+        // one: "1 of 5 pictures didn't send" is what happened, where "Not delivered"
+        // reads as though the whole message is lost and the other four need re-picking.
+        if failedMedia > 0, totalMedia > 1 {
+            let subject = failedMedia == 1 ? "picture" : "pictures"
+            return isRetryable
+                ? "\(failedMedia) of \(totalMedia) \(subject) didn't send — tap to retry just \(failedMedia == 1 ? "that one" : "those")"
+                : "\(failedMedia) of \(totalMedia) \(subject) can't be sent — delete to dismiss"
+        }
         if let reason, !reason.isEmpty {
             return isRetryable
                 ? "Not delivered (\(reason)) — tap to retry"

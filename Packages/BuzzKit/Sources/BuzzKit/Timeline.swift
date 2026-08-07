@@ -65,6 +65,14 @@ public struct TimelineRow: Sendable, Hashable, Identifiable {
     /// counting: the answer would always equal ``media`` and nothing reads it.
     public let uploadedMediaCount: Int
 
+    /// The content hashes of this message's pictures whose upload failed, matched
+    /// against ``MessageMedia/sha256``.
+    ///
+    /// Lets a row mark the one tile that did not make it rather than condemning the
+    /// whole message — four pictures that arrived are not a failed send, and telling a
+    /// reader otherwise makes them re-pick all five.
+    public let failedMediaHashes: Set<String>
+
     /// What the relay narrated here, when this row is a kind-40099 channel notice
     /// rather than something a person wrote.
     ///
@@ -129,6 +137,7 @@ public struct TimelineRow: Sendable, Hashable, Identifiable {
         lastReplyAt: Int64?,
         media: [MessageMedia] = [],
         uploadedMediaCount: Int = 0,
+        failedMediaHashes: Set<String> = [],
         notice: SystemNotice? = nil,
         isNotice: Bool = false,
         namesSelf: Bool = false
@@ -150,6 +159,7 @@ public struct TimelineRow: Sendable, Hashable, Identifiable {
         self.lastReplyAt = lastReplyAt
         self.media = media
         self.uploadedMediaCount = uploadedMediaCount
+        self.failedMediaHashes = failedMediaHashes
         self.notice = notice
         // A decoded notice is a notice, whatever the caller passed: the two cannot
         // disagree, and a test that builds one by hand should not have to say so twice.

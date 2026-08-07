@@ -71,6 +71,15 @@ public struct MessageMedia: Sendable, Hashable, Codable, Identifiable {
     /// picture that will not load should still say what it was.
     public let alt: String?
 
+    /// The blob's content hash, from `imeta`'s `x` field.
+    ///
+    /// Carried so a *sending* message can say which of its pictures is still going up
+    /// and which one failed: the queue keys its rows by this hash, so it is the only
+    /// thing that joins an attachment on screen to its upload. Deriving it from the URL
+    /// would work on this relay and break on any deployment that serves blobs under a
+    /// different shape; the tag states it outright.
+    public let sha256: String?
+
     public var id: String { url }
 
     /// The aspect ratio to reserve space with, or `nil` when the tag did not declare
@@ -88,7 +97,8 @@ public struct MessageMedia: Sendable, Hashable, Codable, Identifiable {
         mimeType: String? = nil,
         pixelSize: CGSize? = nil,
         posterURL: String? = nil,
-        alt: String? = nil
+        alt: String? = nil,
+        sha256: String? = nil
     ) {
         self.url = url
         self.kind = kind
@@ -96,6 +106,7 @@ public struct MessageMedia: Sendable, Hashable, Codable, Identifiable {
         self.pixelSize = pixelSize
         self.posterURL = posterURL
         self.alt = alt
+        self.sha256 = sha256
     }
 }
 
@@ -137,7 +148,8 @@ public extension MessageMedia {
                     mimeType: fields["m"],
                     pixelSize: pixelSize(fields["dim"]),
                     posterURL: fields["image"] ?? fields["thumb"],
-                    alt: fields["alt"]
+                    alt: fields["alt"],
+                    sha256: fields["x"]
                 )
             )
         }

@@ -184,7 +184,9 @@ struct TimelineRowView: View {
                     RetryStrip(
                         reason: reason,
                         isRetryable: row.failureIsRetryable,
-                        isEnabled: allowsInteraction
+                        isEnabled: allowsInteraction,
+                        failedMedia: row.failedMediaHashes.count,
+                        totalMedia: row.media.count
                     ) {
                         performControlAction { onRetry(row.id) }
                     }

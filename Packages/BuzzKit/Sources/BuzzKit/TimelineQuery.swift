@@ -79,7 +79,8 @@ extension BuzzEventStore {
                -- the log is delivered, so every picture it names is already stored;
                -- the count is never read for a `sent` row and 0 is the honest value
                -- for "nothing is still going up".
-               0                   AS uploaded_media
+               0                   AS uploaded_media,
+               NULL                AS failed_media
         FROM event e
         LEFT JOIN rich_content rc ON rc.target_id = e.id
         LEFT JOIN profile p ON p.pubkey = e.pubkey
@@ -311,7 +312,12 @@ extension BuzzEventStore {
                -- drop the index range bound this query depends on. Here it costs one
                -- lookup per *outbox* row, of which a timeline page has nearly none.
                (SELECT COUNT(*) FROM outbox_media m
-                 WHERE m.event_id = o.event_id AND m.state = 'uploaded') AS uploaded_media
+                 WHERE m.event_id = o.event_id AND m.state = 'uploaded') AS uploaded_media,
+               -- Which pictures failed, by content hash, so the row can mark the exact
+               -- tile rather than condemning the whole message. `imeta`'s `x` field is
+               -- the same hash, which is what joins these to what is on screen.
+               (SELECT group_concat(m.sha256) FROM outbox_media m
+                 WHERE m.event_id = o.event_id AND m.state = 'failed') AS failed_media
         FROM outbox o
         LEFT JOIN profile p ON p.pubkey = o.pubkey
         WHERE NOT EXISTS (SELECT 1 FROM event WHERE event.id = o.event_id)
@@ -366,6 +372,11 @@ extension BuzzEventStore {
             lastReplyAt: row["last_reply_at"],
             media: MessageMedia.parse(tags: tags),
             uploadedMediaCount: row["uploaded_media"] ?? 0,
+            failedMediaHashes: Set(
+                (row["failed_media"] as String?)?
+                    .split(separator: ",")
+                    .map(String.init) ?? []
+            ),
             notice: notice,
             isNotice: isNotice,
             // Either tag set, where `media` takes the edit's alone — and the asymmetry is
