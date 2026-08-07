@@ -175,18 +175,28 @@ enum MarkdownDocumentHTML {
             return "<input type=\"\(kind)\" disabled\(checked ? " checked" : "")> "
         }
 
+        /// Every closure here declares `-> String`, and that is load-bearing rather than style.
+        ///
+        /// GRDB's `SQL` is `ExpressibleByStringInterpolation` and carries its own
+        /// `joined(separator:) -> SQL` on `Collection where Element == SQL`. With the return type
+        /// left to inference, `["<tr>…</tr>"].joined(separator: "\n")` type-checks as *either*
+        /// `String` or `SQL`, and the solver picked `SQL` — which then interpolated into the
+        /// surrounding literal as its own `description`, so every table in every document
+        /// rendered as `SQL(elements: [GRDB.SQL.Element.sql("", []), …])` instead of rows. It
+        /// compiles clean either way; only the output is wrong. ``list(_:orderedStart:)`` above
+        /// already carries the same annotation for the same reason.
         private func tableHTML(_ table: RichTable) -> String {
             let header: String
             if table.hasHeader {
-                let cells = table.header.enumerated().map { index, cell in
+                let cells = table.header.enumerated().map { index, cell -> String in
                     "<th style=\"text-align:\(alignment(table.alignments[index]))\">\(inline(cell))</th>"
                 }.joined()
                 header = "<thead><tr>\(cells)</tr></thead>"
             } else {
                 header = ""
             }
-            let rows = table.rows.map { row in
-                let cells = row.enumerated().map { index, cell in
+            let rows = table.rows.map { row -> String in
+                let cells = row.enumerated().map { index, cell -> String in
                     "<td style=\"text-align:\(alignment(table.alignments[index]))\">\(inline(cell))</td>"
                 }.joined()
                 return "<tr>\(cells)</tr>"

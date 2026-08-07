@@ -189,4 +189,35 @@ struct MarkdownDocumentTests {
         }
         #expect(String(note.characters).contains("too long"))
     }
+
+    @Test("a table renders as cells, not as a GRDB SQL literal")
+    func tableRendersAsCells() {
+        // The regression this exists for: `tableHTML` joined its rows with the closure's
+        // return type left to inference, and GRDB — reachable from this target — offers both
+        // `ExpressibleByStringInterpolation` on `SQL` and `joined(separator:) -> SQL` on a
+        // collection of them. Both readings type-checked, the solver chose `SQL`, and the
+        // value interpolated into the surrounding literal as its own `description`. Every
+        // table in every opened document rendered as
+        // `SQL(elements: [GRDB.SQL.Element.sql("", []), …])`.
+        //
+        // Asserted on the rendered HTML rather than on the parsed blocks, because the parse
+        // was never wrong — only the serialisation was.
+        let message = MarkdownDocumentContent.message(for: """
+        | Phase | State |
+        |-------|-------|
+        | One   | done  |
+        | Two   | in progress |
+        """)
+        let html = MarkdownDocumentHTML.body(for: message)
+
+        #expect(html.contains("<table>"))
+        #expect(html.contains("<th"))
+        #expect(html.contains("<td"))
+        #expect(html.contains("Phase"))
+        #expect(html.contains("in progress"))
+        // The exact shape of the leak, so a future inference change cannot bring it back
+        // quietly under a different element name.
+        #expect(!html.contains("SQL("))
+        #expect(!html.contains("GRDB"))
+    }
 }
