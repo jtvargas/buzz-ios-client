@@ -132,6 +132,16 @@ public enum MediaUploadError: Error, Equatable, Sendable {
     /// failure a reader can do something about, and the one a client must not
     /// retry unchanged.
     case rejectedByPolicy
+    /// The relay is already carrying as many uploads as it will take from this
+    /// identity at once — a 429.
+    ///
+    /// Its own case because it is the one refusal that says *later*, not *no*:
+    /// the bytes are fine and the relay is willing, so the only correct response
+    /// is to wait and offer them again. Folding it into ``failed`` cost a picture
+    /// out of every five-picture message, because the relay's ceiling is two per
+    /// pubkey (`buzz-relay` `BUZZ_MEDIA_MAX_CONCURRENT_UPLOADS_PER_PUBKEY`) and
+    /// nothing here backed off.
+    case tooManyConcurrent
     /// The relay answered, and the answer was not success.
     case failed(status: Int, body: String)
     /// The relay answered with success and a body that is not a descriptor.
@@ -237,6 +247,10 @@ public struct MediaUploadClient: Sendable {
             // speaking — the picture is intact and the wrong shape for it, which
             // is a different thing to tell a reader than "upload failed".
             if status == 415 || status == 422 { throw MediaUploadError.rejectedByPolicy }
+            // 429 is the relay saying "not right now", not "not this picture" —
+            // see ``MediaUploadError/tooManyConcurrent``. The caller waits and
+            // offers the same bytes again rather than failing the message.
+            if status == 429 { throw MediaUploadError.tooManyConcurrent }
             throw MediaUploadError.failed(
                 status: status,
                 body: String(data: body, encoding: .utf8) ?? ""

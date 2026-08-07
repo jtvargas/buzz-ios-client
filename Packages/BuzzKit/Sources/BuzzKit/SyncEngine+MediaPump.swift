@@ -101,6 +101,27 @@ extension SyncEngine {
         }
     }
 
+    /// How many of a message's pictures go up at once.
+    ///
+    /// **Two, because that is what the relay allows** — `buzz-relay` caps concurrent
+    /// uploads per pubkey at `BUZZ_MEDIA_MAX_CONCURRENT_UPLOADS_PER_PUBKEY`, default
+    /// 2 (`config.rs`). This was 3, and the third upload of every five-picture
+    /// message was refused with a 429 the instant it started — measured against a
+    /// live relay, five at once, two accepted and three refused.
+    ///
+    /// So this number is not a throughput knob. **Raising it re-breaks five
+    /// pictures** unless the relay's ceiling moves first. The backoff in
+    /// ``upload(_:)`` is what makes us correct rather than merely lucky: another
+    /// device signed in as the same person can still take the budget.
+    static let maxConcurrentMediaUploads = 2
+
+    /// How long to wait before offering a refused upload again, and how many times.
+    ///
+    /// Short and few on purpose: a 429 clears as soon as one of our own two slots
+    /// frees, which is the length of one upload, not a server outage.
+    static let concurrencyBackoff: Duration = .seconds(2)
+    static let concurrencyRetryLimit = 4
+
     private func pumpMedia(eventID: String) async {
         guard mediaUploader != nil, mediaStagingStore != nil,
               let records = try? await store.outboxMedia(eventID: eventID, unfinishedOnly: true)
@@ -112,7 +133,7 @@ extension SyncEngine {
         ) { group in
             var failures: [MediaPumpFailure] = []
             var next = 0
-            while next < min(3, records.count) {
+            while next < min(Self.maxConcurrentMediaUploads, records.count) {
                 let record = records[next]
                 group.addTask { [weak self] in await self?.upload(record) }
                 next += 1
@@ -146,8 +167,28 @@ extension SyncEngine {
         do {
             let data = try mediaStagingStore.data(for: record.key)
             try await store.markOutboxMediaUploading(record)
-            _ = try await Self.within(config.mediaUploadDeadline) {
-                try await mediaUploader.upload(data: data, mimeType: record.mimeType, filename: nil)
+            // Refusal-for-being-busy is retried here rather than surfaced, because it
+            // says nothing about this picture: the relay is holding as many of our
+            // uploads as it will take and one is about to finish. Every other error
+            // falls straight through to the catch below on its first occurrence.
+            var attempt = 0
+            while true {
+                do {
+                    _ = try await Self.within(config.mediaUploadDeadline) {
+                        try await mediaUploader.upload(
+                            data: data,
+                            mimeType: record.mimeType,
+                            filename: nil
+                        )
+                    }
+                    break
+                } catch MediaUploadError.tooManyConcurrent {
+                    attempt += 1
+                    guard attempt <= Self.concurrencyRetryLimit else {
+                        throw MediaUploadError.tooManyConcurrent
+                    }
+                    try await Task.sleep(for: Self.concurrencyBackoff)
+                }
             }
             try await store.markOutboxMediaUploaded(record)
             if try await store.canRemoveStagedFile(record.key) {
@@ -169,6 +210,11 @@ extension SyncEngine {
             MediaPumpFailure(message: "That kind of file can't be sent yet.", isRetryable: false)
         case is MediaUploadDeadlineExceeded:
             MediaPumpFailure(message: "A picture upload timed out.", isRetryable: true)
+        case MediaUploadError.tooManyConcurrent:
+            // Only reachable once the backoff in ``upload(_:)`` has given up, so it
+            // is a busy relay rather than our own concurrency — and it says so, in
+            // case anyone reads this string and starts looking at the picture.
+            MediaPumpFailure(message: "The relay was too busy for that picture.", isRetryable: true)
         default:
             MediaPumpFailure(message: "A picture could not be uploaded.", isRetryable: true)
         }
