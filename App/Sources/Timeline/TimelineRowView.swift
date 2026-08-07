@@ -5,7 +5,7 @@ import SwiftUI
 /// name in bold with the time beside it, then the content (markdown with a plain
 /// fallback, or a "message deleted" placeholder), reaction chips, a reply preview with
 /// its participants' faces, and the delivery treatment — `.pending` dimmed, `.failed`
-/// carrying a tap-to-retry strip, `.sent` plain.
+/// carrying a failure strip, `.sent` plain.
 ///
 /// # What the row deliberately is not
 ///
@@ -180,7 +180,8 @@ struct TimelineRowView: View {
                 if case let .failed(reason) = row.delivery {
                     RetryStrip(
                         reason: reason,
-                        canRetry: row.failureIsRetryable && allowsInteraction
+                        isRetryable: row.failureIsRetryable,
+                        isEnabled: allowsInteraction
                     ) {
                         performControlAction { onRetry(row.id) }
                     }

@@ -119,33 +119,41 @@ enum ThreadSummaryDateFormatter {
     }
 }
 
-/// The "not delivered" strip on a failed send: the reason when the relay gave one,
-/// and a retry action that re-queues the message.
+/// The "not delivered" strip on a failed send: a retry action when the same send
+/// can succeed, or a direction to delete a terminal failure.
 struct RetryStrip: View {
     let reason: String?
-    var canRetry = true
+    var isRetryable = true
+    var isEnabled = true
     let onRetry: () -> Void
 
+    @ViewBuilder
     var body: some View {
-        Button(action: onRetry) {
-            HStack(spacing: 6) {
-                Image(systemName: "exclamationmark.circle.fill")
-                Text(label)
-                    .font(.hive(.caption))
-            }
-            .foregroundStyle(.red)
+        if isRetryable {
+            Button(action: onRetry) { content }
+                .buttonStyle(.plain)
+                .disabled(!isEnabled)
+                .accessibilityHint("Double tap to retry sending")
+        } else {
+            content
         }
-        .buttonStyle(.plain)
-        .disabled(!canRetry)
-        .accessibilityHint(canRetry ? "Double tap to retry sending" : "This relay refusal is terminal")
+    }
+
+    private var content: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "exclamationmark.circle.fill")
+            Text(label)
+                .font(.hive(.caption))
+        }
+        .foregroundStyle(.red)
     }
 
     private var label: String {
         if let reason, !reason.isEmpty {
-            return canRetry
+            return isRetryable
                 ? "Not delivered (\(reason)) — tap to retry"
-                : "Not delivered (\(reason))"
+                : "Not delivered (\(reason)) — delete to dismiss"
         }
-        return canRetry ? "Not delivered — tap to retry" : "Not delivered"
+        return isRetryable ? "Not delivered — tap to retry" : "Not delivered — delete to dismiss"
     }
 }

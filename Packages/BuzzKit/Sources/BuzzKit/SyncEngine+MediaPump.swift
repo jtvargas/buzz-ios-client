@@ -106,8 +106,11 @@ extension SyncEngine {
               let records = try? await store.outboxMedia(eventID: eventID, unfinishedOnly: true)
         else { return }
 
-        let failures = await withTaskGroup(of: String?.self, returning: [String].self) { group in
-            var failures: [String] = []
+        let failures = await withTaskGroup(
+            of: MediaPumpFailure?.self,
+            returning: [MediaPumpFailure].self
+        ) { group in
+            var failures: [MediaPumpFailure] = []
             var next = 0
             while next < min(3, records.count) {
                 let record = records[next]
@@ -124,16 +127,22 @@ extension SyncEngine {
             return failures
         }
 
-        if let failure = failures.first {
-            try? await store.markFailed(eventID, error: failure, retryable: true)
+        if let failure = failures.first(where: { !$0.isRetryable }) ?? failures.first {
+            try? await store.markFailed(
+                eventID,
+                error: failure.message,
+                retryable: failure.isRetryable
+            )
             return
         }
         guard (try? await store.releaseAwaitingMedia(eventID)) == true else { return }
         await drainOutbox()
     }
 
-    private func upload(_ record: OutboxMediaRecord) async -> String? {
-        guard let mediaUploader, let mediaStagingStore else { return "Media upload is unavailable." }
+    private func upload(_ record: OutboxMediaRecord) async -> MediaPumpFailure? {
+        guard let mediaUploader, let mediaStagingStore else {
+            return MediaPumpFailure(message: "Media upload is unavailable.", isRetryable: true)
+        }
         do {
             let data = try mediaStagingStore.data(for: record.key)
             try await store.markOutboxMediaUploading(record)
@@ -146,11 +155,22 @@ extension SyncEngine {
             }
             return nil
         } catch {
-            let detail = error is MediaUploadDeadlineExceeded
-                ? "A picture upload timed out."
-                : "A picture could not be uploaded."
-            try? await store.markOutboxMediaFailed(record, error: detail)
-            return detail
+            let failure = Self.describeMediaFailure(error)
+            try? await store.markOutboxMediaFailed(record, error: failure.message)
+            return failure
+        }
+    }
+
+    private static func describeMediaFailure(_ error: any Error) -> MediaPumpFailure {
+        switch error {
+        case MediaUploadError.rejectedByPolicy:
+            MediaPumpFailure(message: "The relay wouldn't store that picture.", isRetryable: false)
+        case MediaUploadError.unsupportedType:
+            MediaPumpFailure(message: "That kind of file can't be sent yet.", isRetryable: false)
+        case is MediaUploadDeadlineExceeded:
+            MediaPumpFailure(message: "A picture upload timed out.", isRetryable: true)
+        default:
+            MediaPumpFailure(message: "A picture could not be uploaded.", isRetryable: true)
         }
     }
 
@@ -176,8 +196,12 @@ extension SyncEngine {
             }
         }
         let timing = Task {
-            guard (try? await Task.sleep(for: deadline)) != nil else { return }
-            await answer.settle(.failure(MediaUploadDeadlineExceeded()))
+            do {
+                try await Task.sleep(for: deadline)
+                await answer.settle(.failure(MediaUploadDeadlineExceeded()))
+            } catch {
+                await answer.settle(.failure(error))
+            }
         }
         defer {
             working.cancel()
@@ -192,6 +216,11 @@ extension SyncEngine {
 }
 
 private struct MediaUploadDeadlineExceeded: Error {}
+
+private struct MediaPumpFailure: Sendable {
+    let message: String
+    let isRetryable: Bool
+}
 
 private actor MediaUploadFirstAnswer<T: Sendable> {
     private var answer: Result<T, any Error>?

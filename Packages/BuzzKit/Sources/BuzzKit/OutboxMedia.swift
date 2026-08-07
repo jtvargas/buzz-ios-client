@@ -213,8 +213,13 @@ public extension BuzzEventStore {
         try await writer.write { db in
             let mediaCount = try Int.fetchOne(
                 db,
-                sql: "SELECT COUNT(*) FROM outbox_media WHERE event_id = ?",
-                arguments: [eventID]
+                sql: """
+                SELECT COUNT(*)
+                FROM outbox_media
+                JOIN outbox ON outbox.event_id = outbox_media.event_id
+                WHERE outbox_media.event_id = ? AND outbox.state = ?
+                """,
+                arguments: [eventID, OutboxState.failed.rawValue]
             ) ?? 0
             guard mediaCount > 0 else { return false }
             guard let retryable = try Bool.fetchOne(

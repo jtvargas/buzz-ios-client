@@ -15,8 +15,12 @@ extension ComposerAttachmentsModel {
             }
         }
         let timing = Task {
-            guard (try? await Task.sleep(for: deadline)) != nil else { return }
-            await answer.settle(.failure(failure))
+            do {
+                try await Task.sleep(for: deadline)
+                await answer.settle(.failure(failure))
+            } catch {
+                await answer.settle(.failure(error))
+            }
         }
         defer {
             working.cancel()

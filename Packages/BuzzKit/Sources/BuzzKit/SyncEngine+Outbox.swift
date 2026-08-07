@@ -30,8 +30,8 @@ extension SyncEngine {
         return entry
     }
 
-    /// Drains the outbox now — the explicit user-retry entry point. A no-op unless
-    /// the engine is running; the next `.ready` drains otherwise.
+    /// Resumes HTTP media uploads immediately, then drains relay-bound rows when
+    /// the engine is running. The next `.ready` drains those rows otherwise.
     public func drainOutbox() async {
         await resumeMediaUploads()
         guard state == .running else { return }
