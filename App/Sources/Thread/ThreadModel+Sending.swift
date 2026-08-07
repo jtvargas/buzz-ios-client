@@ -53,7 +53,7 @@ extension ThreadModel {
             } catch let error as OutboxError {
                 self.restore(document: document, media: media, error: error)
             } catch {
-                // A transient send failure leaves the reply queued for the next drain.
+                self.restore(document: document, media: media, error: error)
             }
         }
     }

@@ -60,8 +60,7 @@ extension ChannelTimelineModel {
             } catch let error as OutboxError {
                 self.restore(document: document, media: media, error: error)
             } catch {
-                // A transient send failure leaves the row queued in the outbox for
-                // the next drain; nothing to surface and nothing to restore.
+                self.restore(document: document, media: media, error: error)
             }
         }
     }
@@ -107,14 +106,18 @@ extension ChannelTimelineModel {
         Task { await typing.publishEphemeral(kind: .typing, content: "", tags: tags) }
     }
 
-    private func restore(document: MentionDraft, media: [BlobDescriptor], error: OutboxError) {
+    private func restore(document: MentionDraft, media: [BlobDescriptor], error: Error) {
         // Preserve whatever the user has since typed, only restoring if untouched.
         if mentionDraft.text.isEmpty { mentionDraft = document }
         // The blobs are still on the relay, so their descriptors are still good:
-        // a refusal that took the text back must take the pictures back with it,
-        // or a send over the ceiling silently loses them.
+        // any pre-commit refusal that took the text back must take the pictures too,
+        // or the failed send silently loses them.
         attachments.restore(media)
-        sendError = Self.describe(error)
+        if let outboxError = error as? OutboxError {
+            sendError = Self.describe(outboxError)
+        } else {
+            sendError = "Couldn't send that message."
+        }
     }
 
     private static func describe(_ error: OutboxError) -> String {

@@ -269,17 +269,17 @@ final class ComposerAttachmentsModel {
 
     /// Puts attachments back after a send that was refused before it left the
     /// device. The blobs are still on the relay, so the descriptors are still good
-    /// — restoring them is what makes an over-ceiling refusal recoverable rather
-    /// than a silent loss of the pictures along with the text.
+    /// — restoring them is what makes a refusal recoverable rather than a silent
+    /// loss of the pictures along with the text. They precede anything newly added
+    /// while enqueue was in flight, preserving the order of the earlier send.
     func restore(_ descriptors: [BlobDescriptor]) {
-        guard attachments.isEmpty else { return }
-        attachments = descriptors.map {
+        attachments.insert(contentsOf: descriptors.map {
             ComposerAttachment(id: UUID(), preview: nil, state: .uploaded($0))
-        }
+        }, at: 0)
     }
 
-    /// Drops everything and stops any pick still being read. Called when the
-    /// identity behind the composer goes.
+    /// Drops everything and stops local preparation still being read. A send-time
+    /// upload is not in `batches`; leaving during that accepted window cannot cancel it.
     func reset() {
         for batch in batches { batch.cancel() }
         batches.removeAll()

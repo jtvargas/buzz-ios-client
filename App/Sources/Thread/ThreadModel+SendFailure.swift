@@ -19,10 +19,14 @@ extension ThreadModel {
     ///   blobs are still on the relay, so the descriptors are still good — handing
     ///   them back is what keeps a refusal recoverable instead of quietly losing
     ///   the pictures along with the text.
-    func restore(document: MentionDraft, media: [BlobDescriptor], error: OutboxError) {
+    func restore(document: MentionDraft, media: [BlobDescriptor], error: Error) {
         if mentionDraft.text.isEmpty { mentionDraft = document }
         attachments.restore(media)
-        sendError = Self.describe(error)
+        if let outboxError = error as? OutboxError {
+            sendError = Self.describe(outboxError)
+        } else {
+            sendError = "Couldn't send that reply."
+        }
     }
 
     static func describe(_ error: OutboxError) -> String {
