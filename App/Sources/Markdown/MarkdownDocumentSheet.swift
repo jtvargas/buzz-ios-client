@@ -1,5 +1,6 @@
 import BuzzKit
 import SwiftUI
+import UIKit
 
 /// A markdown file, rendered.
 ///
@@ -24,6 +25,22 @@ struct MarkdownDocumentSheet: View {
         case failed(String)
     }
 
+    /// What the share button hands over.
+    ///
+    /// The file once there is one, and the document's own URL until then — a share button
+    /// that is disabled while the document loads is a button the reader presses and nothing
+    /// happens, and the link is always shareable because it is what they pressed to get here.
+    private enum Share {
+        case file(URL)
+        case link(URL)
+
+        var url: URL {
+            switch self {
+            case let .file(url), let .link(url): url
+            }
+        }
+    }
+
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
     /// The signer a hosted relay's blob store requires on a read. Optional because this sheet
@@ -36,6 +53,13 @@ struct MarkdownDocumentSheet: View {
     @State private var phase: Phase = .loading
     /// Bumped by Try again, which is what re-runs the `.task`.
     @State private var attempt = 0
+    /// The document written back out as a file, once it has arrived. See
+    /// ``MarkdownDocumentFile``.
+    @State private var file: URL?
+    /// The document's own markdown, held for Copy all. See ``copyButton``.
+    @State private var source: String?
+    /// Set while the copied confirmation is showing, so the button can say it worked.
+    @State private var copied = false
 
     var body: some View {
         NavigationStack {
@@ -44,12 +68,64 @@ struct MarkdownDocumentSheet: View {
                 .navigationTitle(document.name)
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
+                    // Leading, where a sheet's root has no back button to compete with, so
+                    // Done stays exactly where a reader already found it.
+                    ToolbarItem(placement: .topBarLeading) { shareButton }
+                    ToolbarItem(placement: .topBarLeading) { copyButton }
                     ToolbarItem(placement: .confirmationAction) {
                         Button("Done") { dismiss() }
                     }
                 }
         }
         .task(id: attempt) { await load() }
+    }
+
+    /// Hands the file to the system share sheet, or the link until the file exists.
+    @ViewBuilder
+    private var shareButton: some View {
+        let share: Share = file.map(Share.file) ?? .link(document.url)
+        ShareLink(
+            item: share.url,
+            // The document's name in both states. A file URL previews as its last path
+            // component anyway; the link would otherwise preview as the whole raw URL,
+            // which is the one place a reader sees `raw.githubusercontent.com` spelled out.
+            preview: SharePreview(document.name, image: Image(systemName: "doc.text"))
+        )
+        .accessibilityLabel("Share")
+        .accessibilityIdentifier("markdown-share")
+    }
+
+    /// Puts the whole document on the pasteboard.
+    ///
+    /// # Why a button exists at all when the text is already selectable
+    ///
+    /// SwiftUI's selection is scoped to a single `Text`, and this document is one `Text` per
+    /// block — so a long press reaches the paragraph under the finger and can never reach the
+    /// paragraph after it. Selecting a heading, its prose and the code block below it is not
+    /// expressible by dragging, at any speed. The button is the whole document in one press;
+    /// the long press stays for the sentence somebody wants to quote.
+    ///
+    /// It copies the markdown *source*, not the rendered prose — the same bytes
+    /// ``MarkdownDocumentFile`` writes for the share sheet. Pasting a document that had lost
+    /// its own markup would be pasting something the file never said.
+    @ViewBuilder
+    private var copyButton: some View {
+        Button {
+            guard let source else { return }
+            UIPasteboard.general.string = source
+            // No haptic, matching ``RichCodeBlock``'s Copy code — the checkmark below is the
+            // confirmation, and every impact style in ``HiveHaptic`` already names a different
+            // gesture. Borrowing one would make its name a lie on this surface.
+            withAnimation(.easeOut(duration: 0.15)) { copied = true }
+            Task { @MainActor in
+                try? await Task.sleep(for: .seconds(1.4))
+                withAnimation(.easeOut(duration: 0.2)) { copied = false }
+            }
+        } label: {
+            Label("Copy all", systemImage: copied ? "checkmark" : "doc.on.doc")
+        }
+        .disabled(source == nil)
+        .accessibilityIdentifier("markdown-copy-all")
     }
 
     @ViewBuilder
@@ -103,14 +179,25 @@ struct MarkdownDocumentSheet: View {
 
     private func load() async {
         phase = .loading
+        file = nil
+        source = nil
         let authorization = environment?.mediaReadAuthorizer
         do {
             let text = try await MarkdownDocumentLoader.text(
                 for: document, authorization: authorization
             )
-            let message = await Task.detached(priority: .userInitiated) {
-                MarkdownDocumentContent.message(for: text)
+            // The parse and the write are both off the main actor, and both are the same
+            // arrival: what the reader sees is a sheet that has already presented, not one
+            // that hitches while a few thousand lines are scanned and put on disk.
+            let document = document
+            let (message, written) = await Task.detached(priority: .userInitiated) {
+                (
+                    MarkdownDocumentContent.message(for: text),
+                    MarkdownDocumentFile.write(text, for: document)
+                )
             }.value
+            file = written
+            source = text
             phase = .loaded(message)
         } catch {
             let reason = (error as? LocalizedError)?.errorDescription

@@ -67,6 +67,14 @@ enum ConversationFixture {
         /// exercises the inline renderer. It is a visual regression sampler, not a scroll
         /// shape, so it remains inert unless explicitly requested at launch.
         var markdownSampler = false
+        /// Replaces the conversation with a single message linking one markdown file, so the
+        /// document sheet can be opened the way a reader opens it — by pressing the link in a
+        /// real message row — rather than by presenting the sheet directly.
+        ///
+        /// Off by default and never passed by the scroll suite, for ``links``' reason. Unlike
+        /// every other shape here it reaches the network, because the sheet's whole job is to
+        /// fetch: a stub would be a test of the parser, which already has one.
+        var markdownDocument = false
         /// Adds one message per picture shape — tall, wide, square — so the full-screen
         /// viewer and its header can be looked at on a simulator.
         ///
@@ -137,6 +145,7 @@ enum ConversationFixture {
             options.spread = arguments.contains("-spread")
             options.links = arguments.contains("-links")
             options.markdownSampler = arguments.contains("-markdownSampler")
+            options.markdownDocument = arguments.contains("-markdownDocument")
             options.images = arguments.contains("-images")
             options.imageShape = arguments
                 .first { $0.hasPrefix("-imageShape=") }
@@ -177,10 +186,10 @@ enum ConversationFixture {
     /// - Parameter keys: the authors, taken in turn every ``authorRun`` messages. The
     ///   first of them opens a thread and signs the picture sampler.
     static func events(for options: Options, keys: [PrivateKey]) throws -> [NostrEvent] {
-        if options.markdownSampler {
+        if options.markdownSampler || options.markdownDocument {
             return [try NostrEvent.signed(
                 kind: .channelMessage,
-                content: markdownSampler,
+                content: options.markdownDocument ? markdownDocumentSampler : markdownSampler,
                 tags: [["h", channelID]],
                 createdAt: Date(timeIntervalSince1970: 1_700_000_000),
                 with: keys[0]
@@ -262,6 +271,16 @@ enum ConversationFixture {
     [the scroll fix](https://linear.app/acme/issue/ENG-1421/fix-the-scroll)
     https://developer.apple.com/documentation/swiftui/scrollposition
     https://example.com
+    """
+
+    /// A message linking one markdown file — the shape a reader actually meets a document in.
+    ///
+    /// A public raw URL rather than a community upload: the relay refuses `.md` on upload, so
+    /// a web link is the only way a document reaches a conversation today.
+    private static let markdownDocumentSampler = """
+    Here is a markdown file, press it to preview:
+
+    https://raw.githubusercontent.com/mxstbr/markdown-test-file/master/TEST.md
     """
 
     // swiftlint:disable line_length
