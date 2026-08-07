@@ -126,6 +126,7 @@ struct OutboxMediaTests {
         let retried = try #require(try await harness.store.entry(id: entry.id))
         #expect(retried.state == .awaitingMedia)
         #expect(try await harness.store.outboxMedia(eventID: entry.id).first?.state == .staged)
+        #expect(try await harness.store.retryOutboxMedia(entry.id) == false)
     }
 
     @Test("awaiting media stays out of the drain until the pump uploads it")
@@ -281,6 +282,39 @@ struct OutboxMediaTests {
         #expect(try await harness.store.pendingSends().isEmpty)
     }
 
+    @Test("a relay policy refusal is a terminal media send failure")
+    func policyRefusalIsTerminal() async throws {
+        let database = TempDatabase()
+        defer { database.remove() }
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("media-policy-tests-\(UUID().uuidString)", isDirectory: true)
+        let staging = MediaStagingStore(directory: directory)
+        defer { try? staging.removeAll() }
+        let harness = try EngineHarness(
+            path: database.path,
+            identity: try PrivateKey(),
+            relays: [],
+            mediaUploader: PolicyRejectingMediaUploader(),
+            mediaBaseURL: URL(string: "https://relay.example.com"),
+            mediaStagingStore: staging
+        )
+        let picture = try #require(ImageFixture.png(width: 40, height: 24))
+        let entry = try await harness.engine.enqueueMediaMessage(
+            text: "picture",
+            in: "room-1",
+            media: [OutboundMediaPayload(data: picture)]
+        )
+
+        await waitUntil { (try? await harness.store.entry(id: entry.id)?.state) == .failed }
+
+        let failed = try #require(try await harness.store.entry(id: entry.id))
+        #expect(failed.isRetryable == false)
+        #expect(failed.lastError == "The relay wouldn't store that picture.")
+        await #expect(throws: OutboxError.notRetryable(entry.id)) {
+            try await harness.engine.retry(entry.id)
+        }
+    }
+
     @Test("discard removes an awaiting row and its unshared staged bytes inline")
     func discardAwaitingMedia() async throws {
         let database = TempDatabase()
@@ -340,5 +374,11 @@ private struct NeverFinishingMediaUploader: MediaUploading {
     func upload(data _: Data, mimeType _: String, filename _: String?) async throws -> BlobDescriptor {
         try await Task.sleep(for: .seconds(3600))
         throw CancellationError()
+    }
+}
+
+private struct PolicyRejectingMediaUploader: MediaUploading {
+    func upload(data _: Data, mimeType _: String, filename _: String?) async throws -> BlobDescriptor {
+        throw MediaUploadError.rejectedByPolicy
     }
 }
