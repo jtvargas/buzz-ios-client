@@ -143,7 +143,15 @@ extension AppEnvironment {
         return try BuzzEventStore(path: path)
     }
 
-    /// Deletes a community's database and the two files SQLite keeps beside it.
+    /// The content-addressed media directory paired with one community database.
+    static func makeMediaStagingStore(filename: String) throws -> MediaStagingStore {
+        let directory = try storeDirectory()
+            .appendingPathComponent("media-staging", isDirectory: true)
+            .appendingPathComponent(filename, isDirectory: true)
+        return MediaStagingStore(directory: directory)
+    }
+
+    /// Deletes a community's database, staged media, and the two files SQLite keeps beside it.
     ///
     /// The WAL and the shared-memory file are not incidental: a WAL holds committed pages
     /// that have not been checkpointed into the main file yet, so deleting `store.sqlite`
@@ -156,5 +164,6 @@ extension AppEnvironment {
             let url = directory.appendingPathComponent(filename + suffix)
             try? FileManager.default.removeItem(at: url)
         }
+        try? makeMediaStagingStore(filename: filename).removeAll()
     }
 }

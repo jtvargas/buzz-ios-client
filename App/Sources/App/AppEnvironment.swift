@@ -352,6 +352,7 @@ final class AppEnvironment {
         self.signer = signer
         let store = try Self.makeStore(filename: community.storeFilename)
         self.store = store
+        let mediaStagingStore = try Self.makeMediaStagingStore(filename: community.storeFilename)
         let drafts = ComposerDrafts(persistence: StoredComposerDrafts(store: store))
         self.drafts = drafts
 
@@ -363,12 +364,16 @@ final class AppEnvironment {
         if let intendedPubkey {
             if StoreOwnership.shouldWipe(recordedOwner: community.ownerPubkeyHex, incoming: intendedPubkey) {
                 try await store.wipe()
+                try mediaStagingStore.removeAll()
                 // Beside the wipe, so "a different key never sees the last one's drafts"
                 // holds in memory wherever the handover happens, not only on sign-out.
                 drafts.reset()
             }
             recordOwner(intendedPubkey, of: community)
         }
+
+        let retainedMedia = try await store.reconcileOutboxMedia()
+        try mediaStagingStore.sweep(retaining: retainedMedia)
 
         let engine = makeEngine(store: store, signer: signer, websocketURL: websocketURL, queryURL: queryURL)
         self.engine = engine
