@@ -368,6 +368,12 @@ struct ConversationScaffold<Content: View, Bar: View, Accessory: View>: View {
         // Only the message list dismisses the keyboard, and this is applied inside
         // `safeAreaBar` so the bar's own scroll views do not inherit the mode.
         .scrollDismissesKeyboard(.interactively)
+        // The scroll edge effect, by hand, because `scrollEdgeEffectHidden` above had to turn
+        // the real one off. Top only — the composer is a floating card the conversation rests
+        // against rather than a bar it runs under, so a fade there covers the newest message
+        // instead of an edge. Here rather than anywhere else because it has to be after the
+        // flip, or it is flipped with the list. Both reasons in ``ConversationEdgeFades``.
+        .conversationEdgeFade()
         .safeAreaBar(edge: .bottom) {
             bar
                 .onGeometryChange(for: CGFloat.self) { geometry in
