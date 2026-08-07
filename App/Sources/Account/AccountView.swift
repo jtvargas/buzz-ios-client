@@ -17,6 +17,8 @@ struct AccountView: View {
     @Environment(AppEnvironment.self) private var environment
     @Environment(\.entityNames) private var names
     @Environment(\.dismiss) private var dismiss
+    /// Read for ``editBadge``'s ring, which has to be the page's own colour. See there.
+    @Environment(\.hiveTheme) private var theme
 
     @State private var model: ProfileModel?
     @State private var isEditingAvatar = false
@@ -128,11 +130,12 @@ struct AccountView: View {
             // avatar rather than punched out of it — the same treatment the connection dot
             // gets in ``AccountAvatarButton``.
             //
-            // Which means it follows ``View/hiveSheetGround()`` and is dynamic with it. A
-            // fixed ``ShapeStyle/hiveNight`` here would be a dark ring drawn on a grey page:
-            // #124 moved the ground and this together, and moving the ground back has to
-            // move this back with it.
-            .overlay(Circle().strokeBorder(Color(.systemGroupedBackground), lineWidth: 3))
+            // Which means it follows ``View/hiveSheetGround()`` and is dynamic with it — the
+            // same ``HiveTheme/elevatedBackground`` that modifier paints, now that the page is
+            // the reader's theme rather than `systemGroupedBackground`. Any fixed colour here
+            // is a ring in the wrong dark on fourteen of the fifteen themes: #124 moved the
+            // ground and this together, and every later move has to move both.
+            .overlay(Circle().strokeBorder(theme.elevatedBackground, lineWidth: 3))
             .accessibilityHidden(true)
     }
 

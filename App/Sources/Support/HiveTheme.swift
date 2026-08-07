@@ -65,6 +65,27 @@ struct HiveTheme: Identifiable, Equatable, Sendable {
         accentHex.map(Color.hex) ?? Color(HiveAccent.assetName, bundle: .main)
     }
 
+    /// **The ground for a surface that is presented rather than entered** — one step lighter
+    /// than ``background``, so a sheet reads as sitting above the screen it covers.
+    ///
+    /// This replaces `systemGroupedBackground`, which did the same job by resolving
+    /// `UIUserInterfaceLevel.elevated` through the UIKit trait environment. That worked while
+    /// the app had one ground and it was black: elevated `#1C1C1E` over base `#000000` is a
+    /// step up. It stopped working the moment the default ground became `#222222` — the system
+    /// colour does not know about the theme, so every sheet came out *darker* than the screen
+    /// behind it and the elevation read backwards.
+    ///
+    /// A blend toward white rather than a second stored colour, because the step has to hold
+    /// for all fifteen grounds and hand-picking fifteen more is fifteen chances to get one
+    /// wrong. `0.12` in the default perceptual space puts `#222222` at roughly the distance
+    /// UIKit puts `#000000` from `#1C1C1E`, so a sheet steps by about as much as it always did.
+    ///
+    /// Every theme here is dark, which is what makes "lighter" the right direction; a light
+    /// ground added later would need this to lift the other way.
+    var elevatedBackground: Color {
+        background.mix(with: .white, by: 0.12)
+    }
+
     /// The same accent for UIKit — the window tint, and so the caret, the selection handles,
     /// menus and alerts.
     ///

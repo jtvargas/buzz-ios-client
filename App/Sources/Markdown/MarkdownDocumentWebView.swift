@@ -40,14 +40,17 @@ struct MarkdownDocumentWebView: UIViewRepresentable {
         else { return }
         context.coordinator.lastHTML = html
         context.coordinator.lastDynamicTypeSize = dynamicTypeSize
-        webView.backgroundColor = UIColor(theme.background)
-        webView.scrollView.backgroundColor = UIColor(theme.background)
+        // The *elevated* ground, not the screen one: this only ever renders inside
+        // ``MarkdownDocumentSheet``, so it has to agree with the ``View/hiveSheetGround()``
+        // showing behind the translucent navigation bar above it.
+        webView.backgroundColor = UIColor(theme.elevatedBackground)
+        webView.scrollView.backgroundColor = UIColor(theme.elevatedBackground)
         webView.loadHTMLString(html, baseURL: baseURL)
     }
 
     private func documentHTML(for webView: WKWebView) -> String {
         let traits = webView.traitCollection
-        let background = css(UIColor(theme.background), traits: traits)
+        let background = css(UIColor(theme.elevatedBackground), traits: traits)
         let foreground = css(.label, traits: traits)
         let secondary = css(.secondaryLabel, traits: traits)
         let border = css(.separator, traits: traits)
