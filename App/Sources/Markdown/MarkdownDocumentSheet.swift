@@ -4,10 +4,10 @@ import UIKit
 
 /// A markdown file, rendered.
 ///
-/// Presented over whatever the reader was doing when they pressed the file, and drawn by
-/// ``RichTextView`` — the same renderer the conversation uses, so the document's headings,
-/// tables, code and lists are the ones they already know. See ``MarkdownDocumentContent`` for
-/// the two message-only stages a document deliberately skips.
+/// Presented over whatever the reader was doing when they pressed the file. The shared parser
+/// still understands its markdown, while a document-only web surface gives headings, tables,
+/// code and lists native document layout and one selection range across block boundaries. See
+/// ``MarkdownDocumentContent`` for the two message-only stages a document deliberately skips.
 ///
 /// # Why the parse happens off the main actor
 ///
@@ -62,9 +62,8 @@ struct MarkdownDocumentSheet: View {
     @State private var copied = false
     /// Whether the document's exact markdown is replacing the rendered reading view.
     ///
-    /// The source is deliberately a mode, not a second renderer: one `Text` gives the
-    /// system a single selection range spanning the whole file, while the default path
-    /// remains ``RichTextView`` with its tables, code blocks, media and link treatment.
+    /// The source is deliberately a mode, not a second rich renderer: one `Text` shows the
+    /// exact markdown bytes, while the default web path remains the readable document.
     @State private var isShowingSource = false
 
     var body: some View {
@@ -106,11 +105,8 @@ struct MarkdownDocumentSheet: View {
     ///
     /// # Why a button exists at all when the text is already selectable
     ///
-    /// SwiftUI's selection is scoped to a single `Text`, and this document is one `Text` per
-    /// block — so a long press reaches the paragraph under the finger and can never reach the
-    /// paragraph after it. Selecting a heading, its prose and the code block below it is not
-    /// expressible by dragging, at any speed. The button is the whole document in one press;
-    /// the long press stays for the sentence somebody wants to quote.
+    /// The rendered web document supports selection across blocks, but a one-press lossless
+    /// copy is still useful for a long file and preserves syntax the rendered copy omits.
     ///
     /// It copies the markdown *source*, not the rendered prose — the same bytes
     /// ``MarkdownDocumentFile`` writes for the share sheet. Pasting a document that had lost
@@ -135,14 +131,10 @@ struct MarkdownDocumentSheet: View {
         .accessibilityIdentifier("markdown-copy-all")
     }
 
-    /// Switches between the faithful rich document and one selectable source string.
+    /// Switches between the rendered document and one selectable source string.
     ///
-    /// A `UITextView` bridge cannot preserve both halves of the rich renderer: hosting
-    /// tables and code as attachments makes them opaque replacement characters when
-    /// copied, while flattening them into text loses their layout and horizontal scroll.
-    /// Source mode names that trade honestly. It gives cross-block selection without a
-    /// second markdown renderer to keep in step, and what is selected is exactly what the
-    /// file contains.
+    /// Source mode remains the exact file content: what is selected is what the author wrote,
+    /// including markdown syntax that a rendered selection intentionally does not include.
     private var sourceButton: some View {
         Button {
             withAnimation(.easeInOut(duration: 0.2)) { isShowingSource.toggle() }
@@ -182,17 +174,7 @@ struct MarkdownDocumentSheet: View {
                         .textSelection(.enabled)
                 }
             } else {
-                ScrollView {
-                    MarkdownSelectableRichTextView(message: message)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 20)
-                        .padding(.top, 12)
-                        .padding(.bottom, 40)
-                        // A document is read, not skimmed for who said it, so its text is
-                        // selectable where a message's deliberately is not — there is no row tap
-                        // and no thread underneath for a selection gesture to steal.
-                        .textSelection(.enabled)
-                }
+                MarkdownDocumentWebView(message: message, baseURL: document.url)
             }
         case let .failed(reason):
             failure(reason)
