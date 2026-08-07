@@ -132,10 +132,10 @@ struct ComposerAttachmentStrip: View {
                     .resizable()
                     .scaledToFill()
             }
-            if attachment.isPreparing || attachment.isUploading {
-                // Over the picture rather than instead of it — the author picked a
-                // specific photo and should see *that* one going up. The scrim is
-                // what keeps the spinner legible over a bright picture.
+            if attachment.isPreparing {
+                // One spinner, one meaning: this picture is being loaded and scrubbed
+                // on-device. Relay upload progress belongs to the timeline row after send.
+                // The scrim keeps the spinner legible over a bright preview.
                 Rectangle().fill(.black.opacity(0.28))
                 ProgressView()
                     .progressViewStyle(.circular)
@@ -146,7 +146,6 @@ struct ComposerAttachmentStrip: View {
 
     private func accessibilityLabel(for attachment: ComposerAttachment) -> String {
         if attachment.isPreparing { return "Picture, preparing" }
-        if attachment.isUploading { return "Picture, uploading" }
         return "Picture"
     }
 
