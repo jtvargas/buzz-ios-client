@@ -43,7 +43,7 @@
 		<true/>
 	</dict>
 	<key>NSCameraUsageDescription</key>
-	<string>Hive uses the camera to scan the pairing QR code shown on your desktop so it can move your identity to this device.</string>
+	<string>Hive uses the camera to take photos you attach to messages, and to scan the pairing QR code shown on your desktop.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Hive connects to the Buzz relay you configure, which may be on your local or Tailscale network.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
