@@ -1,14 +1,15 @@
 import CryptoKit
 import Foundation
 import NostrCore
+import os
 
 /// What the relay says back when it has stored a blob.
 ///
-/// The shape is the relay's, not ours, and the fields that matter most are the
-/// ones **it** computed: `dim`, `blurhash` and `thumb`. A client does not measure
-/// or blur a picture before uploading it — it sends bytes and keeps this answer,
-/// which is why the whole of ``imetaTag()`` can be assembled without ever
-/// decoding the image on this device.
+/// The relay's answer remains authoritative, but an image descriptor is also
+/// predictable from the exact scrubbed bytes: the client hashes and measures the
+/// picture, derives its MIME type and thumbnail URL, and makes its own BlurHash.
+/// The relay's BlurHash is deliberately different because it resamples with a
+/// different image stack; every other field used by ``imetaTag()`` must agree.
 ///
 /// `duration`, `image` and `filename` are carried but unused by the image path.
 /// They are what a video or a file attachment will need, and dropping them here
@@ -96,6 +97,7 @@ public struct BlobDescriptor: Sendable, Equatable, Codable {
             .replacingOccurrences(of: "]", with: "\\]")
         return "[\(label)](\(url))"
     }
+
 }
 
 /// Putting bytes on the blob store, as a composer needs it.
@@ -168,6 +170,10 @@ public struct MediaUploadClient: Sendable {
 
     /// How long an upload authorisation stays valid. Matches the mobile client.
     static let authorizationLifetime: TimeInterval = 600
+
+    #if DEBUG
+    static let predictionLog = Logger(subsystem: "BuzzKit", category: "MediaUpload.prediction")
+    #endif
 
     /// The types the relay stores as pictures.
     ///
@@ -244,8 +250,41 @@ public struct MediaUploadClient: Sendable {
         if let filename, descriptor.filename == nil {
             descriptor = descriptor.withFilename(filename)
         }
+        #if DEBUG
+        Self.assertPrediction(of: data, at: baseURL, filename: filename, matches: descriptor)
+        #endif
         return descriptor
     }
+
+    #if DEBUG
+    /// The one-line P1 gate: the relay's answer still wins, while a mismatch is
+    /// impossible to miss before a later phase signs the prediction into an event.
+    static func assertPrediction(
+        of data: Data,
+        at baseURL: URL,
+        filename: String?,
+        matches actual: BlobDescriptor
+    ) {
+        guard let predicted = BlobDescriptor.predicted(
+            data: data,
+            baseURL: baseURL,
+            filename: filename
+        ) else { return }
+        let matches = predicted.url == actual.url
+            && predicted.sha256 == actual.sha256
+            && predicted.size == actual.size
+            && predicted.type == actual.type
+            && predicted.thumb == actual.thumb
+        guard !matches else { return }
+
+        let expected = String(describing: predicted)
+        let received = String(describing: actual)
+        predictionLog.fault("Media descriptor prediction mismatch")
+        predictionLog.fault("Predicted: \(expected, privacy: .public)")
+        predictionLog.fault("Relay returned: \(received, privacy: .public)")
+        assertionFailure("Media descriptor prediction did not match the relay")
+    }
+    #endif
 
     /// The three headers an upload carries.
     func headers(sha256: String, mimeType: String) async throws -> [String: String] {
