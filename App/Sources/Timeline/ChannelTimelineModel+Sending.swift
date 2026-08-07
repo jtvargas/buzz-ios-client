@@ -17,41 +17,38 @@ extension ChannelTimelineModel {
     func send() {
         let document = mentionDraft
         let text = document.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        // A picture with no words is a message; an upload still in flight is not
-        // ready to be one. The composer disables send in both cases — this is the
-        // same rule stated where it is enforced, so a send reaching here another
-        // way cannot post a message missing an attachment.
-        guard !attachments.isAttaching else { return }
-        let media = attachments.takeForSend()
-        guard !text.isEmpty || !media.isEmpty else { return }
-        mentionDraft = MentionDraft()
-        sendError = nil
-        // At the tap, and not behind the `await` below. `enqueue` commits the outbox row and
-        // then waits for the drain — a publish round trip for every queued row — so a jump
-        // issued after it returns lands whenever the relay answers, which on a slow socket is
-        // seconds after the author pressed send. The freeze has to come off here for the same
-        // reason and one more: the row this whole path is about is newer than the boundary, so
-        // while the freeze stands it is not rendered at all and there is nothing to land on.
+        // A picture with no words is a message. Local preparation must finish first,
+        // and a second send cannot overlap the network batch started by the first.
+        guard !attachments.isAttaching, !attachments.isUploadingForSend else { return }
+        guard !text.isEmpty || attachments.hasSendableContent else { return }
+        // Read at the tap, then acted on only after uploads succeed. `enqueue` commits the
+        // outbox row and then waits for the drain — a publish round trip for every queued
+        // row — so the jump still happens before that await, without moving the reader for
+        // an upload that was refused before a message existed.
         //
         // The cost is that a send refused at the door — over the 64 KiB ceiling, the one thing
         // `enqueue` throws for — has already moved the reader. That refusal raises an alert and
         // hands the draft back, so it is neither silent nor lost, and it is not reachable by
         // typing.
         let isChasingOwnSend = shouldJumpToOwnSend
-        if isChasingOwnSend { jumpToLatest() }
-
-        let channel = self.channel
-        let sender = self.sender
         let mentionPubkeys = document.mentionedPubkeys(sender: selfPubkey)
         let selfPubkey = self.selfPubkey
         Task { [weak self] in
+            guard await self?.attachments.prepareForSend() == true else { return }
+            guard let self else { return }
+            let media = self.attachments.takeForSend()
+            guard !text.isEmpty || !media.isEmpty else { return }
+            self.mentionDraft = MentionDraft()
+            self.sendError = nil
+            if isChasingOwnSend { self.jumpToLatest() }
+
             do {
-                let entry = try await sender.enqueue(
+                let entry = try await self.sender.enqueue(
                     kind: .channelMessage,
                     content: OutboundAttachments.content(text, attaching: media),
-                    in: channel,
+                    in: self.channel,
                     tags: OutboundTags.message(
-                        channel: channel,
+                        channel: self.channel,
                         mentioning: mentionPubkeys,
                         sender: selfPubkey
                     ) + OutboundAttachments.tags(attaching: media),
@@ -59,9 +56,9 @@ extension ChannelTimelineModel {
                 )
                 // The message has an id now, so the trip that started at the tap can finish
                 // on the message itself rather than on whatever was newest when it began.
-                if isChasingOwnSend { self?.landOn(ownSend: entry.event.id) }
+                if isChasingOwnSend { self.landOn(ownSend: entry.event.id) }
             } catch let error as OutboxError {
-                self?.restore(document: document, media: media, error: error)
+                self.restore(document: document, media: media, error: error)
             } catch {
                 // A transient send failure leaves the row queued in the outbox for
                 // the next drain; nothing to surface and nothing to restore.

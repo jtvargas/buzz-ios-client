@@ -94,7 +94,7 @@ final class ChannelTimelineModel {
     /// Where that draft is kept between visits. `nil` in tests, which then keep nothing.
     let drafts: ComposerDrafts?
     let mentionAutocomplete: MentionAutocompleteModel
-    /// The pictures the composer is carrying, uploaded as they are picked and
+    /// The pictures the composer is carrying, prepared locally as they are picked and
     /// cleared by the send that names them. Per-model, so a thread opened from this
     /// channel keeps its own.
     let attachments: ComposerAttachmentsModel

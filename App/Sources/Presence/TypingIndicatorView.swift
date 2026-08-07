@@ -62,9 +62,9 @@ struct TypingIndicatorView: View {
 /// strip, and ``ConnectionStatusIndicatorView``.
 ///
 /// Extracted so the two cannot drift. They occupy the same slot, say the same *kind*
-/// of thing — something is happening, right now, that you did not ask for — and a
-/// reader who saw one read as a different sort of object from the other would be
-/// reading a difference that is not there.
+/// of thing — live work is under way and will finish on its own — and a reader who
+/// saw one read as a different sort of object from the other would be reading a
+/// difference that is not there. The work may be ambient or author-initiated.
 struct ConversationAccessoryCapsule<Leading: View>: View {
     /// The words, which are also what VoiceOver speaks for the whole capsule.
     let label: String

@@ -113,7 +113,7 @@ struct ComposerAttachmentStrip: View {
             }
             .overlay(alignment: .topTrailing) { removeButton(for: attachment) }
             .accessibilityElement(children: .contain)
-            .accessibilityLabel(attachment.isUploading ? "Picture, uploading" : "Picture")
+            .accessibilityLabel(accessibilityLabel(for: attachment))
             // Named so a UI test can measure the tile itself rather than infer it from
             // the X inside it — where the strip sits relative to the text field is the
             // whole assertion, and it is a rectangle, not a label.
@@ -132,7 +132,7 @@ struct ComposerAttachmentStrip: View {
                     .resizable()
                     .scaledToFill()
             }
-            if attachment.isUploading {
+            if attachment.isPreparing || attachment.isUploading {
                 // Over the picture rather than instead of it — the author picked a
                 // specific photo and should see *that* one going up. The scrim is
                 // what keeps the spinner legible over a bright picture.
@@ -142,6 +142,12 @@ struct ComposerAttachmentStrip: View {
                     .tint(.white)
             }
         }
+    }
+
+    private func accessibilityLabel(for attachment: ComposerAttachment) -> String {
+        if attachment.isPreparing { return "Picture, preparing" }
+        if attachment.isUploading { return "Picture, uploading" }
+        return "Picture"
     }
 
     private func removeButton(for attachment: ComposerAttachment) -> some View {
