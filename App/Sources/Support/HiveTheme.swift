@@ -32,9 +32,15 @@ import UIKit
 /// Aubergine**, on the sidebar purple the product is actually known by. Neither is a compromise
 /// on the other: the first is what the catalogue says, the second is what Slack looks like.
 ///
-/// Their accents are Slack's own brand palette rather than upstream's `added` field, for the
-/// reason above — upstream records `#ECB22E` for `slack-dark`, which is within a few degrees of
-/// Hive's own `#FFBA38` and would have made the two swatches read as the same theme.
+/// **Slack Aubergine**'s accent is Slack's own brand blue rather than upstream's `added` field,
+/// which records `#ECB22E` for `slack-dark` — within a few degrees of Hive's own `#FFBA38`.
+///
+/// **Slack Dark** carried that same brand blue until the owner asked for Hive's accent on it
+/// (2026-08-06), so it now takes `nil` like ``hive`` and draws the asset catalogue's amber. The
+/// swatch cost the brand blue was avoiding is real and was accepted: Slack Dark and Hive differ
+/// in the picker only by their ground, `#222222` against `hiveNight`. Taking `nil` rather than
+/// hardcoding `#FFBA38` is deliberate — it puts this theme on the same light/dark-resolving
+/// asset path ``AccentTests`` already guards, which a literal would silently leave.
 struct HiveTheme: Identifiable, Equatable, Sendable {
     /// The upstream catalogue's own name, and the persisted value. Stable across releases:
     /// changing one silently resets the reader's choice to the default.
@@ -89,7 +95,7 @@ extension HiveTheme {
         HiveTheme(id: "rose-pine", name: "Rosé Pine", background: .hex(0x191724), accentHex: 0xC4A7E7),
         HiveTheme(id: "tokyo-night", name: "Tokyo Night", background: .hex(0x1A1B26), accentHex: 0x7AA2F7),
         HiveTheme(id: "catppuccin-mocha", name: "Catppuccin Mocha", background: .hex(0x1E1E2E), accentHex: 0xCBA6F7),
-        HiveTheme(id: "slack-dark", name: "Slack Dark", background: .hex(0x222222), accentHex: 0x36C5F0),
+        HiveTheme(id: "slack-dark", name: "Slack Dark", background: .hex(0x222222), accentHex: nil),
         HiveTheme(id: "slack-aubergine", name: "Slack Aubergine", background: .hex(0x3F0E40), accentHex: 0x36C5F0),
         HiveTheme(id: "solarized-dark", name: "Solarized Dark", background: .hex(0x002B36), accentHex: 0x2AA198),
         HiveTheme(id: "monokai", name: "Monokai", background: .hex(0x272822), accentHex: 0xA6E22E),
