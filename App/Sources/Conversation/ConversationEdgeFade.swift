@@ -10,7 +10,7 @@ import SwiftUI
 /// (``SwiftUI/View/conversationInverted()``), and the system effect composited against a flipped
 /// surface does not veil an *edge*: it veils the whole thing. Measured on iPhone 17 Pro /
 /// iOS 26.1 against the shipped build, same fixture, only that line changed — text peak
-/// luminance fell from **89 to 25** over a ground of 20, and contrast across the list from
+/// luminance fell from **255 to 25** over a ground of 20, and contrast across the list from
 /// **20.4 to 1.4**, uniformly in the upper, middle and lower thirds. Uniform is the tell: an edge
 /// effect that dims the middle of the list as hard as the top is not acting as an edge effect.
 ///
@@ -23,9 +23,8 @@ import SwiftUI
 /// is an `overlay` applied *after* `conversationInverted()`, so it is not flipped: it composites
 /// over the already-rendered surface, upright, sampling what is actually on screen.
 ///
-/// It is applied *before* `safeAreaBar`, so the composer draws on top of it rather than being
-/// dimmed by it. The bars — navigation above, composer below — render outside the flip and were
-/// never the problem.
+/// It is applied *before* `safeAreaBar`, so the composer draws on top of it. Measured, not
+/// assumed — see the geometry note on ``ConversationEdgeFades/body(content:)``.
 ///
 /// # What it is made of, and why it is two layers rather than one
 ///
@@ -42,19 +41,38 @@ import SwiftUI
 /// The colour is ``HiveTheme/background``, so this follows the reader's theme like every other
 /// ground in the app.
 struct ConversationEdgeFades: ViewModifier {
-    /// The composer's measured height, so the bottom fade covers exactly what the composer
-    /// floats over. Passed in rather than measured again here: ``ConversationScaffold`` already
-    /// reads it for the accessory and the dismissal band, and a second reading of the same bar
-    /// is a second chance for the two to disagree.
+    /// The composer's measured height. Both a *length* — the band the composer covers is drawn at
+    /// full cover, the way a system bar's own background is — and a *distance*, because it is how
+    /// far down the bottom overlay has to be pushed to reach that band at all. Passed in rather
+    /// than measured again here: ``ConversationScaffold`` already reads it for the accessory and
+    /// the dismissal band, and a second reading of the same bar is a second chance for the two to
+    /// disagree.
     let barHeight: CGFloat
 
     /// How far past the navigation bar the top fade keeps going. Short: the fade's job is the
     /// band the bar covers, and a long tail reads as the screen being dirty rather than as an
     /// edge.
     private static let topReach: CGFloat = 30
-    /// The same for the composer, a little tighter — the composer is already inset 12pt from
-    /// each side, so the fade shows in those gutters at full length and wants less of it.
-    private static let bottomReach: CGFloat = 22
+    /// The ease *above* the composer — the whole of what this fade takes from the message area.
+    ///
+    /// Fixed, and that is the point. It used to be `barHeight + 22`, which is the same number in
+    /// the wrong role: a composer grown to four lines took 212pt of readable conversation with it
+    /// and the owner reported the top *"looks okay"* and the bottom *"impossible to read"* — the
+    /// asymmetry between two fades built from the same stops, one of which was sized off a bar
+    /// that grows. The band below this ease scales with the composer; the ease does not.
+    private static let bottomEase: CGFloat = 44
+    /// How far past the composer's own bottom edge the cover keeps going.
+    ///
+    /// The strip between the composer and the screen bottom is the home indicator's, and the
+    /// conversation scrolls through it — the owner's *"it needs to be below the composer as
+    /// well"*. 60 is comfortably more than that inset on any device this app runs on, and the
+    /// surplus is spent off the bottom of the screen. With the keyboard up there is no strip at
+    /// all (the composer sits on the keyboard) and the whole 60 is behind the keyboard, unseen.
+    ///
+    /// Over-reaching downward is free in a way that reading the inset is not: `safeAreaInsets`
+    /// *becomes the keyboard*, and a band sized off it washes 300pt of screen the moment somebody
+    /// types. Nothing in this file reads a keyboard height.
+    private static let bottomOverhang: CGFloat = 60
 
     func body(content: Content) -> some View {
         content
@@ -76,21 +94,29 @@ struct ConversationEdgeFades: ViewModifier {
                 }
                 .allowsHitTesting(false)
             }
-            // # The bottom: anchored, because the inset there is the keyboard
+            // # The bottom: offset, because `.bottom` here is the composer's *top*
             //
-            // No reading, deliberately. `safeAreaInsets.bottom` is the home indicator until the
-            // keyboard comes up and then it is the keyboard, and a fade sized off that is a
-            // 400pt wash the moment somebody types. This aligns to the safe-area bottom instead
-            // — which is where `safeAreaBar` puts the composer's own bottom, keyboard or not —
-            // so the band is the composer plus a tail in *both* states and the arithmetic that
-            // could get it wrong does not exist.
+            // `safeAreaBar` takes the bar's height out of the scroll view's frame, so this
+            // overlay's bottom edge lands on the composer's top edge — not on the composer, and
+            // not on the screen. Measured on iPhone 17 Pro / iOS 26.1 in a standalone probe of
+            // this exact arrangement (`~/.buzz/.scratch/edgefadeprobe`), keyboard up: scroll
+            // frame `62→418`, bar `418→556`, and the un-offset overlay `190→418`. Its bottom and
+            // the bar's top are the same 418.
             //
-            // It is also the rule this shell states at the top of the file: nothing in here
-            // reads a keyboard height. The strip below the safe area is left bare on purpose;
-            // the composer insets the scrollable content, so no message ever scrolls into it.
+            // That is the whole of the first attempt's defect. A band of `barHeight + 22` hung
+            // off that anchor does not cover the composer — it stacks *on top of the
+            // conversation*, and grows as the composer grows.
+            //
+            // So the band is pushed down by exactly the distance that anchor is short by. It then
+            // covers what a system bar's edge effect covers: an ease into the composer's top, the
+            // composer's own band at full cover, and the strip below it. The composer draws over
+            // it — the same probe, sampled: the field's text is `(255,255,255)` inside the band
+            // while the bar's gutter beside it takes the tint. `offset` and not a layout change,
+            // so nothing in the scroll view moves for it.
             .overlay(alignment: .bottom) {
-                ConversationEdgeFade(edge: .bottom)
-                    .frame(height: barHeight + Self.bottomReach)
+                ConversationEdgeFade(edge: .bottom, ease: Self.bottomEase)
+                    .frame(height: Self.bottomEase + barHeight + Self.bottomOverhang)
+                    .offset(y: barHeight + Self.bottomOverhang)
                     // Decoration, and a scroll surface: a fade that swallowed a touch would
                     // make the bottom of every conversation dead to the drag that scrolls it.
                     .allowsHitTesting(false)
@@ -103,6 +129,12 @@ private struct ConversationEdgeFade: View {
     @Environment(\.hiveTheme) private var theme
 
     let edge: VerticalEdge
+    /// Bottom only: the length of the ease, with everything past it drawn at full cover.
+    ///
+    /// The top has no equivalent because its band *is* its ease — there is no bar-shaped run of
+    /// full cover to draw, the navigation bar being a floating pill with the screen edge just
+    /// above it. The bottom's band is mostly composer, so it is ease-then-hold.
+    var ease: CGFloat?
 
     /// The falloff, as the fraction of the band that is still covered at each stop.
     ///
@@ -118,20 +150,42 @@ private struct ConversationEdgeFade: View {
         (1.00, 0.00),
     ]
 
+    /// The cover the band holds once the ease is done — the same value the ease starts from, so
+    /// the join is invisible.
+    private static var fullCover: Double { falloff[0].cover }
+
     var body: some View {
-        ZStack {
-            // The blur. Masked rather than faded with `opacity`, so the material itself thins
-            // out across the band instead of a uniformly blurred pane going transparent.
-            Rectangle()
-                .fill(.ultraThinMaterial)
-                .mask { ramp(of: .black) }
-            // The recede. Under the reader's own ground, so what passes under the bar goes the
-            // colour of the screen rather than the colour of a scrim.
-            ramp(of: theme.background)
+        if let ease {
+            // Ease into the composer, then hold. Two rectangles rather than one long gradient:
+            // a gradient stretched over `ease + barHeight` would put its half-way point inside
+            // the composer and change shape every time the composer grew a line.
+            VStack(spacing: 0) {
+                layers { ramp(of: $0) }
+                    .frame(height: ease)
+                layers { $0.opacity(Self.fullCover) }
+            }
+        } else {
+            layers { ramp(of: $0) }
         }
     }
 
-    /// The gradient both layers share, in whichever colour the layer needs.
+    /// The blur and the recede, in that order, both driven by the same shading.
+    ///
+    /// The material is *masked* rather than faded with `opacity`, so it thins out across the band
+    /// instead of a uniformly blurred pane going transparent. The colour goes under it, so what
+    /// passes beneath the bar goes the colour of the screen rather than the colour of a scrim.
+    private func layers<Shading: ShapeStyle>(_ shading: (Color) -> Shading) -> some View {
+        ZStack {
+            Rectangle()
+                .fill(.ultraThinMaterial)
+                .mask { Rectangle().fill(shading(.black)) }
+            Rectangle()
+                .fill(shading(theme.background))
+        }
+    }
+
+    /// The gradient both layers share, in whichever colour the layer needs. Runs from the screen
+    /// edge inward, so the bottom's is upside down relative to the top's.
     private func ramp(of colour: Color) -> LinearGradient {
         LinearGradient(
             stops: Self.falloff.map { .init(color: colour.opacity($0.cover), location: $0.location) },
