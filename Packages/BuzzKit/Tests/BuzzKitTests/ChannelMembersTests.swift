@@ -8,8 +8,14 @@ import Testing
 /// `ValueObservation` keeps a member list live.
 @Suite("Channel members read API", .timeLimit(.minutes(1)))
 struct ChannelMembersTests {
-    /// Signs a kind-39002 roster for `channel` naming each `(pubkey, role?)`, the
-    /// same tag shape the projector reads: `["p", pubkey, role?]`.
+    /// Signs a kind-39002 roster for `channel` naming each `(pubkey, role?)` in the
+    /// shape the relay actually signs — `["p", pubkey, "", role]`, the role in the
+    /// petname slot behind an empty relay hint.
+    ///
+    /// This used to build `["p", pubkey, role]`, which is the shape kind *39001* uses
+    /// and the one the projector was reading. Written to match the reader rather than
+    /// the wire, it agreed with the bug and kept every roster test green while
+    /// `channel_member.role` was `""` on every real device.
     private func roster(
         _ relay: Fixture,
         channel: String,
@@ -18,7 +24,7 @@ struct ChannelMembersTests {
     ) throws -> NostrEvent {
         var tags: [[String]] = [["d", channel]]
         for member in members {
-            tags.append(member.role.map { ["p", member.pubkey, $0] } ?? ["p", member.pubkey])
+            tags.append(member.role.map { ["p", member.pubkey, "", $0] } ?? ["p", member.pubkey])
         }
         return try relay.event(.groupMembers, "", tags: tags, at: seconds)
     }

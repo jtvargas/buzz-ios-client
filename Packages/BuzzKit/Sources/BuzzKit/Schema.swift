@@ -64,7 +64,14 @@ enum Schema {
     /// `createProjectionTables`, so an index created in a migration is silently discarded at
     /// the next bump. The index it installs is what stops the Activity feed's "is this
     /// author a bot" test scanning the roster once per candidate row.
-    static let projectionVersion = 9
+    ///
+    /// Version 10 reprojects `channel_member.role`. The column has held `""` for every
+    /// member ever stored — ``BuzzProjector/projectRoster(_:into:)`` read the role out
+    /// of the empty relay slot instead of the petname slot — which left the roster half
+    /// of `isAgent` permanently false. The correct value is already in the log, on every
+    /// kind:39002 in it, so the rebuild recovers it without a resync. Without the bump
+    /// the fix would only reach a channel whose roster happens to change again.
+    static let projectionVersion = 10
 
     /// The `meta` key under which the applied projection version is recorded.
     static let projectionVersionKey = "projection_version"

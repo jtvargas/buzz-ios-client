@@ -165,6 +165,25 @@ struct BuzzProjector: EventProjecting {
     /// — a member removed upstream must disappear here too. It is also addressable
     /// state, so a staler roster resent after a reconnect is ignored, which also
     /// makes the replace order-independent under a rebuild.
+    ///
+    /// # The role is at index 3, and 39001's is at index 2
+    ///
+    /// A member tag is the full NIP-01 `p` shape — `["p", pubkey, relay, petname]` —
+    /// with the role in the petname slot and the relay hint left empty:
+    ///
+    /// ```
+    /// ["p", "cca9537a…", "", "bot"]
+    /// ```
+    ///
+    /// ``projectAdmins`` reads index 2 and is right to: kind 39001 writes the short
+    /// three-element form. The two rosters genuinely disagree, which is why the same
+    /// expression is correct in one and wrong in the other, and why reading index 2
+    /// here silently stored `""` as every member's role — measured against the live
+    /// relay, 5,078 of 5,078 member tags are four long with an empty index 2. That
+    /// emptied `DirectorySnapshot.isAgent` for every identity, since its other source
+    /// (kind 10100, `agent_directory`) has never had a single event on that relay.
+    /// Index 2 is still read as a fallback so a roster in the short form is not
+    /// silently roleless.
     private static func projectRoster(_ event: NostrEvent, into db: Database) throws {
         guard let channelID = event.addressableIdentifier else { return }
 
@@ -195,9 +214,20 @@ struct BuzzProjector: EventProjecting {
                     source_created_at = excluded.source_created_at,
                     source_event_id = excluded.source_event_id
                 """,
-                arguments: [channelID, tag[1], tag.count > 2 ? tag[2] : nil, event.createdAt, event.id]
+                arguments: [channelID, tag[1], memberRole(tag), event.createdAt, event.id]
             )
         }
+    }
+
+    /// The role carried by a kind-39002 `p` tag: the petname slot, falling back to the
+    /// relay slot for the short form ``projectAdmins`` receives. Empty is `nil` rather
+    /// than `""` so `LOWER(role) = 'bot'` and `COALESCE(role, '')` mean the same thing
+    /// whichever shape arrived.
+    private static func memberRole(_ tag: [String]) -> String? {
+        for index in [3, 2] where tag.count > index && !tag[index].isEmpty {
+            return tag[index]
+        }
+        return nil
     }
 
     /// Kind 39001: relay-authored owner/admin roster.
