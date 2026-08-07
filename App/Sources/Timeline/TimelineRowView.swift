@@ -57,6 +57,7 @@ struct TimelineRowView: View {
     @Environment(\.openConversation) private var openConversation
     /// The app-wide markdown reader, installed above the tabs. `nil` in a preview.
     @Environment(\.openMarkdownDocument) private var openMarkdownDocument
+    @Environment(AppEnvironment.self) private var environment: AppEnvironment?
     /// Whether a control inside the row already answered the touch the row's own tap is
     /// about to act on. Internal for the same reason ``names`` is: the rules that read it
     /// live in `TimelineRowView+Taps.swift`.
@@ -280,14 +281,11 @@ struct TimelineRowView: View {
                 .italic()
                 .foregroundStyle(.secondary)
         } else {
-            // One engine for both kind-40002 rich markdown and plain kind-9 content:
-            // block layout, safe links, and resolved @mention / #channel tokens, so a
-            // message renders identically on every surface (WS-1 #7/#9).
-            RichTextView(
-                text: bodyText,
-                media: row.media,
-                resolver: resolver,
-                attribution: mediaAttribution
+            // The POC deliberately hands the original message markdown to Textual so its
+            // parser, layout, selection, and complete style presets can be compared directly.
+            TextualMarkdownView(
+                markdown: bodyText,
+                style: environment?.settings.textualRenderingStyle ?? .gitHub
             )
                 // Applied here rather than inside the renderer: it is a property of a
                 // message being read in a timeline, not of the markdown, and the

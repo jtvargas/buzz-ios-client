@@ -70,6 +70,17 @@ final class AppSettings {
     /// and the box stays a mirror of it; the writes are here so there is exactly one writer.
     var theme: HiveTheme { .named(themeID) }
 
+    /// Which complete Textual preset the POC applies to messages and markdown documents.
+    var textualRenderingStyleID: String {
+        didSet {
+            defaults.set(textualRenderingStyleID, forKey: Key.textualRenderingStyleID)
+        }
+    }
+
+    var textualRenderingStyle: TextualRenderingStyle {
+        TextualRenderingStyle(rawValue: textualRenderingStyleID) ?? .gitHub
+    }
+
     /// The `UserDefaults` keys, in one place and pinned by a test.
     ///
     /// Renaming one silently resets that preference for every existing install, and — unlike a
@@ -77,6 +88,7 @@ final class AppSettings {
     enum Key {
         static let notificationsEnabled = "settings.notifications.enabled"
         static let themeID = "settings.theme.id"
+        static let textualRenderingStyleID = "settings.textual-rendering.style"
     }
 
     private let defaults: UserDefaults
@@ -87,6 +99,8 @@ final class AppSettings {
         self.defaults = defaults
         notificationsEnabled = Self.flag(Key.notificationsEnabled, default: true, in: defaults)
         themeID = defaults.string(forKey: Key.themeID) ?? HiveTheme.hive.id
+        textualRenderingStyleID = defaults.string(forKey: Key.textualRenderingStyleID)
+            ?? TextualRenderingStyle.gitHub.rawValue
         // `didSet` does not fire for a write inside `init`, so the launch value has to be
         // mirrored by hand — without this, an app relaunched on a chosen theme draws its ground
         // correctly (that comes through the environment) and every accent in the amber.

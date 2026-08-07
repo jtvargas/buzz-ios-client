@@ -37,6 +37,7 @@ struct SettingsView: View {
             ScrollView {
                 VStack(spacing: 20) {
                     themeCard
+                    textualRenderingCard
                     notificationsCard
                     siriCard
                 }
@@ -144,6 +145,27 @@ struct SettingsView: View {
     private static let themeBlurb =
         "The ground every screen is drawn on, and the colour Hive uses for its own marks. "
             + "Backgrounds come from the Buzz client's own theme catalogue."
+
+    // MARK: - Text rendering
+
+    private var textualRenderingCard: some View {
+        @Bindable var settings = environment.settings
+        return AccountCard(
+            title: "Message styling",
+            subtitle: "Compare Textual's complete presets in messages and markdown previews."
+        ) {
+            EmptyView()
+        } content: {
+            AccountFieldRow(label: "TEXTUAL STYLE") {
+                Picker("Textual style", selection: $settings.textualRenderingStyleID) {
+                    ForEach(TextualRenderingStyle.allCases) { style in
+                        Text(style.name).tag(style.rawValue)
+                    }
+                }
+                .pickerStyle(.segmented)
+            }
+        }
+    }
 
     // MARK: - Notifications
 
