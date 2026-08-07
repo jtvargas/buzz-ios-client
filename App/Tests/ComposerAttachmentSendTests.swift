@@ -27,8 +27,8 @@ struct ComposerAttachmentSendTests {
         }
     }
 
-    /// Attaches `count` named pictures and waits for them to land. The names are
-    /// what make the resulting descriptors distinguishable — see
+    /// Attaches `count` named pictures and waits for local preparation. The names
+    /// make the eventual descriptors distinguishable — see
     /// ``StubUploader/descriptor(key:mimeType:size:)``.
     static func attach(_ count: Int, to model: ComposerAttachmentsModel, through uploader: StubUploader) async {
         model.add((0 ..< count).map { StubPickedItem(data: TestPicture.png(), suggestedFilename: "pic-\($0)") })
@@ -55,6 +55,8 @@ struct ComposerAttachmentSendTests {
         await Self.attach(2, to: model.attachments, through: uploader)
         model.mentionDraft = MentionDraft(text: "look at these")
         model.send()
+        await Self.waitUntil { await uploader.parkedCount == 2 }
+        await uploader.releaseAll()
         await Self.waitUntil { await !sender.sent.isEmpty }
 
         let sent = try #require(await sender.sent.first)
@@ -96,6 +98,8 @@ struct ComposerAttachmentSendTests {
 
         await Self.attach(1, to: model.attachments, through: uploader)
         model.send()
+        await Self.waitUntil { await uploader.parkedCount == 1 }
+        await uploader.releaseAll()
         await Self.waitUntil { await !sender.sent.isEmpty }
 
         let sent = try #require(await sender.sent.first)
@@ -104,10 +108,8 @@ struct ComposerAttachmentSendTests {
         #expect(sent.content.first != "\n")
     }
 
-    /// The gate: a send while a picture is still going up would post a message
-    /// missing a picture the author can see in the composer.
-    @Test("a send is refused while a picture is still uploading")
-    func sendRefusedWhileUploading() async throws {
+    @Test("a failed upload keeps the draft and pictures ready to send again")
+    func failedUploadPreservesDraftForRetry() async throws {
         let temp = TempStore()
         defer { temp.remove() }
         let store = try temp.open()
@@ -117,21 +119,21 @@ struct ComposerAttachmentSendTests {
             channel: "room-1", store: store, sender: sender, uploader: { uploader }
         )
 
-        model.attachments.add([StubPickedItem(data: TestPicture.png())])
-        await Self.waitUntil { await uploader.parkedCount == 1 }
+        await Self.attach(1, to: model.attachments, through: uploader)
         model.mentionDraft = MentionDraft(text: "too soon")
         model.send()
+        await Self.waitUntil { await uploader.parkedCount == 1 }
+        await uploader.releaseAll(.failure(.rejectedByPolicy))
+        await Self.waitUntil { model.attachments.uploadError != nil }
 
-        for _ in 0 ..< 50 { await Task.yield() }
         #expect(await sender.sent.isEmpty)
-        // And the draft is still in front of the author, not cleared by a send that
-        // did not happen.
         #expect(model.mentionDraft.text == "too soon")
+        #expect(model.attachments.attachments.count == 1)
 
-        // Once it lands, the same send goes.
-        await uploader.releaseAll()
-        await Self.waitUntil { !model.attachments.isAttaching }
+        // Sending again uploads only the row that returned to local-ready.
         model.send()
+        await Self.waitUntil { await uploader.parkedCount == 1 }
+        await uploader.releaseAll()
         await Self.waitUntil { await !sender.sent.isEmpty }
         #expect(await sender.sent.count == 1)
     }
@@ -171,6 +173,8 @@ struct ComposerAttachmentSendTests {
         await Self.attach(1, to: model.attachments, through: uploader)
         model.mentionDraft = MentionDraft(text: "here")
         model.sendReply()
+        await Self.waitUntil { await uploader.parkedCount == 1 }
+        await uploader.releaseAll()
         await Self.waitUntil { await !sender.sent.isEmpty }
 
         let sent = try #require(await sender.sent.first)
