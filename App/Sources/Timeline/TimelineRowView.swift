@@ -178,7 +178,7 @@ struct TimelineRowView: View {
                     )
                 }
                 if row.delivery == .pending, !row.media.isEmpty {
-                    SendingStrip()
+                    SendingStrip(uploaded: row.uploadedMediaCount, total: row.media.count)
                 }
                 if case let .failed(reason) = row.delivery {
                     RetryStrip(

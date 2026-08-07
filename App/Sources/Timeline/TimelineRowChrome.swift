@@ -122,16 +122,36 @@ enum ThreadSummaryDateFormatter {
 /// The live counterpart to ``RetryStrip``: a media send still working above the
 /// relay drain, shown only where the row's authored media makes that wait visible.
 struct SendingStrip: View {
+    /// Pictures already on the relay, and how many the message carries.
+    ///
+    /// The count is shown only while more than one picture is going up: "(1/1)" tells
+    /// a reader nothing they cannot see, and a single number that only ever reads 0 or
+    /// 1 invites them to watch it rather than the conversation.
+    let uploaded: Int
+    let total: Int
+
+    private var progress: String? {
+        guard total > 1 else { return nil }
+        return "(\(uploaded)/\(total))"
+    }
+
     var body: some View {
         HStack(spacing: 6) {
             ProgressView()
                 .controlSize(.mini)
-            Text("Sending…")
+            Text(progress.map { "Sending… \($0)" } ?? "Sending…")
                 .font(.hive(.caption))
+                // The count changes width as it climbs; without this the spinner beside
+                // it steps sideways on every picture that lands.
+                .monospacedDigit()
         }
         .foregroundStyle(.secondary)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("Sending")
+        .accessibilityLabel(
+            progress == nil
+                ? "Sending"
+                : "Sending, \(uploaded) of \(total) pictures uploaded"
+        )
     }
 }
 
