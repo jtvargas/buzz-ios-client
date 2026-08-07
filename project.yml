@@ -136,8 +136,8 @@ targets:
           Hive connects to the Buzz relay you configure, which may be on your local
           or Tailscale network.
         NSCameraUsageDescription: >-
-          Hive uses the camera to scan the pairing QR code shown on your desktop so
-          it can move your identity to this device.
+          Hive uses the camera to take photos you attach to messages, and to scan the
+          pairing QR code shown on your desktop.
         # Add-only, deliberately: Hive never reads the photo library, and the prompt a
         # reader is shown should promise no more than the app will do. The read-side
         # `NSPhotoLibraryUsageDescription` is absent for that reason — the composer's

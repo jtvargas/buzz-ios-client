@@ -43,6 +43,9 @@ final class ComposerAttachmentsModel {
     /// strip. Cleared by the next pick.
     var uploadError: String?
 
+    /// Whether the live camera is occupying the panel above this composer's bar.
+    private(set) var isCameraPresented = false
+
     /// At most this many uploads at once. Three, the ceiling the mobile client
     /// uses (`_maxConcurrentImageUploads`), and it bounds memory as much as
     /// bandwidth: converting a 12-megapixel photo holds a bitmap of about 48 MB
@@ -129,17 +132,12 @@ final class ComposerAttachmentsModel {
     /// Deliberately **not** the number of attachments. Ten pictures are the same 72-point row
     /// as one, because the strip scrolls sideways rather than wrapping, so a count would
     /// declare a height change on every pick after the first and never on the failure that
-    /// swaps the strip for a line of red text. What actually moves the bar is those two facts:
-    /// whether there is a strip at all, and whether there is an error line under it.
+    /// swaps the strip for a line of red text. What actually moves the bar is those facts:
+    /// whether there is a strip, an error line, or the inline camera panel.
     ///
-    /// Computed rather than stored, which costs the conversation a body pass on every
-    /// attachment write — a preview decoding, an upload landing — and not only on the ones that
-    /// change the bar's height. Accepted for ``ConversationScaffold/contentRevision``' reason:
-    /// the events behind it are a picked photo, not a frame. A stored version would need a
-    /// `didSet` on both properties feeding it, and a path that forgot one would lose the
-    /// declaration silently.
+    /// Computed so every path changing a height-bearing property declares the change.
     var barRevision: Int {
-        (isEmpty ? 0 : 1) + (uploadError == nil ? 0 : 2)
+        (isEmpty ? 0 : 1) + (uploadError == nil ? 0 : 2) + (isCameraPresented ? 4 : 0)
     }
 
     /// Whether these attachments alone are enough to justify a send — a picture
@@ -154,6 +152,19 @@ final class ComposerAttachmentsModel {
     /// Says the composer is full, for a caller that declined to offer a picker at all.
     func reportAtCapacity() {
         uploadError = Self.describe(ComposerAttachmentError.tooMany)
+    }
+
+    /// Opens the inline camera when the message still has room for a photo.
+    func presentCamera() {
+        guard remainingCapacity > 0 else {
+            reportAtCapacity()
+            return
+        }
+        isCameraPresented = true
+    }
+
+    func dismissCamera() {
+        isCameraPresented = false
     }
 
     /// Takes a pick and starts uploading it.
@@ -225,6 +236,7 @@ final class ComposerAttachmentsModel {
         batches.removeAll()
         attachments.removeAll()
         uploadError = nil
+        isCameraPresented = false
     }
 
     // MARK: - Uploading
