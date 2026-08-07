@@ -22,7 +22,14 @@ enum MarkdownDocumentHTML {
         <!doctype html>
         <html>
         <head>
-        <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+        <!-- `user-scalable=no` is what turns off double-tap-to-zoom, which fires on the same
+             gesture as double-tap-to-select-a-word and made selecting one impossible. WKWebView
+             honours the limit (Safari has not since iOS 10) as long as nothing sets
+             `ignoresViewportScaleLimits`. Nothing is lost by it: the document is laid out at
+             `width=device-width` so it wraps rather than needing to be panned, and text size
+             still follows the reader through `-apple-system-body`. -->
+        <meta name="viewport"
+              content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
         <style>\(baseCSS(palette))\(proseCSS(palette))\(boxedCSS(palette))</style>
         </head>
         <body>\(body(for: message))</body>

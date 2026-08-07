@@ -178,8 +178,12 @@ struct MessageComposerView: View {
             .frame(minHeight: minRowsHeight, alignment: .top)
             .padding(Self.shellPadding)
             // The *only* glass in this view, now that the two controls have given theirs
-            // up — see the note at the top.
-            .glassEffect(.clear.interactive(), in: .rect(cornerRadius: Self.cornerRadius))
+            // up — see the note at the top. `.regular` rather than `.clear` at the owner's
+            // word (2026-08-06): `.clear` let a dense conversation read straight through the
+            // bar and fight the text in it. `.regular` is still Liquid Glass — it lenses and
+            // it stays interactive — it just carries the frost that makes the field legible
+            // over anything scrolled under it.
+            .glassEffect(.regular.interactive(), in: .rect(cornerRadius: Self.cornerRadius))
         }
         // The float: 12pt in from each side, 8pt clear of the bottom.
         .padding(.horizontal, 12)

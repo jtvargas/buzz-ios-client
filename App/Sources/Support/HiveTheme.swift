@@ -24,26 +24,33 @@ import UIKit
 /// by, not values extracted from upstream's file. It is the one place this deliberately diverges,
 /// and it is what makes choosing a theme visibly change two things rather than one.
 ///
-/// # The two Slack entries
+/// # Hive, Hive Dark, and why their ids read wrong
 ///
-/// Upstream's catalogue does carry a `slack-dark`, and ``all`` takes its `#222222` background
-/// verbatim like every other one. But `#222222` is a plain grey — next to Gruvbox's `#282828` it
-/// is not recognisably anything, least of all Slack. So there is a second entry, **Slack
-/// Aubergine**, on the sidebar purple the product is actually known by. Neither is a compromise
-/// on the other: the first is what the catalogue says, the second is what Slack looks like.
+/// Upstream's catalogue carries a `slack-dark` whose `#222222` ground ``all`` took verbatim like
+/// every other one. The owner then chose that grey as Hive's own (2026-08-06), so it is no
+/// longer a Slack entry at all: it is **Hive**, first in the list and the default, and the
+/// near-black the app shipped with before the picker existed is **Hive Dark** beside it. The
+/// two are one step apart deliberately — the default is the lighter grey, and the old black is
+/// one swatch away for anyone who preferred it.
 ///
-/// **Slack Aubergine**'s accent is Slack's own brand blue rather than upstream's `added` field,
-/// which records `#ECB22E` for `slack-dark` — within a few degrees of Hive's own `#FFBA38`.
+/// **Their ids did not move, and that is the point.** ``hive`` persists as `slack-dark` and
+/// ``hiveDark`` as `hive`, because an id is an opaque storage key and renaming one resets every
+/// reader who had chosen it. Swapping the two ids to match the new names is worse than leaving
+/// them: `hive` would mean the grey to this version and the near-black to the last, one string
+/// with two meanings and no way to tell them apart, so no migration table could be written.
+/// The names are what a reader sees; the ids are history.
 ///
-/// **Slack Dark** carried that same brand blue until the owner asked for Hive's accent on it
-/// (2026-08-06), so it now takes `nil` like ``hive`` and draws the asset catalogue's amber. The
-/// swatch cost the brand blue was avoiding is real and was accepted: Slack Dark and Hive differ
-/// in the picker only by their ground, `#222222` against `hiveNight`. Taking `nil` rather than
-/// hardcoding `#FFBA38` is deliberate — it puts this theme on the same light/dark-resolving
-/// asset path ``AccentTests`` already guards, which a literal would silently leave.
+/// Both take a `nil` accent and draw the asset catalogue's amber. Taking `nil` rather than
+/// hardcoding `#FFBA38` is deliberate — it puts them on the same light/dark-resolving asset
+/// path ``AccentTests`` already guards, which a literal would silently leave.
+///
+/// **Slack Aubergine** stays, on the sidebar purple the product is actually known by, with
+/// Slack's own brand blue for an accent rather than upstream's `added` field — which records
+/// `#ECB22E` for `slack-dark`, within a few degrees of Hive's own `#FFBA38`.
 struct HiveTheme: Identifiable, Equatable, Sendable {
-    /// The upstream catalogue's own name, and the persisted value. Stable across releases:
-    /// changing one silently resets the reader's choice to the default.
+    /// The persisted value — the upstream catalogue's own name for the themes taken from it.
+    /// Stable across releases and *not* required to match ``name``: changing one silently
+    /// resets the reader's choice to the default. See this type's note on the two Hive entries.
     let id: String
     /// What Settings calls it.
     let name: String
@@ -74,28 +81,40 @@ struct HiveTheme: Identifiable, Equatable, Sendable {
 }
 
 extension HiveTheme {
-    /// Hive's own colours, unchanged — `hiveNight` and the honey amber in the asset catalogue.
-    /// First in the list and the default, so an install that has never opened Settings looks
-    /// exactly as it did before this existed.
+    /// **The app's ground and the default** — upstream's `slack-dark` grey, which the owner
+    /// chose as Hive's own, with the honey amber from the asset catalogue on it. First in the
+    /// list, so an install that has never opened Settings gets this one. Its id is historical;
+    /// see this type's note.
     static let hive = HiveTheme(
-        id: "hive",
+        id: "slack-dark",
         name: "Hive",
+        background: .hex(0x222222),
+        accentHex: nil
+    )
+
+    /// The near-black the app wore before the picker existed — `hiveNight`, the ground the
+    /// honeycomb composites over and the dark end of `LaunchBackground`. Second, so a reader
+    /// who preferred it does not have to hunt for it. Its id is historical; see this type's note.
+    static let hiveDark = HiveTheme(
+        id: "hive",
+        name: "Hive Dark",
         background: Color.hiveNight,
         accentHex: nil
     )
 
-    /// The fourteen alternatives, ordered by the WCAG relative luminance of their background so
-    /// the picker reads as a gradient rather than an arbitrary list. ``hive`` is pinned first
-    /// regardless, because it is the default and the one somebody scrolls back to.
+    /// The thirteen alternatives, ordered by the WCAG relative luminance of their background so
+    /// the picker reads as a gradient rather than an arbitrary list. ``hive`` and ``hiveDark``
+    /// are pinned first regardless — one is the default and the other is the app's other own
+    /// colour, and both are what somebody scrolls back to.
     static let all: [HiveTheme] = [
         .hive,
+        .hiveDark,
         HiveTheme(id: "vitesse-black", name: "Vitesse Black", background: .hex(0x000000), accentHex: 0x4D9375),
         HiveTheme(id: "github-dark-default", name: "GitHub Dark", background: .hex(0x0D1117), accentHex: 0x58A6FF),
         HiveTheme(id: "night-owl", name: "Night Owl", background: .hex(0x011627), accentHex: 0x82AAFF),
         HiveTheme(id: "rose-pine", name: "Rosé Pine", background: .hex(0x191724), accentHex: 0xC4A7E7),
         HiveTheme(id: "tokyo-night", name: "Tokyo Night", background: .hex(0x1A1B26), accentHex: 0x7AA2F7),
         HiveTheme(id: "catppuccin-mocha", name: "Catppuccin Mocha", background: .hex(0x1E1E2E), accentHex: 0xCBA6F7),
-        HiveTheme(id: "slack-dark", name: "Slack Dark", background: .hex(0x222222), accentHex: nil),
         HiveTheme(id: "slack-aubergine", name: "Slack Aubergine", background: .hex(0x3F0E40), accentHex: 0x36C5F0),
         HiveTheme(id: "solarized-dark", name: "Solarized Dark", background: .hex(0x002B36), accentHex: 0x2AA198),
         HiveTheme(id: "monokai", name: "Monokai", background: .hex(0x272822), accentHex: 0xA6E22E),

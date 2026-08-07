@@ -60,11 +60,6 @@ struct MarkdownDocumentSheet: View {
     @State private var source: String?
     /// Set while the copied confirmation is showing, so the button can say it worked.
     @State private var copied = false
-    /// Whether the document's exact markdown is replacing the rendered reading view.
-    ///
-    /// The source is deliberately a mode, not a second rich renderer: one `Text` shows the
-    /// exact markdown bytes, while the default web path remains the readable document.
-    @State private var isShowingSource = false
 
     var body: some View {
         NavigationStack {
@@ -77,7 +72,6 @@ struct MarkdownDocumentSheet: View {
                     // Done stays exactly where a reader already found it.
                     ToolbarItem(placement: .topBarLeading) { shareButton }
                     ToolbarItem(placement: .topBarLeading) { copyButton }
-                    ToolbarItem(placement: .topBarLeading) { sourceButton }
                     ToolbarItem(placement: .confirmationAction) {
                         Button("Done") { dismiss() }
                     }
@@ -131,25 +125,6 @@ struct MarkdownDocumentSheet: View {
         .accessibilityIdentifier("markdown-copy-all")
     }
 
-    /// Switches between the rendered document and one selectable source string.
-    ///
-    /// Source mode remains the exact file content: what is selected is what the author wrote,
-    /// including markdown syntax that a rendered selection intentionally does not include.
-    private var sourceButton: some View {
-        Button {
-            withAnimation(.easeInOut(duration: 0.2)) { isShowingSource.toggle() }
-        } label: {
-            Label(
-                isShowingSource ? "View rendered" : "View source",
-                systemImage: isShowingSource
-                    ? "doc.richtext"
-                    : "chevron.left.forwardslash.chevron.right"
-            )
-        }
-        .disabled(source == nil)
-        .accessibilityIdentifier("markdown-view-source")
-    }
-
     @ViewBuilder
     private var content: some View {
         switch phase {
@@ -161,21 +136,7 @@ struct MarkdownDocumentSheet: View {
                 .controlSize(.large)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         case let .loaded(message):
-            if isShowingSource, let source {
-                ScrollView {
-                    Text(verbatim: source)
-                        .font(.hiveMono(.body))
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 20)
-                        .padding(.top, 12)
-                        .padding(.bottom, 40)
-                        // One Text means one system selection range, so Select All and a
-                        // drag from a heading into the paragraph below both work here.
-                        .textSelection(.enabled)
-                }
-            } else {
-                MarkdownDocumentWebView(message: message, baseURL: document.url)
-            }
+            MarkdownDocumentWebView(message: message, baseURL: document.url)
         case let .failed(reason):
             failure(reason)
         }

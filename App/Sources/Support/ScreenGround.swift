@@ -80,13 +80,26 @@ extension View {
 /// The colour animates rather than cutting: a ground is the largest surface on screen, and
 /// swapping it instantly reads as a flash. `animation(_:value:)` is scoped to the theme alone, so
 /// the crossfade cannot leak onto anything else the ground happens to be redrawn beside.
+/// # Why the colour ignores the safe area itself
+///
+/// `background(_:ignoresSafeAreaEdges:)` defaults to `.all`, which sounds like it covers this
+/// and does not: those edges are the *container* region only. The keyboard is its own region
+/// (`SafeAreaRegions.keyboard`), so a raised keyboard shrinks the ground with the layout and
+/// whatever the window is showing — black — comes through in the strip behind the keys and in
+/// the corners its rounded top cuts out of them. Handing the colour its own
+/// `ignoresSafeArea()`, whose default region set *does* include `.keyboard`, paints the whole
+/// window instead.
+///
+/// This moves no layout and is not the banned modifier: the ban in ``ConversationScaffold`` is
+/// on the *content* ignoring the keyboard, which drops the composer behind the keys. Only the
+/// painted layer ignores it here.
 private struct HiveScreenGround: ViewModifier {
     @Environment(\.hiveTheme) private var theme
 
     func body(content: Content) -> some View {
         content
             .scrollContentBackground(.hidden)
-            .background(theme.background)
+            .background { theme.background.ignoresSafeArea() }
             .animation(.easeInOut(duration: 0.35), value: theme)
     }
 }
