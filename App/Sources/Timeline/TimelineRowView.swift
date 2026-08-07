@@ -4,8 +4,8 @@ import SwiftUI
 /// One timeline message, in Slack's hierarchy: a rounded-square avatar, the author's
 /// name in bold with the time beside it, then the content (markdown with a plain
 /// fallback, or a "message deleted" placeholder), reaction chips, a reply preview with
-/// its participants' faces, and the delivery treatment — `.pending` dimmed, `.failed`
-/// carrying a failure strip, `.sent` plain.
+/// its participants' faces, and the delivery treatment — `.pending` dimmed (plus a
+/// sending strip for media), `.failed` carrying a failure strip, `.sent` plain.
 ///
 /// # What the row deliberately is not
 ///
@@ -176,6 +176,9 @@ struct TimelineRowView: View {
                             performControlAction(onOpenThread)
                         }
                     )
+                }
+                if row.delivery == .pending, !row.media.isEmpty {
+                    SendingStrip()
                 }
                 if case let .failed(reason) = row.delivery {
                     RetryStrip(

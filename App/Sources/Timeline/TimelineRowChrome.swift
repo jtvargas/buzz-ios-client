@@ -3,7 +3,7 @@ import Foundation
 import SwiftUI
 
 /// The small views a message row hangs off itself — the "N replies" affordance and the
-/// failed-send strip. Split out of `TimelineRowView.swift` so that file is about the row's
+/// delivery strips. Split out of `TimelineRowView.swift` so that file is about the row's
 /// own hierarchy.
 ///
 /// A third one used to live here: `MessagePreview`, the compact card the long-press context
@@ -116,6 +116,22 @@ enum ThreadSummaryDateFormatter {
         timeFormatter.timeStyle = .short
         let time = timeFormatter.string(from: date)
         return "\(prefix) at \(time)"
+    }
+}
+
+/// The live counterpart to ``RetryStrip``: a media send still working above the
+/// relay drain, shown only where the row's authored media makes that wait visible.
+struct SendingStrip: View {
+    var body: some View {
+        HStack(spacing: 6) {
+            ProgressView()
+                .controlSize(.mini)
+            Text("Sending…")
+                .font(.hive(.caption))
+        }
+        .foregroundStyle(.secondary)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Sending")
     }
 }
 
