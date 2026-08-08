@@ -79,7 +79,7 @@ public extension BuzzEventStore {
                     markers: markers
                 ),
                 people: Self.searchPeople(
-                    Self.fetchDirectorySnapshot(db, selfPubkey: selfPubkey),
+                    try Self.fetchDirectorySnapshot(db, selfPubkey: selfPubkey),
                     query: text,
                     limit: boundedLimit
                 ),

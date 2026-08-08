@@ -29,10 +29,9 @@ public extension BuzzEventStore {
     func wipe() async throws {
         try await writer.write { db in
             try db.execute(sql: "DELETE FROM event") // ON DELETE CASCADE clears event_tag
-            // The event-delete trigger removes each token row. Keep the explicit bulk
-            // delete as the forensic-clean invariant: a future trigger change must not
-            // leave the previous identity's search terms for the next session.
-            try db.execute(sql: "DELETE FROM message_search")
+            // The event-delete trigger clears tokens row-by-row on the way. This wholesale
+            // clear does not depend on that trigger or on source rows still existing.
+            try db.execute(sql: "INSERT INTO message_search(message_search) VALUES('delete-all')")
             try db.execute(sql: "DELETE FROM outbox_media")
             try db.execute(sql: "DELETE FROM outbox")
             try db.execute(sql: "DELETE FROM channel_sync")
