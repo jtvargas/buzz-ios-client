@@ -120,27 +120,15 @@ struct SearchView: View {
         //
         // This used to subtract the bottom inset from the container's height, on the argument
         // that it was "correct either way" — the keyboard's height if the frame ran behind the
-        // keys, and about zero if it did not. It is not correct either way, and the owner's
-        // screenshot settles which: a control bottom-aligned in that frame landed a full
-        // keyboard *above* the keyboard, so `proxy.size.height` had already been shrunk and
-        // the subtraction took the keyboard off twice. A centred spinner hid it by being
-        // merely too high; a control with a definite place could not.
+        // keys, and about zero if it did not. It is not correct either way, and a screenshot
+        // settled which: a control bottom-aligned in that frame landed a full keyboard *above*
+        // the keyboard, so `proxy.size.height` had already been shrunk for the keys and the
+        // subtraction took them off twice. A centred spinner hid it by being merely too high;
+        // a control with a definite place could not.
         //
-        // Measured rather than reasoned, which is the only way this question has ever been
-        // settled on this screen.
+        // The control that exposed it is gone — the owner withdrew it — and the arithmetic
+        // stays gone with it, because the double count was never about that control.
         .overlay { stateOverlay }
-        // The way out of the keyboard, lifted by the keyboard itself.
-        //
-        // The mechanism the composer already uses and the app has measured:
-        // ``ConversationScaffold`` carries a `safeAreaBar` whose entire keyboard behaviour is
-        // that the inset lifts it. No arithmetic, so there is nothing to get wrong twice.
-        //
-        // It lands just above the search field, which on this tab docks above the keys — the
-        // nearest thing this screen has to the row the invite sheet puts its `Done` in, since
-        // that row here belongs to the tab bar and takes nothing of ours.
-        .safeAreaInset(edge: .bottom) {
-            hideKeyboardButton
-        }
     }
 
     /// The list's one non-row state: searching, failed, empty, or not yet asked.
@@ -184,8 +172,9 @@ struct SearchView: View {
 
     /// What the screen says when it has no rows to show.
     ///
-    /// It carried the `Done` button too, until the affordance became a floating one that
-    /// every state has — see ``hideKeyboardButton``.
+    /// It carried a `Done` button for the keyboard once. Tapping anywhere that is not a row
+    /// does that job now, and dragging the list always did — the owner withdrew the control
+    /// after seeing it, and two gestures that already work do not need a third thing on screen.
     @ViewBuilder
     private var emptyState: some View {
         if let error = model.errorMessage {
@@ -217,44 +206,6 @@ struct SearchView: View {
     /// answers `false` again the moment the field is cleared.
     private var showsRecentSearches: Bool {
         model.errorMessage == nil && !model.hasSearched && !history.terms.isEmpty
-    }
-
-    /// The way out of the keyboard, floating just above it.
-    ///
-    /// # Why it is not a keyboard toolbar
-    ///
-    /// Because a `ToolbarItem(placement: .keyboard)` renders nothing at all on this screen,
-    /// verified on device: the field belongs to the **tab bar**, which is outside this stack's
-    /// toolbar scope, so there is no accessory bar of ours for an item to attach to. This is
-    /// the same reason `Done` had to live inside the empty state's own content.
-    ///
-    /// It floats here instead of in that content because the content is no longer always a
-    /// placeholder — the recent searches fill the screen — and an affordance that exists in
-    /// one state and not the others is one the reader has to learn twice. Positioned by the
-    /// same arithmetic as ``stateOverlay``: inside a frame the bottom safe area has already
-    /// been taken off, which is where the keyboard is not.
-    @ViewBuilder
-    private var hideKeyboardButton: some View {
-        if isFieldFocused {
-            HStack {
-                Spacer()
-                Button {
-                    isFieldFocused = false
-                } label: {
-                    Label("Hide", systemImage: "keyboard.chevron.compact.down")
-                        .font(.hive(.subheadline, weight: .semibold))
-                }
-                .buttonStyle(.glass)
-                .controlSize(.small)
-                .clipShape(.capsule)
-            }
-            // Trailing and just above the keys, which is where the invite screen's `Done`
-            // sits — the owner's reference, and the place iOS itself puts this control.
-            .padding(.horizontal, 16)
-            .padding(.bottom, 8)
-            .transition(.opacity)
-            .animation(.smooth(duration: 0.15), value: isFieldFocused)
-        }
     }
 
     /// The screen a route names.
