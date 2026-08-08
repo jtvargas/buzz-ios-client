@@ -70,6 +70,17 @@ struct RecentPlacesMenu: View {
                 Text("Thread")
                 Image(systemName: ThreadView.threadSymbol)
             }
+        } else if row.conversation.kind == .agent {
+            Button {
+                open(row.place)
+            } label: {
+                Text(row.conversation.title)
+                // The bot, not a person — the same lucide mark this app draws in place of
+                // the `@` on a mention of an agent, and the same one desktop and Flutter
+                // draw. It is a picture here rather than a path because a menu row's icon
+                // is a `UIImage`; see ``AgentGlyph/templateImage``.
+                Image(uiImage: AgentGlyph.templateImage)
+            }
         } else {
             Button {
                 open(row.place)
@@ -82,6 +93,9 @@ struct RecentPlacesMenu: View {
 
     /// The glyph for a conversation, in the vocabulary the sidebar already uses: `#` for a
     /// channel, a lock for a private one, a person for a direct message, two for a group.
+    ///
+    /// An agent is absent on purpose — its mark is not a system symbol, so it is drawn by
+    /// the branch above rather than named here.
     static func symbol(for conversation: ConversationIdentity) -> String {
         switch conversation.kind {
         case .channel: conversation.isPrivate ? "lock.fill" : "number"

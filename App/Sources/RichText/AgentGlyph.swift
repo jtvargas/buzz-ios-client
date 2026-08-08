@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// The **lucide `bot`** glyph, the mark both official Buzz clients put in place of the
 /// `@` on a mention of an agent.
@@ -90,6 +91,38 @@ enum AgentGlyph {
 
         return path
     }
+
+    // MARK: - As a picture
+
+    /// The glyph as a **template image**, for the one caller that needs a picture rather
+    /// than a path: a system menu row, whose icon is a `UIImage` and cannot be a view.
+    ///
+    /// Template, so it takes the menu's tint exactly as an SF Symbol beside it does — the
+    /// history list draws its `#`, its locks and this in one colour, and none of them names
+    /// that colour.
+    ///
+    /// Rasterised once and shared. Every agent draws the same mark, and the alternative —
+    /// an `ImageRenderer` per row, per rebuild — would redraw an identical 22-point square
+    /// for each one. `@MainActor` because that is where the one caller is, and because it
+    /// is what makes a shared `UIImage` safe to hold in a `static`.
+    ///
+    /// Rendered into the whole view box rather than an inset of it: lucide's ink reaches
+    /// x=2 and x=22 of 24, and a round cap adds half a stroke, so the drawing still clears
+    /// the edges by a unit. Nothing here is clipped.
+    @MainActor static let templateImage: UIImage = {
+        let side: CGFloat = 22
+        let box = CGRect(x: 0, y: 0, width: side, height: side)
+        let stroke = strokeStyle(side: side)
+        let image = UIGraphicsImageRenderer(size: box.size).image { context in
+            context.cgContext.setLineWidth(stroke.lineWidth)
+            context.cgContext.setLineCap(.round)
+            context.cgContext.setLineJoin(.round)
+            context.cgContext.setStrokeColor(UIColor.label.cgColor)
+            context.cgContext.addPath(path(in: box).cgPath)
+            context.cgContext.strokePath()
+        }
+        return image.withRenderingMode(.alwaysTemplate)
+    }()
 
     /// lucide's stroke, scaled to a glyph of `side` points: 2 units of 24, round caps
     /// and round joins.
