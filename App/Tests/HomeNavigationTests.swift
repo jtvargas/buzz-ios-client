@@ -16,6 +16,8 @@ struct HomeNavigationTests {
         #expect(HomeTab.home.symbol(isSelected: true) == "house.fill")
         #expect(HomeTab.activity.symbol(isSelected: false) == "bell")
         #expect(HomeTab.activity.symbol(isSelected: true) == "bell.fill")
+        #expect(HomeTab.search.symbol(isSelected: false) == "magnifyingglass")
+        #expect(HomeTab.search.symbol(isSelected: true) == "magnifyingglass")
     }
 
     @Test("every symbol either tab can draw exists on this system")
