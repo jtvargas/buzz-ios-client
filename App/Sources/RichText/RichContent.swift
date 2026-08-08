@@ -140,21 +140,8 @@ extension [RichBlock] {
                 .orderedList(start: start, items.map { $0.mapInlines(transform) })
             case let .table(table):
                 .table(table.mapCells(transform))
-            case .rule:
-                block // a rule has no inline to transform
-            case .sourceBlankLine:
-                block // source spacing has no inline to transform
-            case .linkPreview:
-                // Derived from the message's links rather than authored, and appended
-                // after both passes that use this walk have already run. There is no
-                // inline in it to transform.
-                block
-            case .media:
-                // Nothing here is text. The alt an author wrote is carried on the
-                // ``MessageMedia`` for VoiceOver and for the failure placeholder, not as
-                // an inline — autolinking it would make a tappable link out of a caption
-                // that names a URL, and the entity pass would resolve an `@` in it into
-                // a mention of somebody who was never in this message.
+            case .rule, .sourceBlankLine, .linkPreview, .media:
+                // These blocks carry no authored inline to transform.
                 block
             }
         }

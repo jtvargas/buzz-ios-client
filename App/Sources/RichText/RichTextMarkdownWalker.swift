@@ -1,6 +1,10 @@
 import Foundation
 import Markdown
 
+// The parser and its inline builder intentionally live together so only this parse-layer
+// file imports Markdown's SwiftUI-colliding Text, Image, Table, and Link symbols.
+// swiftlint:disable file_length
+
 /// Converts swift-markdown's CommonMark + GFM tree into Hive's renderer-neutral
 /// ``RichBlock`` tree.
 struct RichTextMarkdownWalker {
@@ -63,6 +67,8 @@ struct RichTextMarkdownWalker {
         }
     }
 
+    // Exhaustive dispatch over the block node types Hive supports.
+    // swiftlint:disable:next cyclomatic_complexity
     private func block(_ markup: Markup, listDepth: Int) -> [RichBlock] {
         switch markup {
         case let paragraph as Paragraph:
@@ -319,6 +325,8 @@ private struct RichTextInlineBuilder {
         }
     }
 
+    // Exhaustive dispatch over the inline node types Hive supports.
+    // swiftlint:disable:next cyclomatic_complexity
     private mutating func append(
         _ markup: Markup,
         intent: InlinePresentationIntent,

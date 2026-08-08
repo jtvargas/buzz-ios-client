@@ -22,7 +22,9 @@ struct MarkdownDocumentTests {
 
     @Test("every markdown extension is one, and the name is the file's own")
     func recognisedExtensions() throws {
-        let raw = try #require(document("https://raw.githubusercontent.com/mxstbr/markdown-test-file/master/TEST.md"))
+        let raw = try #require(
+            document("https://raw.githubusercontent.com/mxstbr/markdown-test-file/master/TEST.md")
+        )
         #expect(raw.name == "TEST.md")
 
         #expect(document("https://example.invalid/notes.markdown")?.name == "notes.markdown")
@@ -82,7 +84,9 @@ struct MarkdownDocumentTests {
 
     @Test("a markdown file is carded as a document, titled by its filename")
     func card() throws {
-        let url = try #require(URL(string: "https://raw.githubusercontent.com/mxstbr/markdown-test-file/master/TEST.md"))
+        let url = try #require(
+            URL(string: "https://raw.githubusercontent.com/mxstbr/markdown-test-file/master/TEST.md")
+        )
         let preview = try #require(LinkPreview(url: url))
 
         #expect(preview.kind == .markdownDocument)

@@ -1,6 +1,7 @@
 import BuzzKit
 import Foundation
 
+// swiftlint:disable type_body_length
 /// Serialises the parsed document tree into semantic HTML for ``MarkdownDocumentWebView``.
 ///
 /// The markdown parser remains the only place syntax is understood. This type translates its
@@ -123,6 +124,8 @@ enum MarkdownDocumentHTML {
     private struct Renderer {
         private var headingCounts: [String: Int] = [:]
 
+        // Exhaustive serialization of the renderer-neutral block model.
+        // swiftlint:disable:next cyclomatic_complexity
         mutating func block(_ block: RichBlock) -> String {
             switch block {
             case let .paragraph(text):
@@ -302,3 +305,4 @@ enum MarkdownDocumentHTML {
         }
     }
 }
+// swiftlint:enable type_body_length

@@ -8,6 +8,8 @@ import Testing
 /// reaches the screen if it is stated as an attribute, and the inter-block spacing
 /// rule.
 @Suite("Rich text blocks")
+// The suite keeps all non-table renderer constructs under one behavior boundary.
+// swiftlint:disable:next type_body_length
 struct RichTextBlockTests {
     private func inline(_ markdown: String) -> AttributedString {
         RichTextParser.parse(markdown).first.map(RichTextProbe.inline(of:)) ?? AttributedString()
