@@ -243,6 +243,10 @@ struct RecentPlacesTests {
     /// This is the only thing standing between a renamed SF Symbol and an invisible button.
     @Test("the history symbol exists")
     func symbolExists() {
-        #expect(UIImage(systemName: HomeToolbarControls.symbol) != nil)
+        // `UIImage(named:)`, because this one is the app's own artwork now. Same guard as
+        // before and against the same failure: a name that resolves to nothing draws nothing,
+        // silently, and the control keeps its hit area either way — so the only way to see it
+        // is to look at the toolbar.
+        #expect(UIImage(named: HomeToolbarControls.glyph) != nil)
     }
 }

@@ -62,9 +62,14 @@ struct HomeToolbarControls: View {
         Menu {
             RecentPlacesMenu(rows: history(), open: openPlace)
         } label: {
-            Image(systemName: Self.symbol)
-                .font(.hiveSymbol(fixedSize: Self.glyphPointSize, weight: .regular))
+            Image(Self.glyph)
+                // Sized rather than fonted: a template image has no text style to take a
+                // point size from, so the frame *is* the point size. `scaledToFit` keeps the
+                // drawing's own proportions inside it — it is very slightly wider than tall.
+                .resizable()
+                .scaledToFit()
                 .foregroundStyle(.primary)
+                .frame(width: Self.glyphPointSize, height: Self.glyphPointSize)
                 .frame(width: Self.controlSize, height: Self.controlSize)
                 .padding(8)
                 .contentShape(.circle)
@@ -84,10 +89,17 @@ struct HomeToolbarControls: View {
         .accessibilityHint("Shows the places you visited recently")
     }
 
-    /// The clock with the arrow running back around it, at the owner's word. Named here
-    /// rather than at the call site because a misspelt system symbol renders as *nothing* —
-    /// no warning, no placeholder — and one constant is what a test can assert exists.
-    static let symbol = "clock.arrow.trianglehead.clockwise.rotate.90.path.dotted"
+    /// The owner's own clock, drawn with the dial dissolving into dashes behind it.
+    ///
+    /// An asset rather than a system symbol because this drawing is not in the library — it
+    /// replaced `clock.arrow.trianglehead.clockwise.rotate.90.path.dotted`, which was the
+    /// nearest thing there and not the same thing. Template-rendered, so it takes the same
+    /// `.primary` the symbol did and needs no second colour rule.
+    ///
+    /// Named here rather than at the call site for the reason the symbol was: a name that
+    /// resolves to nothing renders as *nothing* — no warning, no placeholder — and one
+    /// constant is what a test can assert exists.
+    static let glyph = "HistoryGlyph"
 
     /// The size ``AccountAvatarButton`` draws its picture at, so the two controls are the
     /// same size inside the capsule and the pair is symmetrical about its middle.
