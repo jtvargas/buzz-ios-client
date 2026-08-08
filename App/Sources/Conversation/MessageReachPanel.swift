@@ -30,6 +30,16 @@ struct MessageReachPanel: View {
     /// Run it again from where the conversation now stands. Absent for a failure that is a
     /// proof, because a second attempt walks the same ground to the same end.
     let onRetry: () -> Void
+    /// Copy the message's own link, then dismiss.
+    ///
+    /// The owner's, and it is the right offer for this moment specifically: the reader came
+    /// here to reference a message, the trip failed, and the link is the whole of what they
+    /// wanted anyway — it opens on Desktop, it pastes into a reply, and it costs no fetch. A
+    /// dead end that hands you the thing you were reaching for is not a dead end.
+    ///
+    /// `nil` only where no link can be built, which is a channel or message id this screen
+    /// does not have — not a state it reaches from search.
+    let onCopyLink: (() -> Void)?
 
     var body: some View {
         Group {
@@ -65,12 +75,20 @@ struct MessageReachPanel: View {
                         .font(.hive(.caption))
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
-                    HStack(spacing: 8) {
+                    // Stacked rather than in a row. Three controls across 220 points is three
+                    // controls nobody can hit, and the order is the order of usefulness: the
+                    // thing that might still work, the thing that works regardless, then the
+                    // way out.
+                    VStack(spacing: 6) {
                         if reason.isWorthRetrying {
-                            action("Try again", action: onRetry)
+                            action("Try again", systemImage: "arrow.clockwise", action: onRetry)
+                        }
+                        if let onCopyLink {
+                            action("Copy Link", systemImage: "link", action: onCopyLink)
                         }
                         action("Dismiss", role: .cancel, action: onCancel)
                     }
+                    .padding(.top, 2)
                 }
             }
         }
@@ -88,20 +106,30 @@ struct MessageReachPanel: View {
             content()
         }
         .padding(20)
-        .frame(width: 220)
+        .frame(width: 240)
         .glassEffect(.regular, in: .rect(cornerRadius: 24, style: .continuous))
         .transition(.scale(scale: 0.92).combined(with: .opacity))
     }
 
     private func action(
         _ title: String,
+        systemImage: String? = nil,
         role: ButtonRole? = nil,
         action: @escaping () -> Void
     ) -> some View {
-        Button(title, role: role, action: action)
-            .buttonStyle(.glass)
-            .controlSize(.small)
+        Button(role: role, action: action) {
+            Label {
+                Text(title)
+            } icon: {
+                if let systemImage { Image(systemName: systemImage) }
+            }
             .font(.hive(.caption, weight: .semibold))
+            // Full width so the stacked controls read as one column of equal offers rather
+            // than as three differently-sized guesses at what the reader wants.
+            .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.glass)
+        .controlSize(.small)
     }
 }
 
@@ -120,15 +148,18 @@ extension ConversationSeekFailure {
         case .notFound:
             "It is not in this conversation."
         case .unreachable:
-            "The older messages did not arrive in time."
+            // Covers both of the ways this happens — a relay that did not answer in time, and
+            // a message this device never stored — because from here they are the same fact:
+            // the stretch of conversation it sits in is not on this phone.
+            "The messages around it did not load."
         }
     }
 
     /// Whether **Try again** is offered.
     ///
-    /// Only for ``unreachable``. ``notFound`` is a proof — the walk loaded every row at or
-    /// after the message's place and it was not among them — and a button that cannot change
-    /// its own answer is worse than no button, because pressing it and getting the same thing
-    /// reads as the app being broken rather than as the message being absent.
+    /// Only for ``unreachable``. ``notFound`` is a proof — the message is in this device's log,
+    /// every row at or after its place is loaded, and it is not among them — and a button that
+    /// cannot change its own answer is worse than no button, because pressing it and getting
+    /// the same thing reads as the app being broken rather than as the message being absent.
     var isWorthRetrying: Bool { self == .unreachable }
 }

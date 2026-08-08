@@ -124,11 +124,14 @@ struct SearchView: View {
             // when the frame runs behind it and about zero when the frame already stops
             // above it.
             GeometryReader { proxy in
-                stateOverlay
-                    .frame(
-                        width: proxy.size.width,
-                        height: max(0, proxy.size.height - proxy.safeAreaInsets.bottom)
-                    )
+                ZStack(alignment: .bottom) {
+                    stateOverlay
+                    hideKeyboardButton
+                }
+                .frame(
+                    width: proxy.size.width,
+                    height: max(0, proxy.size.height - proxy.safeAreaInsets.bottom)
+                )
             }
         }
     }
@@ -142,10 +145,10 @@ struct SearchView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .dismissesKeyboard($isFieldFocused)
         } else if model.messages.isEmpty, showsRecentSearches {
-            // Deliberately outside `dismissesKeyboard`: every one of these rows is a control,
-            // and a tap-to-dismiss over a list of controls is a second reading of the same
-            // tap. Dragging the list still puts the keyboard away, which is the gesture a
-            // reader reaches for anyway.
+            // Inside `dismissesKeyboard` like every other state. A child `Button` wins a tap
+            // over an ancestor's `onTapGesture`, so the rows keep their own taps and every
+            // *other* point on the screen puts the keyboard away — which is what the owner
+            // asked for, and what the empty space below two rows is otherwise good for.
             RecentSearchesView(history: history) { term in
                 // The field takes the term as well as the search, so the reader lands on
                 // their own words and can edit from there instead of retyping to change a
@@ -156,6 +159,7 @@ struct SearchView: View {
                 isFieldFocused = false
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .dismissesKeyboard($isFieldFocused)
         } else if model.messages.isEmpty {
             emptyState
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -171,13 +175,10 @@ struct SearchView: View {
         }
     }
 
-    /// The empty screen, and the one place a `Done` can be *seen*.
+    /// What the screen says when it has no rows to show.
     ///
-    /// A `.keyboard`-placement toolbar item renders nothing for a search-role tab's field:
-    /// that field is presented by the tab bar, outside this stack's toolbar scope. Verified
-    /// on device — the row never appeared. So the affordance lives in the only content this
-    /// screen draws while there is nothing to scroll, which is also the state that has no
-    /// other way out.
+    /// It carried the `Done` button too, until the affordance became a floating one that
+    /// every state has — see ``hideKeyboardButton``.
     @ViewBuilder
     private var emptyState: some View {
         if let error = model.errorMessage {
@@ -185,24 +186,18 @@ struct SearchView: View {
                 Label("Search unavailable", systemImage: "exclamationmark.magnifyingglass")
             } description: {
                 Text(error)
-            } actions: {
-                dismissKeyboardButton
             }
         } else if model.hasSearched {
             ContentUnavailableView {
                 Label("No results", systemImage: "magnifyingglass")
             } description: {
                 Text("No message matches “\(model.current)”.")
-            } actions: {
-                dismissKeyboardButton
             }
         } else {
             ContentUnavailableView {
                 Label("Search messages", systemImage: "magnifyingglass")
             } description: {
                 Text("Find any message in the conversations you are in.")
-            } actions: {
-                dismissKeyboardButton
             }
         }
     }
@@ -217,11 +212,34 @@ struct SearchView: View {
         model.errorMessage == nil && !model.hasSearched && !history.terms.isEmpty
     }
 
+    /// The way out of the keyboard, floating just above it.
+    ///
+    /// # Why it is not a keyboard toolbar
+    ///
+    /// Because a `ToolbarItem(placement: .keyboard)` renders nothing at all on this screen,
+    /// verified on device: the field belongs to the **tab bar**, which is outside this stack's
+    /// toolbar scope, so there is no accessory bar of ours for an item to attach to. This is
+    /// the same reason `Done` had to live inside the empty state's own content.
+    ///
+    /// It floats here instead of in that content because the content is no longer always a
+    /// placeholder — the recent searches fill the screen — and an affordance that exists in
+    /// one state and not the others is one the reader has to learn twice. Positioned by the
+    /// same arithmetic as ``stateOverlay``: inside a frame the bottom safe area has already
+    /// been taken off, which is where the keyboard is not.
     @ViewBuilder
-    private var dismissKeyboardButton: some View {
+    private var hideKeyboardButton: some View {
         if isFieldFocused {
-            Button("Done") { isFieldFocused = false }
-                .buttonStyle(.borderedProminent)
+            Button {
+                isFieldFocused = false
+            } label: {
+                Label("Hide", systemImage: "keyboard.chevron.compact.down")
+                    .font(.hive(.caption, weight: .semibold))
+            }
+            .buttonStyle(.glass)
+            .controlSize(.small)
+            .clipShape(.capsule)
+            .padding(.bottom, 10)
+            .transition(.scale(scale: 0.9).combined(with: .opacity))
         }
     }
 

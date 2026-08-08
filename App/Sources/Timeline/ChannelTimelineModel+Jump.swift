@@ -262,29 +262,40 @@ extension ChannelTimelineModel {
         return (earliest.createdAt, earliest.id) < (target.createdAt, target.id)
     }
 
-    /// Proved absent from this conversation — so ask the one question that is left.
+    /// The floor has gone past this message's place — so ask what that actually proved.
     ///
-    /// The walk has been past this message's place, which means anything the store now holds
-    /// under that id was stored *by the walk*. A row here that names a thread is a reply the
-    /// channel page excludes — see the `NOT EXISTS` against `thread` in `fetchTimeline` — and
-    /// that is a surface to send the reader to rather than a failure to report.
+    /// Three answers, and telling them apart is the difference between a true sentence and a
+    /// confident one.
+    ///
+    /// **It is in the log and names a thread.** A reply the channel page excludes by
+    /// construction — see the `NOT EXISTS` against `thread` in `fetchTimeline` — so its thread
+    /// is a surface to send the reader to rather than a failure to report.
+    ///
+    /// **It is in the log and names no thread.** Then it is genuinely not on this surface:
+    /// every row at or after its place is loaded, the message is in the log, and it is not
+    /// among them. `Message not found` is a claim about this conversation, and here it is
+    /// true.
+    ///
+    /// **It is not in the log at all.** Then nothing has been proved. The walk's own proof is
+    /// that the loaded rows are contiguous *with what this device holds* — and a device that
+    /// never stored the message may equally never have stored the stretch around it, so its
+    /// order has a hole the walk cannot see. This is exactly the relay-only result the row
+    /// marks `Fetches on open`, and answering it `Message not found` states as a fact about
+    /// the conversation something that is only a fact about the local store. It is
+    /// ``ConversationSeekFailure/unreachable``: we could not get there.
     private func settleMissing(_ messageID: String) -> FocusOutcome {
-        if let root = threadRoot(of: messageID) {
-            jump.setSeek(.none)
-            return .inThread(root: root)
-        }
-        return report(.notFound)
+        guard let row = storedRow(messageID) else { return report(.unreachable) }
+        guard let root = row.rootID else { return report(.notFound) }
+        jump.setSeek(.none)
+        return .inThread(root: root)
     }
 
-    /// The thread a message belongs to, if this device holds the message and it names one.
+    /// The message as this device holds it, if it holds it.
     ///
-    /// A read failure answers `nil`: the caller's next move is then to report that the
-    /// message was not found, which is what it would have reported anyway.
-    private func threadRoot(of messageID: String) -> String? {
-        guard let row = try? store.rows(for: [messageID], selfPubkey: selfPubkey).first else {
-            return nil
-        }
-        return row.rootID
+    /// A read failure answers `nil`, which routes to ``ConversationSeekFailure/unreachable`` —
+    /// the honest verdict for a question that could not be asked.
+    private func storedRow(_ messageID: String) -> TimelineRow? {
+        try? store.rows(for: [messageID], selfPubkey: selfPubkey).first
     }
 
     /// Shows one of the two endings, and leaves it up.

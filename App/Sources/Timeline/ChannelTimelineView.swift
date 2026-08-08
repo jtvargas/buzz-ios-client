@@ -67,6 +67,19 @@ struct ChannelTimelineView: View {
     /// ``ChannelTimelineModel/focus(on:sentAt:)``.
     private let focus: ConversationFocus?
 
+    /// The link to the message this screen was opened at, for the reach panel to offer when
+    /// it could not get there.
+    ///
+    /// No thread root: this path is the one where the message's own threading is exactly what
+    /// is not known — a reply this device holds would have opened its thread from the search
+    /// results instead of arriving here. The link resolves without it.
+    private var reachLinkURL: URL? {
+        guard let focus else { return nil }
+        return MessageLink.url(
+            channelID: channelID, messageID: focus.messageID, threadRootID: nil
+        )
+    }
+
     /// Reserved for the top-of-history sentinel. Constant, and present whenever an
     /// older page may exist: a spinner that appears and disappears is itself a content
     /// height change at the top of a bottom-anchored list, which is one visible jump
@@ -211,7 +224,17 @@ struct ChannelTimelineView: View {
             MessageReachPanel(
                 seek: model.jump.seek,
                 onCancel: { model.cancelFocus() },
-                onRetry: { model.retryFocus() }
+                onRetry: { model.retryFocus() },
+                onCopyLink: reachLinkURL.map { url in
+                    {
+                        UIPasteboard.general.string = url.absoluteString
+                        HiveHaptics.play(.suggestionPicked)
+                        // Copying answers the report, so it takes it away — pressing a control
+                        // and being left looking at the same failure reads as the press not
+                        // having landed.
+                        model.cancelFocus()
+                    }
+                }
             )
         }
         .focusesComposerOnArrival(focusesComposer) { model.mentionAutocomplete.isComposerFocused = true }
