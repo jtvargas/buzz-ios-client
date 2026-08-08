@@ -108,7 +108,7 @@ struct RootView: View {
         }
     }
 
-    /// The two destinations.
+    /// The three destinations.
     ///
     /// Each tab owns its own `NavigationStack` — the channel list's is inside
     /// ``ChannelListView``, with the app-wide resolvers injected above it — so a push in one
@@ -155,6 +155,15 @@ struct RootView: View {
                     )
                 } label: {
                     label(for: .activity)
+                }
+                Tab(value: HomeTab.search, role: .search) {
+                    SearchView(
+                        store: store,
+                        engine: engine,
+                        selfPubkey: environment.selfPubkeyHex
+                    )
+                } label: {
+                    label(for: .search)
                 }
             }
             // A screen asked for from outside the app — Siri, Spotlight, the Shortcuts app —
