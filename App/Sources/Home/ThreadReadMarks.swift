@@ -70,6 +70,32 @@ final class ThreadReadMarks {
         defaults.set(marks.mapValues(NSNumber.init(value:)), forKey: Self.storageKey)
     }
 
+    /// Marks every one of `threads` seen, as far as the newest reply somebody else wrote in
+    /// it — what the Threads card's **Mark All As Read** commits.
+    ///
+    /// The bound is ``UnreadThread/latestReplyByOthersAt`` rather than the newest reply
+    /// overall, because that is exactly the value ``hasUnseen(_:latestReplyByOthersAt:)``
+    /// compares against: marking to it clears the thread and marks to no further. Reaching
+    /// for `latestReplyAt` instead would write a mark past a message *somebody else has not
+    /// sent yet* in the only case where the two differ — a reply of the reader's own from
+    /// another device — and swallow the next real reply that happened to land in that gap.
+    ///
+    /// One pass and one write, not a loop over ``mark(_:seenUpTo:)``: that prunes and
+    /// persists on every call, so a few hundred threads would be a few hundred defaults
+    /// writes and a few hundred observation ticks for one press. Grow-only for the same
+    /// reason a single mark is, and silent when nothing moves — a card that is already clear
+    /// must not write.
+    func markAllSeen(among threads: [UnreadThread]) {
+        var updated = marks
+        for thread in threads where !thread.rootID.isEmpty
+            && thread.latestReplyByOthersAt > updated[thread.rootID] ?? 0 {
+            updated[thread.rootID] = thread.latestReplyByOthersAt
+        }
+        guard updated != marks else { return }
+        marks = Self.pruned(updated)
+        defaults.set(marks.mapValues(NSNumber.init(value:)), forKey: Self.storageKey)
+    }
+
     /// Whether this thread still holds something the reader has not seen on this device.
     ///
     /// # Why the argument is the newest reply *by somebody else*

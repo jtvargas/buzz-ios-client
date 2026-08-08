@@ -36,6 +36,17 @@ struct HomeShortcutTests {
         #expect(HomeShortcutCard.hasSomethingWaiting(12))
     }
 
+    @Test("only the Threads card offers to mark everything read")
+    func onlyThreadsOffersMarkAllRead() {
+        // The rule the long press is drawn from, stated as a fact about each destination —
+        // whether its contents have a read state at all. A `case .threads` in the card view
+        // would be a rule a fourth destination silently opts out of, and a menu on Drafts
+        // would be an action with nothing to act on.
+        // As the whole list rather than card by card: this fails both ways round — if
+        // Threads ever stops offering it, and if a new destination quietly starts.
+        #expect(HomeShortcut.allCases.filter(\.offersMarkAllRead) == [.threads])
+    }
+
     @Test("a card is spoken as its destination and what is in it")
     func accessibilityLabels() {
         // `.combine` flattens the card into one element, so this string is the whole of

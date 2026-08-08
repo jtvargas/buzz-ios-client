@@ -605,7 +605,8 @@ private extension ChannelListView {
     /// The Threads and Later cards, in one row above the conversations — one list row
     /// holding both, because they are a set of destinations rather than two rows.
     var shortcuts: some View {
-        HomeShortcutCards(count: count(for:), isCalling: isCalling(_:), press: press(_:))
+        HomeShortcutCards(count: count(for:), isCalling: isCalling(_:), press: press(_:),
+                          markAllThreadsRead: { threadReads.markAllSeen(among: model.unreadThreads) })
             .listRowInsets(Self.cardsInsets)
             .listRowSeparator(.hidden)
             .listRowBackground(Color.clear)
