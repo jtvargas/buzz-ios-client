@@ -28,6 +28,16 @@ struct SearchMessageResult: Sendable, Hashable, Identifiable {
     /// The thread this message lives inside when it lives *only* there — see
     /// ``BuzzKit/MessageSearchHit/threadRootID``. It decides which surface a tap opens.
     let threadRootID: String?
+    /// Whether opening this result has to read history off the relay before it can land.
+    ///
+    /// True for exactly the hits the *relay's* index answered and this device's did not — the
+    /// message is not in the local log, so the reach has to page back to it over the network,
+    /// which is the one path that is slow and the one that can fail. A hit this device already
+    /// holds is a walk over local pages and lands about as fast as the screen opens.
+    ///
+    /// It earns a marker on the row because it changes what the reader should expect from the
+    /// tap, and because it is the case where copying the link is the better move.
+    let needsHistoryFetch: Bool
 
     init(_ hit: MessageSearchHit) {
         id = hit.id
@@ -40,6 +50,7 @@ struct SearchMessageResult: Sendable, Hashable, Identifiable {
         authorPicture = hit.authorPicture
         isDirectMessage = hit.isDirectMessage
         threadRootID = hit.threadRootID
+        needsHistoryFetch = false
     }
 
     init(_ hit: RelayMessageSearchHit) {
@@ -58,6 +69,7 @@ struct SearchMessageResult: Sendable, Hashable, Identifiable {
         // not to be there, the surface says so rather than pretending. Settling that
         // properly means fetching the message before deciding, which is its own step.
         threadRootID = nil
+        needsHistoryFetch = true
     }
 }
 

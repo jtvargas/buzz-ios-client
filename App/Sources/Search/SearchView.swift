@@ -14,6 +14,7 @@ struct SearchView: View {
     /// and cleared by the destination's own `onAppear`, so it covers exactly the gap between
     /// the finger and the answer and never outlives it.
     @State private var opening: String?
+    @State private var history = SearchHistory()
     @State private var ticker = RelativeTimeTicker()
     @State private var threadReads = ThreadReadMarks()
     @State private var router: DirectMessageRouter
@@ -53,6 +54,10 @@ struct SearchView: View {
         .onChange(of: query) { _, value in model.search(value) }
         .onSubmit(of: .search) {
             model.submit(query)
+            // Filed here and where a result is opened, and nowhere else. Recording every
+            // debounced lookup would fill the history with the prefixes of one word — these
+            // two are the moments the reader said the term was the one they meant.
+            history.record(query)
             // Submitting is the reader saying they are done typing. Holding the keyboard
             // up after it hides the top of their own results.
             isFieldFocused = false
@@ -130,6 +135,21 @@ struct SearchView: View {
                 .controlSize(.large)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .dismissesKeyboard($isFieldFocused)
+        } else if model.messages.isEmpty, showsRecentSearches {
+            // Deliberately outside `dismissesKeyboard`: every one of these rows is a control,
+            // and a tap-to-dismiss over a list of controls is a second reading of the same
+            // tap. Dragging the list still puts the keyboard away, which is the gesture a
+            // reader reaches for anyway.
+            RecentSearchesView(history: history) { term in
+                // The field takes the term as well as the search, so the reader lands on
+                // their own words and can edit from there instead of retyping to change a
+                // letter.
+                query = term
+                model.submit(term)
+                history.record(term)
+                isFieldFocused = false
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if model.messages.isEmpty {
             emptyState
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -181,6 +201,16 @@ struct SearchView: View {
         }
     }
 
+    /// Whether the screen has nothing to say yet *and* something to remember.
+    ///
+    /// Not `query.isEmpty`: a one-letter query is below the search floor and produces no
+    /// lookup at all, so the reader is still looking at a screen that has asked nothing. What
+    /// decides is whether a search has run — which ``SearchModel`` already answers, and
+    /// answers `false` again the moment the field is cleared.
+    private var showsRecentSearches: Bool {
+        model.errorMessage == nil && !model.hasSearched && !history.terms.isEmpty
+    }
+
     @ViewBuilder
     private var dismissKeyboardButton: some View {
         if isFieldFocused {
@@ -230,6 +260,9 @@ struct SearchView: View {
     /// reader is working through, not to a channel nobody asked for.
     private func open(message: SearchMessageResult) {
         opening = message.id
+        // A term that led somewhere is a term worth remembering, whether or not the reader
+        // ever pressed return on it.
+        history.record(model.current)
         if let root = message.threadRootID {
             let route = ThreadRoute(
                 root: root, channel: message.channelID, anchor: .reply(message.id)

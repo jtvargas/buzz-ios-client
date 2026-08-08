@@ -49,7 +49,10 @@ struct SearchMessageRow: View {
                             .transition(.opacity)
                     }
                 }
-                place
+                HStack(spacing: 6) {
+                    place
+                    if hit.needsHistoryFetch { SearchFetchWarning() }
+                }
                 // Search ranges are offsets into the raw message. RichText changes offsets
                 // while parsing markdown, so a result snippet deliberately styles that raw
                 // value instead of pretending the ranges map onto a rendered block tree.
@@ -61,6 +64,51 @@ struct SearchMessageRow: View {
         }
         .animation(.smooth(duration: 0.15), value: isOpening)
         .accessibilityHint(place.accessibilityHint)
+        // On the row, which here *is* the whole button — the rule that a `.contextMenu` in a
+        // list row cannot be narrowed does not bite when the row has one target. A result is
+        // one message and one destination, so the hold is bounded by construction.
+        .contextMenu { copyLink }
+    }
+
+    /// The one thing a result offers besides opening: the link Desktop opens too.
+    ///
+    /// Worth having on every row and not only the slow ones. A message that is easy to reach
+    /// is also the one most worth quoting somewhere else.
+    @ViewBuilder
+    private var copyLink: some View {
+        if let url = MessageLink.url(
+            channelID: hit.channelID,
+            messageID: hit.id,
+            threadRootID: hit.threadRootID
+        ) {
+            Button {
+                UIPasteboard.general.string = url.absoluteString
+                // Reused rather than added: the vocabulary is deliberately closed, and this
+                // *is* an item chosen from a menu — which is what `.selection` means.
+                HiveHaptics.play(.suggestionPicked)
+            } label: {
+                Label("Copy Link", systemImage: "link")
+            }
+        }
+    }
+}
+
+/// The marker on a result this device has not stored.
+///
+/// Says what the tap will cost rather than naming the mechanism: "not downloaded" is a fact
+/// about the database, and what the reader needs to know is that this one takes a moment and
+/// the others do not. Paired with Copy Link on the hold, which is the way to reference a
+/// message without waiting for it at all.
+struct SearchFetchWarning: View {
+    var body: some View {
+        HStack(spacing: 3) {
+            Image(systemName: "arrow.down.circle")
+                .font(.hiveSymbol(.caption2, weight: .semibold))
+            Text("Fetches on open")
+                .font(.hive(.caption2, weight: .medium))
+        }
+        .foregroundStyle(.orange)
+        .accessibilityLabel("Not on this device. Opening reads older messages first.")
     }
 }
 

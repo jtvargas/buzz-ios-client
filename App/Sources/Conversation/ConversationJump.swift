@@ -30,18 +30,6 @@ enum ConversationJumpTarget: Equatable {
 /// affordance would be a case here instead of a re-typing of `control`, the animation's
 /// `value:`, and the tests.
 enum ConversationJumpControl: Equatable {
-    /// A message the reader asked for is being paged in from history: `Finding message`.
-    ///
-    /// Outranks both of the others, and it is the one case that is not an offer — it is a
-    /// report about something already happening because the reader asked for it. Nothing
-    /// else on this surface can say so: the top-of-history spinner sits at the far end of
-    /// the loaded rows, which is exactly where a reader waiting at the newest message is
-    /// not.
-    case seeking
-    /// The reach for that message ended without it. Carries *which* ending, because the two
-    /// are different news — see ``ConversationSeekFailure``. Cleared by its owner after a
-    /// moment.
-    case seekFailed(ConversationSeekFailure)
     /// Arrivals are waiting behind the frozen tail: `N new messages`.
     case unread(Int)
     /// The reader is far enough up that the way back is worth offering, and nothing is
@@ -56,7 +44,7 @@ enum ConversationJumpControl: Equatable {
 ///
 /// Its own type rather than two flags because the three states are exclusive and the
 /// transitions between them are the whole behaviour: nothing → searching → found (back to
-/// nothing) or ended without it (which decays back to nothing on a timer the owner holds).
+/// nothing) or ended without it, which stays up until the reader answers it.
 enum ConversationSeek: Equatable {
     case none
     case searching
@@ -139,11 +127,11 @@ final class ConversationJumpState {
     /// `visibleRect.minY`: an offset from zero, not a difference between two estimates. It
     /// is the same exact quantity the freeze's own two bands already read.
     var control: ConversationJumpControl? {
-        switch seek {
-        case .searching: return .seeking
-        case let .failed(reason): return .seekFailed(reason)
-        case .none: break
-        }
+        // The reach is deliberately absent. It used to outrank both of these from this same
+        // slot, which put a report the reader has to *answer* — Cancel, Try again — into the
+        // corner reserved for offers they are free to ignore, at a size that could hold
+        // neither. It has its own surface now (``MessageReachPanel``), and this is back to
+        // being one question: what is worth offering above the composer.
         if unreadCount > 0 { return .unread(unreadCount) }
         return isFarFromBottom ? .latest : nil
     }
@@ -195,12 +183,6 @@ struct ConversationJumpControls: View {
     var body: some View {
         Group {
             switch state.control {
-            case .seeking:
-                SeekingPill()
-                    .transition(.scale(scale: 0.9).combined(with: .opacity))
-            case let .seekFailed(reason):
-                SeekFailedPill(reason: reason)
-                    .transition(.scale(scale: 0.9).combined(with: .opacity))
             case let .unread(count):
                 NewMessagesPill(count: count, action: onJumpToNew)
                     .transition(.scale(scale: 0.9).combined(with: .opacity))
@@ -277,49 +259,6 @@ struct LatestPill: View {
         .clipShape(.capsule)
         .accessibilityLabel("Latest")
         .accessibilityHint("Double tap to jump to the newest message")
-    }
-}
-
-/// What the surface says while it is paging history back toward a message the reader asked
-/// for from somewhere else — search, today.
-///
-/// # Why it is not a button
-///
-/// The other two pills are offers, and pressing them is how the journey happens. This one
-/// reports a journey already under way, so there is nothing to press. It takes the same slot
-/// and the same shape deliberately: a reader who has just tapped a search result is looking
-/// at this corner of the screen either way, and a second visual language for "wait" would be
-/// one more thing to recognise.
-///
-/// It is also the only progress this reach can show. The top-of-history spinner sits at the
-/// far end of the loaded rows — which is exactly where a reader waiting at the newest message
-/// is not — so without this the app pages silently and looks frozen.
-struct SeekingPill: View {
-    var body: some View {
-        JumpPillLabel(text: "Finding message", symbol: nil) {
-            ProgressView()
-                .controlSize(.mini)
-        }
-        .glassEffect(.regular, in: .capsule)
-        .accessibilityLabel("Finding message")
-        // A live region: this appears without the reader doing anything to *this* screen,
-        // and it is the only signal that the tap they made somewhere else is being answered.
-        .accessibilityAddTraits(.updatesFrequently)
-    }
-}
-
-/// What the surface says when the reach ended without the message.
-///
-/// Says what happened rather than offering a retry, in both endings: one is a proof that
-/// re-pressing cannot overturn, and the other has already re-tried inside the walk. The
-/// owner clears this after a moment — see ``ChannelTimelineModel/focus(on:)``.
-struct SeekFailedPill: View {
-    let reason: ConversationSeekFailure
-
-    var body: some View {
-        JumpPillLabel(text: reason.label, symbol: "exclamationmark.circle")
-            .glassEffect(.regular, in: .capsule)
-            .accessibilityLabel(reason.label)
     }
 }
 

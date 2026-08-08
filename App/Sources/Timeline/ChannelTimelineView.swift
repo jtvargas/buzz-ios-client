@@ -204,6 +204,16 @@ struct ChannelTimelineView: View {
             accessory
         }
         .overlay { emptyState }
+        // Above the conversation and below nothing: the reach is the only thing on this
+        // screen the reader is waiting on, and it has controls they have to be able to hit.
+        // Hit testing is off for everything but the panel — see ``MessageReachPanel``.
+        .overlay {
+            MessageReachPanel(
+                seek: model.jump.seek,
+                onCancel: { model.cancelFocus() },
+                onRetry: { model.retryFocus() }
+            )
+        }
         .focusesComposerOnArrival(focusesComposer) { model.mentionAutocomplete.isComposerFocused = true }
         .modifier(header)
         // A conversation takes the whole screen. The tab bar is not just visual clutter
@@ -285,18 +295,20 @@ struct ChannelTimelineView: View {
             )
         }
         .task { await model.run() }
-        // After the first render, never from the prime: the walk ends in a `jumpToken` bump,
+        // After the first render, never from the prime: the reach ends in a `jumpToken` bump,
         // and a bump made before the scaffold has installed its `onChange` is a change that
         // observer never sees — see ``ChannelTimelineModel/focus(on:sentAt:)``.
-        .task {
-            guard let focus else { return }
-            // A message that turns out to be a thread reply is only discoverable once the
-            // walk has been past its place in history and stored it — see
-            // ``ChannelTimelineModel/FocusOutcome/inThread(root:)``. The other two endings
-            // have already said what they had to say on the surface itself.
-            guard case let .inThread(root) = await model.focus(
-                on: focus.messageID, sentAt: focus.sentAt
-            ) else { return }
+        //
+        // Started rather than awaited: the reader can cancel it and run it again, so no one
+        // attempt is the answer. What it *finds* comes back through `focusThreadRoot` below.
+        .task { if let focus { model.startFocus(focus) } }
+        .onDisappear { model.cancelFocus() }
+        // A message that turns out to be a thread reply is only discoverable once the reach
+        // has been past its place in history and stored it — see
+        // ``ChannelTimelineModel/FocusOutcome/inThread(root:)``. The other endings have
+        // already said what they had to say on the surface itself.
+        .onChange(of: model.focusThreadRoot) { _, root in
+            guard let root, let focus else { return }
             openedThread = ThreadRoute(
                 root: root, channel: channelID, anchor: .reply(focus.messageID)
             )

@@ -490,6 +490,19 @@ final class ChannelTimelineModel {
     /// first stall as exhaustion is what ended the walk early and reported a message that was
     /// there as missing.
     static let focusStallBudget = 4
+    /// The thread the message this screen was opened at turned out to live in, once the reach
+    /// has proved it is not on this surface — see ``FocusOutcome/inThread(root:)``.
+    ///
+    /// A property rather than the walk's return value because the walk can be cancelled and
+    /// run again, and the caller that pushes the thread is a `.task` that must not be left
+    /// awaiting any one attempt.
+    var focusThreadRoot: String?
+    /// The message the reach is for, kept so **Try again** has something to ask for.
+    @ObservationIgnored var focusRequest: ConversationFocus?
+    /// The supervised reach itself. Not observable: nothing draws it — ``jump`` carries what
+    /// the surface says about it.
+    @ObservationIgnored var focusTask: Task<Void, Never>?
+
     /// How long ``focus(on:sentAt:)`` may keep a reader waiting before it stops and says so.
     ///
     /// The page budget is not a bound on *time*: every page past what the device holds is a

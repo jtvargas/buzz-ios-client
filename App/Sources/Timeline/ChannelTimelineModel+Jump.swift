@@ -124,26 +124,42 @@ extension ChannelTimelineModel {
     /// budget — proves nothing about the message, and is reported as
     /// ``ConversationSeekFailure/unreachable`` rather than as "not found".
     ///
-    /// Cancellation is the caller's `.task`: leaving the screen ends the walk where it
-    /// stands, and what it did load is ordinary loaded history.
+    /// # Why a watchdog rather than a deadline the walk checks
+    ///
+    /// Because the walk cannot check anything while a page is in flight, and a page is an
+    /// HTTP request. `WindowClient.fetch` posts through `URLSession`, whose default request
+    /// timeout is sixty seconds — so a relay that accepts the connection and then says nothing
+    /// parks the walk inside one `await` for a minute, and a deadline tested at the top of the
+    /// loop does not get a turn until long after it has passed. That is the stuck spinner:
+    /// not a walk that refuses to stop, a walk that is never asked.
+    ///
+    /// ``startFocus(_:)`` supervises from outside instead. It settles the surface itself when
+    /// the limit is reached, so what the reader sees is bounded by the limit and not by
+    /// whatever the network eventually does.
+    ///
+    /// Cancellation belongs to whoever cancelled: the reader pressing Cancel, the watchdog, or
+    /// the screen going away all want to say something different, so this says nothing at all
+    /// on the way out.
     func focus(on messageID: String, sentAt: Int64) async -> FocusOutcome {
         if land(on: messageID) { return .landed }
         jump.setSeek(.searching)
         let target = TimelineCursor(createdAt: sentAt, id: messageID)
-        let deadline = ContinuousClock.now + Self.focusDeadline
         var stalls = 0
 
         for _ in 0 ..< Self.focusPageBudget {
-            if Task.isCancelled { return settleCancelled() }
-            if ContinuousClock.now >= deadline { return await report(.unreachable) }
+            if Task.isCancelled { return .gaveUp }
             // Before the load rather than after it, so a message already behind the loaded
             // floor when the walk starts costs no page at all.
-            if hasWalkedPast(target) { return await settleMissing(messageID) }
-            guard hasMoreOlder else { return await settleMissing(messageID) }
+            if hasWalkedPast(target) { return settleMissing(messageID) }
+            guard hasMoreOlder else { return settleMissing(messageID) }
 
             let before = loaded.count
             await loadOlder()
-            if land(on: messageID) { return .landed }
+            if Task.isCancelled { return .gaveUp }
+            // Takes the panel down as well as landing: the reader is looking at the message,
+            // which is the whole answer, and a surface still saying it is looking for it is
+            // the loudest possible way to be wrong.
+            if land(on: messageID) { return settleLanded() }
 
             guard loaded.count == before else {
                 stalls = 0
@@ -153,10 +169,63 @@ extension ChannelTimelineModel {
             // ``ChannelTimelineModel/focusStallBudget`` for the three ordinary ways
             // ``loadOlder()`` arrives here. Wait for whatever it was, then ask again.
             stalls += 1
-            if stalls >= Self.focusStallBudget { return await report(.unreachable) }
+            if stalls >= Self.focusStallBudget { return report(.unreachable) }
             try? await Task.sleep(for: Self.focusStallPause)
         }
-        return await report(.unreachable)
+        return report(.unreachable)
+    }
+
+    // MARK: - Owning the reach
+
+    /// Starts the reach for a message, under a watchdog, and remembers it so it can be run
+    /// again.
+    ///
+    /// Fire-and-forget on purpose: the caller is a `.task` that must not be left awaiting a
+    /// walk the reader may cancel and restart several times. What the walk *finds* comes back
+    /// through ``focusThreadRoot`` instead, which is a fact about this screen rather than a
+    /// return value belonging to one particular attempt.
+    func startFocus(_ focus: ConversationFocus) {
+        focusRequest = focus
+        focusTask?.cancel()
+        focusTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            let walk = Task { @MainActor [weak self] in
+                await self?.focus(on: focus.messageID, sentAt: focus.sentAt) ?? .gaveUp
+            }
+            let watchdog = Task { @MainActor [weak self] in
+                try? await Task.sleep(for: Self.focusDeadline)
+                guard !Task.isCancelled, let self else { return }
+                // The order matters. Reporting *before* the cancel means the surface is
+                // settled by the time the walk notices, so nothing the walk does on its way
+                // out can be mistaken for the answer — and if the request it is inside never
+                // honours the cancel at all, the reader is still told.
+                jump.setSeek(.failed(.unreachable))
+                walk.cancel()
+            }
+            let outcome = await walk.value
+            watchdog.cancel()
+            if case let .inThread(root) = outcome { focusThreadRoot = root }
+        }
+    }
+
+    /// Runs the reach again from where the screen now stands.
+    ///
+    /// Not from scratch: the pages the last attempt did load are ordinary loaded history, so a
+    /// second attempt starts nearer the message than the first. That is what makes retrying a
+    /// timeout worth offering rather than a way to wait the same fifteen seconds twice.
+    func retryFocus() {
+        guard let focusRequest else { return }
+        startFocus(focusRequest)
+    }
+
+    /// Stops the reach at the reader's word, and takes the report off with it.
+    ///
+    /// Also how the surface is dismissed after a failure — there is nothing left running by
+    /// then, and "stop telling me" is the same instruction.
+    func cancelFocus() {
+        focusTask?.cancel()
+        focusTask = nil
+        jump.setSeek(.none)
     }
 
     /// How ``focus(on:sentAt:)`` ended, for a caller that can do something about it.
@@ -178,6 +247,12 @@ extension ChannelTimelineModel {
         case gaveUp
     }
 
+    /// The reader is on the message. Nothing left to report.
+    private func settleLanded() -> FocusOutcome {
+        jump.setSeek(.none)
+        return .landed
+    }
+
     /// Whether the loaded floor has gone past where the message would be.
     ///
     /// Strictly past: a floor *equal* to the target is the target, which ``land(on:)`` has
@@ -187,25 +262,18 @@ extension ChannelTimelineModel {
         return (earliest.createdAt, earliest.id) < (target.createdAt, target.id)
     }
 
-    /// The reader left. Saying anything about it would be saying it to whoever opens this
-    /// conversation next.
-    private func settleCancelled() -> FocusOutcome {
-        jump.setSeek(.none)
-        return .gaveUp
-    }
-
     /// Proved absent from this conversation — so ask the one question that is left.
     ///
     /// The walk has been past this message's place, which means anything the store now holds
     /// under that id was stored *by the walk*. A row here that names a thread is a reply the
     /// channel page excludes — see the `NOT EXISTS` against `thread` in `fetchTimeline` — and
     /// that is a surface to send the reader to rather than a failure to report.
-    private func settleMissing(_ messageID: String) async -> FocusOutcome {
+    private func settleMissing(_ messageID: String) -> FocusOutcome {
         if let root = threadRoot(of: messageID) {
             jump.setSeek(.none)
             return .inThread(root: root)
         }
-        return await report(.notFound)
+        return report(.notFound)
     }
 
     /// The thread a message belongs to, if this device holds the message and it names one.
@@ -219,16 +287,14 @@ extension ChannelTimelineModel {
         return row.rootID
     }
 
-    /// Shows one of the two endings, and takes it away again.
+    /// Shows one of the two endings, and leaves it up.
     ///
-    /// Says something rather than going quiet: a reach that gives up silently cannot be told
-    /// apart from one still running, and the reader is left at the newest message wondering
-    /// why their tap did nothing. Neither ending offers a retry — one is a proof a second
-    /// press cannot overturn, and the other has already re-tried inside the walk.
-    private func report(_ reason: ConversationSeekFailure) async -> FocusOutcome {
+    /// It used to clear itself after three seconds. That was wrong in the way a reader
+    /// notices: the one state worth acting on is the one that took itself away while they were
+    /// still reading it, and a failure with a **Try again** on it has to survive long enough to
+    /// be pressed. ``cancelFocus()`` is how it goes.
+    private func report(_ reason: ConversationSeekFailure) -> FocusOutcome {
         jump.setSeek(.failed(reason))
-        try? await Task.sleep(for: .seconds(3))
-        jump.setSeek(.none)
         return .gaveUp
     }
 
