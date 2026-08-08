@@ -27,7 +27,7 @@ struct HomeNavigationTests {
     @Test("every glyph either tab can draw exists")
     func tabGlyphsExist() {
         // A `.fill` variant that does not exist renders as nothing at all, silently — the
-        // trap ``ThreadView/threadSymbol`` is pinned against, and one a derived name is
+        // trap ``ThreadView/threadGlyph`` is pinned against, and one a derived name is
         // especially exposed to. An asset name is exposed to the identical trap through a
         // different door: a typo, or an imageset that never made it into the bundle, is also
         // a blank tab and no error. Both are checked, each the only way its kind can be.
@@ -68,9 +68,15 @@ struct HomeNavigationTests {
         // The other three headings — Activity, a thread, a channel — write their mark plainly
         // as `.symbol(name)`, so the *default* is what keeps them out of the accent. Pinned
         // here because flipping that default would recolour three screens silently.
-        for symbol in [ActivityView.symbol, ThreadView.threadSymbol, "number"] {
+        for symbol in [ActivityView.symbol, "number"] {
             #expect(ConversationTitleBar.Mark.symbol(symbol) == .symbol(symbol, accented: false))
         }
+        // The thread's mark is the app's own artwork rather than a symbol, and takes the same
+        // default from the other side of the enum.
+        #expect(
+            ConversationTitleBar.Mark.glyph(ThreadView.threadGlyph)
+                == .glyph(ThreadView.threadGlyph, accented: false)
+        )
     }
 
     @Test("the home heading carries a cached community mark")

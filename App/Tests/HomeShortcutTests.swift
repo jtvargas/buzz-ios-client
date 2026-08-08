@@ -59,7 +59,7 @@ struct HomeShortcutTests {
     @Test("every glyph a card can draw resolves to something")
     func glyphsExist() {
         // A name that resolves to nothing renders as nothing at all, silently — the same trap
-        // ``ThreadView/threadSymbol`` is pinned against. Two kinds now, each checked the only
+        // ``ThreadView/threadGlyph`` is pinned against. Two kinds now, each checked the only
         // way its kind can be: a symbol against the system library, an asset against the
         // bundle. Handing either name to the other call draws a blank card and no error.
         for shortcut in HomeShortcut.allCases {

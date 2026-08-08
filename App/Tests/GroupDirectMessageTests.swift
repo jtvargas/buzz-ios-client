@@ -273,7 +273,7 @@ struct GroupDirectMessageTests {
             updatedAt: 1_000
         )
 
-        #expect(DraftRowMark.symbol(for: reply, in: group) == nil)
+        #expect(DraftRowMark.glyph(for: reply, in: group) == nil)
         #expect(DraftRowText.title(for: reply, in: group) == "Thread in Ada, Bo, Cy")
     }
 }

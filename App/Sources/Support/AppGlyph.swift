@@ -34,3 +34,45 @@ extension AppGlyph {
         }
     }
 }
+
+/// One glyph drawn at a definite height, whichever kind it is.
+///
+/// # Why a height and not a font
+///
+/// Because the two kinds take their size from different things: a symbol scales with the font
+/// it is given, and an asset scales with the frame it is put in. A call site that says
+/// `.font(.hiveSymbol(.body))` sizes one of them and silently leaves the other at whatever it
+/// happens to have been drawn at.
+///
+/// So the size is said once, in points, and `@ScaledMetric` keeps it following Dynamic Type
+/// the way the font would have — which is the property that would otherwise be quietly lost
+/// the moment a symbol became artwork.
+struct GlyphView: View {
+    let glyph: AppGlyph
+    let weight: Font.Weight
+    @ScaledMetric private var height: CGFloat
+
+    init(
+        _ glyph: AppGlyph,
+        height: CGFloat,
+        relativeTo textStyle: Font.TextStyle = .body,
+        weight: Font.Weight = .semibold
+    ) {
+        self.glyph = glyph
+        self.weight = weight
+        _height = ScaledMetric(wrappedValue: height, relativeTo: textStyle)
+    }
+
+    var body: some View {
+        switch glyph {
+        case let .symbol(name):
+            Image(systemName: name)
+                .font(.hiveSymbol(fixedSize: height, weight: weight))
+        case let .asset(name):
+            Image(name)
+                .resizable()
+                .scaledToFit()
+                .frame(height: height)
+        }
+    }
+}

@@ -59,7 +59,7 @@ struct ThreadView: View {
     /// the symbol for adding a line to something already written, which is what a thread is.
     /// Named here rather than at the call site so the test that it is a symbol the system
     /// actually has can reach it — a missing name renders as nothing at all, silently.
-    static let threadSymbol = "text.append"
+    static let threadGlyph = AppGlyph.asset("ThreadsGlyph")
 
     /// Where this thread rests when it opens. A thread reached from a message in its own
     /// channel opens at the newest reply — the reader has the opener in front of them
@@ -201,7 +201,7 @@ struct ThreadView: View {
         // stack-level `.visible` beats it, so the two have to agree, so only one of them may
         // speak.
         .conversationTitle(
-            mark: .symbol(Self.threadSymbol),
+            mark: .glyph(Self.threadGlyph),
             title: "Thread",
             subtitle: .text(context),
             actionHint: "Double tap to return to the conversation",

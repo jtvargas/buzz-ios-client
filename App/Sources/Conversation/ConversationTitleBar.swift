@@ -48,13 +48,19 @@ struct ConversationTitleBar: ViewModifier {
     enum Mark: Equatable {
         /// No mark; the name stands on its own.
         case none
-        /// An SF Symbol — `number` for a channel, `text.append` for a thread.
+        /// One glyph — `number` for a channel, the app's own drawing for a thread.
         ///
         /// `accented` spends the app's colour on the glyph, and is off everywhere but the
         /// workspace's own heading: the accent marks the one heading that names *this app's*
         /// community, where a `#` or a thread glyph names a conversation inside it. A colour
         /// that appeared on every heading would say nothing about any of them.
-        case symbol(String, accented: Bool = false)
+        case glyph(AppGlyph, accented: Bool = false)
+
+        /// A system symbol, spelled the short way. Most marks are one, and
+        /// `.glyph(.symbol("number"))` says the word twice.
+        static func symbol(_ name: String, accented: Bool = false) -> Mark {
+            .glyph(.symbol(name), accented: accented)
+        }
         /// The peer's picture, falling back to their monogram. A person is recognised by
         /// their face before their name, which a glyph cannot do.
         case avatar(url: URL?, seed: String, initials: String)
@@ -273,12 +279,12 @@ struct ConversationTitleBar: ViewModifier {
         switch mark {
         case .none:
             EmptyView()
-        case let .symbol(name, accented):
-            Image(systemName: name)
-                // A step above the name rather than two: at `.title3` the `#` was the
-                // loudest thing in the bar and hung below the second line's baseline, which
-                // is most of what read as the heading being crammed.
-                .font(.hiveSymbol(.body, weight: .semibold))
+        case let .glyph(glyph, accented):
+            // A step above the name rather than two: at `.title3` the `#` was the loudest
+            // thing in the bar and hung below the second line's baseline, which is most of
+            // what read as the heading being crammed. `.body` semibold is 17 points, said
+            // here as a number because artwork cannot be sized by a font — see ``GlyphView``.
+            GlyphView(glyph, height: 17)
                 // Named colours rather than hierarchical ones, for the reason above the
                 // name: inside a control the hierarchy resolves against the tint. The accent
                 // is therefore asked for by name where it is wanted, and refused everywhere

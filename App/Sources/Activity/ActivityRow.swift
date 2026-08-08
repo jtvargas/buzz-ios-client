@@ -125,8 +125,9 @@ struct ActivityRow: View {
     private var destination: some View {
         HStack(spacing: 6) {
             if entry.rootID != nil {
-                Image(systemName: ThreadView.threadSymbol)
-                    .font(.hiveSymbol(.caption2))
+                // 11 points is `.caption2`, said as a number because artwork takes its size
+                // from a frame rather than from a font — see ``GlyphView``.
+                GlyphView(ThreadView.threadGlyph, height: 11, relativeTo: .caption2, weight: .regular)
                     .foregroundStyle(.secondary)
             }
             Text(title)
