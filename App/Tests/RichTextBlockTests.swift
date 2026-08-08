@@ -266,10 +266,20 @@ struct RichTextBlockTests {
 
     @Test("authored blank lines become bounded source spacers without leading or trailing air")
     func authoredBlankLines() {
+        func spacerCount(_ markdown: String) -> Int {
+            RichTextParser.parse(markdown).count { $0 == .sourceBlankLine }
+        }
+
+        #expect(spacerCount("above\n\nbelow") == 0)
+        #expect(spacerCount("above\n\n\nbelow") == 1)
+        #expect(spacerCount("above\n\n\n\nbelow") == 2)
+        let sixBlankLines = (["above"] + Array(repeating: "", count: 6) + ["below"]).joined(separator: "\n")
+        #expect(spacerCount(sixBlankLines) == 2)
+
         let blocks = RichTextParser.parse("\n\nabove\n\n\n\n\nbelow\n\n")
         #expect(blocks.first == .paragraph(AttributedString("above")))
         #expect(blocks.last == .paragraph(AttributedString("below")))
-        #expect(blocks.filter { $0 == .sourceBlankLine }.count == RichTextParser.maxBlankLineRun)
+        #expect(blocks.filter { $0 == .sourceBlankLine }.count == RichTextParser.maxBlankLineRun - 1)
     }
 
     @Test("a source spacer owns its height instead of gaining semantic pair spacing")

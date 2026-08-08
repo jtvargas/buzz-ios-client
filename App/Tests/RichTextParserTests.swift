@@ -103,14 +103,11 @@ struct RichTextParserTests {
     @Test("a mixed document parses into the expected block sequence")
     func mixedDocument() {
         let blocks = RichTextParser.parse("# Title\n\npara text\n\n- a\n- b\n\n```\ncode\n```")
-        #expect(blocks.count == 7)
+        #expect(blocks.count == 4)
         if case .heading(1, _) = blocks[0] {} else { Issue.record("block 0 heading") }
-        #expect(blocks[1] == .sourceBlankLine)
-        if case .paragraph = blocks[2] {} else { Issue.record("block 2 paragraph") }
-        #expect(blocks[3] == .sourceBlankLine)
-        if case .bulletList = blocks[4] {} else { Issue.record("block 4 bullets") }
-        #expect(blocks[5] == .sourceBlankLine)
-        if case .code = blocks[6] {} else { Issue.record("block 6 code") }
+        if case .paragraph = blocks[1] {} else { Issue.record("block 1 paragraph") }
+        if case .bulletList = blocks[2] {} else { Issue.record("block 2 bullets") }
+        if case .code = blocks[3] {} else { Issue.record("block 3 code") }
     }
 
     // MARK: - Nested lists

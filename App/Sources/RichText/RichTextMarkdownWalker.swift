@@ -33,7 +33,8 @@ struct RichTextMarkdownWalker {
             guard !converted.isEmpty else { continue }
             let blankLineCount: Int
             if hasPreviousBlock {
-                blankLineCount = min(precedingBlankLineCount(for: child), RichTextParser.maxBlankLineRun)
+                let authored = min(precedingBlankLineCount(for: child), RichTextParser.maxBlankLineRun)
+                blankLineCount = max(0, authored - 1)
                 result.append(contentsOf: repeatElement(.sourceBlankLine, count: blankLineCount))
             } else {
                 blankLineCount = 0
@@ -93,9 +94,9 @@ struct RichTextMarkdownWalker {
     }
 
     /// CommonMark discards blank lines between blocks. Source positions stay enabled,
-    /// so recover only source lines that are actually empty. The caller deliberately
-    /// asks only after a preceding semantic block; trailing whitespace has no following
-    /// node and therefore cannot produce a spacer either.
+    /// so recover only source lines that are actually empty. The caller removes the one
+    /// separator CommonMark already represents through semantic pair spacing. Leading
+    /// and trailing whitespace have no adjacent pair and cannot produce a spacer.
     private func precedingBlankLineCount(for markup: Markup) -> Int {
         guard let line = markup.range?.lowerBound.line else { return 0 }
         var index = line - 2

@@ -54,7 +54,7 @@ struct RichBlockView: View {
         case .rule:
             RichRuleView()
         case .sourceBlankLine:
-            Text("\n")
+            Text(verbatim: " ")
                 .font(.hive(.body))
                 .hidden()
                 .accessibilityHidden(true)

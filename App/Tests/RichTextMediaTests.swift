@@ -105,13 +105,10 @@ struct RichTextMediaTests {
         #expect(attachedGroup(parsed.first)?.map(\.url) == [Self.second, Self.picture, third])
     }
 
-    @Test("two separate paragraphs of one image each still fold — nothing sits between them")
+    @Test("an authored spacer between image paragraphs does not split the media group")
     func separateParagraphsStillFold() {
-        // A blank line between two image-only paragraphs: two `RichBlock`s reach `group`
-        // adjacent to each other because neither carries a caption of its own, which is
-        // the same shape as one paragraph with a bare newline between its images.
         let parsed = blocks(
-            "![a](\(Self.second))\n\n![b](\(Self.picture))",
+            "![a](\(Self.second))\n\n\n![b](\(Self.picture))",
             media: [media(), media(Self.second)]
         )
 

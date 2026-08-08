@@ -27,11 +27,10 @@ struct RichTextLinkPreviewTests {
     func cardsComeLast() throws {
         let parsed = blocks("shipped it\n\nhttps://github.com/o/r/pull/61")
 
-        #expect(parsed.count == 4)
+        #expect(parsed.count == 3)
         if case .linkPreview = parsed[0] { Issue.record("a card came before the message") }
         if case .linkPreview = parsed[1] { Issue.record("a card came before the message") }
-        if case .linkPreview = parsed[2] { Issue.record("a card came before the message") }
-        guard case let .linkPreview(preview) = parsed[3] else {
+        guard case let .linkPreview(preview) = parsed[2] else {
             Issue.record("the last block is not a card")
             return
         }
