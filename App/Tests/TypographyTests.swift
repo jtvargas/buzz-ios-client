@@ -248,7 +248,9 @@ struct MessageTypographyTests {
         mention.mention = MentionToken(pubkey: String(repeating: "a", count: 64), isSelf: false)
         mention.inlinePresentationIntent = .stronglyEmphasized
 
-        var attributed = InlineMarkdown.render("**bold** *italic* ***both*** `code`")
+        var attributed = RichTextProbe.inline(
+            of: RichTextParser.parse("**bold** *italic* ***both*** `code`")[0]
+        )
         attributed.append(AttributedString(" "))
         attributed.append(mention)
         let styled = RichTextStyle.styled(attributed, base: .body)

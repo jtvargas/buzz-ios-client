@@ -2,9 +2,7 @@ import Foundation
 @testable import Hive
 import Testing
 
-/// The block parser and its inline hardening: block classification, the CommonMark
-/// subset the workspace uses, nested lists, and unsafe-link stripping. Pure and
-/// deterministic — no store, no view, no resolver.
+/// The CommonMark block/inline conversion and its product-specific hardening.
 @Suite("Rich text parsing")
 struct RichTextParserTests {
     // MARK: - Blocks
@@ -27,6 +25,16 @@ struct RichTextParserTests {
             return
         }
         #expect(level == 2)
+        #expect(String(text.characters) == "Section")
+    }
+
+    @Test("a setext underline produces a heading")
+    func setextHeading() {
+        guard case let .heading(level, text) = RichTextParser.parse("Section\n=======").first else {
+            Issue.record("expected a setext heading")
+            return
+        }
+        #expect(level == 1)
         #expect(String(text.characters) == "Section")
     }
 
@@ -53,7 +61,7 @@ struct RichTextParserTests {
             Issue.record("expected a bullet list")
             return
         }
-        #expect(items.map { String($0.content.characters) } == ["one", "two", "three"])
+        #expect(items.map { String(RichTextProbe.inline(of: $0).characters) } == ["one", "two", "three"])
     }
 
     @Test("numbered lines form an ordered list carrying its start")
@@ -63,7 +71,7 @@ struct RichTextParserTests {
             return
         }
         #expect(start == 3)
-        #expect(items.map { String($0.content.characters) } == ["first", "second"])
+        #expect(items.map { String(RichTextProbe.inline(of: $0).characters) } == ["first", "second"])
     }
 
     @Test("a marker-kind change at the same indentation starts a sibling list")
@@ -76,30 +84,58 @@ struct RichTextParserTests {
             Issue.record("expected adjacent bullet and ordered lists")
             return
         }
-        #expect(bullets.map { String($0.content.characters) } == ["bullet"])
+        #expect(bullets.map { String(RichTextProbe.inline(of: $0).characters) } == ["bullet"])
         #expect(start == 1)
-        #expect(numbered.map { String($0.content.characters) } == ["numbered", "second"])
+        #expect(numbered.map { String(RichTextProbe.inline(of: $0).characters) } == ["numbered", "second"])
     }
 
     @Test("a fenced code block keeps its raw text and language, unparsed")
     func fencedCode() {
         let blocks = RichTextParser.parse("```swift\nlet x = *notBold*\n```")
-        #expect(blocks == [.code("let x = *notBold*", language: "swift")])
+        #expect(blocks == [.code("let x = *notBold*", info: CodeFenceInfo(rawInfoString: "swift"))])
     }
 
     @Test("an unterminated fence runs to the end of the message")
     func unterminatedFence() {
         let blocks = RichTextParser.parse("```\ncode line 1\ncode line 2")
-        #expect(blocks == [.code("code line 1\ncode line 2", language: nil)])
+        #expect(blocks == [.code("code line 1\ncode line 2", info: nil)])
+    }
+
+    @Test("a tilde fence produces a code block")
+    func tildeFence() {
+        let blocks = RichTextParser.parse("~~~swift\nlet x = 1\n~~~")
+        #expect(blocks == [.code("let x = 1", info: CodeFenceInfo(rawInfoString: "swift"))])
+    }
+
+    @Test("a four-backtick fence can contain a three-backtick fence")
+    func longBacktickFence() {
+        let blocks = RichTextParser.parse("````markdown\n```\ninside\n```\n````")
+        #expect(blocks == [
+            .code("```\ninside\n```", info: CodeFenceInfo(rawInfoString: "markdown"))
+        ])
+    }
+
+    @Test("four-space indented source produces a code block")
+    func indentedCode() {
+        #expect(RichTextParser.parse("    let x = 1") == [.code("let x = 1", info: nil)])
     }
 
     @Test("a > line is a block quote")
     func blockQuote() {
-        guard case let .quote(text) = RichTextParser.parse("> quoted words").first else {
+        guard case let .quote(blocks) = RichTextParser.parse("> quoted words").first else {
             Issue.record("expected a quote")
             return
         }
-        #expect(String(text.characters) == "quoted words")
+        #expect(String(RichTextProbe.inline(of: blocks[0]).characters) == "quoted words")
+    }
+
+    @Test("an unmarked line lazily continues the block quote")
+    func lazyBlockQuoteContinuation() {
+        guard case let .quote(blocks) = RichTextParser.parse("> first\ncontinued").first else {
+            Issue.record("expected a quote")
+            return
+        }
+        #expect(String(RichTextProbe.inline(of: blocks[0]).characters) == "first\ncontinued")
     }
 
     @Test("a mixed document parses into the expected block sequence")
@@ -121,13 +157,13 @@ struct RichTextParserTests {
             return
         }
         #expect(items.count == 2)
-        #expect(String(items[0].content.characters) == "a")
-        guard case let .bulletList(children) = items[0].children.first else {
+        #expect(String(RichTextProbe.inline(of: items[0].blocks[0]).characters) == "a")
+        guard case let .bulletList(children) = items[0].blocks.last else {
             Issue.record("expected a nested bullet list under item a")
             return
         }
-        #expect(children.map { String($0.content.characters) } == ["b", "c"])
-        #expect(items[1].children.isEmpty)
+        #expect(children.map { String(RichTextProbe.inline(of: $0).characters) } == ["b", "c"])
+        #expect(items[1].blocks.count == 1)
     }
 
     @Test("an ordered sub-list nests under a bullet item, keeping its start")
@@ -136,12 +172,12 @@ struct RichTextParserTests {
             Issue.record("expected a bullet list")
             return
         }
-        guard case let .orderedList(start, children) = items[0].children.first else {
+        guard case let .orderedList(start, children) = items[0].blocks.last else {
             Issue.record("expected a nested ordered list")
             return
         }
         #expect(start == 1)
-        #expect(children.map { String($0.content.characters) } == ["x", "y"])
+        #expect(children.map { String(RichTextProbe.inline(of: $0).characters) } == ["x", "y"])
     }
 
     @Test("runaway indentation is depth-clamped, never crashing or unbounded")
@@ -152,6 +188,24 @@ struct RichTextParserTests {
         let blocks = RichTextParser.parse(markdown)
         #expect(!blocks.isEmpty)
         #expect(RichTextProbe.maxListDepth(blocks) <= RichTextParser.maxListDepth + 1)
+        let flattened = String(RichMessage(blocks: blocks).flattenedInline().characters)
+        #expect(flattened.contains("level19"))
+    }
+
+    @Test("a list item can contain fenced code and a quote can contain a list")
+    func nestedBlockShapes() {
+        let item = RichTextParser.parse("- before\n\n  ```swift\n  let x = 1\n  ```")
+        guard case let .bulletList(items) = item.first else {
+            Issue.record("expected a list")
+            return
+        }
+        #expect(items[0].blocks.contains { if case .code = $0 { true } else { false } })
+
+        guard case let .quote(quoted) = RichTextParser.parse("> - one\n> - two").first else {
+            Issue.record("expected a quote")
+            return
+        }
+        #expect(quoted.contains { if case .bulletList = $0 { true } else { false } })
     }
 
     // MARK: - Inline hardening
@@ -160,6 +214,12 @@ struct RichTextParserTests {
     func safeLinkKept() {
         let link = RichTextProbe.firstLink(RichTextParser.parse("see [docs](https://example.com/x)"))
         #expect(link?.absoluteString == "https://example.com/x")
+    }
+
+    @Test("mailto links stay tappable while unsupported schemes do not")
+    func authoredLinkSchemes() {
+        #expect(RichTextProbe.firstLink(RichTextParser.parse("[mail](mailto:a@example.com)"))?.scheme == "mailto")
+        #expect(RichTextProbe.firstLink(RichTextParser.parse("[file](ftp://example.com/a)")) == nil)
     }
 
     @Test("a javascript: link is stripped of its link attribute")
@@ -185,8 +245,31 @@ struct RichTextParserTests {
 
     @Test("inline bold is applied within a paragraph")
     func inlineBold() {
-        let attributed = InlineMarkdown.render("this is **bold** here")
+        let attributed = RichTextProbe.inline(of: RichTextParser.parse("this is **bold** here")[0])
         #expect(RichTextProbe.hasBold(attributed))
         #expect(String(attributed.characters) == "this is bold here")
+    }
+
+    @Test("one source newline stays a visible line break")
+    func softBreakIsHardBreak() {
+        let attributed = RichTextProbe.inline(of: RichTextParser.parse("first\nsecond")[0])
+        #expect(String(attributed.characters) == "first\nsecond")
+    }
+
+    @Test("smart typography stays disabled so copy-out matches source")
+    func smartTypographyDisabled() {
+        let attributed = RichTextProbe.inline(of: RichTextParser.parse(#""straight" -- text"#)[0])
+        #expect(String(attributed.characters) == #""straight" -- text"#)
+    }
+
+    @Test("code fence metadata does not become the highlighter language")
+    func codeFenceInfo() {
+        guard case let .code(_, info) = RichTextParser.parse("```swift title=\"x\"\nlet x = 1\n```").first else {
+            Issue.record("expected code")
+            return
+        }
+        #expect(info?.language == "swift")
+        #expect(info?.highlightLanguage == "swift")
+        #expect(CodeFenceInfo(rawInfoString: "zsh")?.highlightLanguage == "bash")
     }
 }

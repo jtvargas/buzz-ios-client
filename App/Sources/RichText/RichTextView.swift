@@ -40,10 +40,6 @@ struct RichTextView: View {
     /// the system's otherwise. Read here so this view can flash the pill on the way
     /// through without having to know what happens next.
     @Environment(\.openURL) private var openURL
-    /// The surrounding row's tap claim, when there is a row. An attachment is a view
-    /// rather than a link run, so it never reaches the arbitrating `OpenURLAction`
-    /// above and has to claim the tap itself — see ``ClaimRowTapAction``.
-    @Environment(\.claimRowTap) private var claimRowTap
     /// Block spacing represents an empty body-text line in the reference renderer, so it
     /// must grow with the same Dynamic Type setting as the message it separates.
     @ScaledMetric(relativeTo: .body) private var blockSpacingScale: CGFloat = 1
@@ -169,60 +165,6 @@ private extension RichTextView {
 
     @ViewBuilder
     func blockView(_ block: RichBlock) -> some View {
-        switch block {
-        case let .paragraph(text):
-            RichTextInline.text(text, base: .body)
-                .font(.hive(.body))
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-        case let .heading(level, text):
-            RichHeadingView(level: level, text: text)
-
-        case let .quote(text):
-            HStack(alignment: .top, spacing: 8) {
-                RoundedRectangle(cornerRadius: 1.5)
-                    .fill(Color.secondary.opacity(0.5))
-                    .frame(width: 3)
-                RichTextInline.text(text, base: .body)
-                    .font(.hive(.body))
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            // Was a bare `fixedSize(horizontal:vertical:)`, which is this modifier
-            // without the line-limit gate: on a Threads summary row it overrode the
-            // six-line clamp the row asks for, so one quoted message could run the
-            // length of the whole quote. Same treatment on a message being read.
-            .richTextIdealHeight()
-
-        case let .code(code, language):
-            RichCodeBlock(code: code, language: language)
-
-        case let .bulletList(items):
-            RichListView(items: items, ordered: false, start: 1)
-
-        case let .orderedList(start, items):
-            RichListView(items: items, ordered: true, start: start)
-
-        case let .table(table):
-            RichTableView(table: table)
-
-        case .rule:
-            RichRuleView()
-
-        case let .media(media):
-            // `onTap` is the row's claim, not the viewer's trigger — the attachment
-            // presents that itself. Without it a press would open the picture *and*
-            // push the thread behind it, which is the defect the reaction chips'
-            // `onOpenPalette` exists to avoid.
-            MessageMediaGroupView(media: media, onTap: { claimRowTap?() }, attribution: attribution)
-
-        case let .linkPreview(preview):
-            // The surface's own `openURL`, captured above — *not* the flashing wrapper
-            // this view installs below. Handing the card the wrapper would light the
-            // pill on the matching link in the text when the card was pressed, which is
-            // feedback on the wrong object; the card dims itself instead. Either way the
-            // URL travels through the row's arbitrating action, so the tap is claimed.
-            LinkPreviewCardView(preview: preview) { openURL(preview.url) }
-        }
+        RichBlockView(block: block, attribution: attribution)
     }
 }

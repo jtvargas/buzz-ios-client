@@ -8,8 +8,10 @@ enum RichTextProbe {
     /// The inline content of a text-bearing block, empty for code/list blocks.
     static func inline(of block: RichBlock) -> AttributedString {
         switch block {
-        case let .paragraph(text), let .quote(text):
+        case let .paragraph(text):
             return text
+        case let .quote(blocks):
+            return joined(blocks.map(inline(of:)))
         case let .heading(_, text):
             return text
         default:
@@ -54,9 +56,13 @@ enum RichTextProbe {
     /// The first tappable link across all text blocks, or `nil`.
     static func firstLink(_ blocks: [RichBlock]) -> URL? {
         for block in blocks {
-            if let link = inline(of: block).runs.compactMap(\.link).first { return link }
+            if let link = links(in: block).first { return link }
         }
         return nil
+    }
+
+    static func inline(of item: RichListItem) -> AttributedString {
+        joined(item.blocks.map(inline(of:)))
     }
 
     /// The deepest list nesting in `blocks` (0 when there are no lists), for the
@@ -72,9 +78,33 @@ enum RichTextProbe {
             }
             deepest = max(deepest, current + 1)
             for item in items {
-                deepest = max(deepest, maxListDepth(item.children, current: current + 1))
+                deepest = max(deepest, maxListDepth(item.blocks, current: current + 1))
             }
         }
         return deepest
+    }
+
+    private static func links(in block: RichBlock) -> [URL] {
+        switch block {
+        case let .paragraph(text), let .heading(_, text):
+            text.runs.compactMap(\.link)
+        case let .quote(blocks):
+            blocks.flatMap(links(in:))
+        case let .bulletList(items), let .orderedList(_, items):
+            items.flatMap { $0.blocks.flatMap(links(in:)) }
+        case let .table(table):
+            table.cellsInReadingOrder.flatMap { $0.runs.compactMap(\.link) }
+        default:
+            []
+        }
+    }
+
+    private static func joined(_ pieces: [AttributedString]) -> AttributedString {
+        var result = AttributedString()
+        for piece in pieces where !piece.characters.isEmpty {
+            if !result.characters.isEmpty { result.append(AttributedString(" ")) }
+            result.append(piece)
+        }
+        return result
     }
 }

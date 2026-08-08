@@ -19,8 +19,10 @@ extension RichMessage {
 
     private static func inline(of block: RichBlock) -> AttributedString {
         switch block {
-        case let .paragraph(text), let .quote(text):
+        case let .paragraph(text):
             return text
+        case let .quote(blocks):
+            return joined(blocks.map { inline(of: $0) })
         case let .heading(_, text):
             return text
         case let .code(code, _):
@@ -31,7 +33,7 @@ extension RichMessage {
             return inline(of: items)
         case let .table(table):
             return joined(table.cellsInReadingOrder)
-        case .rule:
+        case .rule, .sourceBlankLine:
             // A rule is a shape, not words. Flattening it to punctuation would put a
             // stray `—` in a sidebar preview where the message's own first sentence
             // belongs.
@@ -88,14 +90,10 @@ extension RichMessage {
     private static func inline(of items: [RichListItem]) -> AttributedString {
         var result = AttributedString()
         for item in items {
+            let piece = joined(item.blocks.map { inline(of: $0) })
+            guard !piece.characters.isEmpty else { continue }
             if !result.characters.isEmpty { result.append(AttributedString(" ")) }
-            result.append(item.content)
-            for child in item.children {
-                let childInline = inline(of: child)
-                guard !childInline.characters.isEmpty else { continue }
-                result.append(AttributedString(" "))
-                result.append(childInline)
-            }
+            result.append(piece)
         }
         return result
     }

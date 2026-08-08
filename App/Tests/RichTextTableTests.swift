@@ -74,7 +74,7 @@ struct RichTextTableTests {
         let blocks = RichTextParser.parse("| a |\n| --- |\n| 1 |\n```\ncode\n```")
         #expect(blocks.count == 2)
         if case .table = blocks[0] {} else { Issue.record("block 0 table") }
-        #expect(blocks[1] == .code("code", language: nil))
+        #expect(blocks[1] == .code("code", info: nil))
     }
 
     // MARK: - Alignment

@@ -107,22 +107,24 @@ enum RichTextLinkPreview {
     private static func links(in blocks: [RichBlock]) -> [Candidate] {
         blocks.flatMap { block -> [Candidate] in
             switch block {
-            case let .paragraph(text), let .quote(text), let .heading(_, text):
+            case let .paragraph(text), let .heading(_, text):
                 links(in: text)
+            case let .quote(blocks):
+                links(in: blocks)
             case let .bulletList(items), let .orderedList(_, items):
                 links(in: items)
             case let .table(table):
                 table.cellsInReadingOrder.flatMap { links(in: $0) }
             // A fenced block is raw text that was never inline-parsed, a rule has no
             // words, and an attachment's URL is the picture rather than a link to it.
-            case .code, .rule, .media, .linkPreview:
+            case .code, .rule, .sourceBlankLine, .media, .linkPreview:
                 []
             }
         }
     }
 
     private static func links(in items: [RichListItem]) -> [Candidate] {
-        items.flatMap { links(in: $0.content) + links(in: $0.children) }
+        items.flatMap { links(in: $0.blocks) }
     }
 
     /// The links in one inline, *adjacent* runs sharing a target joined back together.

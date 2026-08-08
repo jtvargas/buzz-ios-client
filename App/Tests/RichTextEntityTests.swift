@@ -136,7 +136,7 @@ struct RichTextEntityTests {
     func codeFenceNeverEntity() {
         let resolver = StubMentionResolver(members: ["bob": MentionMatch(pubkey: "PK_BOB", isSelf: false)])
         let blocks = resolved("```\n@bob and #general\n```", resolver)
-        #expect(blocks == [.code("@bob and #general", language: nil)])
+        #expect(blocks == [.code("@bob and #general", info: nil)])
     }
 
     @Test("an inline code span is never entity-parsed")
@@ -170,6 +170,18 @@ struct RichTextEntityTests {
         #expect(RichTextProbe.mentionRuns(paragraph).isEmpty)
         #expect(RichTextProbe.hasBold(paragraph))
         #expect(paragraph.runs.compactMap(\.link).first?.absoluteString == "https://y.com")
+    }
+
+    @Test("entities resolve inside nested quote and list blocks")
+    func nestedEntities() {
+        let resolver = StubMentionResolver(
+            members: ["bob": MentionMatch(pubkey: "PK_BOB", isSelf: false)],
+            channels: ["general": "CH_GEN"]
+        )
+        let blocks = resolved("> - @bob in #general", resolver)
+        let inline = RichTextProbe.inline(of: blocks[0])
+        #expect(RichTextProbe.firstMention(inline)?.pubkey == "PK_BOB")
+        #expect(RichTextProbe.firstChannel(inline)?.channelID == "CH_GEN")
     }
 
     // MARK: - Production resolver

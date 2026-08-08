@@ -8,7 +8,13 @@ import Testing
 /// reaches the screen if it is stated as an attribute, and the inter-block spacing
 /// rule.
 @Suite("Rich text blocks")
+// The suite keeps all non-table renderer constructs under one behavior boundary.
+// swiftlint:disable:next type_body_length
 struct RichTextBlockTests {
+    private func inline(_ markdown: String) -> AttributedString {
+        RichTextParser.parse(markdown).first.map(RichTextProbe.inline(of:)) ?? AttributedString()
+    }
+
     // MARK: - Code highlighting
 
     @Test("the One Light scanner colours Swift tokens with the mobile map")
@@ -103,13 +109,26 @@ struct RichTextBlockTests {
         #expect(!RichTextParser.parse(line).contains(.rule))
     }
 
-    @Test("a rule separates the paragraphs around it without swallowing either")
-    func ruleBetweenParagraphs() {
-        let blocks = RichTextParser.parse("above\n---\nbelow")
+    @Test("a blank-separated rule preserves the paragraphs around it")
+    func blankSeparatedRule() {
+        let blocks = RichTextParser.parse("above\n\n---\n\nbelow")
         #expect(blocks.count == 3)
         #expect(String(RichTextProbe.inline(of: blocks[0]).characters) == "above")
         #expect(blocks[1] == .rule)
         #expect(String(RichTextProbe.inline(of: blocks[2]).characters) == "below")
+    }
+
+    @Test("a consecutive dash underline is a setext heading, not a rule")
+    func consecutiveDashUnderlineIsSetext() {
+        let blocks = RichTextParser.parse("above\n---\nbelow")
+        #expect(blocks.count == 2)
+        guard case let .heading(level, heading) = blocks[0] else {
+            Issue.record("expected a setext heading")
+            return
+        }
+        #expect(level == 2)
+        #expect(String(heading.characters) == "above")
+        #expect(String(RichTextProbe.inline(of: blocks[1]).characters) == "below")
     }
 
     // MARK: - Task and radio items
@@ -121,7 +140,7 @@ struct RichTextBlockTests {
             return
         }
         #expect(items.map(\.marker) == [.checkbox(false), .checkbox(true)])
-        #expect(items.map { String($0.content.characters) } == ["todo", "done"])
+        #expect(items.map { String(RichTextProbe.inline(of: $0).characters) } == ["todo", "done"])
     }
 
     @Test("a task item and a plain item stay one list")
@@ -142,7 +161,7 @@ struct RichTextBlockTests {
             return
         }
         #expect(items.first?.marker == .checkbox(true))
-        #expect(String(items[0].content.characters) == "shipped")
+        #expect(String(RichTextProbe.inline(of: items[0]).characters) == "shipped")
     }
 
     @Test("a bare parenthesis line is a radio item")
@@ -152,6 +171,17 @@ struct RichTextBlockTests {
             return
         }
         #expect(items.map(\.marker) == [.radio(false), .radio(true)])
+    }
+
+    @Test("soft-broken bare markers become one multi-item list")
+    func consecutiveBareMarkers() {
+        guard case let .bulletList(items) = RichTextParser.parse("[ ] one\n[x] two\n( ) three").first else {
+            Issue.record("expected one promoted list")
+            return
+        }
+        #expect(items.count == 3)
+        #expect(items.map(\.marker) == [.checkbox(false), .checkbox(true), .radio(false)])
+        #expect(items.map { String(RichTextProbe.inline(of: $0).characters) } == ["one", "two", "three"])
     }
 
     @Test("an ordered item can carry a tick too")
@@ -182,7 +212,7 @@ struct RichTextBlockTests {
             Issue.record("expected a bullet list")
             return
         }
-        guard case let .bulletList(children) = items[0].children.first else {
+        guard case let .bulletList(children) = items[0].blocks.last else {
             Issue.record("expected a nested list")
             return
         }
@@ -193,7 +223,7 @@ struct RichTextBlockTests {
 
     @Test("a u tag underlines its content and leaves no tag on screen")
     func underlineTag() {
-        let attributed = InlineMarkdown.render("say <u>this</u> now")
+        let attributed = inline("say <u>this</u> now")
         #expect(String(attributed.characters) == "say this now")
         let underlined = attributed.runs.filter { $0.underline == true }
         #expect(underlined.map { String(attributed[$0.range].characters) } == ["this"])
@@ -201,53 +231,89 @@ struct RichTextBlockTests {
 
     @Test("an unclosed u tag underlines to the end of the block")
     func unclosedUnderlineTag() {
-        let attributed = InlineMarkdown.render("say <u>this")
+        let attributed = inline("say <u>this")
         #expect(String(attributed.characters) == "say this")
         #expect(attributed.runs.contains { $0.underline == true })
     }
 
     @Test("a stray closing tag is left as the text it is")
     func strayClosingTag() {
-        let attributed = InlineMarkdown.render("a </u> b")
+        let attributed = inline("a </u> b")
         #expect(String(attributed.characters) == "a </u> b")
         #expect(!attributed.runs.contains { $0.underline == true })
     }
 
     @Test("a tag this renderer does not implement is left as written")
     func otherHTMLIsLiteral() {
-        #expect(String(InlineMarkdown.render("x <b>y</b> z").characters) == "x <b>y</b> z")
+        #expect(String(inline("x <b>y</b> z").characters) == "x <b>y</b> z")
     }
 
     // MARK: - Emphasis that has to be stated
 
     @Test("a struck run is given a strikethrough a Text will draw")
     func strikethroughIsStated() {
-        let styled = RichTextStyle.styled(InlineMarkdown.render("a ~~gone~~ b"), base: .body)
+        let styled = RichTextStyle.styled(inline("a ~~gone~~ b"), base: .body)
         let struck = styled.runs.filter { $0.strikethroughStyle != nil }
         #expect(struck.map { String(styled[$0.range].characters) } == ["gone"])
     }
 
     @Test("a code span is given an explicit prose face")
     func codeSpanUsesExplicitProseFace() {
-        let styled = RichTextStyle.styled(InlineMarkdown.render("run `git log` first"), base: .body)
+        let styled = RichTextStyle.styled(inline("run `git log` first"), base: .body)
         let monospaced = styled.runs.filter { $0.font != nil }
         #expect(monospaced.map { String(styled[$0.range].characters) } == ["git log"])
     }
 
     @Test("bold and italic are given named faces so Dynamic Type cannot drop their scale")
     func emphasisUsesExplicitFaces() {
-        let styled = RichTextStyle.styled(InlineMarkdown.render("**b** and *i*"), base: .body)
+        let styled = RichTextStyle.styled(inline("**b** and *i*"), base: .body)
         #expect(styled.runs.filter { $0.font != nil }.map { String(styled[$0.range].characters) } == ["b", "i"])
     }
 
     @Test("an underlined run is given an underline a Text will draw")
     func underlineIsStated() {
-        let styled = RichTextStyle.styled(InlineMarkdown.render("<u>x</u> y"), base: .body)
+        let styled = RichTextStyle.styled(inline("<u>x</u> y"), base: .body)
         let underlined = styled.runs.filter { $0.underlineStyle != nil }
         #expect(underlined.map { String(styled[$0.range].characters) } == ["x"])
     }
 
     // MARK: - Spacing
+
+    @Test("authored blank lines become bounded source spacers without leading or trailing air")
+    func authoredBlankLines() {
+        func spacerCount(_ markdown: String) -> Int {
+            RichTextParser.parse(markdown).count { $0 == .sourceBlankLine }
+        }
+
+        #expect(spacerCount("above\n\nbelow") == 0)
+        #expect(spacerCount("above\n\n\nbelow") == 1)
+        #expect(spacerCount("above\n\n\n\nbelow") == 2)
+        let sixBlankLines = (["above"] + Array(repeating: "", count: 6) + ["below"]).joined(separator: "\n")
+        #expect(spacerCount(sixBlankLines) == 2)
+
+        let blocks = RichTextParser.parse("\n\nabove\n\n\n\n\nbelow\n\n")
+        #expect(blocks.first == .paragraph(AttributedString("above")))
+        #expect(blocks.last == .paragraph(AttributedString("below")))
+        #expect(blocks.filter { $0 == .sourceBlankLine }.count == RichTextParser.maxBlankLineRun - 1)
+    }
+
+    @Test("a source spacer owns its height instead of gaining semantic pair spacing")
+    func sourceSpacerHasNoPairGap() {
+        let paragraph = RichBlock.paragraph(AttributedString("p"))
+        #expect(RichTextSpacing.gap(after: paragraph, before: .sourceBlankLine) == 0)
+        #expect(RichTextSpacing.gap(after: .sourceBlankLine, before: paragraph) == 0)
+    }
+
+    @Test("source spacers never add whitespace to the one-line snippet")
+    func sourceSpacerIsAbsentFromSnippet() {
+        let message = RichMessage(blocks: [
+            .sourceBlankLine,
+            .paragraph(AttributedString("first")),
+            .sourceBlankLine,
+            .paragraph(AttributedString("second"))
+        ])
+        #expect(String(message.flattenedInline().characters) == "first second")
+    }
 
     // MARK: - The heading ladder
 
@@ -288,7 +354,7 @@ struct RichTextBlockTests {
     @Test("a block that draws its own frame gets clear air on both sides")
     func boxedSpacing() {
         let paragraph = RichBlock.paragraph(AttributedString("p"))
-        let code = RichBlock.code("x", language: nil)
+        let code = RichBlock.code("x", info: nil)
         let table = RichBlock.table(RichTable(alignments: [.leading], header: [], rows: []))
         #expect(RichTextSpacing.gap(after: paragraph, before: code) == RichTextSpacing.aroundBoxed)
         #expect(RichTextSpacing.gap(after: table, before: paragraph) == RichTextSpacing.aroundBoxed)
@@ -297,7 +363,7 @@ struct RichTextBlockTests {
 
     @Test("a heading after a code block still opens a section")
     func headingBeatsBoxed() {
-        let code = RichBlock.code("x", language: nil)
+        let code = RichBlock.code("x", info: nil)
         let heading = RichBlock.heading(level: 1, AttributedString("H"))
         #expect(RichTextSpacing.gap(after: code, before: heading) == RichTextSpacing.beforeHeading)
     }

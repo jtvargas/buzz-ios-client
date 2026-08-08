@@ -1,6 +1,7 @@
 import BuzzKit
 import Foundation
 
+// swiftlint:disable type_body_length
 /// Serialises the parsed document tree into semantic HTML for ``MarkdownDocumentWebView``.
 ///
 /// The markdown parser remains the only place syntax is understood. This type translates its
@@ -57,6 +58,7 @@ enum MarkdownDocumentHTML {
           -webkit-text-size-adjust: 100%;
         }
         p, blockquote, ul, ol, pre, .table-scroll { margin: 0 0 16px; }
+        .source-blank-line { height: 1.5em; }
         a { color: \(palette.accent); text-decoration: none; }
         a:active { text-decoration: underline; }
         ::selection { background: color-mix(in srgb, \(palette.accent) 35%, transparent); }
@@ -122,17 +124,27 @@ enum MarkdownDocumentHTML {
     private struct Renderer {
         private var headingCounts: [String: Int] = [:]
 
-        mutating func block(_ block: RichBlock) -> String {
-            switch block {
+        // Exhaustive serialization of the renderer-neutral block model.
+        // swiftlint:disable:next cyclomatic_complexity
+        mutating func block(_ richBlock: RichBlock) -> String {
+            switch richBlock {
             case let .paragraph(text):
                 return "<p>\(inline(text))</p>"
             case let .heading(level, text):
                 let level = min(max(level, 1), 6)
                 return "<h\(level) id=\"\(headingID(for: text))\">\(inline(text))</h\(level)>"
-            case let .quote(text):
-                return "<blockquote>\(inline(text))</blockquote>"
-            case let .code(code, language):
-                let languageClass = language.map { " class=\"language-\(attribute($0))\"" } ?? ""
+            case let .quote(blocks):
+                let content: String
+                if case let .paragraph(text)? = blocks.count == 1 ? blocks.first : nil {
+                    content = inline(text)
+                } else {
+                    content = blocks.map { block($0) }.joined(separator: "\n")
+                }
+                return "<blockquote>\(content)</blockquote>"
+            case let .code(code, info):
+                let languageClass = info.map {
+                    " class=\"language-\(attribute($0.highlightLanguage))\""
+                } ?? ""
                 return "<pre><code\(languageClass)>\(text(code))</code></pre>"
             case let .bulletList(items):
                 return list(items, orderedStart: nil)
@@ -142,6 +154,8 @@ enum MarkdownDocumentHTML {
                 return tableHTML(table)
             case .rule:
                 return "<hr>"
+            case .sourceBlankLine:
+                return "<div class=\"source-blank-line\" aria-hidden=\"true\"></div>"
             case let .media(items):
                 return items.map(media).joined(separator: "\n")
             case let .linkPreview(preview):
@@ -154,8 +168,13 @@ enum MarkdownDocumentHTML {
             let start = orderedStart.map { $0 == 1 ? "" : " start=\"\($0)\"" } ?? ""
             let rows = items.map { item -> String in
                 let marker = markerHTML(item.marker)
-                let children = item.children.map { block($0) }.joined(separator: "\n")
-                return "<li>\(marker)\(inline(item.content))\(children)</li>"
+                let content: String
+                if case let .paragraph(text)? = item.blocks.count == 1 ? item.blocks.first : nil {
+                    content = inline(text)
+                } else {
+                    content = item.blocks.map { block($0) }.joined(separator: "\n")
+                }
+                return "<li>\(marker)\(content)</li>"
             }.joined(separator: "\n")
             return "<\(tag)\(start)>\n\(rows)\n</\(tag)>"
         }
@@ -286,3 +305,4 @@ enum MarkdownDocumentHTML {
         }
     }
 }
+// swiftlint:enable type_body_length

@@ -279,6 +279,6 @@ struct RichTextInteractiveTests {
             Issue.record("expected a bullet list")
             return
         }
-        #expect(links(items[0].content).count == 1)
+        #expect(links(RichTextProbe.inline(of: items[0])).count == 1)
     }
 }

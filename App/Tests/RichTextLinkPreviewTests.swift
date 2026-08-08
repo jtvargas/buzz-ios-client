@@ -72,6 +72,12 @@ struct RichTextLinkPreviewTests {
         #expect(found.map(\.title) == ["/one", "/two", "/three"])
     }
 
+    @Test("a link nested inside a quote and list still produces a card")
+    func nestedLink() {
+        let found = previewCards("> - [notes](https://example.com/nested)")
+        #expect(found.map(\.title) == ["notes"])
+    }
+
     /// The count is the obvious half. The title is the half that broke: joining runs by
     /// "the last candidate has this URL" rather than by adjacency splices the two link
     /// runs — with the words between them dropped — into `https://…/ahttps://…/a`, which

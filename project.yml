@@ -18,6 +18,23 @@ packages:
   GRDB:
     url: https://github.com/groue/GRDB.swift
     exactVersion: 7.11.1
+  # Apple's cmark-gfm wrapper — the CommonMark + GFM parser behind `RichTextParser`.
+  # A real AST replaced a hand-rolled line scanner so that what a message says and
+  # what it renders as are decided by a conformant parser rather than by the order
+  # of our own `if` branches.
+  #
+  # Pinned exactly for the same reason GRDB is: Xcode Cloud builds with automatic
+  # package resolution disabled and reads permitted versions out of the committed
+  # `Config/Package.resolved` (see ci_scripts/ci_post_clone.sh). Bumping this line
+  # means running `make pins` in the same commit, or the cloud build fails with no
+  # way to self-heal.
+  #
+  # It pulls two transitive packages, neither of which needs new trust: swift-cmark
+  # (the C parser) and swift-docc-plugin, which is a *command* plugin and so never
+  # runs during a build.
+  SwiftMarkdown:
+    url: https://github.com/swiftlang/swift-markdown
+    exactVersion: 0.8.0
 targets:
   Hive:
     type: application
@@ -44,6 +61,11 @@ targets:
       - package: NostrCore
       - package: BuzzKit
       - package: GRDB
+      # The product is `Markdown`, not the package key. `import Markdown` belongs in
+      # the parse layer ONLY: the module exports `Text`, `Image`, `Table` and `Link`,
+      # every one of which collides with SwiftUI in a file that imports both.
+      - package: SwiftMarkdown
+        product: Markdown
     info:
       path: App/Info.plist
       properties:

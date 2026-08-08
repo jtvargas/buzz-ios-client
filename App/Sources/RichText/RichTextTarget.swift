@@ -34,7 +34,7 @@ enum RichTextTarget: Hashable, Sendable {
 
     /// The private scheme the two identity cases travel under. Not a scheme anything
     /// outside this app answers, and deliberately not one a message author can spell:
-    /// ``InlineMarkdown`` strips it from authored markdown, so a link only ever
+    /// The markdown inline builder strips it from authored markdown, so a link only ever
     /// carries it when *this* app attached it to a resolved token.
     static let entityScheme = "hive-entity"
 
