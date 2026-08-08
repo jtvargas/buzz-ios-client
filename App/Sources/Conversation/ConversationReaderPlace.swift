@@ -31,20 +31,12 @@ import CoreGraphics
 /// patched copy of these files now (`~/.buzz/.scratch/harness-*/Sources/`), so a variant that
 /// was not built cannot compile.
 ///
-/// # What this type still gets wrong
-///
-/// A settling window closes on a run of readings whose height held still, and **a conversation
-/// at rest produces no readings at all** — `onScrollGeometryChange` fires on change. So a
-/// window opened by a reaction chip or an arriving reply stands until the reader touches
-/// something, and what they usually touch is the composer: the keyboard is then spent as that
-/// old commit settling, and a reader up in history is moved. Measured, five of thirteen shapes,
-/// all of them with a live store: **821–861 points for a 311-point keyboard**.
-///
-/// Closing the window on a container change fixes exactly that and costs more than it saves —
-/// measured, it takes the keyboard's own re-pin away from a reader who is *at* the newest
-/// message, and the blank conversation returns in four shapes. Narrowing it to re-pin only an
-/// at-bottom reader was also measured, and lands between the two (eight failures against one).
-/// Both attempts are recorded in `mem/buzz-ios-scroll-round3`; neither is in the tree.
+/// > Superseded. This section described a settling window that could be spent on the keyboard,
+/// moving a reader up in history by 821–861 points for a 311-point keyboard — five of thirteen
+/// measured shapes. **The inverted list closed it**, and the owner confirms it on device. The
+/// paragraph outlived the fix by nine days because nothing sends you back to a doc comment when
+/// the thing it describes is repaired somewhere else; the two failed remedies it recorded are
+/// in `mem/buzz-ios-scroll-round3` if the shape ever returns.
 ///
 /// The reason no arrangement of this file gets both cases to zero is that every input it has —
 /// `contentSize.height`, `contentOffset.y`, and the distance derived from them — is estimated
