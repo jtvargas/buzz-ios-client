@@ -150,6 +150,79 @@ struct PressFeedbackBody: View {
     }
 }
 
+/// The same press treatment, for the one control SwiftUI will not let carry
+/// ``PressFeedbackButtonStyle``.
+///
+/// A `Menu` with a `primaryAction` draws as a button and answers a tap like one, but a
+/// `PrimitiveButtonStyle` reaches a `Button` and nothing else. The Threads shortcut card is a
+/// menu rather than a button for a reason it cannot give up — a `.contextMenu` written inside
+/// a list row is installed on the *row*, so the hold was answered anywhere along a row the
+/// card shares with Later and Drafts, while a `Menu` is a control and its hold is bounded by
+/// its own label. So the card kept its hold and lost its dip. This is the ordinary
+/// `ButtonStyle` a menu *can* carry, drawing the same ``PressTreatment`` from the one signal
+/// a non-primitive style is given.
+///
+/// **What it gives up is the cancel.** `configuration.isPressed` goes false identically
+/// whether the finger lifted or the list took the touch away, so an abandoned press settles on
+/// the release curve rather than the faster ``PressFeedback/cancel``. On one card at the top of
+/// the sidebar that is a 220ms fade where a 60ms one was wanted; on a list of full-width rows
+/// it would be the highlight trailing a scrolling finger that ``PressFeedbackButtonStyle`` is
+/// primitive to avoid. Which is why this is the exception and not the treatment.
+struct PressFeedbackMenuStyle: ButtonStyle {
+    var emphasis: PressFeedbackButtonStyle.Emphasis = .control
+    /// The shape the wash is drawn in — the card's own radius, for the same reason
+    /// ``PressFeedbackButtonStyle/shape`` takes one.
+    var shape: AnyShape
+
+    func makeBody(configuration: Configuration) -> some View {
+        Treatment(label: configuration.label, isPressed: configuration.isPressed, emphasis: emphasis, shape: shape)
+    }
+
+    /// A `View` rather than the style's own return value, for the same reason
+    /// ``PressFeedbackBody`` is one: a `ButtonStyle` is not a view and can read no environment,
+    /// and Reduce Motion has to reach both halves of the treatment.
+    ///
+    /// Not named `Body`: a nested type by that name matches `ButtonStyle`'s own associated
+    /// type, and the compiler then requires it to be as visible as the style itself.
+    private struct Treatment: View {
+        let label: ButtonStyleConfiguration.Label
+        let isPressed: Bool
+        let emphasis: PressFeedbackButtonStyle.Emphasis
+        let shape: AnyShape
+
+        @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+        var body: some View {
+            label
+                .contentShape(.rect)
+                .modifier(
+                    PressTreatment(
+                        isShowing: isPressed,
+                        emphasis: emphasis,
+                        shape: shape,
+                        reduceMotion: reduceMotion
+                    )
+                )
+                // Evaluated against the value being moved *to*, so the press takes the fast
+                // spring and the release the slower one — the same pair ``PressFeedbackBody``
+                // chooses by hand.
+                .animation(PressFeedback.animation(pressed: isPressed, reduceMotion: reduceMotion), value: isPressed)
+                // The same 150ms a scroll view otherwise sits on the touch for; see
+                // ``ScrollTouchDeliveryView``. A card inside the sidebar list needs it exactly
+                // as much as a button does.
+                .immediateScrollTouchDelivery()
+        }
+    }
+}
+
+extension ButtonStyle where Self == PressFeedbackMenuStyle {
+    /// The app's press treatment for a `Menu` that draws as a button, washing in a shape the
+    /// control names for itself. See ``PressFeedbackMenuStyle``.
+    static func hiveMenuPress(in shape: some Shape) -> PressFeedbackMenuStyle {
+        PressFeedbackMenuStyle(shape: AnyShape(shape))
+    }
+}
+
 /// Reports SwiftUI's own press state upward and draws nothing.
 ///
 /// The whole reason ``PressFeedbackBody`` can observe a finger without costing the enclosing

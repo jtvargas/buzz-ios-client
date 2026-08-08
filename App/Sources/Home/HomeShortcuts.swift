@@ -33,31 +33,69 @@ struct HomeShortcutCards: View {
     var body: some View {
         HStack(spacing: Self.betweenCards) {
             ForEach(HomeShortcut.allCases) { shortcut in
-                // The hold is added *to the card the app already had*, and nothing about
-                // that card changes: same button, same press treatment, same label colour,
-                // same place in the scrolling list. ``ShortcutCardMenu`` carries the whole
-                // argument for why it is UIKit's own interaction and not `.contextMenu`.
                 if shortcut.offersMarkAllRead {
-                    card(shortcut).background {
-                        ShortcutCardMenu(
-                            title: "Mark All As Read",
-                            systemImage: "checkmark.circle",
-                            // Offered but inert at zero rather than absent. A menu item that
-                            // exists only while there is something to clear is one nobody
-                            // finds the first time they go looking for it.
-                            isEnabled: count(shortcut) > 0,
-                            action: markAllThreadsRead
-                        )
-                        // A vantage point, never a target — the same rule
-                        // ``ScrollTouchDelivery`` is held to. It must not be in the way of
-                        // the press it sits behind.
-                        .allowsHitTesting(false)
-                    }
+                    holdable(shortcut)
                 } else {
                     card(shortcut)
                 }
             }
         }
+    }
+
+    /// The one card with something under a hold. Same card, same place in the scrolling list,
+    /// and it is a `Menu` rather than a `Button` for one reason.
+    ///
+    /// **A `.contextMenu` cannot be bounded to it.** All three cards share one list row, and a
+    /// context menu written anywhere inside a row is installed *on the row*: holding Later or
+    /// Drafts opened the Threads menu, and the lift took all three cards and dropped them back
+    /// together — both measured on the owner's phone. It is the same mechanism that lets
+    /// ``ChannelListView`` write a context menu beside `.swipeActions` and mean the whole row
+    /// by it, useful there and wrong here. A `Menu` is a *control*, so its hold is bounded by
+    /// its own label; `primaryAction` is what keeps the tap, which a menu would otherwise spend
+    /// on opening itself.
+    ///
+    /// Taking the cards out of the list bounds it too, and that is the version the owner
+    /// rejected: out of the list they are out of its scroll view, and he does not want them
+    /// pinned above the conversations.
+    ///
+    /// The two modifiers under it are what a menu costs, and both were device-reported:
+    ///
+    /// - **the tint.** A menu tints its label, and `.primary` is not a colour — it is *the
+    ///   primary level of the enclosing foreground style* — so the card's own white and grey
+    ///   resolved to the accent and a dimmer accent. Naming a concrete colour is what stops it;
+    ///   the card's amber *border* is a `Color` and is untouched.
+    /// - **the press treatment.** ``PressFeedbackButtonStyle`` is a `PrimitiveButtonStyle`,
+    ///   which reaches a `Button` and nothing else, so the card kept its hold and lost its dip
+    ///   and its wash. A menu with a `primaryAction` draws as a button and carries an ordinary
+    ///   `ButtonStyle` — see ``PressFeedbackMenuStyle``.
+    private func holdable(_ shortcut: HomeShortcut) -> some View {
+        Menu {
+            // Not destructive, though it takes the row a delete usually occupies in a menu
+            // this shape: nothing is removed and nothing is published — a mark is this device
+            // saying it has looked.
+            Button("Mark All As Read", systemImage: "checkmark.circle") {
+                markAllThreadsRead()
+            }
+            // Offered but inert at zero rather than absent. A menu item that exists only while
+            // there is something to clear is one nobody finds the first time they go looking.
+            .disabled(count(shortcut) == 0)
+        } label: {
+            HomeShortcutCard(
+                shortcut: shortcut,
+                count: count(shortcut),
+                isCalling: isCalling(shortcut)
+            )
+            // The base the card's own `.primary` and `.secondary` resolve against — see above.
+            .foregroundStyle(Color.primary)
+        } primaryAction: {
+            press(shortcut)
+        }
+        // The menu's label is drawn by the button style, which is how the treatment gets on.
+        .menuStyle(.button)
+        .buttonStyle(.hiveMenuPress(in: .rect(cornerRadius: HomeShortcutCard.cornerRadius)))
+        // The other half of the tint: a button style is free to tint its own label, so the
+        // accent is taken out of the environment rather than only overridden inside it.
+        .tint(Color.primary)
     }
 
     /// A card with nothing under a hold: an ordinary button, and the app's press treatment.
