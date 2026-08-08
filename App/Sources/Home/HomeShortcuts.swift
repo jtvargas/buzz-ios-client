@@ -30,46 +30,51 @@ struct HomeShortcutCards: View {
     /// Reached by holding the Threads card; see ``HomeShortcut/offersMarkAllRead``.
     let markAllThreadsRead: () -> Void
 
+    /// The same relation ``HomeShortcutCard`` sizes itself by, so the hosted card grows with
+    /// its neighbours instead of clipping at an accessibility size.
+    @ScaledMetric(relativeTo: .subheadline) private var typeScale: CGFloat = 1
+
     var body: some View {
         HStack(spacing: Self.betweenCards) {
             ForEach(HomeShortcut.allCases) { shortcut in
                 // The hold is added *to the card the app already had*, and nothing about
                 // that card changes: same button, same press treatment, same label colour.
-                //
-                // **A `Menu` was tried here and was wrong twice over.** It tints its whole
-                // label with the accent, so the glyph and both lines went amber next to two
-                // white cards; and it carries no button, so ``PressFeedbackButtonStyle`` —
-                // a *button* style — had nothing to attach to and the dip and the wash went
-                // with it. Anything that replaces the control has to re-supply everything
-                // the control was already giving.
-                //
-                // What is bounded here instead is the *preview*: all three cards share one
-                // list row, so the lift takes the row's shape unless the card names its own.
+                // What changes is only where the card is hosted — see
+                // ``HostedShortcutCard``, which carries the whole argument.
                 if shortcut.offersMarkAllRead {
-                    card(shortcut)
-                        // The lifted shape under the menu — this card, in its own corner
-                        // radius, rather than the whole row it shares with two others.
-                        .contentShape(
-                            .contextMenuPreview,
-                            .rect(cornerRadius: HomeShortcutCard.cornerRadius)
-                        )
-                        .contextMenu {
-                            // Not destructive, though it takes the row a delete usually
-                            // occupies in a menu this shape: nothing is removed and nothing
-                            // is published — a mark is this device saying it has looked.
-                            Button("Mark All As Read", systemImage: "checkmark.circle") {
-                                markAllThreadsRead()
-                            }
-                            // Offered but inert at zero rather than absent. A menu item that
-                            // exists only while there is something to clear is one nobody
-                            // finds the first time they go looking for it.
-                            .disabled(count(shortcut) == 0)
-                        }
+                    HostedShortcutCard { menuedCard(shortcut) }
+                        // The hosting view has no idea what a card is worth, so it is given
+                        // the height the other two work out for themselves. Same
+                        // `@ScaledMetric` relation, so all three grow together.
+                        .frame(height: HomeShortcutCard.height * typeScale)
                 } else {
                     card(shortcut)
                 }
             }
         }
+    }
+
+    /// The card that answers a hold: the same card as any other, and the menu it offers.
+    ///
+    /// Drawn inside ``HostedShortcutCard``, which is the only reason the menu can mean this
+    /// card rather than the row all three share.
+    private func menuedCard(_ shortcut: HomeShortcut) -> some View {
+        card(shortcut)
+            // The lifted shape under the menu: the card's own corner radius rather than the
+            // square bounds of the view hosting it.
+            .contentShape(.contextMenuPreview, .rect(cornerRadius: HomeShortcutCard.cornerRadius))
+            .contextMenu {
+                // Not destructive, though it takes the row a delete usually occupies in a
+                // menu this shape: nothing is removed and nothing is published — a mark is
+                // this device saying it has looked.
+                Button("Mark All As Read", systemImage: "checkmark.circle") {
+                    markAllThreadsRead()
+                }
+                // Offered but inert at zero rather than absent. A menu item that exists only
+                // while there is something to clear is one nobody finds the first time they
+                // go looking for it.
+                .disabled(count(shortcut) == 0)
+            }
     }
 
     /// A card with nothing under a hold: an ordinary button, and the app's press treatment.
@@ -230,7 +235,9 @@ struct HomeShortcutCard: View {
     /// floor is the content — glyph, title, count, and the padding around them come to
     /// about 78 at default type — so this leaves a little air above the title and no more.
     /// The width is the row's own, divided.
-    private static let height: CGFloat = 86
+    /// Not private: ``HomeShortcutCards`` gives the hosted card this same height, because a
+    /// hosting view sizes itself from the slot it is given rather than from what is inside it.
+    static let height: CGFloat = 86
     /// The card's edge, and so the shape a press is washed in — see ``HomeShortcutCards``.
     /// Reachable from there for that reason alone: a wash drawn on a shape the card does not
     /// have is more visible than no wash at all.
