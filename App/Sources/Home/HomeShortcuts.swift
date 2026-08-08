@@ -30,21 +30,23 @@ struct HomeShortcutCards: View {
     /// Reached by holding the Threads card; see ``HomeShortcut/offersMarkAllRead``.
     let markAllThreadsRead: () -> Void
 
+    /// The same relation ``HomeShortcutCard`` sizes itself by, so the hosted card grows with
+    /// its neighbours instead of clipping at an accessibility size.
+    @ScaledMetric(relativeTo: .subheadline) private var typeScale: CGFloat = 1
+
     var body: some View {
         HStack(spacing: Self.betweenCards) {
             ForEach(HomeShortcut.allCases) { shortcut in
                 // The hold is added *to the card the app already had*, and nothing about
                 // that card changes: same button, same press treatment, same label colour.
-                //
-                // This only works because the cards are no longer a list row. A context menu
-                // written anywhere inside a row is installed on the row: holding Later
-                // opened the Threads menu, and the lift took all three cards and dropped
-                // them back together. Both measured on the owner's phone, 2026-08-08.
-                // Hosting this one card in its own `UIHostingController` did bound the menu
-                // and cost the card every touch it had — it drew correctly and answered
-                // nothing. See ``ChannelListView/conversations(names:resumable:)``.
+                // What changes is only where the card is hosted — see
+                // ``HostedShortcutCard``, which carries the whole argument.
                 if shortcut.offersMarkAllRead {
-                    menuedCard(shortcut)
+                    HostedShortcutCard { menuedCard(shortcut) }
+                        // The hosting view has no idea what a card is worth, so it is given
+                        // the height the other two work out for themselves. Same
+                        // `@ScaledMetric` relation, so all three grow together.
+                        .frame(height: HomeShortcutCard.height * typeScale)
                 } else {
                     card(shortcut)
                 }
@@ -53,6 +55,9 @@ struct HomeShortcutCards: View {
     }
 
     /// The card that answers a hold: the same card as any other, and the menu it offers.
+    ///
+    /// Drawn inside ``HostedShortcutCard``, which is the only reason the menu can mean this
+    /// card rather than the row all three share.
     private func menuedCard(_ shortcut: HomeShortcut) -> some View {
         card(shortcut)
             // The lifted shape under the menu: the card's own corner radius rather than the
@@ -230,7 +235,9 @@ struct HomeShortcutCard: View {
     /// floor is the content — glyph, title, count, and the padding around them come to
     /// about 78 at default type — so this leaves a little air above the title and no more.
     /// The width is the row's own, divided.
-    private static let height: CGFloat = 86
+    /// Not private: ``HomeShortcutCards`` gives the hosted card this same height, because a
+    /// hosting view sizes itself from the slot it is given rather than from what is inside it.
+    static let height: CGFloat = 86
     /// The card's edge, and so the shape a press is washed in — see ``HomeShortcutCards``.
     /// Reachable from there for that reason alone: a wash drawn on a shape the card does not
     /// have is more visible than no wash at all.
