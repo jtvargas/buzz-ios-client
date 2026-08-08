@@ -38,9 +38,10 @@ enum ConversationJumpControl: Equatable {
     /// the loaded rows, which is exactly where a reader waiting at the newest message is
     /// not.
     case seeking
-    /// The reach for that message ran out of history without finding it: `Message not
-    /// found`. Cleared by its owner after a moment — see ``ConversationSeek``.
-    case seekFailed
+    /// The reach for that message ended without it. Carries *which* ending, because the two
+    /// are different news — see ``ConversationSeekFailure``. Cleared by its owner after a
+    /// moment.
+    case seekFailed(ConversationSeekFailure)
     /// Arrivals are waiting behind the frozen tail: `N new messages`.
     case unread(Int)
     /// The reader is far enough up that the way back is worth offering, and nothing is
@@ -55,11 +56,42 @@ enum ConversationJumpControl: Equatable {
 ///
 /// Its own type rather than two flags because the three states are exclusive and the
 /// transitions between them are the whole behaviour: nothing → searching → found (back to
-/// nothing) or not found (which decays back to nothing on a timer the owner holds).
+/// nothing) or ended without it (which decays back to nothing on a timer the owner holds).
 enum ConversationSeek: Equatable {
     case none
     case searching
-    case failed
+    case failed(ConversationSeekFailure)
+}
+
+/// Why a reach for one particular message ended without it.
+///
+/// # Why this is two cases and not one message
+///
+/// They are answers to different questions, and saying the wrong one is worse than saying
+/// nothing. ``notFound`` is a *proof*: the walk loaded every row at or after the message's
+/// own place in this conversation and the message was not among them, so it is not here and
+/// pressing again cannot change that. ``unreachable`` is the absence of a proof — the relay
+/// would not answer, or the walk hit its bound before it got there — and the message may be
+/// perfectly present.
+///
+/// Reporting the second as the first is what a single `Message not found` did, and it is a
+/// lie a reader has no way to see through: a flaky minute reads exactly like a missing
+/// message.
+enum ConversationSeekFailure: Equatable {
+    /// The walk passed the message's place in history without it.
+    case notFound
+    /// The walk could not get that far: the relay kept failing, or it ran out of budget
+    /// before it arrived.
+    case unreachable
+
+    /// What the pill says. Held here rather than in the view so the two endings cannot
+    /// drift apart from the reasons that produce them.
+    var label: String {
+        switch self {
+        case .notFound: "Message not found"
+        case .unreachable: "Couldn’t reach that message"
+        }
+    }
 }
 
 /// The jump control's state, held apart from the rows a conversation renders.
@@ -109,7 +141,7 @@ final class ConversationJumpState {
     var control: ConversationJumpControl? {
         switch seek {
         case .searching: return .seeking
-        case .failed: return .seekFailed
+        case let .failed(reason): return .seekFailed(reason)
         case .none: break
         }
         if unreadCount > 0 { return .unread(unreadCount) }
@@ -166,8 +198,8 @@ struct ConversationJumpControls: View {
             case .seeking:
                 SeekingPill()
                     .transition(.scale(scale: 0.9).combined(with: .opacity))
-            case .seekFailed:
-                SeekFailedPill()
+            case let .seekFailed(reason):
+                SeekFailedPill(reason: reason)
                     .transition(.scale(scale: 0.9).combined(with: .opacity))
             case let .unread(count):
                 NewMessagesPill(count: count, action: onJumpToNew)
@@ -276,16 +308,18 @@ struct SeekingPill: View {
     }
 }
 
-/// What the surface says when the reach ran out of history without finding the message.
+/// What the surface says when the reach ended without the message.
 ///
-/// Says what happened rather than offering a retry: the reach already walked as far as the
-/// relay would give it, so a second press would walk the same ground to the same end. The
+/// Says what happened rather than offering a retry, in both endings: one is a proof that
+/// re-pressing cannot overturn, and the other has already re-tried inside the walk. The
 /// owner clears this after a moment — see ``ChannelTimelineModel/focus(on:)``.
 struct SeekFailedPill: View {
+    let reason: ConversationSeekFailure
+
     var body: some View {
-        JumpPillLabel(text: "Message not found", symbol: "exclamationmark.circle")
+        JumpPillLabel(text: reason.label, symbol: "exclamationmark.circle")
             .glassEffect(.regular, in: .capsule)
-            .accessibilityLabel("Message not found")
+            .accessibilityLabel(reason.label)
     }
 }
 

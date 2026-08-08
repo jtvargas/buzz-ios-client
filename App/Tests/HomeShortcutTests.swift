@@ -360,7 +360,7 @@ struct HomeShortcutTests {
 
         model.landOnOpener()
         #expect(model.jumpToken == before + 1)
-        #expect(model.jumpTarget == .message(opener.id))
+        #expect(model.jumpTarget == .message(opener.id, animated: true))
     }
 }
 

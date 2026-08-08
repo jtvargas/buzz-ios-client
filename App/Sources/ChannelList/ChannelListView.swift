@@ -219,7 +219,7 @@ struct ChannelListView: View {
                         selfPubkey: environment.selfPubkeyHex,
                         knownPeers: route.knownPeers,
                         focusingComposer: route.focusesComposer,
-                        focusing: route.focusMessageID
+                        focusing: route.focus
                     )
                 }
                 .toolbar {

@@ -112,30 +112,122 @@ extension ChannelTimelineModel {
     /// sees — the same reason ``ThreadModel/landOnOpener()`` is driven from a `.task` rather
     /// than from a prime.
     ///
+    /// # How it knows when to stop
+    ///
+    /// By `sentAt`, and only by it. The rows are held in the `(created_at, id)` total order
+    /// the page query itself pages by, so once the oldest loaded row is *older* than the
+    /// message's own key, every row at or after where the message would be is loaded — and it
+    /// is not among them. That is a proof, it costs one comparison, and it is what lets "not
+    /// here" be an answer rather than a guess made when something else ran out first.
+    ///
+    /// Everything else that ends the walk — the relay refusing, the page budget, the stall
+    /// budget — proves nothing about the message, and is reported as
+    /// ``ConversationSeekFailure/unreachable`` rather than as "not found".
+    ///
     /// Cancellation is the caller's `.task`: leaving the screen ends the walk where it
     /// stands, and what it did load is ordinary loaded history.
-    func focus(on messageID: String) async {
-        if land(on: messageID) { return }
+    func focus(on messageID: String, sentAt: Int64) async -> FocusOutcome {
+        if land(on: messageID) { return .landed }
         jump.setSeek(.searching)
+        let target = TimelineCursor(createdAt: sentAt, id: messageID)
+        var stalls = 0
+
         for _ in 0 ..< Self.focusPageBudget {
-            guard hasMoreOlder, !olderFailed, !Task.isCancelled else { break }
+            if Task.isCancelled { return settleCancelled() }
+            // Before the load rather than after it, so a message already behind the loaded
+            // floor when the walk starts costs no page at all.
+            if hasWalkedPast(target) { return await settleMissing(messageID) }
+            guard hasMoreOlder else { return await settleMissing(messageID) }
+
             let before = loaded.count
             await loadOlder()
-            if land(on: messageID) { return jump.setSeek(.none) }
-            // A pass that brought nothing back cannot be repeated into a different answer.
-            // ``loadOlder()`` already walks its own budget of relay pages while the reader is
-            // given nothing to see, so arriving here with the count unchanged means the pager
-            // ran out or failed — both of which it does report, but only on the pass after.
-            if loaded.count == before { break }
+            if land(on: messageID) { return .landed }
+
+            guard loaded.count == before else {
+                stalls = 0
+                continue
+            }
+            // A pass that brought nothing back is not the end of history — see
+            // ``ChannelTimelineModel/focusStallBudget`` for the three ordinary ways
+            // ``loadOlder()`` arrives here. Wait for whatever it was, then ask again.
+            stalls += 1
+            if stalls >= Self.focusStallBudget { return await report(.unreachable) }
+            try? await Task.sleep(for: Self.focusStallPause)
         }
-        guard !Task.isCancelled else { return jump.setSeek(.none) }
-        // Say so. A reach that quietly gives up cannot be told apart from one still running,
-        // and the reader is left at the newest message wondering why their tap did nothing.
-        // It clears itself rather than offering a retry: a second reach walks the same
-        // ground to the same end.
-        jump.setSeek(.failed)
+        return await report(.unreachable)
+    }
+
+    /// How ``focus(on:sentAt:)`` ended, for a caller that can do something about it.
+    enum FocusOutcome: Equatable {
+        /// The reader is looking at the message.
+        case landed
+        /// It is not on this surface, but the walk pulled it in on the way past and it names
+        /// a thread — so it is one of the replies this channel's page excludes by
+        /// construction, and its thread is where the reader was trying to go.
+        ///
+        /// This is the case a *relay* search result falls into. The index this device holds
+        /// answers with a thread root; the relay's search answers with event ids and nothing
+        /// else, so a reply that had never reached this device could only be sent to its
+        /// channel and left to fail there. It becomes knowable by the end of the walk,
+        /// because the walk is what stored it.
+        case inThread(root: String)
+        /// The walk ended without the message and there is nothing further to try. Already
+        /// reported on the surface; the caller has nothing to do.
+        case gaveUp
+    }
+
+    /// Whether the loaded floor has gone past where the message would be.
+    ///
+    /// Strictly past: a floor *equal* to the target is the target, which ``land(on:)`` has
+    /// already been asked about.
+    private func hasWalkedPast(_ target: TimelineCursor) -> Bool {
+        guard let earliest else { return false }
+        return (earliest.createdAt, earliest.id) < (target.createdAt, target.id)
+    }
+
+    /// The reader left. Saying anything about it would be saying it to whoever opens this
+    /// conversation next.
+    private func settleCancelled() -> FocusOutcome {
+        jump.setSeek(.none)
+        return .gaveUp
+    }
+
+    /// Proved absent from this conversation — so ask the one question that is left.
+    ///
+    /// The walk has been past this message's place, which means anything the store now holds
+    /// under that id was stored *by the walk*. A row here that names a thread is a reply the
+    /// channel page excludes — see the `NOT EXISTS` against `thread` in `fetchTimeline` — and
+    /// that is a surface to send the reader to rather than a failure to report.
+    private func settleMissing(_ messageID: String) async -> FocusOutcome {
+        if let root = threadRoot(of: messageID) {
+            jump.setSeek(.none)
+            return .inThread(root: root)
+        }
+        return await report(.notFound)
+    }
+
+    /// The thread a message belongs to, if this device holds the message and it names one.
+    ///
+    /// A read failure answers `nil`: the caller's next move is then to report that the
+    /// message was not found, which is what it would have reported anyway.
+    private func threadRoot(of messageID: String) -> String? {
+        guard let row = try? store.rows(for: [messageID], selfPubkey: selfPubkey).first else {
+            return nil
+        }
+        return row.rootID
+    }
+
+    /// Shows one of the two endings, and takes it away again.
+    ///
+    /// Says something rather than going quiet: a reach that gives up silently cannot be told
+    /// apart from one still running, and the reader is left at the newest message wondering
+    /// why their tap did nothing. Neither ending offers a retry — one is a proof a second
+    /// press cannot overturn, and the other has already re-tried inside the walk.
+    private func report(_ reason: ConversationSeekFailure) async -> FocusOutcome {
+        jump.setSeek(.failed(reason))
         try? await Task.sleep(for: .seconds(3))
         jump.setSeek(.none)
+        return .gaveUp
     }
 
     /// Scrolls to a loaded message and marks it; answers `false` when it is not loaded.

@@ -49,7 +49,7 @@ struct SearchView: View {
                         selfPubkey: selfPubkey,
                         knownPeers: route.knownPeers,
                         focusingComposer: route.focusesComposer,
-                        focusing: route.focusMessageID
+                        focusing: route.focus
                     )
                 }
                 .navigationDestination(item: $openedThread) { route in
@@ -233,20 +233,24 @@ struct SearchView: View {
             lastMessageAuthorPubkey: message.pubkey,
             channelType: message.isDirectMessage ? "dm" : nil
         )
-        open(channelID: message.channelID, fallback: fallback, focusing: message.id)
+        open(
+            channelID: message.channelID,
+            fallback: fallback,
+            focusing: ConversationFocus(messageID: message.id, sentAt: message.createdAt)
+        )
     }
 
     private func open(
         channelID: String,
         fallback: ChannelListRow? = nil,
-        focusing focusMessageID: String? = nil
+        focusing focus: ConversationFocus? = nil
     ) {
         // Deliberately does *not* clear focus. A push already resigns the field, and
         // forcing the state false on the way out left the field unable to take the keyboard
         // back when the reader returned to it.
         let route = ConversationRoute(
             channel: channelRow(for: channelID, fallback: fallback),
-            focusMessageID: focusMessageID
+            focus: focus
         )
         path = route.pushed(onto: path)
     }

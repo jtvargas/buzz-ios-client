@@ -64,8 +64,8 @@ struct ChannelTimelineView: View {
     private let knownPeers: [String]
     /// One message this conversation was opened *at*, when it was reached from search. The
     /// screen still opens at its newest message and this is walked back to from there — see
-    /// ``ChannelTimelineModel/focus(on:)``.
-    private let focusMessageID: String?
+    /// ``ChannelTimelineModel/focus(on:sentAt:)``.
+    private let focus: ConversationFocus?
 
     /// Reserved for the top-of-history sentinel. Constant, and present whenever an
     /// older page may exist: a spinner that appears and disappears is itself a content
@@ -83,7 +83,7 @@ struct ChannelTimelineView: View {
         selfPubkey: String?,
         knownPeers: [String] = [],
         focusingComposer focusesComposer: Bool = false,
-        focusing focusMessageID: String? = nil
+        focusing focus: ConversationFocus? = nil
     ) {
         self.init(
             channel: channel,
@@ -101,7 +101,7 @@ struct ChannelTimelineView: View {
             knownPeers: knownPeers,
             lifecycleEngine: engine,
             focusingComposer: focusesComposer,
-            focusing: focusMessageID
+            focusing: focus
         )
     }
 
@@ -131,10 +131,10 @@ struct ChannelTimelineView: View {
         knownPeers: [String] = [],
         lifecycleEngine: SyncEngine? = nil,
         focusingComposer focusesComposer: Bool = false,
-        focusing focusMessageID: String? = nil
+        focusing focus: ConversationFocus? = nil
     ) {
         self.focusesComposer = focusesComposer
-        self.focusMessageID = focusMessageID
+        self.focus = focus
         self.channel = channel
         channelID = channel.id
         self.store = store
@@ -276,14 +276,31 @@ struct ChannelTimelineView: View {
                 // dead bar.
                 joiner: lifecycleEngine,
                 lifecycleEngine: lifecycleEngine,
+                // Carried, because a thread can now be pushed from here *at* one of its
+                // replies — the walk below discovers that a message it was sent to find is
+                // one this page excludes. Every other push from this screen leaves it at
+                // the default.
+                landingOn: route.anchor,
                 focusingComposer: route.focusesComposer
             )
         }
         .task { await model.run() }
         // After the first render, never from the prime: the walk ends in a `jumpToken` bump,
         // and a bump made before the scaffold has installed its `onChange` is a change that
-        // observer never sees — see ``ChannelTimelineModel/focus(on:)``.
-        .task { if let focusMessageID { await model.focus(on: focusMessageID) } }
+        // observer never sees — see ``ChannelTimelineModel/focus(on:sentAt:)``.
+        .task {
+            guard let focus else { return }
+            // A message that turns out to be a thread reply is only discoverable once the
+            // walk has been past its place in history and stored it — see
+            // ``ChannelTimelineModel/FocusOutcome/inThread(root:)``. The other two endings
+            // have already said what they had to say on the surface itself.
+            guard case let .inThread(root) = await model.focus(
+                on: focus.messageID, sentAt: focus.sentAt
+            ) else { return }
+            openedThread = ThreadRoute(
+                root: root, channel: channelID, anchor: .reply(focus.messageID)
+            )
+        }
         .task { await presence.run() }
         // Here rather than inside ``TypingIndicatorView``, which is absent from the view
         // tree until somebody is typing and so could never start its own model — see the

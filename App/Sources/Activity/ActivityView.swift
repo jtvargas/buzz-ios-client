@@ -97,7 +97,7 @@ struct ActivityView: View {
                         selfPubkey: selfPubkey,
                         knownPeers: route.knownPeers,
                         focusingComposer: route.focusesComposer,
-                        focusing: route.focusMessageID
+                        focusing: route.focus
                     )
                 }
                 .navigationDestination(item: $openedThread) { route in

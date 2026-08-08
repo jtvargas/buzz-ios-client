@@ -210,7 +210,11 @@ final class ChannelTimelineModel {
     private(set) var loaded: [String: TimelineRow] = [:]
     /// The oldest loaded row's cursor, the basis of the next older page. Tracks the
     /// *full* loaded set, so a frozen tail never affects where pagination resumes.
-    private var earliest: TimelineCursor?
+    ///
+    /// `private(set)` rather than `private` because the walk in `+Jump.swift` reads it to
+    /// know when it has gone past the message it is looking for — Swift's `private` is
+    /// file-scoped. Writes stay here, with the rebuild that derives it.
+    private(set) var earliest: TimelineCursor?
     /// Set once history is proved to end above the oldest loaded row, and no later head
     /// re-read may re-open it. The proof is the relay's exhaustion fact, or — with no
     /// relay pager — a short local page.
@@ -458,16 +462,40 @@ final class ChannelTimelineModel {
     /// on screen. Enough to carry the cursor past a crowded boundary second or a stretch
     /// a background reconcile has already filled; small enough that the reader is never
     /// waiting on an unbounded walk.
-    private static let olderPageBudget = 5
+    /// Internal rather than `private` so the walk's own test can say what it means by "did
+    /// not stop at the first stall" in terms of this number, instead of a magic one that
+    /// silently stops testing anything if this moves.
+    static let olderPageBudget = 5
 
     /// How many pages ``focus(on:)`` may walk back looking for one message. At the page
     /// size that is a couple of thousand messages, which is far more history than a search
     /// result has ever sat behind in this app and still a bound rather than a promise —
     /// the walk can cost a relay round trip per page once it passes what the device holds.
     ///
+    /// A backstop rather than the terminator: the walk normally stops the moment it passes
+    /// the message's own place in history, which it can only do because the caller supplies
+    /// the timestamp. Running this out is reported as ``ConversationSeekFailure/unreachable``
+    /// and never as "not found", because it proves nothing about the message.
+    ///
     /// Internal, not `private`: the walk is in `ChannelTimelineModel+Jump.swift`, and
     /// Swift's `private` is file-scoped.
     static let focusPageBudget = 40
+    /// How many passes in a row may bring nothing back before ``focus(on:sentAt:)`` gives up.
+    ///
+    /// Not one. ``loadOlder()`` returns having loaded nothing in three situations that are
+    /// **not** the end of history, all of them ordinary: another caller's load was already in
+    /// flight and this one was turned away at the guard; its own relay budget went on window
+    /// pages that landed only rows already held, which is what a crowded boundary second
+    /// looks like; or a page failed and it left ``olderFailed`` set for a retry. Treating the
+    /// first stall as exhaustion is what ended the walk early and reported a message that was
+    /// there as missing.
+    static let focusStallBudget = 4
+    /// How long the walk waits before re-asking after a pass that brought nothing back.
+    ///
+    /// Long enough for an in-flight local page to land and for a failed relay page not to be
+    /// re-asked instantly; short enough that four of them are still under a second of a
+    /// reader's time on top of the reading itself.
+    static let focusStallPause = Duration.milliseconds(200)
     /// How close a landing has to be, in rows, to be worth animating.
     ///
     /// About two screens of ordinary messages. Beyond it the travel renders every row it
