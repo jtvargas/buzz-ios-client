@@ -22,7 +22,7 @@ struct SearchView: View {
         self.store = store
         self.engine = engine
         self.selfPubkey = selfPubkey
-        _model = State(initialValue: SearchModel(store: store, selfPubkey: selfPubkey))
+        _model = State(initialValue: SearchModel(store: store, selfPubkey: selfPubkey, engine: engine))
         _presence = State(initialValue: PresenceModel(store: engine.presenceStore))
         _router = State(initialValue: DirectMessageRouter(opener: engine))
     }
@@ -80,9 +80,9 @@ struct SearchView: View {
     @ViewBuilder
     private var content: some View {
         List {
-            if !model.results.messages.isEmpty {
+            if !model.messages.isEmpty {
                 Section("Messages") {
-                    ForEach(model.results.messages) { hit in
+                    ForEach(model.messages) { hit in
                         SearchMessageRow(hit: hit, names: entityNames) {
                             open(message: hit)
                         }
@@ -124,7 +124,10 @@ struct SearchView: View {
 
     @ViewBuilder
     private var stateOverlay: some View {
-        if model.results == .empty, !model.isSearching {
+        if model.messages.isEmpty,
+           model.results.people.isEmpty,
+           model.results.channels.isEmpty,
+           !model.isSearching {
             if let error = model.errorMessage {
                 ContentUnavailableView(
                     "Search unavailable",
@@ -143,7 +146,7 @@ struct SearchView: View {
         }
     }
 
-    private func open(message: MessageSearchHit) {
+    private func open(message: SearchMessageResult) {
         let fallback = ChannelListRow(
             id: message.channelID,
             name: nil,

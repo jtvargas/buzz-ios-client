@@ -1,4 +1,4 @@
-import BuzzKit
+@testable import BuzzKit
 @testable import Hive
 import Testing
 
@@ -72,6 +72,64 @@ struct SearchModelTests {
         #expect(!model.isSearching)
         #expect(!model.hasSearched)
         #expect(await probe.queries.isEmpty)
+    }
+
+    @Test("relay hits append in wire order and do not duplicate local ids")
+    func relayOrderAndDeduplication() async throws {
+        let database = TempStore()
+        defer { database.remove() }
+        let store = try database.open()
+        let first = relayHit(id: "first", ordinal: 0)
+        let duplicate = relayHit(id: "local", ordinal: 1)
+        let second = relayHit(id: "second", ordinal: 2)
+        let local = localSnapshot(id: duplicate.id)
+        let model = SearchModel(
+            store: store,
+            selfPubkey: "reader",
+            debounce: .zero,
+            lookup: { _ in local },
+            relayLookup: { _ in [second, duplicate, first] }
+        )
+
+        model.search("bees")
+        while model.isSearching { await Task.yield() }
+
+        #expect(model.messages.map(\.id) == ["local", "first", "second"])
+    }
+
+    private func relayHit(id: String, ordinal: Int) -> RelayMessageSearchHit {
+        RelayMessageSearchHit(
+            id: id,
+            channelID: "channel",
+            pubkey: "author",
+            createdAt: Int64(ordinal),
+            content: "bees",
+            matchRanges: [SearchMatchRange(location: 0, length: 4)],
+            ordinal: ordinal
+        )
+    }
+
+    private func localSnapshot(id: String) -> SearchSnapshot {
+        return SearchSnapshot(
+            results: LocalSearchResults(
+                messages: [MessageSearchHit(
+                    id: id,
+                    channelID: "channel",
+                    pubkey: "author",
+                    createdAt: 1,
+                    content: "bees",
+                    matchRanges: [SearchMatchRange(location: 0, length: 4)],
+                    rank: -1,
+                    authorName: nil,
+                    authorPicture: nil,
+                    isDirectMessage: false
+                )],
+                people: [],
+                channels: []
+            ),
+            directory: .empty,
+            channels: []
+        )
     }
 }
 

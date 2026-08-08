@@ -2,16 +2,16 @@ import BuzzKit
 import SwiftUI
 
 struct SearchMessageRow: View {
-    let hit: MessageSearchHit
+    let hit: SearchMessageResult
     let names: EntityNames
     let onOpen: () -> Void
 
     var body: some View {
         SearchResultButton(action: onOpen) {
             AvatarView(
-                url: hit.authorPicture.flatMap(URL.init(string:)),
+                url: hit.authorPicture.flatMap(URL.init(string:)) ?? names.picture(for: hit.pubkey),
                 seed: hit.pubkey,
-                monogram: EntityNames.initials(from: hit.authorName),
+                monogram: hit.authorName.map(EntityNames.initials(from:)) ?? names.initials(for: hit.pubkey),
                 size: 36
             )
             VStack(alignment: .leading, spacing: 3) {
@@ -56,10 +56,8 @@ struct SearchPersonRow: View {
                 size: 36
             )
             VStack(alignment: .leading, spacing: 3) {
-                Text(names.name(for: hit.person.pubkey))
-                    .font(.hive(.subheadline, weight: .semibold))
-                    .lineLimit(1)
-                SearchHighlightedText(text: hit.match.text, ranges: hit.match.ranges)
+                personTitle
+                personSecondary
                     .font(.hive(.caption))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -67,6 +65,30 @@ struct SearchPersonRow: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .accessibilityHint("Opens the profile")
+    }
+
+    @ViewBuilder
+    private var personTitle: some View {
+        if hit.match.field == .name || hit.match.field == .agentName {
+            SearchHighlightedText(text: hit.match.text, ranges: hit.match.ranges)
+                .font(.hive(.subheadline, weight: .semibold))
+                .lineLimit(1)
+        } else {
+            Text(names.name(for: hit.person.pubkey))
+                .font(.hive(.subheadline, weight: .semibold))
+                .lineLimit(1)
+        }
+    }
+
+    @ViewBuilder
+    private var personSecondary: some View {
+        if hit.match.field == .name || hit.match.field == .agentName {
+            if let label = names.secondaryLabel(for: hit.person.pubkey) {
+                Text(label)
+            }
+        } else {
+            SearchHighlightedText(text: hit.match.text, ranges: hit.match.ranges)
+        }
     }
 }
 
@@ -83,10 +105,8 @@ struct SearchChannelRow: View {
                 size: 36
             )
             VStack(alignment: .leading, spacing: 3) {
-                Text(hit.channel.name ?? "Untitled channel")
-                    .font(.hive(.subheadline, weight: .semibold))
-                    .lineLimit(1)
-                SearchHighlightedText(text: hit.match.text, ranges: hit.match.ranges)
+                channelTitle
+                channelSecondary
                     .font(.hive(.caption))
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
@@ -94,6 +114,30 @@ struct SearchChannelRow: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .accessibilityHint("Opens the channel")
+    }
+
+    @ViewBuilder
+    private var channelTitle: some View {
+        if hit.match.field == .name {
+            SearchHighlightedText(text: hit.match.text, ranges: hit.match.ranges)
+                .font(.hive(.subheadline, weight: .semibold))
+                .lineLimit(1)
+        } else {
+            Text(hit.channel.name ?? "Untitled channel")
+                .font(.hive(.subheadline, weight: .semibold))
+                .lineLimit(1)
+        }
+    }
+
+    @ViewBuilder
+    private var channelSecondary: some View {
+        if hit.match.field == .name {
+            if let detail = hit.channel.about ?? hit.channel.topic {
+                Text(detail)
+            }
+        } else {
+            SearchHighlightedText(text: hit.match.text, ranges: hit.match.ranges)
+        }
     }
 }
 

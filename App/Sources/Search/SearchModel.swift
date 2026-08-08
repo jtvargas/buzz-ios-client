@@ -10,11 +10,48 @@ struct SearchSnapshot: Sendable, Hashable {
     static let empty = SearchSnapshot(results: .empty, directory: .empty, channels: [])
 }
 
+struct SearchMessageResult: Sendable, Hashable, Identifiable {
+    let id: String
+    let channelID: String
+    let pubkey: String
+    let createdAt: Int64
+    let content: String
+    let matchRanges: [SearchMatchRange]
+    let authorName: String?
+    let authorPicture: String?
+    let isDirectMessage: Bool
+
+    init(_ hit: MessageSearchHit) {
+        id = hit.id
+        channelID = hit.channelID
+        pubkey = hit.pubkey
+        createdAt = hit.createdAt
+        content = hit.content
+        matchRanges = hit.matchRanges
+        authorName = hit.authorName
+        authorPicture = hit.authorPicture
+        isDirectMessage = hit.isDirectMessage
+    }
+
+    init(_ hit: RelayMessageSearchHit) {
+        id = hit.id
+        channelID = hit.channelID
+        pubkey = hit.pubkey
+        createdAt = hit.createdAt
+        content = hit.content
+        matchRanges = hit.matchRanges
+        authorName = nil
+        authorPicture = nil
+        isDirectMessage = false
+    }
+}
+
 /// Owns one trailing-edge local search and rejects answers for text that has moved on.
 @MainActor
 @Observable
 final class SearchModel {
     typealias Lookup = @Sendable (String) async throws -> SearchSnapshot
+    typealias RelayLookup = @Sendable (String) async throws -> [RelayMessageSearchHit]
 
     private(set) var current = ""
     private(set) var results: LocalSearchResults = .empty
@@ -24,18 +61,41 @@ final class SearchModel {
     private(set) var hasSearched = false
     private(set) var errorMessage: String?
 
+    var messages: [SearchMessageResult] {
+        let local = results.messages.map(SearchMessageResult.init)
+        let localIDs = Set(local.map(\.id))
+        let relay = relayMessages
+            .filter { !localIDs.contains($0.id) }
+            .sorted { $0.ordinal < $1.ordinal }
+            .map(SearchMessageResult.init)
+        return local + relay
+    }
+
     private let debounce: Duration
     private let lookup: Lookup
+    private let relayLookup: RelayLookup?
     private var task: Task<Void, Never>?
+    private var relayMessages: [RelayMessageSearchHit] = []
 
     init(
         store: BuzzEventStore,
         selfPubkey: String?,
+        engine: SyncEngine? = nil,
         debounce: Duration = .milliseconds(300),
-        lookup: Lookup? = nil
+        lookup: Lookup? = nil,
+        relayLookup: RelayLookup? = nil
     ) {
         self.debounce = debounce
         self.lookup = lookup ?? Self.liveLookup(store: store, selfPubkey: selfPubkey)
+        if let relayLookup {
+            self.relayLookup = relayLookup
+        } else if let engine {
+            self.relayLookup = { query in
+                try await engine.searchRelayMessages(query: query)
+            }
+        } else {
+            self.relayLookup = nil
+        }
     }
 
     /// Schedules a trailing search. Repeating the current text is a true no-op: the guard
@@ -62,6 +122,7 @@ final class SearchModel {
 
         guard query.count >= 2 else {
             results = .empty
+            relayMessages = []
             isSearching = false
             hasSearched = false
             return
@@ -71,28 +132,60 @@ final class SearchModel {
         // the new text while its trailing-edge search is pending.
         isSearching = true
         let lookup = lookup
+        let relayLookup = relayLookup
         // `query` is a call-site snapshot. Reading `current` inside this closure would make
         // the stale-answer guard below a tautology after a later keystroke.
         task = Task { [weak self] in
             if wait > .zero { try? await Task.sleep(for: wait) }
-            guard !Task.isCancelled else { return }
-            do {
-                let snapshot = try await lookup(query)
-                guard let self, !Task.isCancelled, self.current == query else { return }
-                self.results = snapshot.results
-                self.directory = snapshot.directory
-                self.channels = snapshot.channels
-                self.isSearching = false
-                self.hasSearched = true
-                self.task = nil
-            } catch {
-                guard let self, !Task.isCancelled, self.current == query else { return }
-                self.isSearching = false
-                self.hasSearched = true
-                self.errorMessage = "Search is unavailable right now."
-                self.task = nil
-            }
+            guard let self, !Task.isCancelled else { return }
+            await self.run(query, lookup: lookup, relayLookup: relayLookup)
         }
+    }
+
+    private func run(_ query: String, lookup: Lookup, relayLookup: RelayLookup?) async {
+        let relayTask = relayLookup.map { relayLookup in
+            Task { try await relayLookup(query) }
+        }
+        defer { relayTask?.cancel() }
+
+        do {
+            let snapshot = try await lookup(query)
+            guard !Task.isCancelled, current == query else { return }
+            results = snapshot.results
+            relayMessages = []
+            directory = snapshot.directory
+            channels = snapshot.channels
+            hasSearched = true
+            guard let relayTask else { return finish() }
+            await mergeRelay(from: relayTask, query: query)
+        } catch {
+            guard !Task.isCancelled, current == query else { return }
+            isSearching = false
+            hasSearched = true
+            errorMessage = "Search is unavailable right now."
+            task = nil
+        }
+    }
+
+    private func mergeRelay(
+        from relayTask: Task<[RelayMessageSearchHit], Error>,
+        query: String
+    ) async {
+        do {
+            let relay = try await relayTask.value
+            guard !Task.isCancelled, current == query else { return }
+            relayMessages = relay
+        } catch {
+            // Local search is the feature; a disconnected relay only removes reach beyond
+            // this device and must not turn a valid offline answer into an error.
+        }
+        guard !Task.isCancelled, current == query else { return }
+        finish()
+    }
+
+    private func finish() {
+        isSearching = false
+        task = nil
     }
 
     private nonisolated static func liveLookup(
