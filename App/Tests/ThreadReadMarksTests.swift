@@ -169,6 +169,101 @@ struct ThreadReadMarksTests {
         #expect(stillUnread.first?.newReplyCount == 1)
     }
 
+    /// The Threads card's **Mark All As Read**, against the store rather than a hand-built
+    /// list: the same read that feeds the card, cleared in one press, and still a mark
+    /// rather than a dismissal afterwards.
+    @Test("Mark All As Read clears every thread at once, and only this device's marks move")
+    @MainActor
+    func markAllSeenClearsTheCard() async throws {
+        let temp = TempStore()
+        defer { temp.remove() }
+        let store = try temp.open()
+        let relay = try Fixture()
+        let peer = try Fixture()
+        let reader = try Fixture()
+
+        let suiteName = "thread-marks-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let marks = ThreadReadMarks(defaults: defaults)
+
+        var batch = [try relay.channelMetadata("general", name: "General", at: 500)]
+        for index in 0 ..< 3 {
+            let opener = try reader.message("question \(index)", in: "general", at: 1_000 + Int64(index))
+            batch.append(opener)
+            batch.append(try peer.event(
+                .channelMessage, "an answer",
+                tags: [["h", "general"], ["e", opener.id, "", "reply"]], at: 2_000 + Int64(index)
+            ))
+        }
+        _ = try await store.ingest(batch: batch, phase: .backfill)
+
+        var threads = try store.unreadThreads(selfPubkey: reader.pubkey)
+        #expect(threads.count == 3)
+        #expect(marks.unseenCount(among: threads) == 3)
+
+        marks.markAllSeen(among: threads)
+        #expect(marks.unseenCount(among: threads) == 0)
+        // Marked no further than the reply that was there to be read: the next thing
+        // somebody else says lands past it, so the thread comes back on its own.
+        #expect(marks.marks.values.sorted() == [2_000, 2_001, 2_002])
+        // Nothing was published — the store's own count is untouched, exactly as it is
+        // when a single thread is opened.
+        #expect(try store.unreadThreads(selfPubkey: reader.pubkey).first?.newReplyCount == 1)
+        // And it survives a relaunch, like any other mark.
+        #expect(ThreadReadMarks(defaults: defaults).unseenCount(among: threads) == 0)
+
+        _ = try await store.ingest(batch: [
+            try peer.event(
+                .channelMessage, "one more thing",
+                tags: [["h", "general"], ["e", threads[0].rootID, "", "reply"]], at: 5_000
+            ),
+        ], phase: .live)
+        threads = try store.unreadThreads(selfPubkey: reader.pubkey)
+        #expect(marks.unseenCount(among: threads) == 1)
+    }
+
+    @Test("marking everything is grow-only, and writes nothing when there is nothing to clear")
+    @MainActor
+    func markAllSeenIsGrowOnlyAndSilentWhenClear() throws {
+        let suiteName = "thread-marks-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let marks = ThreadReadMarks(defaults: defaults)
+
+        marks.mark("read-further", seenUpTo: 900)
+        marks.markAllSeen(among: [
+            unread("fresh", latestReplyByOthersAt: 400),
+            // An older snapshot of a thread this device has already read past. A mark that
+            // moved here would resurface it the moment the list caught up.
+            unread("read-further", latestReplyByOthersAt: 500),
+        ])
+        #expect(marks.marks == ["read-further": 900, "fresh": 400])
+
+        // Nothing left to clear: the marks are already past every thread on the list, so
+        // there is no write and no change for the card to observe.
+        let before = defaults.dictionary(forKey: ThreadReadMarks.storageKey)
+        defaults.removeObject(forKey: ThreadReadMarks.storageKey)
+        marks.markAllSeen(among: [unread("fresh", latestReplyByOthersAt: 400)])
+        #expect(defaults.dictionary(forKey: ThreadReadMarks.storageKey) == nil)
+        #expect(marks.marks.count == 2)
+        // An empty list is the same no-op, not a reason to rewrite the blob.
+        marks.markAllSeen(among: [])
+        #expect(defaults.dictionary(forKey: ThreadReadMarks.storageKey) == nil)
+        defaults.set(before, forKey: ThreadReadMarks.storageKey)
+    }
+
+    /// An unread thread as the store would report it, for the cases that are about the
+    /// arithmetic rather than about the query.
+    private func unread(_ rootID: String, latestReplyByOthersAt: Int64) -> UnreadThread {
+        UnreadThread(
+            rootID: rootID,
+            newReplyCount: 1,
+            latestReplyAt: latestReplyByOthersAt,
+            latestReplyByOthersAt: latestReplyByOthersAt
+        )
+    }
+
     @Test("the marks are bounded, keeping the most recently active threads")
     func marksArePruned() {
         let capacity = ThreadReadMarks.capacity

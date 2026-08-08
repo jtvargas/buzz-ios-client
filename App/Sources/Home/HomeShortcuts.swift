@@ -26,25 +26,55 @@ struct HomeShortcutCards: View {
     /// tomorrow is waiting, not calling.
     let isCalling: (HomeShortcut) -> Bool
     let press: (HomeShortcut) -> Void
+    /// Clears every unread thread on this device — see ``ThreadReadMarks/markAllSeen(among:)``.
+    /// Reached by holding the Threads card; see ``HomeShortcut/offersMarkAllRead``.
+    let markAllThreadsRead: () -> Void
 
     var body: some View {
         HStack(spacing: Self.betweenCards) {
             ForEach(HomeShortcut.allCases) { shortcut in
-                Button { press(shortcut) } label: {
-                    HomeShortcutCard(
-                        shortcut: shortcut,
-                        count: count(shortcut),
-                        isCalling: isCalling(shortcut)
-                    )
+                // Only the card with something to offer gets the interaction at all. A
+                // `.contextMenu` with an empty builder is not nothing: the hold still lifts
+                // the card and blurs the screen behind it, then dismisses with no menu,
+                // which reads as a control that broke rather than one that was never there.
+                // The branch is decided by the case and not by any state, so a card's
+                // identity cannot change under it while it is on screen.
+                if shortcut.offersMarkAllRead {
+                    card(shortcut)
+                        .contextMenu {
+                            // Not destructive, though it takes the row a delete usually
+                            // occupies in a menu this shape: nothing is removed and nothing
+                            // is published — a mark is this device saying it has looked.
+                            Button("Mark All As Read", systemImage: "checkmark.circle") {
+                                markAllThreadsRead()
+                            }
+                            // Offered but inert at zero rather than absent. A menu item
+                            // that exists only while there is something to clear is one
+                            // nobody finds the first time they go looking for it.
+                            .disabled(count(shortcut) == 0)
+                        }
+                } else {
+                    card(shortcut)
                 }
-                // The card's own border is still the whole button — any bordered *system*
-                // style would draw a second background inside a card already drawing its
-                // edge — so the press treatment is the app's, in the card's own shape. The
-                // shared radius would put the wash a couple of points inside the drawn
-                // corner, which is the one place a mismatch is visible.
-                .buttonStyle(.hivePress(.control, in: .rect(cornerRadius: HomeShortcutCard.cornerRadius)))
             }
         }
+    }
+
+    /// One card, and the press treatment every card shares.
+    private func card(_ shortcut: HomeShortcut) -> some View {
+        Button { press(shortcut) } label: {
+            HomeShortcutCard(
+                shortcut: shortcut,
+                count: count(shortcut),
+                isCalling: isCalling(shortcut)
+            )
+        }
+        // The card's own border is still the whole button — any bordered *system*
+        // style would draw a second background inside a card already drawing its
+        // edge — so the press treatment is the app's, in the card's own shape. The
+        // shared radius would put the wash a couple of points inside the drawn
+        // corner, which is the one place a mismatch is visible.
+        .buttonStyle(.hivePress(.control, in: .rect(cornerRadius: HomeShortcutCard.cornerRadius)))
     }
 
     /// Between adjacent cards.
@@ -261,6 +291,18 @@ enum HomeShortcut: String, CaseIterable, Hashable, Identifiable {
     /// system ships a `.fill` cut of ``symbol``. The ones that can do not also spend the
     /// accent on their edge; see ``HomeShortcutCard/border``.
     var signalsWithGlyph: Bool { filledSymbol != nil }
+
+    /// Whether holding this card offers **Mark All As Read**.
+    ///
+    /// Threads alone, and this is a fact about the destinations rather than about the menu:
+    /// a card can offer to clear its contents only where "read" is something its contents
+    /// *have*. Later holds reminders, which are cleared by coming due or being deleted, and
+    /// Drafts holds text nobody has sent — neither has a read state to mark, so a menu on
+    /// them would be an action with nothing to act on.
+    ///
+    /// A property here rather than a `case .threads` in the drawing, so the rule is one a
+    /// test can read back and a fourth destination has to answer for itself.
+    var offersMarkAllRead: Bool { self == .threads }
 
     /// ``symbol``'s filled counterpart, or `nil` where the system has none. Resolved at
     /// runtime rather than assumed: asking for a name the system does not have draws
