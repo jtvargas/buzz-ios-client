@@ -86,6 +86,13 @@ struct MentionSuggestionsView: View {
 private struct MentionSuggestionRow: View {
     let suggestion: MentionSuggestion
 
+    /// The agent badge's view box, tracking the text style the `lock` beside it uses.
+    ///
+    /// Larger than that symbol's point size on purpose: lucide insets its ink inside the box
+    /// (``AgentGlyph/inkHeightRatio``), so a 16-point box draws a mark about as tall as a
+    /// 12-point symbol — which is what makes the two badges read as one size.
+    @ScaledMetric(relativeTo: .caption) private var agentMarkSide: CGFloat = 16
+
     /// The avatar/glyph edge, so the two kinds line their text up identically.
     private static var markSize: CGFloat { 30 }
 
@@ -145,8 +152,11 @@ private struct MentionSuggestionRow: View {
     @ViewBuilder
     private var trailingBadge: some View {
         if suggestion.isAgent {
-            Image(systemName: "sparkles")
-                .font(.hiveSymbol(.caption))
+            // The bot, not `sparkles`. Picking this row inserts a mention that *draws* this
+            // exact mark in place of its `@` (``RichTextEntityRenderer``), so the badge and
+            // the thing it commits to the draft are now the same glyph. Accent, as it was
+            // and as the rendered mention is — the shape changed here, not the colour.
+            AgentGlyphMark(side: agentMarkSide)
                 .foregroundStyle(.tint)
                 .accessibilityLabel("Agent")
         } else if suggestion.isPrivateChannel {
