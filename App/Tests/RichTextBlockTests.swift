@@ -109,13 +109,26 @@ struct RichTextBlockTests {
         #expect(!RichTextParser.parse(line).contains(.rule))
     }
 
-    @Test("a rule separates the paragraphs around it without swallowing either")
-    func ruleBetweenParagraphs() {
-        let blocks = RichTextParser.parse("above\n---\nbelow")
+    @Test("a blank-separated rule preserves the paragraphs around it")
+    func blankSeparatedRule() {
+        let blocks = RichTextParser.parse("above\n\n---\n\nbelow")
         #expect(blocks.count == 3)
         #expect(String(RichTextProbe.inline(of: blocks[0]).characters) == "above")
         #expect(blocks[1] == .rule)
         #expect(String(RichTextProbe.inline(of: blocks[2]).characters) == "below")
+    }
+
+    @Test("a consecutive dash underline is a setext heading, not a rule")
+    func consecutiveDashUnderlineIsSetext() {
+        let blocks = RichTextParser.parse("above\n---\nbelow")
+        #expect(blocks.count == 2)
+        guard case let .heading(level, heading) = blocks[0] else {
+            Issue.record("expected a setext heading")
+            return
+        }
+        #expect(level == 2)
+        #expect(String(heading.characters) == "above")
+        #expect(String(RichTextProbe.inline(of: blocks[1]).characters) == "below")
     }
 
     // MARK: - Task and radio items

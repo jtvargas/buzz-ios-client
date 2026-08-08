@@ -28,6 +28,16 @@ struct RichTextParserTests {
         #expect(String(text.characters) == "Section")
     }
 
+    @Test("a setext underline produces a heading")
+    func setextHeading() {
+        guard case let .heading(level, text) = RichTextParser.parse("Section\n=======").first else {
+            Issue.record("expected a setext heading")
+            return
+        }
+        #expect(level == 1)
+        #expect(String(text.characters) == "Section")
+    }
+
     @Test("more than six hashes is not a heading")
     func tooManyHashes() {
         let blocks = RichTextParser.parse("####### not a heading")
@@ -91,6 +101,25 @@ struct RichTextParserTests {
         #expect(blocks == [.code("code line 1\ncode line 2", info: nil)])
     }
 
+    @Test("a tilde fence produces a code block")
+    func tildeFence() {
+        let blocks = RichTextParser.parse("~~~swift\nlet x = 1\n~~~")
+        #expect(blocks == [.code("let x = 1", info: CodeFenceInfo(rawInfoString: "swift"))])
+    }
+
+    @Test("a four-backtick fence can contain a three-backtick fence")
+    func longBacktickFence() {
+        let blocks = RichTextParser.parse("````markdown\n```\ninside\n```\n````")
+        #expect(blocks == [
+            .code("```\ninside\n```", info: CodeFenceInfo(rawInfoString: "markdown"))
+        ])
+    }
+
+    @Test("four-space indented source produces a code block")
+    func indentedCode() {
+        #expect(RichTextParser.parse("    let x = 1") == [.code("let x = 1", info: nil)])
+    }
+
     @Test("a > line is a block quote")
     func blockQuote() {
         guard case let .quote(blocks) = RichTextParser.parse("> quoted words").first else {
@@ -98,6 +127,15 @@ struct RichTextParserTests {
             return
         }
         #expect(String(RichTextProbe.inline(of: blocks[0]).characters) == "quoted words")
+    }
+
+    @Test("an unmarked line lazily continues the block quote")
+    func lazyBlockQuoteContinuation() {
+        guard case let .quote(blocks) = RichTextParser.parse("> first\ncontinued").first else {
+            Issue.record("expected a quote")
+            return
+        }
+        #expect(String(RichTextProbe.inline(of: blocks[0]).characters) == "first\ncontinued")
     }
 
     @Test("a mixed document parses into the expected block sequence")
