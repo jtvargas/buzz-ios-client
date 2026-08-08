@@ -27,19 +27,47 @@ enum HomeTab: String, CaseIterable, Hashable, Identifiable {
     }
 
     /// The outlined symbol, which is also the stem the filled variant is derived from.
-    var symbol: String {
+    ///
+    /// `nil` for a tab drawn from the app's own artwork — see ``icon(isSelected:)``.
+    var symbol: String? {
         switch self {
-        case .home: "house"
+        case .home: nil
         case .activity: "bell"
         case .search: "magnifyingglass"
         }
     }
 
-    /// The symbol for this tab given which tab is selected.
-    func symbol(isSelected: Bool) -> String {
+    /// What this tab draws, given whether it is the selected one.
+    ///
+    /// # Why Home is not a symbol
+    ///
+    /// Because the owner's house is not one. `home` and `home.fill` are not in the system
+    /// library — checked against the 9,184 names in `CoreGlyphs`, where `house` has existed
+    /// since 2019 and `home` has never existed — so the artwork ships with the app, traced to
+    /// template assets that take the tab bar's tint exactly as a symbol does.
+    ///
+    /// The pair is the same idea as `.fill`: outline when the tab is not selected, solid when
+    /// it is. Keeping that rule here rather than at the call site is what stops Home drifting
+    /// from the two tabs beside it.
+    func icon(isSelected: Bool) -> HomeTabIcon {
+        guard let symbol else {
+            return .asset(isSelected ? "TabHomeFill" : "TabHome")
+        }
         // `magnifyingglass.fill` does not exist. The search role supplies its own selected
         // treatment, so deriving a missing variant would make the detached control blank.
-        guard self != .search else { return symbol }
-        return isSelected ? "\(symbol).fill" : symbol
+        guard self != .search else { return .symbol(symbol) }
+        return .symbol(isSelected ? "\(symbol).fill" : symbol)
     }
+}
+
+/// Where a tab's glyph comes from.
+///
+/// Two cases because the app has two kinds, and a `String` cannot say which it is: an asset
+/// name handed to `Image(systemName:)` renders nothing at all, silently, which is a blank tab
+/// nobody notices until it ships.
+enum HomeTabIcon: Equatable {
+    /// A name in the system symbol library.
+    case symbol(String)
+    /// A template image in the app's own asset catalogue.
+    case asset(String)
 }

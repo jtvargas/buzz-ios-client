@@ -12,27 +12,50 @@ struct HomeNavigationTests {
 
     @Test("the selected tab is filled and the others are not")
     func selectedTabIsFilled() {
-        #expect(HomeTab.home.symbol(isSelected: false) == "house")
-        #expect(HomeTab.home.symbol(isSelected: true) == "house.fill")
-        #expect(HomeTab.activity.symbol(isSelected: false) == "bell")
-        #expect(HomeTab.activity.symbol(isSelected: true) == "bell.fill")
-        #expect(HomeTab.search.symbol(isSelected: false) == "magnifyingglass")
-        #expect(HomeTab.search.symbol(isSelected: true) == "magnifyingglass")
+        // Home draws the app's own artwork: `home` and `home.fill` are not system symbols —
+        // `house` has been in the library since 2019 and `home` has never been in it — so the
+        // owner's pair ships in the asset catalogue. The *rule* is the same as `.fill`'s, and
+        // that is what this pins.
+        #expect(HomeTab.home.icon(isSelected: false) == .asset("TabHome"))
+        #expect(HomeTab.home.icon(isSelected: true) == .asset("TabHomeFill"))
+        #expect(HomeTab.activity.icon(isSelected: false) == .symbol("bell"))
+        #expect(HomeTab.activity.icon(isSelected: true) == .symbol("bell.fill"))
+        #expect(HomeTab.search.icon(isSelected: false) == .symbol("magnifyingglass"))
+        #expect(HomeTab.search.icon(isSelected: true) == .symbol("magnifyingglass"))
     }
 
-    @Test("every symbol either tab can draw exists on this system")
-    func tabSymbolsExist() {
+    @Test("every glyph either tab can draw exists")
+    func tabGlyphsExist() {
         // A `.fill` variant that does not exist renders as nothing at all, silently — the
         // trap ``ThreadView/threadSymbol`` is pinned against, and one a derived name is
-        // especially exposed to.
+        // especially exposed to. An asset name is exposed to the identical trap through a
+        // different door: a typo, or an imageset that never made it into the bundle, is also
+        // a blank tab and no error. Both are checked, each the only way its kind can be.
         for tab in HomeTab.allCases {
             for selected in [true, false] {
-                let symbol = tab.symbol(isSelected: selected)
-                #expect(UIImage(systemName: symbol) != nil, "\(symbol) is missing")
+                switch tab.icon(isSelected: selected) {
+                case let .symbol(name):
+                    #expect(UIImage(systemName: name) != nil, "symbol \(name) is missing")
+                case let .asset(name):
+                    #expect(UIImage(named: name) != nil, "asset \(name) is missing")
+                }
             }
         }
         #expect(UIImage(systemName: ActivityView.symbol) != nil)
         #expect(UIImage(systemName: ChannelListView.communitySymbol) != nil)
+    }
+
+    @Test("the home tab's artwork is a template, so the tab bar tints it")
+    func homeArtworkIsTemplate() {
+        // Without this the icon ships as-drawn — solid black on a dark tab bar, and no
+        // selected state at all, because the tint that says "you are here" is applied to a
+        // template's alpha and to nothing else. It is one key in `Contents.json` and nothing
+        // in the running app complains when it is absent.
+        for name in ["TabHome", "TabHomeFill"] {
+            let image = UIImage(named: name)
+            #expect(image != nil, "asset \(name) is missing")
+            #expect(image?.renderingMode == .alwaysTemplate, "\(name) is not a template")
+        }
     }
 
     @Test("the workspace's own heading is the only one drawn in the accent")

@@ -205,8 +205,17 @@ struct RootView: View {
         }
     }
 
+    @ViewBuilder
     private func label(for item: HomeTab) -> some View {
-        Label(item.title, systemImage: item.symbol(isSelected: tab == item))
+        switch item.icon(isSelected: tab == item) {
+        case let .symbol(name):
+            Label(item.title, systemImage: name)
+        case let .asset(name):
+            // `Label(_:image:)`, so the tab bar gets an image it can size and tint itself.
+            // The asset is template-rendered, which is what makes it take the selected tint
+            // the way the symbols either side of it do.
+            Label(item.title, image: name)
+        }
     }
 }
 
