@@ -46,24 +46,14 @@ struct ComposerDictationControls: View {
     private var center: some View {
         switch phase {
         case .preparing:
-            VStack(spacing: 3) {
-                Text("Preparing dictation")
-                    .font(.hive(.caption, weight: .medium))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                if let preparationProgress {
-                    ProgressView(value: preparationProgress)
-                        .progressViewStyle(.linear)
-                        .tint(.accentColor)
-                } else {
-                    ProgressView()
-                        .controlSize(.small)
-                }
-            }
-            .accessibilityElement(children: .combine)
+            // Nothing. Preparing is drawn inside the button that was pressed — see
+            // ``MessageComposerView/dictationButton`` — at the owner's word: the answer to a
+            // press belongs on the thing that was pressed, and putting it where the waveform
+            // will be announces a surface that is not ready to be shown.
+            EmptyView()
         case .listening:
             DictationWaveform(levels: levels)
-                .frame(height: 26)
+                .frame(height: DictationWaveform.maxHeight)
                 .accessibilityElement()
                 .accessibilityLabel("Listening")
         case .finishing:
@@ -80,29 +70,63 @@ struct ComposerDictationControls: View {
     }
 }
 
-/// A compact amplitude history, not a frequency spectrum. One Canvas keeps the fixed
-/// 24-bar audiogram cheap while the model replaces samples at a capped paint rate.
-private struct DictationWaveform: View {
+/// A compact amplitude history, not a frequency spectrum.
+///
+/// # Where these numbers come from
+///
+/// Measured off the owner's reference at @3x rather than chosen: bars **3pt** wide on a
+/// **5pt** pitch — so a 2pt gap, and ink is 60% of the pitch — reaching **28pt** at the
+/// loudest. Silence is not a hairline but a **dot**: the bar's floor is its own width, which
+/// draws as a circle because the capsule's radius is half that width. That dotted run through
+/// the quiet parts is most of what makes the reference read as a considered drawing rather
+/// than a level meter.
+///
+/// # Why the bar count is derived rather than fixed
+///
+/// The pitch is the constant, not the number of bars, so the drawing keeps its density on any
+/// width — a narrower composer shows fewer bars of the same size instead of the same bars
+/// stretched. The owner's note was that the waves should read as *more and shorter*, and a
+/// fixed count is exactly what stops that being true.
+struct DictationWaveform: View {
     let levels: [Float]
+
+    /// Ink width of one bar.
+    static let barWidth: CGFloat = 3
+    /// Centre-to-centre spacing. `barWidth` of ink and 2 of air.
+    static let pitch: CGFloat = 5
+    /// The loudest a bar is drawn.
+    static let maxHeight: CGFloat = 28
+
+    /// How many bars fit a given width — the model's sample budget, so the buffer holds
+    /// exactly what is drawn and no history is kept that nobody sees.
+    static func barCount(forWidth width: CGFloat) -> Int {
+        max(1, Int((width + pitch - Self.barWidth) / pitch))
+    }
 
     var body: some View {
         Canvas { context, size in
             guard !levels.isEmpty else { return }
-            let spacing: CGFloat = 2
-            let width = max(
-                1,
-                (size.width - spacing * CGFloat(levels.count - 1)) / CGFloat(levels.count)
-            )
-            for (index, level) in levels.enumerated() {
-                let height = max(2, size.height * CGFloat(0.12 + level * 0.88))
+            // Right-aligned: the newest sample is the one under the reader's eye, and a
+            // partially filled buffer should grow leftward from `now` rather than sit in the
+            // left corner while the rest of the track stays blank.
+            let count = min(levels.count, Self.barCount(forWidth: size.width))
+            let drawn = levels.suffix(count)
+            let used = CGFloat(count) * Self.pitch - (Self.pitch - Self.barWidth)
+            let origin = size.width - used
+
+            for (offset, level) in drawn.enumerated() {
+                let height = max(
+                    Self.barWidth,
+                    min(Self.maxHeight, size.height) * CGFloat(level)
+                )
                 let rect = CGRect(
-                    x: CGFloat(index) * (width + spacing),
+                    x: origin + CGFloat(offset) * Self.pitch,
                     y: (size.height - height) / 2,
-                    width: width,
+                    width: Self.barWidth,
                     height: height
                 )
                 context.fill(
-                    Path(roundedRect: rect, cornerRadius: width / 2),
+                    Path(roundedRect: rect, cornerRadius: Self.barWidth / 2),
                     with: .color(.accentColor.opacity(0.92))
                 )
             }

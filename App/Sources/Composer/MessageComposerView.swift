@@ -311,7 +311,7 @@ struct MessageComposerView: View {
     /// carry only ever came off the `Spacer`, so the `+` and send have not moved.
     private var controls: some View {
         ZStack {
-            if dictation.isActive {
+            if dictation.showsDictationRow {
                 ComposerDictationControls(
                     phase: dictation.phase,
                     levels: dictation.levels,
@@ -348,17 +348,32 @@ struct MessageComposerView: View {
         }
     }
 
+    /// The microphone, and — while the speech model is being fetched — the answer to having
+    /// pressed it.
+    ///
+    /// The owner's call, and the right one: a press is answered on the thing that was pressed.
+    /// The spinner used to sit in the middle of the row, where the waveform goes, which
+    /// announced that surface before it had anything to draw and left the button looking
+    /// inert. The glyph is replaced rather than covered, so the control keeps its size and the
+    /// row does not move.
     private var dictationButton: some View {
         Button(action: startDictation) {
-            Image(systemName: "waveform")
-                .font(.hiveSymbol(.body, weight: .semibold))
-                .foregroundStyle(.secondary)
-                .frame(width: controlDiameter, height: controlDiameter)
-                .frame(width: hitTarget, height: hitTarget)
+            Group {
+                if dictation.isPreparing {
+                    ProgressView()
+                        .controlSize(.small)
+                } else {
+                    Image(systemName: "waveform")
+                        .font(.hiveSymbol(.body, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .frame(width: controlDiameter, height: controlDiameter)
+            .frame(width: hitTarget, height: hitTarget)
         }
         .buttonStyle(.hivePress(.control, in: .circle))
-        .disabled(!isEnabled)
-        .accessibilityLabel("Start dictation")
+        .disabled(!isEnabled || dictation.isPreparing)
+        .accessibilityLabel(dictation.isPreparing ? "Preparing dictation" : "Start dictation")
     }
 
     /// The `+`, and the card, picker and notice it presents — all of which live in

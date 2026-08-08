@@ -24,12 +24,32 @@ final class ComposerDictationModel {
 
     private(set) var phase: Phase = .idle
     private(set) var document: MentionDraft?
-    private(set) var levels = Array(repeating: Float.zero, count: 24)
+    /// The amplitude history the waveform draws, oldest first.
+    ///
+    /// Sized to what a composer-width track actually shows at the drawing's own pitch rather
+    /// than to a round number — see ``DictationWaveform``. Holding more would be history
+    /// nobody sees; holding fewer would stretch the drawing and lose the density the owner
+    /// asked for. A narrow screen simply draws the newest of these.
+    private(set) var levels = Array(
+        repeating: Float.zero,
+        count: DictationWaveform.barCount(forWidth: 260)
+    )
     private(set) var preparationProgress: Double?
     var notice: ComposerDictationNotice?
 
     var isActive: Bool { phase != .idle }
     var canFinish: Bool { phase == .listening }
+    /// Whether the speech model is still being fetched. Drawn inside the microphone button
+    /// rather than in the row, so the press is answered where it was made.
+    var isPreparing: Bool {
+        if case .preparing = phase { return true }
+        return false
+    }
+    /// Whether the ✕ / waveform / ✓ row replaces the ordinary controls.
+    ///
+    /// Not simply ``isActive``: `preparing` deliberately keeps the ordinary row, because a
+    /// waveform with nothing to draw yet is a surface arriving before it has anything to say.
+    var showsDictationRow: Bool { isActive && !isPreparing }
 
     private var baseline = MentionDraft()
     private var insertionRange = NSRange(location: 0, length: 0)
