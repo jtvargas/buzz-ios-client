@@ -570,7 +570,7 @@ private extension ChannelListView {
         }
     }
 
-    /// The toolbar's trailing pair: your history, and you. It presents its own popover.
+    /// The toolbar's trailing pair: your history, and you. The clock is its own menu.
     func homeControls(names: EntityNames) -> some View {
         HomeToolbarControls(
             names: names,
@@ -585,9 +585,9 @@ private extension ChannelListView {
     /// The history for the community shown, less anything that has since left the sidebar,
     /// each place resolved to the name and mark the app is using for it right now.
     ///
-    /// Called from the clock's action and nowhere else. Resolving here — rather than inside
-    /// the popover, a row at a time — is what keeps the presented content still: see
-    /// ``RecentPlacesHistory``.
+    /// Read while the clock's menu is built. A menu updates in place, so this is free to
+    /// answer differently from one build to the next — see ``RecentPlacesMenu`` for why
+    /// that was not true of the popover this replaced.
     func recentPlaceRows(names: EntityNames) -> [RecentPlaceRow] {
         environment.recents
             .resolved(among: model.visibleChannels, in: environment.communities.activeID)
