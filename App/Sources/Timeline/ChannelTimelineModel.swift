@@ -490,6 +490,18 @@ final class ChannelTimelineModel {
     /// first stall as exhaustion is what ended the walk early and reported a message that was
     /// there as missing.
     static let focusStallBudget = 4
+    /// How long ``focus(on:sentAt:)`` may keep a reader waiting before it stops and says so.
+    ///
+    /// The page budget is not a bound on *time*: every page past what the device holds is a
+    /// relay round trip, and ``loadOlder()`` may spend five of them on one page, so the
+    /// budget alone permits a walk of a minute or more. Nothing about a message is worth
+    /// that much of a reader's attention when the alternative is telling them plainly that
+    /// it could not be reached — which is honest, and leaves them where they can act.
+    ///
+    /// Generous against what a walk actually costs: the local pages that carry most of them
+    /// are a millisecond each, so this is spent almost entirely on a relay that is being
+    /// slow, which is exactly the case it exists to end.
+    static let focusDeadline = Duration.seconds(15)
     /// How long the walk waits before re-asking after a pass that brought nothing back.
     ///
     /// Long enough for an in-flight local page to land and for a failed relay page not to be

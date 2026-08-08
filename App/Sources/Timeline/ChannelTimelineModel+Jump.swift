@@ -130,10 +130,12 @@ extension ChannelTimelineModel {
         if land(on: messageID) { return .landed }
         jump.setSeek(.searching)
         let target = TimelineCursor(createdAt: sentAt, id: messageID)
+        let deadline = ContinuousClock.now + Self.focusDeadline
         var stalls = 0
 
         for _ in 0 ..< Self.focusPageBudget {
             if Task.isCancelled { return settleCancelled() }
+            if ContinuousClock.now >= deadline { return await report(.unreachable) }
             // Before the load rather than after it, so a message already behind the loaded
             // floor when the walk starts costs no page at all.
             if hasWalkedPast(target) { return await settleMissing(messageID) }
