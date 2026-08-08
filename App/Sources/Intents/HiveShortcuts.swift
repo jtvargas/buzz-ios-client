@@ -16,10 +16,13 @@ import AppIntents
 /// is the reason that check is first in the device pass.
 ///
 /// **`systemImageName` is a literal because the compiler requires one** — it is declared
-/// `_const Swift.String` in the framework, so `HomeShortcut.threads.symbol`, which is where
-/// that name really lives, is a compile error here rather than a silent drift. The pin runs
-/// the other way instead: `AppDestinationTests` asserts the card still carries
-/// `"text.append"`, so changing the card fails a test that names this file.
+/// `_const Swift.String` in the framework, so a reference to wherever the name really lives is
+/// a compile error here rather than a silent drift.
+///
+/// For Threads that gap is now permanent: the card draws the owner's own artwork, and this
+/// takes a system symbol and nothing else — an App Intent tile cannot show an asset. So the
+/// tile keeps `text.append`, which is the nearest system drawing, and `AppIntentsTests` pins
+/// only that the name still resolves.
 /// An SF Symbol the system does not have draws nothing at all, silently — the same trap
 /// ``HomeShortcut/symbol(hasItems:)`` is already pinned against.
 struct HiveShortcuts: AppShortcutsProvider {

@@ -49,7 +49,7 @@ enum HomeTab: String, CaseIterable, Hashable, Identifiable {
     /// The pair is the same idea as `.fill`: outline when the tab is not selected, solid when
     /// it is. Keeping that rule here rather than at the call site is what stops Home drifting
     /// from the two tabs beside it.
-    func icon(isSelected: Bool) -> HomeTabIcon {
+    func icon(isSelected: Bool) -> AppGlyph {
         guard let symbol else {
             return .asset(isSelected ? "TabHomeFill" : "TabHome")
         }
@@ -58,16 +58,4 @@ enum HomeTab: String, CaseIterable, Hashable, Identifiable {
         guard self != .search else { return .symbol(symbol) }
         return .symbol(isSelected ? "\(symbol).fill" : symbol)
     }
-}
-
-/// Where a tab's glyph comes from.
-///
-/// Two cases because the app has two kinds, and a `String` cannot say which it is: an asset
-/// name handed to `Image(systemName:)` renders nothing at all, silently, which is a blank tab
-/// nobody notices until it ships.
-enum HomeTabIcon: Equatable {
-    /// A name in the system symbol library.
-    case symbol(String)
-    /// A template image in the app's own asset catalogue.
-    case asset(String)
 }

@@ -104,7 +104,13 @@ struct HomeToolbarControls: View {
     /// The size ``AccountAvatarButton`` draws its picture at, so the two controls are the
     /// same size inside the capsule and the pair is symmetrical about its middle.
     private static let controlSize: CGFloat = 28
-    /// The glyph is drawn smaller than the control it sits in, at the owner's word: a face
-    /// fills its circle and a line drawing at the same size reads heavier than one.
-    private static let glyphPointSize: CGFloat = 17
+    /// How big the drawing is inside its control.
+    ///
+    /// It was 17 — measured on the owner's screenshot as 0.61 of the avatar's diameter, which
+    /// is exactly 17/28 — on the argument that a face fills its circle and a line drawing at
+    /// the same size reads heavier than one. His word now is that it should sit closer to the
+    /// avatar beside it, so: **24 of the control's 28**, which is 0.86. Not the whole 28. The
+    /// earlier reason has not stopped being true, and a stroke drawing flush to the avatar's
+    /// diameter reads as the larger of the two rather than as its equal.
+    private static let glyphPointSize: CGFloat = 24
 }

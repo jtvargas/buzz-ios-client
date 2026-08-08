@@ -1,5 +1,6 @@
 import AppIntents
 import Testing
+import UIKit
 @testable import Hive
 
 /// The routing vocabulary, and the one asymmetry worth failing a build over.
@@ -31,17 +32,24 @@ import Testing
         }
     }
 
-    /// The symbol the Siri tile is drawn with, pinned from the card's side.
+    /// The symbols the Siri tiles are drawn with, pinned from the card's side.
     ///
     /// ``HiveShortcuts`` cannot be read back — `AppShortcut` publishes initialisers and no
-    /// properties — and `systemImageName` is declared `_const`, so the literal there cannot
-    /// be replaced by a reference to this value. Pinning the *card* to the same literal is
-    /// the half that can be asserted: change ``HomeShortcut/symbol`` and this fails, naming
-    /// the file that has to change with it.
+    /// properties — and `systemImageName` is declared `_const`, so the literal there cannot be
+    /// replaced by a reference to this value. Pinning the *card* to the same literal is the
+    /// half that can be asserted: change the card and this fails, naming the file that has to
+    /// change with it.
+    ///
+    /// **Threads is deliberately no longer in that pair.** Its card draws the app's own
+    /// artwork, and `systemImageName` takes a system symbol and nothing else — an App Intent
+    /// tile cannot show an asset. So the two have separated on purpose, and asserting they
+    /// still match would be asserting something the platform forbids. What is still worth
+    /// pinning is that the literal over there names a symbol that exists, since one that does
+    /// not is a Siri tile with no picture and no error.
     @Test func theCardsStillCarryTheShortcutSymbols() {
-        #expect(HomeShortcut.threads.symbol == "text.append")
         #expect(HomeShortcut.later.symbol == "bookmark")
         #expect(HomeShortcut.drafts.symbol == "paperplane")
+        #expect(UIImage(systemName: "text.append") != nil)
     }
 }
 

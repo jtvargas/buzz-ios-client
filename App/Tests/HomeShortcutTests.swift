@@ -56,32 +56,48 @@ struct HomeShortcutTests {
         #expect(HomeShortcutCard.accessibilityLabel(.later, count: 0) == "Later, 0 items")
     }
 
-    @Test("every shortcut names a symbol the system actually has")
-    func symbolsExist() {
-        // A missing symbol name renders as nothing at all, silently — the same trap
-        // ``ThreadView/threadSymbol`` is pinned against.
+    @Test("every glyph a card can draw resolves to something")
+    func glyphsExist() {
+        // A name that resolves to nothing renders as nothing at all, silently — the same trap
+        // ``ThreadView/threadSymbol`` is pinned against. Two kinds now, each checked the only
+        // way its kind can be: a symbol against the system library, an asset against the
+        // bundle. Handing either name to the other call draws a blank card and no error.
         for shortcut in HomeShortcut.allCases {
-            #expect(UIImage(systemName: shortcut.symbol) != nil, "\(shortcut.symbol) is missing")
+            for hasItems in [true, false] {
+                switch shortcut.glyph(hasItems: hasItems) {
+                case let .symbol(name):
+                    #expect(UIImage(systemName: name) != nil, "symbol \(name) is missing")
+                case let .asset(name):
+                    #expect(UIImage(named: name) != nil, "asset \(name) is missing")
+                }
+            }
         }
+    }
+
+    @Test("the card's own artwork is a template, so it takes the card's colour")
+    func ownArtworkIsTemplate() {
+        // Without this the drawing ships as-drawn — black on a dark card, which is invisible
+        // rather than wrong-coloured. One key in `Contents.json`, and nothing at runtime says
+        // it is missing.
+        let image = UIImage(named: HomeShortcut.threadsGlyph)
+        #expect(image != nil)
+        #expect(image?.renderingMode == .alwaysTemplate)
     }
 
     @Test("a card with items draws the .fill cut, and the outline when it is empty")
     func symbolFollowsTheCount() {
         // Empty is always the outline.
-        #expect(HomeShortcut.drafts.symbol(hasItems: false) == "paperplane")
-        #expect(HomeShortcut.later.symbol(hasItems: false) == "bookmark")
+        #expect(HomeShortcut.drafts.glyph(hasItems: false) == .symbol("paperplane"))
+        #expect(HomeShortcut.later.glyph(hasItems: false) == .symbol("bookmark"))
         // With items, the filled cut — the second signal beside the card's accent edge.
-        #expect(HomeShortcut.drafts.symbol(hasItems: true) == "paperplane.fill")
-        #expect(HomeShortcut.later.symbol(hasItems: true) == "bookmark.fill")
-        // `text.append` has no `.fill` counterpart. String-appending `.fill` onto it and
-        // trusting the result draws nothing at all — this pins the fallback, not the glue.
-        #expect(HomeShortcut.threads.symbol(hasItems: true) == "text.append")
-        for shortcut in HomeShortcut.allCases {
-            for hasItems in [true, false] {
-                let name = shortcut.symbol(hasItems: hasItems)
-                #expect(UIImage(systemName: name) != nil, "\(name) is missing")
-            }
-        }
+        #expect(HomeShortcut.drafts.glyph(hasItems: true) == .symbol("paperplane.fill"))
+        #expect(HomeShortcut.later.glyph(hasItems: true) == .symbol("bookmark.fill"))
+        // Threads draws the owner's own artwork, which ships one cut — so it keeps the same
+        // drawing either way, exactly as `text.append` did for want of a `.fill` counterpart.
+        // The card still says "there is something here" with its accent edge.
+        #expect(HomeShortcut.threads.glyph(hasItems: true) == .asset(HomeShortcut.threadsGlyph))
+        #expect(HomeShortcut.threads.glyph(hasItems: false) == .asset(HomeShortcut.threadsGlyph))
+        #expect(!HomeShortcut.threads.signalsWithGlyph)
     }
 
     @Test("Drafts counts items, like Later")

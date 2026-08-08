@@ -113,7 +113,13 @@ struct DraftsView: View {
     private var emptyState: some View {
         if model.hasLoaded, model.summaries.isEmpty {
             ContentUnavailableView {
-                Label("No drafts", systemImage: HomeShortcut.drafts.symbol)
+                // Through the card's own glyph rather than a second name for it, now that a
+                // shortcut's drawing may not be a system symbol at all.
+                Label {
+                    Text("No drafts")
+                } icon: {
+                    HomeShortcut.drafts.glyph(hasItems: false).image
+                }
             } description: {
                 Text("Messages you start and don't send will wait here.")
             }
