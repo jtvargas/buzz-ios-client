@@ -523,14 +523,17 @@ private extension ChannelListView {
         if model.visibleChannels.isEmpty {
             emptyState
         } else {
-            List {
+            // The cards sit above the list, not in it — ``HomeShortcutCards`` says why.
+            VStack(spacing: 0) {
                 shortcuts
-                ForEach(sidebarContent(names: names).sections) { section in
-                    sectionCell(section, resumable: resumable)
+                List {
+                    ForEach(sidebarContent(names: names).sections) { section in
+                        sectionCell(section, resumable: resumable)
+                    }
                 }
+                .listStyle(.plain)
+                .refreshable { await engine.refresh() }
             }
-            .listStyle(.plain)
-            .refreshable { await engine.refresh() }
         }
     }
 
@@ -602,14 +605,12 @@ private extension ChannelListView {
         ))
     }
 
-    /// The Threads and Later cards, in one row above the conversations — one list row
-    /// holding both, because they are a set of destinations rather than two rows.
+    /// The shortcut cards, in one band above the conversations. The padding is the numbers
+    /// they carried as a list row, so they sit exactly where they did.
     var shortcuts: some View {
         HomeShortcutCards(count: count(for:), isCalling: isCalling(_:), press: press(_:),
                           markAllThreadsRead: { threadReads.markAllSeen(among: model.unreadThreads) })
-            .listRowInsets(Self.cardsInsets)
-            .listRowSeparator(.hidden)
-            .listRowBackground(Color.clear)
+            .padding(Self.cardsInsets)
     }
 
     /// The communities panel, sized against the real screen.
