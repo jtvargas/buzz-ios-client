@@ -31,31 +31,45 @@ enum HomeTab: String, CaseIterable, Hashable, Identifiable {
     /// `nil` for a tab drawn from the app's own artwork — see ``icon(isSelected:)``.
     var symbol: String? {
         switch self {
-        case .home: nil
-        case .activity: "bell"
+        case .home, .activity: nil
         case .search: "magnifyingglass"
         }
     }
 
     /// What this tab draws, given whether it is the selected one.
     ///
-    /// # Why Home is not a symbol
+    /// # Why two of the three are not symbols
     ///
-    /// Because the owner's house is not one. `home` and `home.fill` are not in the system
-    /// library — checked against the 9,184 names in `CoreGlyphs`, where `house` has existed
-    /// since 2019 and `home` has never existed — so the artwork ships with the app, traced to
+    /// Because the owner's drawings are not in the library. `home` and `home.fill` are not
+    /// among the 9,184 names in `CoreGlyphs` — `house` has been there since 2019 and `home`
+    /// has never been — and neither is his tray. So that artwork ships with the app, traced to
     /// template assets that take the tab bar's tint exactly as a symbol does.
     ///
-    /// The pair is the same idea as `.fill`: outline when the tab is not selected, solid when
-    /// it is. Keeping that rule here rather than at the call site is what stops Home drifting
-    /// from the two tabs beside it.
+    /// The pairs are the same idea as `.fill`: outline when the tab is not selected, solid
+    /// when it is. Keeping that rule here rather than at the call site is what stops the
+    /// drawn tabs drifting from the symbol beside them.
     func icon(isSelected: Bool) -> AppGlyph {
         guard let symbol else {
-            return .asset(isSelected ? "TabHomeFill" : "TabHome")
+            return .asset(isSelected ? Self.filledArtwork[self]! : Self.artwork[self]!)
         }
         // `magnifyingglass.fill` does not exist. The search role supplies its own selected
         // treatment, so deriving a missing variant would make the detached control blank.
         guard self != .search else { return .symbol(symbol) }
         return .symbol(isSelected ? "\(symbol).fill" : symbol)
     }
+}
+
+private extension HomeTab {
+    /// The app's own artwork for a tab that has no system symbol, unselected.
+    ///
+    /// A dictionary rather than a `switch` returning a name, because the two halves have to
+    /// agree — a tab in one and not the other is a tab that draws nothing in one of its two
+    /// states — and two tables sharing a key set is a thing a test can check. It does, in
+    /// `HomeNavigationTests`.
+    static let artwork: [HomeTab: String] = [.home: "TabHome", .activity: "TabActivity"]
+    /// The same, selected.
+    static let filledArtwork: [HomeTab: String] = [
+        .home: "TabHomeFill",
+        .activity: "TabActivityFill",
+    ]
 }

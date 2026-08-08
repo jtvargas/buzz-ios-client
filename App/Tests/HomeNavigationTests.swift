@@ -18,8 +18,8 @@ struct HomeNavigationTests {
         // that is what this pins.
         #expect(HomeTab.home.icon(isSelected: false) == .asset("TabHome"))
         #expect(HomeTab.home.icon(isSelected: true) == .asset("TabHomeFill"))
-        #expect(HomeTab.activity.icon(isSelected: false) == .symbol("bell"))
-        #expect(HomeTab.activity.icon(isSelected: true) == .symbol("bell.fill"))
+        #expect(HomeTab.activity.icon(isSelected: false) == .asset("TabActivity"))
+        #expect(HomeTab.activity.icon(isSelected: true) == .asset("TabActivityFill"))
         #expect(HomeTab.search.icon(isSelected: false) == .symbol("magnifyingglass"))
         #expect(HomeTab.search.icon(isSelected: true) == .symbol("magnifyingglass"))
     }
@@ -41,8 +41,36 @@ struct HomeNavigationTests {
                 }
             }
         }
-        #expect(UIImage(systemName: ActivityView.symbol) != nil)
+        // The two headings that name a screen rather than a conversation, checked the same
+        // way their kinds require.
+        switch ActivityView.glyph {
+        case let .symbol(name): #expect(UIImage(systemName: name) != nil)
+        case let .asset(name): #expect(UIImage(named: name) != nil, "asset \(name) is missing")
+        }
         #expect(UIImage(systemName: ChannelListView.communitySymbol) != nil)
+    }
+
+    @Test("every tab that draws its own artwork has both cuts, and both are templates")
+    func tabArtworkIsComplete() {
+        // The two tables have to agree: a tab in one and not the other draws nothing in one of
+        // its two states, and nothing at runtime says so. And a drawing shipped non-template
+        // is black on a dark bar with no selected tint at all — one key in `Contents.json`,
+        // invisible until somebody looks at the tab bar.
+        for tab in HomeTab.allCases where tab.symbol == nil {
+            for selected in [true, false] {
+                guard case let .asset(name) = tab.icon(isSelected: selected) else {
+                    Issue.record("\(tab) has no symbol, so it must name artwork")
+                    continue
+                }
+                let image = UIImage(named: name)
+                #expect(image != nil, "asset \(name) is missing")
+                #expect(image?.renderingMode == .alwaysTemplate, "\(name) is not a template")
+            }
+        }
+        // And the selected cut is a *different* drawing, or the tab never changes.
+        for tab in HomeTab.allCases where tab.symbol == nil {
+            #expect(tab.icon(isSelected: true) != tab.icon(isSelected: false))
+        }
     }
 
     @Test("the home tab's artwork is a template, so the tab bar tints it")
@@ -68,15 +96,12 @@ struct HomeNavigationTests {
         // The other three headings — Activity, a thread, a channel — write their mark plainly
         // as `.symbol(name)`, so the *default* is what keeps them out of the accent. Pinned
         // here because flipping that default would recolour three screens silently.
-        for symbol in [ActivityView.symbol, "number"] {
-            #expect(ConversationTitleBar.Mark.symbol(symbol) == .symbol(symbol, accented: false))
+        #expect(ConversationTitleBar.Mark.symbol("number") == .symbol("number", accented: false))
+        // The thread's and Activity's marks are the app's own artwork rather than symbols, and
+        // take the same default from the other side of the enum.
+        for glyph in [ThreadView.threadGlyph, ActivityView.glyph] {
+            #expect(ConversationTitleBar.Mark.glyph(glyph) == .glyph(glyph, accented: false))
         }
-        // The thread's mark is the app's own artwork rather than a symbol, and takes the same
-        // default from the other side of the enum.
-        #expect(
-            ConversationTitleBar.Mark.glyph(ThreadView.threadGlyph)
-                == .glyph(ThreadView.threadGlyph, accented: false)
-        )
     }
 
     @Test("the home heading carries a cached community mark")
