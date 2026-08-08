@@ -222,11 +222,9 @@ struct ChannelListView: View {
                     )
                 }
                 .toolbar {
-                    // One item, because two would push the heading towards the overflow
-                    // menu ``ConversationTitleBar`` exists to stay out of — so the face
-                    // carries the connection state that used to be a pill beside it.
+                    // Still one item, holding two — ``HomeToolbarControls`` draws the capsule.
                     ToolbarItem(placement: .topBarTrailing) {
-                        accountButton(names: names)
+                        homeControls(names: names)
                             // Leaves with the heading opposite it, at the same rate and for
                             // the same reason: the bar belongs to the sidebar, and the panel
                             // is covering the sidebar. Faded rather than removed so the bar's
@@ -235,8 +233,8 @@ struct ChannelListView: View {
                             .allowsHitTesting(workspacePanel.progress < 0.5)
                             .accessibilityHidden(workspacePanel.progress >= 0.5)
                     }
-                    // The account button draws its own hexagonal glass, so the toolbar's
-                    // automatic circular background must stay hidden.
+                    // The pair draws its own glass, so the toolbar's automatic background
+                    // must stay hidden.
                     .sharedBackgroundVisibility(.hidden)
                 }
                 .sheet(isPresented: $showAccount) {
@@ -344,8 +342,12 @@ struct ChannelListView: View {
         .onChange(of: path) { previous, current in
             resume.observe(path: current, previously: previous)
         }
+        // Two readers of one value: where the reader *is* decides whether a banner repeats
+        // something already on screen, and it is also the definition of a place visited.
+        // Here rather than at the call sites that push, so no route can be left uninstrumented.
         .onChange(of: notificationLocation, initial: true) { _, location in
             visibleNotificationLocation = location
+            environment.recents.visit(location, in: environment.communities.activeID)
         }
         .onChange(of: notificationRoute, initial: true) { _, route in
             guard let route else { return }
@@ -568,17 +570,36 @@ private extension ChannelListView {
         }
     }
 
-    /// You, in the toolbar: the account sheet, with the engine's state as a dot.
-    func accountButton(names: EntityNames) -> some View {
-        let me = environment.selfPubkeyHex ?? ""
-        return AccountAvatarButton(
+    /// The toolbar's trailing pair: your history, and you. The clock is its own menu.
+    func homeControls(names: EntityNames) -> some View {
+        HomeToolbarControls(
+            names: names,
             state: environment.engineState,
-            picture: names.picture(for: me),
-            seed: me,
-            monogram: names.initials(for: me)
-        ) {
-            showAccount = true
-        }
+            selfPubkey: environment.selfPubkeyHex ?? "",
+            history: { recentPlaceRows(names: names) },
+            openPlace: openRecent,
+            openAccount: { showAccount = true }
+        )
+    }
+
+    /// The history for the community shown, less anything that has since left the sidebar,
+    /// each place resolved to the name and mark the app is using for it right now.
+    ///
+    /// Read while the clock's menu is built. A menu updates in place, so this is free to
+    /// answer differently from one build to the next — see ``RecentPlacesMenu`` for why
+    /// that was not true of the popover this replaced.
+    func recentPlaceRows(names: EntityNames) -> [RecentPlaceRow] {
+        environment.recents
+            .resolved(among: model.visibleChannels, in: environment.communities.activeID)
+            .map { RecentPlaceRow(place: $0, conversation: names.conversation(for: $0.channelID)) }
+    }
+
+    /// The same jump a tapped banner is: to a conversation or a thread, closing what was open.
+    func openRecent(_ place: RecentPlace) {
+        openNotification(InAppNotificationRoute(
+            location: place.location,
+            fallbackChannel: conversationRow(for: place.channelID)
+        ))
     }
 
     /// The Threads and Later cards, in one row above the conversations — one list row
@@ -870,19 +891,16 @@ private extension ChannelListView {
 private extension ChannelListView {
     /// Opens one navigation request originating outside this view tree.
     ///
-    /// The route itself is derived in ``ChannelListView/route(for:)`` — it reads nothing this
-    /// view holds, and this file is six lines from swiftlint's `file_length` error.
+    /// The route is derived in ``ChannelListView/route(for:)``, which reads nothing this holds.
     func open(_ target: AppTarget) {
         if case let .destination(destination) = target { return open(destination) }
         guard let route = Self.route(for: target) else { return }
         openNotification(route)
     }
 
+    /// Where this stack is — shared with the Activity tab's, which asks the same question.
     var notificationLocation: InAppNotificationLocation? {
-        if let openedThread {
-            return .thread(channelID: openedThread.channel, rootID: openedThread.root)
-        }
-        return path.last.map { .channel($0.channel.id) }
+        RecentPlaces.location(path: path, openedThread: openedThread)
     }
 
     func openNotification(_ route: InAppNotificationRoute) {

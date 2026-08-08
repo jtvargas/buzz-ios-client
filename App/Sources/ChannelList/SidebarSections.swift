@@ -43,12 +43,18 @@ enum SidebarSection: String, CaseIterable, Hashable, Sendable, Identifiable {
     }
 
     /// The SF Symbol that makes this section recognizable before its title is read.
-    var symbol: String {
+    ///
+    /// `nil` for Agents, and that is the one thing this property has to say: the app draws
+    /// agents with the **lucide bot** — in a mention, in the mention picker, and in the home
+    /// screen's history — and there is no system symbol for it, so the heading strokes
+    /// ``AgentGlyphMark`` instead. Optional rather than a `sparkles` nothing renders, because
+    /// a symbol name still answered here is one a later reader will believe.
+    var symbol: String? {
         switch self {
         case .starred: "star.fill"
         case .channels: "number"
         case .directMessages: "bubble.left.and.text.bubble.right"
-        case .agents: "sparkles"
+        case .agents: nil
         }
     }
 
@@ -66,6 +72,14 @@ enum SidebarSection: String, CaseIterable, Hashable, Sendable, Identifiable {
     /// contains it, so changing a symbol, the text style, or the weight cannot quietly
     /// reintroduce the overlap.
     static let symbolColumnWidth: CGFloat = 36
+
+    /// The view box the Agents heading strokes its bot in, before Dynamic Type scales it.
+    ///
+    /// Here rather than private to the header, so the column test above measures the one
+    /// heading that is not a system symbol against the same width as the three that are.
+    /// Larger than their 17-point type because lucide insets its ink inside the box — see
+    /// ``AgentGlyph/inkHeightRatio``.
+    static let agentMarkSide: CGFloat = 22
 
     /// Whether this heading stays on screen with nothing underneath it.
     ///

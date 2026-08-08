@@ -55,11 +55,29 @@ struct SidebarSectionHeader: View {
     /// the other three.
     var create: (() -> Void)?
 
+    /// The Agents heading's view box, tracking the type the other three headings are set in.
+    /// The base is ``SidebarSection/agentMarkSide``, which is where the column test can
+    /// reach it.
+    @ScaledMetric(relativeTo: .headline)
+    private var agentMarkSide: CGFloat = SidebarSection.agentMarkSide
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Divider()
                 .accessibilityHidden(true)
             control
+        }
+    }
+
+    /// The heading's glyph: a system symbol for three of the four, and the app's own bot for
+    /// Agents, which has none — see ``SidebarSection/symbol``.
+    @ViewBuilder
+    private var mark: some View {
+        if let symbol = section.symbol {
+            Image(systemName: symbol)
+                .font(.hiveSymbol(.headline, weight: .bold))
+        } else {
+            AgentGlyphMark(side: agentMarkSide)
         }
     }
 
@@ -82,8 +100,7 @@ struct SidebarSectionHeader: View {
             toggle()
         } label: {
             HStack(spacing: 8) {
-                Image(systemName: section.symbol)
-                    .font(.hiveSymbol(.headline, weight: .bold))
+                mark
                     .foregroundStyle(.primary)
                     .frame(width: SidebarSection.symbolColumnWidth)
                     .accessibilityHidden(true)

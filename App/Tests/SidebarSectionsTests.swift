@@ -181,19 +181,25 @@ extension SidebarSectionsTests {
         #expect(SidebarSection.starred.symbol == "star.fill")
         #expect(SidebarSection.channels.symbol == "number")
         #expect(SidebarSection.directMessages.symbol == "bubble.left.and.text.bubble.right")
-        #expect(SidebarSection.agents.symbol == "sparkles")
+        // Agents has no system symbol, and that absence is what routes the heading to
+        // ``AgentGlyphMark``. Asserted rather than left implied: a name put back here would
+        // silently take the heading off the app's own agent mark.
+        #expect(SidebarSection.agents.symbol == nil)
     }
 
     @Test("the sidebar symbol column contains every title3 bold glyph")
     func symbolColumnWidth() throws {
         let configuration = UIImage.SymbolConfiguration(textStyle: .title3)
             .applying(UIImage.SymbolConfiguration(weight: .bold))
-        let images = try SidebarSection.allCases.map { section in
-            try #require(UIImage(systemName: section.symbol, withConfiguration: configuration))
+        let images = try SidebarSection.allCases.compactMap(\.symbol).map { symbol in
+            try #require(UIImage(systemName: symbol, withConfiguration: configuration))
         }
         let widest = try #require(images.map(\.size.width).max())
 
         #expect(SidebarSection.symbolColumnWidth >= widest)
+        // The one heading drawn by hand rather than by SF Symbols is held to the same
+        // column, on the same unscaled basis as the measurements above.
+        #expect(SidebarSection.symbolColumnWidth >= SidebarSection.agentMarkSide)
     }
 }
 

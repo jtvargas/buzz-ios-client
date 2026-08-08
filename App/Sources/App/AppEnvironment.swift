@@ -163,6 +163,15 @@ final class AppEnvironment {
     /// ``AppNavigator`` for why the request is held rather than delivered.
     let navigator = AppNavigator()
 
+    /// The last places the reader visited, per community — the history behind the home
+    /// screen's toolbar.
+    ///
+    /// Here rather than inside a screen because both tabs are ways *into* a conversation
+    /// and both have to write to the same list. It survives a community switch on purpose:
+    /// the list it holds is keyed by community, so switching re-points it rather than
+    /// discarding it, and switching back finds that community's history where it was left.
+    let recents = RecentPlaces()
+
     /// The active community's Siri/Spotlight index and the status Settings renders.
     let conversationEntityIndex = ConversationEntityIndex()
 

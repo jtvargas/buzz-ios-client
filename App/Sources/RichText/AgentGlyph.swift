@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// The **lucide `bot`** glyph, the mark both official Buzz clients put in place of the
 /// `@` on a mention of an agent.
@@ -91,6 +92,49 @@ enum AgentGlyph {
         return path
     }
 
+    // MARK: - As a view
+
+    /// The proportion of ``AgentGlyphMark``'s side the ink actually covers, vertically.
+    ///
+    /// lucide insets its drawing from the view box — the body runs y=4 to y=20 of 24, and a
+    /// round cap adds half a stroke at each end. Measured off the rendered glyph rather than
+    /// derived, and recorded here because it is the number that decides what side to ask for:
+    /// a mark meant to read at the same height as a 17-point symbol beside it needs a side of
+    /// about 22, not of 17.
+    static let inkHeightRatio: CGFloat = 0.74
+
+    // MARK: - As a picture
+
+    /// The glyph as a **template image**, for the one caller that needs a picture rather
+    /// than a path: a system menu row, whose icon is a `UIImage` and cannot be a view.
+    ///
+    /// Template, so it takes the menu's tint exactly as an SF Symbol beside it does — the
+    /// history list draws its `#`, its locks and this in one colour, and none of them names
+    /// that colour.
+    ///
+    /// Rasterised once and shared. Every agent draws the same mark, and the alternative —
+    /// an `ImageRenderer` per row, per rebuild — would redraw an identical 22-point square
+    /// for each one. `@MainActor` because that is where the one caller is, and because it
+    /// is what makes a shared `UIImage` safe to hold in a `static`.
+    ///
+    /// Rendered into the whole view box rather than an inset of it: lucide's ink reaches
+    /// x=2 and x=22 of 24, and a round cap adds half a stroke, so the drawing still clears
+    /// the edges by a unit. Nothing here is clipped.
+    @MainActor static let templateImage: UIImage = {
+        let side: CGFloat = 22
+        let box = CGRect(x: 0, y: 0, width: side, height: side)
+        let stroke = strokeStyle(side: side)
+        let image = UIGraphicsImageRenderer(size: box.size).image { context in
+            context.cgContext.setLineWidth(stroke.lineWidth)
+            context.cgContext.setLineCap(.round)
+            context.cgContext.setLineJoin(.round)
+            context.cgContext.setStrokeColor(UIColor.label.cgColor)
+            context.cgContext.addPath(path(in: box).cgPath)
+            context.cgContext.strokePath()
+        }
+        return image.withRenderingMode(.alwaysTemplate)
+    }()
+
     /// lucide's stroke, scaled to a glyph of `side` points: 2 units of 24, round caps
     /// and round joins.
     ///
@@ -155,5 +199,44 @@ enum AgentGlyph {
             width: side,
             height: side
         )
+    }
+}
+
+/// The bot, drawn as an ordinary view, for the surfaces that put it **beside** text rather
+/// than inside a line of it.
+///
+/// Three places name an agent and each used to do it differently: the mention in the message
+/// body drew this glyph, the mention picker drew `sparkles`, and the sidebar's Agents heading
+/// drew `sparkles` too. One thing wants one mark — so those two now draw this, and a reader
+/// who has learnt the bot in one place reads it everywhere.
+///
+/// Stroked rather than rasterised, unlike ``AgentGlyph/templateImage``: nothing here is
+/// handing UIKit a picture, so the path can be drawn at whatever size the reader's type
+/// demands and stay sharp. It takes the current foreground style like any other shape.
+struct AgentGlyphMark: View {
+    /// The side of lucide's **view box**, not of the ink. The drawing covers roughly
+    /// ``AgentGlyph/inkHeightRatio`` of it, so this is asked for a few points larger than
+    /// the SF Symbol it stands beside.
+    let side: CGFloat
+
+    var body: some View {
+        Shape()
+            .stroke(style: AgentGlyph.strokeStyle(side: side))
+            .frame(width: side, height: side)
+    }
+
+    /// The outline, centred in whatever it is given. Nested because the glyph is only ever
+    /// square: a caller that hands this a rectangle wants the mark centred in it, not
+    /// stretched to fill it.
+    private struct Shape: SwiftUI.Shape {
+        func path(in rect: CGRect) -> Path {
+            let side = min(rect.width, rect.height)
+            return AgentGlyph.path(in: CGRect(
+                x: rect.midX - side / 2,
+                y: rect.midY - side / 2,
+                width: side,
+                height: side
+            ))
+        }
     }
 }

@@ -292,12 +292,35 @@ struct ChannelTimelineView: View {
         // Not cleared when the view goes away: the engine's preference is advisory, and
         // the channel just left is the one most likely to be opened again.
         .task { await lifecycleEngine?.setActiveChannel(channelID) }
-        // Popping a thread reveals this already-mounted channel without restarting its
-        // `.task`, so record that return explicitly and move the channel back to MRU front.
         .onChange(of: openedThread) { _, thread in
-            guard thread == nil else { return }
-            Task { await lifecycleEngine?.setActiveChannel(channelID) }
+            guard let thread else {
+                // Popping a thread reveals this already-mounted channel without restarting
+                // its `.task`, so record that return explicitly and move the channel back
+                // to MRU front — for the engine, and for the history alike.
+                Task { await lifecycleEngine?.setActiveChannel(channelID) }
+                return visit(.channel(channelID))
+            }
+            visit(.thread(channelID: thread.channel, rootID: thread.root))
         }
+    }
+
+    /// Records where the reader is, for the home screen's history.
+    ///
+    /// # Why this is said here and not once, up in the stack
+    ///
+    /// Both tabs derive the place they are from `path` plus the thread *they* have open
+    /// (``RecentPlaces/location(path:openedThread:)``), which covers every route those
+    /// screens push. It cannot cover this one: a thread opened from a reply in a channel is
+    /// pushed by **this** view's own `navigationDestination`, from a `@State` no ancestor
+    /// can see, so to the sidebar the reader never left the channel. The owner found exactly
+    /// that — threads reached from the Threads tab were listed and threads reached from a
+    /// message were not.
+    ///
+    /// So the fact is reported by the view that holds it. Every other way into a thread
+    /// still reports itself the way it always did; this adds the one that was silent.
+    private func visit(_ location: InAppNotificationLocation) {
+        guard let appEnvironment else { return }
+        appEnvironment.recents.visit(location, in: appEnvironment.communities.activeID)
     }
 
     /// How this conversation presents itself — a channel, or the person on the other
