@@ -94,6 +94,7 @@ struct ChannelListView: View {
     /// than inside the panel because three things move it: the rightward drag, the heading's
     /// tap, and the panel's own strip.
     @State private var workspacePanel = WorkspacePanelState()
+    @State private var showsHistory = false
 
     @Binding private var notificationRoute: InAppNotificationRoute?
     @Binding private var visibleNotificationLocation: InAppNotificationLocation?
@@ -191,11 +192,20 @@ struct ChannelListView: View {
                     // *else* would make the two ways in two different features.
                     workspacePanel.setOpen(true)
                 }
+                // Where you have been, hanging off the toolbar's clock — drawn here rather than
+                // presented from it, and before the communities panel so that panel covers it.
+                .recentPlacesOverlay(
+                    isPresented: $showsHistory,
+                    places: { recentPlaces },
+                    names: names,
+                    open: openRecent
+                )
                 // The communities, over the sidebar. Both layers are declared here, in this
                 // order, so the panel is above the darkness it casts.
                 .overlay { WorkspacePanelScrim(state: workspacePanel) }
                 .overlay(alignment: .leading) { workspacePanelOverlay }
-                .workspacePanelDrag(workspacePanel, isAvailable: path.isEmpty && openedThread == nil)
+                // Refused while the history is up: the next press belongs to its scrim.
+                .workspacePanelDrag(workspacePanel, isAvailable: path.isEmpty && openedThread == nil && !showsHistory)
                 // Drag left anywhere here to reopen the conversation just left — the
                 // system's back swipe, mirrored. Declared inside the stack because the
                 // transition it drives is that stack's own push.
@@ -222,8 +232,7 @@ struct ChannelListView: View {
                     )
                 }
                 .toolbar {
-                    // Still one item, holding two controls — see ``HomeToolbarControls`` for
-                    // why the capsule around them is drawn there and not by the toolbar.
+                    // Still one item, holding two — ``HomeToolbarControls`` draws the capsule.
                     ToolbarItem(placement: .topBarTrailing) {
                         homeControls(names: names)
                             // Leaves with the heading opposite it, at the same rate and for
@@ -343,10 +352,9 @@ struct ChannelListView: View {
         .onChange(of: path) { previous, current in
             resume.observe(path: current, previously: previous)
         }
-        // Two readers of one value: where the reader *is* decides whether a banner is
-        // telling them something already on screen, and it is also the definition of a place
-        // visited. Written here rather than at the call sites that push, so a route nobody
-        // remembered to instrument cannot be missed.
+        // Two readers of one value: where the reader *is* decides whether a banner repeats
+        // something already on screen, and it is also the definition of a place visited.
+        // Here rather than at the call sites that push, so no route can be left uninstrumented.
         .onChange(of: notificationLocation, initial: true) { _, location in
             visibleNotificationLocation = location
             environment.recents.visit(location, in: environment.communities.activeID)
@@ -572,35 +580,28 @@ private extension ChannelListView {
         }
     }
 
-    /// The toolbar's trailing pair: your history, and you.
-    ///
-    /// Handed a *question* rather than an answer: resolving the history here — against the
-    /// live list, so a place whose conversation left the sidebar is dropped rather than
-    /// offered and then refused — would make the toolbar item depend on the history, and
-    /// opening a place changes it. See ``HomeToolbarControls/history``.
+    /// The toolbar's trailing pair: your history, and you. The list itself is the sidebar's.
     func homeControls(names: EntityNames) -> some View {
         HomeToolbarControls(
-            resolvePlaces: { recentPlaces },
+            showsHistory: $showsHistory,
             names: names,
             state: environment.engineState,
             selfPubkey: environment.selfPubkeyHex ?? "",
-            openAccount: { showAccount = true },
-            // The same arrival a tapped banner is, because it is the same kind of jump:
-            // from anywhere, to a conversation or a thread, with what was open on the way
-            // there closed behind it.
-            openPlace: { place in
-                openNotification(InAppNotificationRoute(
-                    location: place.location,
-                    fallbackChannel: conversationRow(for: place.channelID)
-                ))
-            }
+            openAccount: { showAccount = true }
         )
     }
 
-    /// The history, for the community the sidebar is showing. Read on a press, never in a body.
+    /// The history for the community shown, less anything that has since left the sidebar.
     var recentPlaces: [RecentPlace] {
-        let community = environment.communities.activeID
-        return environment.recents.resolved(among: model.visibleChannels, in: community)
+        environment.recents.resolved(among: model.visibleChannels, in: environment.communities.activeID)
+    }
+
+    /// The same jump a tapped banner is: to a conversation or a thread, closing what was open.
+    func openRecent(_ place: RecentPlace) {
+        openNotification(InAppNotificationRoute(
+            location: place.location,
+            fallbackChannel: conversationRow(for: place.channelID)
+        ))
     }
 
     /// The Threads and Later cards, in one row above the conversations — one list row
@@ -892,16 +893,14 @@ private extension ChannelListView {
 private extension ChannelListView {
     /// Opens one navigation request originating outside this view tree.
     ///
-    /// The route itself is derived in ``ChannelListView/route(for:)`` — it reads nothing this
-    /// view holds, and this file is six lines from swiftlint's `file_length` error.
+    /// The route is derived in ``ChannelListView/route(for:)``, which reads nothing this holds.
     func open(_ target: AppTarget) {
         if case let .destination(destination) = target { return open(destination) }
         guard let route = Self.route(for: target) else { return }
         openNotification(route)
     }
 
-    /// Where this stack is. Shared with the Activity tab's, which asks the same question of
-    /// the same two values — ``RecentPlaces/location(path:openedThread:)``.
+    /// Where this stack is — shared with the Activity tab's, which asks the same question.
     var notificationLocation: InAppNotificationLocation? {
         RecentPlaces.location(path: path, openedThread: openedThread)
     }

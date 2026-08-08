@@ -52,7 +52,7 @@ struct RecentPlacesTests {
         recents.visit(.channel("b"), in: Self.communityA)
         recents.visit(.channel("a"), in: Self.communityA)
 
-        #expect(recents.places.map(\.channelID) == ["a", "b"])
+        #expect(recents.places(in: Self.communityA).map(\.channelID) == ["a", "b"])
     }
 
     /// Standing in the sidebar is not a place, and it is what the recorder is handed every
@@ -66,7 +66,7 @@ struct RecentPlacesTests {
         recents.visit(.channel("a"), in: Self.communityA)
         recents.visit(nil, in: Self.communityA)
 
-        #expect(recents.places.map(\.channelID) == ["a"])
+        #expect(recents.places(in: Self.communityA).map(\.channelID) == ["a"])
     }
 
     /// The owner's number, and the reason the list is a history rather than a log.
@@ -80,9 +80,10 @@ struct RecentPlacesTests {
             recents.visit(.channel("c\(index)"), in: Self.communityA)
         }
 
-        #expect(recents.places.count == RecentPlaces.capacity)
-        #expect(recents.places.first?.channelID == "c14")
-        #expect(recents.places.last?.channelID == "c3")
+        let places = recents.places(in: Self.communityA)
+        #expect(places.count == RecentPlaces.capacity)
+        #expect(places.first?.channelID == "c14")
+        #expect(places.last?.channelID == "c3")
     }
 
     /// Both appear in the owner's reference, on adjacent rows: a channel and a thread
@@ -97,9 +98,10 @@ struct RecentPlacesTests {
         recents.visit(.channel("a"), in: Self.communityA)
         recents.visit(.thread(channelID: "a", rootID: "root"), in: Self.communityA)
 
-        #expect(recents.places.count == 2)
-        #expect(recents.places.first?.isThread == true)
-        #expect(recents.places.last?.isThread == false)
+        let places = recents.places(in: Self.communityA)
+        #expect(places.count == 2)
+        #expect(places.first?.isThread == true)
+        #expect(places.last?.isThread == false)
     }
 
     /// The owner's requirement, and the sharp end of it: the twelve slots are *per
@@ -115,16 +117,13 @@ struct RecentPlacesTests {
             recents.visit(.channel("b\(index)"), in: Self.communityB)
         }
 
-        #expect(recents.places.count == RecentPlaces.capacity)
-        #expect(!recents.places.contains { $0.channelID == "a-only" })
-
-        recents.use(Self.communityA)
-        #expect(recents.places.map(\.channelID) == ["a-only"])
+        #expect(recents.places(in: Self.communityB).count == RecentPlaces.capacity)
+        #expect(!recents.places(in: Self.communityB).contains { $0.channelID == "a-only" })
+        #expect(recents.places(in: Self.communityA).map(\.channelID) == ["a-only"])
     }
 
-    /// The second guard, for a read taken while a switch is in flight: a list loaded for
-    /// one community answers a question about another with nothing, rather than with the
-    /// wrong community's rows.
+    /// Every read names the community it is about, so there is no "current" list to be
+    /// pointed at the wrong one — the isolation is the lookup itself.
     @Test("a read for a different community answers empty")
     func readsAreCommunityScoped() {
         let (defaults, suite) = makeSuite()
@@ -165,10 +164,8 @@ struct RecentPlacesTests {
         first.visit(.channel("b"), in: Self.communityB)
 
         let second = RecentPlaces(defaults: defaults)
-        second.use(Self.communityA)
-        #expect(second.places.map(\.id) == ["a/root"])
-        second.use(Self.communityB)
-        #expect(second.places.map(\.id) == ["b"])
+        #expect(second.places(in: Self.communityA).map(\.id) == ["a/root"])
+        #expect(second.places(in: Self.communityB).map(\.id) == ["b"])
     }
 
     /// Pinned for the reason ``StarredConversations/storageKey`` is: renaming this silently
@@ -207,6 +204,39 @@ struct RecentPlacesTests {
                 openedThread: ThreadRoute(root: "root", channel: "a")
             ) == .thread(channelID: "a", rootID: "root")
         )
+    }
+
+    /// The regression the owner reported as "the history randomly disappears".
+    ///
+    /// The first version held one list plus the community it was loaded for, and re-pointed
+    /// it on demand — so a call made while the app had no active community (a launch, a
+    /// switch, a signed-out frame) pointed it at nothing and emptied it. Nothing the reader
+    /// had done was lost on disk, but the list they were looking at went blank.
+    @Test("a visit with no community leaves every community's history alone")
+    func nilCommunityDoesNotWipe() {
+        let (defaults, suite) = makeSuite()
+        defer { forget(suite) }
+        let recents = RecentPlaces(defaults: defaults)
+
+        recents.visit(.channel("a"), in: Self.communityA)
+        recents.visit(.channel("b"), in: nil)
+        recents.visit(nil, in: nil)
+
+        #expect(recents.places(in: Self.communityA).map(\.channelID) == ["a"])
+        #expect(recents.places(in: nil).isEmpty)
+    }
+
+    /// The other half of the same symptom. The sidebar is empty for as long as its first
+    /// read takes, and filtering the history against an empty sidebar would blank it every
+    /// cold launch — exactly when the question it answers is worth most.
+    @Test("an empty sidebar filters nothing")
+    func emptySidebarDoesNotFilter() {
+        let (defaults, suite) = makeSuite()
+        defer { forget(suite) }
+        let recents = RecentPlaces(defaults: defaults)
+        recents.visit(.channel("a"), in: Self.communityA)
+
+        #expect(recents.resolved(among: [], in: Self.communityA).map(\.channelID) == ["a"])
     }
 
     /// A system symbol that does not exist renders as nothing — no warning, no placeholder.

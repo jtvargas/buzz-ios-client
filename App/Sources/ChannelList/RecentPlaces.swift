@@ -53,23 +53,27 @@ struct RecentPlace: Codable, Hashable, Identifiable {
 ///
 /// # One community, structurally
 ///
-/// The owner asked for communities not to mix. Two things enforce it, and neither is a
-/// filter anyone has to remember to apply. The storage key carries the community's id, so
-/// the twelve slots are *per community* — reading a dozen channels in one cannot evict the
-/// other's history. And the in-memory list carries the community it was loaded for, so a
-/// read taken with a different id answers empty rather than answering with the wrong
-/// community's rows. The failure mode of a desync is a popover that is briefly empty,
-/// which is the direction a mistake here should fail in.
+/// The owner asked for communities not to mix, and the way this holds them is what stops
+/// them mixing: **one list per community id**, in memory and on disk both, asked for by id
+/// at every call. There is no "active" list, so there is no moment at which the wrong one
+/// is loaded and no state to keep in step with the app's community switch.
+///
+/// That shape is a correction. The first version held one list plus the id it was loaded
+/// for, and re-pointed on demand — which meant a call made while the app had no active
+/// community (a launch, a switch, a signed-out frame) re-pointed it at *nothing* and
+/// emptied it. The owner saw exactly that: a history that vanished at random. A dictionary
+/// keyed by community cannot express the bug, because nothing is ever pointed anywhere.
 ///
 /// A community's id is device-local and survives re-pairing the same relay — see
 /// ``CommunityDirectory/add(_:)``, which adopts the existing id — so the history does too.
 @MainActor
 @Observable
 final class RecentPlaces {
-    /// The active community's places, newest first. Empty before a community is named.
-    private(set) var places: [RecentPlace] = []
-    /// The community ``places`` was loaded for.
-    private(set) var community: Community.ID?
+    /// Every community's places this session has touched, newest first within each.
+    ///
+    /// A cache over ``UserDefaults`` rather than the record of truth: a community absent
+    /// here has not been *read* yet, never "has no history".
+    private(set) var byCommunity: [Community.ID: [RecentPlace]] = [:]
 
     /// The owner's number.
     static let capacity = 12
@@ -89,29 +93,31 @@ final class RecentPlaces {
         self.defaults = defaults
     }
 
-    /// Points the list at a community, loading what that community already has.
+    /// One community's places, newest first. Empty for a community with no history, and for
+    /// the frame before the app has one at all.
     ///
-    /// Idempotent, and called by both the read and the write below rather than from a
-    /// lifecycle hook — the same reasoning as ``ConversationResume``'s: a value observed
-    /// where it is *used* cannot be missed by a route nobody remembered to instrument.
-    func use(_ community: Community.ID?) {
-        guard community != self.community else { return }
-        self.community = community
-        places = community.map(load) ?? []
+    /// Reads through to storage on a miss and does **not** write the result back: a read
+    /// that mutates could not be called from a `View`'s body without SwiftUI complaining,
+    /// and this list is twelve entries — cheap enough that the cache is a convenience rather
+    /// than a requirement.
+    func places(in community: Community.ID?) -> [RecentPlace] {
+        guard let community else { return [] }
+        return byCommunity[community] ?? load(community)
     }
 
     /// Records a visit, moving an already-known place to the front rather than repeating it.
     ///
-    /// `nil` is the reader standing in the sidebar rather than inside anything, which is not
-    /// a place and is what this is handed every time they back out of one.
+    /// `nil` for either argument is ignored outright — the reader standing in the sidebar
+    /// rather than inside anything, or a frame before a community exists. Neither is news
+    /// about any community's history, so neither touches one.
     func visit(_ location: InAppNotificationLocation?, in community: Community.ID?) {
-        use(community)
         guard let community, let location, !location.channelID.isEmpty else { return }
         let place = RecentPlace(location)
-        var updated = places.filter { $0.id != place.id }
+        var updated = places(in: community).filter { $0.id != place.id }
         updated.insert(place, at: 0)
-        places = Array(updated.prefix(Self.capacity))
-        save(for: community)
+        let capped = Array(updated.prefix(Self.capacity))
+        byCommunity[community] = capped
+        save(capped, for: community)
     }
 
     /// The places whose conversation the sidebar still lists, for the community named.
@@ -121,10 +127,12 @@ final class RecentPlaces {
     /// while it is in here — a hidden direct message, a channel this key was removed from —
     /// and offering it is a row that navigates somewhere the sidebar says you cannot go.
     ///
-    /// The community is named again here rather than assumed: a read racing a switch would
-    /// otherwise be the one way a foreign row could reach the screen.
+    /// An **empty** sidebar is not that answer, though: it is the sidebar before its first
+    /// read has landed, and filtering against it would blank the history every cold launch.
+    /// So the check applies only once there is a list to check against.
     func resolved(among channels: [ChannelListRow], in community: Community.ID?) -> [RecentPlace] {
-        guard community == self.community else { return [] }
+        let places = places(in: community)
+        guard !channels.isEmpty else { return places }
         let listed = Set(channels.map(\.id))
         return places.filter { listed.contains($0.channelID) }
     }
@@ -158,7 +166,7 @@ final class RecentPlaces {
 
     /// Written on every visit. There is no later moment at which a history is committed,
     /// and an app killed from the switcher must not lose where its owner just was.
-    private func save(for community: Community.ID) {
+    private func save(_ places: [RecentPlace], for community: Community.ID) {
         guard let data = try? JSONEncoder().encode(places) else { return }
         defaults.set(data, forKey: Self.storageKey(for: community))
     }

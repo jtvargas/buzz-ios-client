@@ -22,40 +22,24 @@ import SwiftUI
 /// `.interactive()` would answer a press on either control by lighting the whole capsule,
 /// which says "you pressed this pair" when the reader pressed one of two things. Each
 /// button already answers for itself, in its own circle, through ``PressFeedback``.
+///
+/// # The history is not opened from here
+///
+/// This button owns a flag and nothing else. The list it shows is drawn by the sidebar, as
+/// part of the sidebar — see ``RecentPlacesPanel`` for the crashes that came of presenting
+/// it from a toolbar item instead. A toolbar item is the single worst place in this app to
+/// hang a presentation off: it is rebuilt by every message, heartbeat and profile that
+/// lands.
 struct HomeToolbarControls: View {
-    /// The history, resolved against the live sidebar and the active community — asked for
-    /// when the popover opens, never read while it is open. See ``history``.
-    let resolvePlaces: () -> [RecentPlace]
-    /// The shared resolver, for the rows' names and marks.
+    /// Whether the history is on screen. Owned by the screen that draws it.
+    @Binding var showsHistory: Bool
+    /// The shared resolver, for your picture and your initials.
     let names: EntityNames
     /// The engine's state, drawn as the dot on your face.
     let state: SyncEngine.State
     /// Your pubkey — your picture, your initials, and the monogram's colour seed.
     let selfPubkey: String
     let openAccount: () -> Void
-    let openPlace: (RecentPlace) -> Void
-
-    @State private var showsHistory = false
-    /// The list this popover is showing, taken once when it opens.
-    ///
-    /// A popover's content rides to UIKit as a preference. Changing it while the popover is
-    /// presented makes SwiftUI dismiss and re-present, and *opening a place changes this very
-    /// list* — the visit is recorded the moment the push lands. That dismissal then runs
-    /// inside the navigation transition it caused, and UIKit traps: four crash reports off the
-    /// owner's phone, all of them `UIKitPopoverBridge.dismissAndReset` inside a running
-    /// transition or the navigation path underflowing beneath it. It survived only when the
-    /// place tapped was already at the front, which is the one case where the list does not
-    /// change.
-    ///
-    /// So the list is frozen for as long as it is on screen. A history that reshuffles under
-    /// the finger would be wrong even if it were safe.
-    @State private var history: [RecentPlace] = []
-    /// The place tapped, held until the popover has gone. ``openPlace`` rewrites the
-    /// navigation stack, and a push started from inside a dismissing presentation races the
-    /// modal transition — the reason the sheets in this app route their navigation through
-    /// `onDismiss` (see ``CreateChannelSheet``). A popover has no `onDismiss`, so the hook is
-    /// its content disappearing.
-    @State private var pending: RecentPlace?
 
     var body: some View {
         HStack(spacing: 0) {
@@ -73,11 +57,10 @@ struct HomeToolbarControls: View {
 
     private var historyButton: some View {
         Button {
-            // Read here rather than in `body`: a value read inside an action registers no
-            // dependency, so neither this button nor the popover it opens is rebuilt by a
-            // visit being recorded.
-            history = resolvePlaces()
-            showsHistory = true
+            // A toggle rather than a set, so the control that opened the panel is also the
+            // one that closes it — pressing it again while it is up is the gesture anyone
+            // tries first, and the scrim below the toolbar cannot catch that press.
+            showsHistory.toggle()
         } label: {
             Image(systemName: Self.symbol)
                 .font(.hiveSymbol(fixedSize: Self.glyphPointSize, weight: .regular))
@@ -88,28 +71,6 @@ struct HomeToolbarControls: View {
         .buttonStyle(.hivePress(.control, in: .circle))
         .accessibilityLabel("History")
         .accessibilityHint("Shows the places you visited recently")
-        // Attached to the button rather than to the capsule so the popover points at the
-        // control that opened it and not at the space between two of them.
-        .popover(isPresented: $showsHistory) {
-            RecentPlacesPopover(places: history, names: names) { place in
-                pending = place
-                showsHistory = false
-            }
-            // Without this a popover becomes a sheet in a compact width, which on a phone
-            // is every time — and a sheet is a screen, which is more than a list of twelve
-            // shortcuts is worth.
-            .presentationCompactAdaptation(.popover)
-            // The popover's own content going away is the one moment that is provably after
-            // the dismissal rather than inside it — this popover's `onDismiss`.
-            .onDisappear(perform: openPending)
-        }
-    }
-
-    /// Jumps to the place tapped, now that the popover holding it has gone.
-    private func openPending() {
-        guard let place = pending else { return }
-        pending = nil
-        openPlace(place)
     }
 
     /// The clock with the arrow running back around it, at the owner's word. Named here
