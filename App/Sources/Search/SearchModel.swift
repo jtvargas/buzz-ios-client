@@ -25,6 +25,9 @@ struct SearchMessageResult: Sendable, Hashable, Identifiable {
     let authorName: String?
     let authorPicture: String?
     let isDirectMessage: Bool
+    /// The thread this message lives inside when it lives *only* there — see
+    /// ``BuzzKit/MessageSearchHit/threadRootID``. It decides which surface a tap opens.
+    let threadRootID: String?
 
     init(_ hit: MessageSearchHit) {
         id = hit.id
@@ -36,6 +39,7 @@ struct SearchMessageResult: Sendable, Hashable, Identifiable {
         authorName = hit.authorName
         authorPicture = hit.authorPicture
         isDirectMessage = hit.isDirectMessage
+        threadRootID = hit.threadRootID
     }
 
     init(_ hit: RelayMessageSearchHit) {
@@ -48,6 +52,12 @@ struct SearchMessageResult: Sendable, Hashable, Identifiable {
         authorName = nil
         authorPicture = nil
         isDirectMessage = false
+        // The relay's search answers with event ids and nothing about threading, and this
+        // device has not stored the message — so there is no thread row to consult either.
+        // A relay-only reply therefore opens its channel and is paged for; when it turns out
+        // not to be there, the surface says so rather than pretending. Settling that
+        // properly means fetching the message before deciding, which is its own step.
+        threadRootID = nil
     }
 }
 

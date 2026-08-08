@@ -145,7 +145,8 @@ struct SearchModelTests {
                 rank: -1,
                 authorName: nil,
                 authorPicture: nil,
-                isDirectMessage: false
+                isDirectMessage: false,
+                threadRootID: nil
             )],
             directory: .empty,
             channels: [ChannelListRow(

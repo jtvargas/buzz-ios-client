@@ -131,6 +131,10 @@ struct ConversationScaffold<Content: View, Bar: View, Accessory: View>: View {
     /// Where the reader is and who put them there — see ``ConversationReaderPlace`` for
     /// what it corrects and why the anchors below are not enough on their own.
     @State private var place = ConversationReaderPlace()
+    /// Whether the reader has asked the system not to animate travel. Read here rather than
+    /// by the owners that ask for a jump: it is a property of *this* scroll view's motion,
+    /// and both surfaces would otherwise carry the same check.
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// Whether the last geometry reading put the reader inside the top band.
     ///
     /// Kept because `Edges` is a *projection*: its action runs when the three booleans
@@ -500,15 +504,20 @@ struct ConversationScaffold<Content: View, Bar: View, Accessory: View>: View {
     /// still below the fold. The `.alignment` anchor earns its place, so the proxy is the path
     /// that works alongside it.
     private func jump(using proxy: ScrollViewProxy) {
-        withAnimation(.smooth(duration: 0.2)) {
-            switch jumpTarget {
-            case .bottom:
+        switch jumpTarget {
+        case .bottom:
+            withAnimation(.smooth(duration: 0.2)) {
                 // `.top` in flipped space is the newest row's visual bottom edge. The
                 // declaration stops the settling that follows from undoing this, and has the
                 // destination asserted again once the scroll comes to rest.
                 if let newestID { proxy.scrollTo(newestID, anchor: .top) }
                 place.jumpToNewestBegan()
-            case let .message(id):
+            }
+        case let .message(id, animated):
+            // Reduce Motion outranks the caller. It is the one preference that means
+            // *travelling* is the problem rather than the distance, and the reader still
+            // arrives — the landing and the highlight that marks it are unaffected.
+            withAnimation(animated && !reduceMotion ? .smooth(duration: 0.2) : nil) {
                 // `.bottom` in flipped space is the target row's visual top edge, so the first
                 // thing under the reader's eye is the first message they have not read.
                 proxy.scrollTo(id, anchor: .bottom)

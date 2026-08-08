@@ -32,6 +32,18 @@ public struct MessageSearchHit: Sendable, Hashable, Identifiable {
     public let authorPicture: String?
     /// The relay-authored channel type, not a roster-count inference.
     public let isDirectMessage: Bool
+    /// The thread this message lives inside, when it lives inside one *and nowhere else*.
+    ///
+    /// The index covers every message; the channel timeline does not. A non-broadcast
+    /// reply is deliberately excluded from its channel's page — see the `NOT EXISTS`
+    /// against `thread` in ``fetchTimeline(_:channel:before:limit:selfPubkey:)`` — so a
+    /// caller that opens the channel to show one of these opens a surface the message can
+    /// never appear in. This is what lets the caller open the thread instead.
+    ///
+    /// `nil` for anything reachable in its channel, which includes a *broadcast* reply:
+    /// it has a `thread` row too, and the timeline lets it through, so routing it to a
+    /// thread would move it away from where its author put it.
+    public let threadRootID: String?
 }
 
 public extension BuzzEventStore {
@@ -115,7 +127,8 @@ extension BuzzEventStore {
                 rank: row["rank"],
                 authorName: row["display_name"],
                 authorPicture: row["picture"],
-                isDirectMessage: row["is_dm"] ?? false
+                isDirectMessage: row["is_dm"] ?? false,
+                threadRootID: row["thread_root_id"]
             )
         }
     }
@@ -148,25 +161,43 @@ extension BuzzEventStore {
                candidate.rank AS rank,
                profile.display_name AS display_name,
                profile.picture AS picture,
-               COALESCE(channel.channel_type = 'dm', 0) AS is_dm
-          FROM candidate
-          JOIN event source ON source.rowid = candidate.source_rowid
-          LEFT JOIN edit source_edit ON source_edit.event_id = source.id
-          JOIN event target
-            ON target.id = CASE source.kind
-                WHEN :messageKind THEN source.id
-                WHEN :editKind THEN source_edit.target_id
-               END
-           AND target.kind = :messageKind
-          LEFT JOIN event_owner owner ON owner.event_id = target.id
-          LEFT JOIN profile ON profile.pubkey = target.pubkey
-          LEFT JOIN channel ON channel.id = target.h
+               COALESCE(channel.channel_type = 'dm', 0) AS is_dm,
+               reply.root_id AS thread_root_id
+        \(messageSearchHitJoins)
          WHERE source.id = COALESCE(\(currentEdit), target.id)
            AND NOT \(deleted)
          ORDER BY rank, target.created_at DESC, target.id DESC
          LIMIT :limit
         """
     }
+
+    /// Resolving one FTS candidate row into the message it stands for, and everything the
+    /// caller needs to name and route that message.
+    ///
+    /// Its own constant because the query around it is a `LIMIT` and an `ORDER BY` on top of
+    /// exactly this; keeping the resolution in one piece is also what makes it obvious that
+    /// the last join is the only one that decides anything.
+    static let messageSearchHitJoins = """
+      FROM candidate
+      JOIN event source ON source.rowid = candidate.source_rowid
+      LEFT JOIN edit source_edit ON source_edit.event_id = source.id
+      JOIN event target
+        ON target.id = CASE source.kind
+            WHEN :messageKind THEN source.id
+            WHEN :editKind THEN source_edit.target_id
+           END
+       AND target.kind = :messageKind
+      LEFT JOIN event_owner owner ON owner.event_id = target.id
+      LEFT JOIN profile ON profile.pubkey = target.pubkey
+      LEFT JOIN channel ON channel.id = target.h
+      -- The mirror image of the channel page's own exclusion: this returns a root for
+      -- exactly the messages `fetchTimeline` refuses to show, and for nothing else, so a
+      -- caller can tell "open the channel" from "open the thread" without a second read.
+      -- `broadcast = 0` belongs on the join and not in the `WHERE`, or a broadcast reply
+      -- would fail the condition and drop out of the results altogether.
+      LEFT JOIN thread reply
+        ON reply.event_id = target.id AND reply.broadcast = 0
+    """
 
     static func messageSearchCandidateScope(channelScoped: Bool) -> String {
         if !channelScoped {

@@ -36,4 +36,9 @@ enum ThreadLanding: Hashable, Sendable {
     /// The message that started the thread, for someone who came to find out what it is
     /// about.
     case opener
+    /// One particular reply, for someone who arrived from search and came for exactly it.
+    ///
+    /// Carries the id rather than an index because the thread is read fresh when the screen
+    /// opens, and a reply landing in it a moment earlier would move every position after it.
+    case reply(String)
 }

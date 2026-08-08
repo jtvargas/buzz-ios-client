@@ -239,7 +239,13 @@ struct ThreadView: View {
         )
         // After the first render, so the scaffold's `onChange(of: jumpToken)` is installed
         // and the bump is a transition it sees — see ``ThreadModel/landOnOpener()``.
-        .task { if landing == .opener { model.landOnOpener() } }
+        .task {
+            switch landing {
+            case .opener: model.landOnOpener()
+            case let .reply(id): model.land(on: id)
+            case .latestReply: break
+            }
+        }
         .task { await model.run() }
         .task { await lifecycleEngine?.setActiveThread(channel: channelID, root: model.root) }
         .task { await presence.run() }
@@ -322,6 +328,9 @@ struct ThreadView: View {
             // The shared constant rather than a bare `.padding(.horizontal)`, so a reply
             // starts on the same line as the header pill and the day separators above it.
             .padding(.horizontal, MessageRowMetrics.rowLeading)
+            // On the reply alone and not on the `VStack`: the opener's divider below is
+            // furniture between two messages, not part of either one.
+            .messageFocusHighlight(model.highlightedMessageID == row.id)
 
             // Set the opener apart from its replies, and furnish that rule — see
             // ``ThreadOpenerDivider``. The row in hand *is* the opener, by this branch.

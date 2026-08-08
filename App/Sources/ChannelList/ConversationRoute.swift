@@ -23,6 +23,14 @@ struct ConversationRoute: Hashable {
     /// comparison, not this type's equality, so folding it in costs nothing and keeps two
     /// routes to the same channel distinguishable in a path.
     var focusesComposer = false
+    /// One message this conversation is being opened *at*, set only by an arrival that names
+    /// one — search today. The conversation still opens at its newest message and this is
+    /// walked back to behind the reader; see ``ChannelTimelineModel/focus(on:)``.
+    ///
+    /// Part of `Hashable` for ``focusesComposer``'s reason, and it matters slightly more
+    /// here: two searches landing on two different messages in one channel are two different
+    /// arrivals, and only this tells them apart.
+    var focusMessageID: String?
 }
 
 extension ConversationRoute {

@@ -84,7 +84,88 @@ extension ChannelTimelineModel {
         guard let target = jump.firstUnreadID else { return jumpToLatest() }
         tail.release()
         rebuild()
-        jumpTarget = .message(target)
+        jumpTarget = .message(target, animated: true)
         jumpToken += 1
+    }
+
+    // MARK: - Arriving from somewhere else
+
+    /// Takes the reader to one particular message, paging history back until it is there.
+    ///
+    /// The arrival case: search today, and whatever else later asks to open a conversation
+    /// *at* something. The conversation opens where it always does — at its newest message —
+    /// and this walks backwards behind it until the row exists to be scrolled to.
+    ///
+    /// # Why it pages rather than seeding a window around the message
+    ///
+    /// A window would be one read instead of a walk, and it would leave a hole: the rows
+    /// between that window and the newest page were never loaded, and nothing in this model
+    /// represents a hole. A reader scrolling down out of the window would pass from one
+    /// island straight into the other with a stretch of the conversation silently missing
+    /// and nothing to tell them. Paging is slower and honest — the loaded set stays what it
+    /// claims to be, which every other rule in this file already leans on.
+    ///
+    /// # Why this must not be called before the first layout
+    ///
+    /// It ends in a ``ChannelTimelineModel/jumpToken`` bump, and a bump made before
+    /// ``ConversationScaffold`` has installed its `onChange` is a change that observer never
+    /// sees — the same reason ``ThreadModel/landOnOpener()`` is driven from a `.task` rather
+    /// than from a prime.
+    ///
+    /// Cancellation is the caller's `.task`: leaving the screen ends the walk where it
+    /// stands, and what it did load is ordinary loaded history.
+    func focus(on messageID: String) async {
+        if land(on: messageID) { return }
+        jump.setSeek(.searching)
+        for _ in 0 ..< Self.focusPageBudget {
+            guard hasMoreOlder, !olderFailed, !Task.isCancelled else { break }
+            let before = loaded.count
+            await loadOlder()
+            if land(on: messageID) { return jump.setSeek(.none) }
+            // A pass that brought nothing back cannot be repeated into a different answer.
+            // ``loadOlder()`` already walks its own budget of relay pages while the reader is
+            // given nothing to see, so arriving here with the count unchanged means the pager
+            // ran out or failed — both of which it does report, but only on the pass after.
+            if loaded.count == before { break }
+        }
+        guard !Task.isCancelled else { return jump.setSeek(.none) }
+        // Say so. A reach that quietly gives up cannot be told apart from one still running,
+        // and the reader is left at the newest message wondering why their tap did nothing.
+        // It clears itself rather than offering a retry: a second reach walks the same
+        // ground to the same end.
+        jump.setSeek(.failed)
+        try? await Task.sleep(for: .seconds(3))
+        jump.setSeek(.none)
+    }
+
+    /// Scrolls to a loaded message and marks it; answers `false` when it is not loaded.
+    ///
+    /// The distance is counted in *rows*, which is the one count on this surface that is not
+    /// an estimate — see ``ConversationJumpTarget/message(_:animated:)`` for why the scaffold
+    /// does not work it out from geometry instead.
+    @discardableResult
+    func land(on messageID: String) -> Bool {
+        // The rendered rows, not the loaded ones: a row behind the frozen tail has no frame
+        // for the scroll view to find, so the scroll would move nothing and report nothing.
+        guard let index = rows.firstIndex(where: { $0.id == messageID }) else { return false }
+        let rowsFromNewest = rows.count - 1 - index
+        jumpTarget = .message(messageID, animated: rowsFromNewest <= Self.animatedLandingRows)
+        jumpToken += 1
+        highlight(messageID)
+        return true
+    }
+
+    /// Marks a row as the one the reader came for, and takes the mark away again.
+    ///
+    /// Long enough to be seen after a scroll that takes a fifth of a second, short enough
+    /// that it is gone before it starts reading as a selection.
+    func highlight(_ messageID: String) {
+        highlightTask?.cancel()
+        highlightedMessageID = messageID
+        highlightTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(1.6))
+            guard !Task.isCancelled else { return }
+            self?.highlightedMessageID = nil
+        }
     }
 }

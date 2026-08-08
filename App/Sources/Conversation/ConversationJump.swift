@@ -5,8 +5,22 @@ enum ConversationJumpTarget: Equatable {
     /// The newest message: an own send that would otherwise arrive out of sight, and the
     /// fallback for a press that raced the reader back to the bottom.
     case bottom
-    /// One particular message, by id — the *first* arrival the reader has not seen.
-    case message(String)
+    /// One particular message, by id — the *first* arrival the reader has not seen, the
+    /// message that opened a thread, or a message arrived at from search.
+    ///
+    /// # Why the animation is the caller's to decide
+    ///
+    /// A `scrollTo` inside `withAnimation` renders every row it travels over, and those
+    /// rows are precisely the ones a `LazyVStack` has not measured. Across the handful the
+    /// unread pill covers, that *is* the point — the reader watches where they are being
+    /// taken. Across the several hundred a search result can sit behind, it is a stutter
+    /// carrying no information, and nobody can follow it anyway.
+    ///
+    /// So the caller says, and there is deliberately no distance threshold in the scaffold:
+    /// the only trustworthy count is the one in the owner's own rows, and deriving it from
+    /// the scroll view's estimated extent is the mistake ``ConversationReaderPlace``
+    /// exists to document.
+    case message(String, animated: Bool)
 }
 
 /// Which control a conversation is offering above its composer, if any.
@@ -16,6 +30,17 @@ enum ConversationJumpTarget: Equatable {
 /// affordance would be a case here instead of a re-typing of `control`, the animation's
 /// `value:`, and the tests.
 enum ConversationJumpControl: Equatable {
+    /// A message the reader asked for is being paged in from history: `Finding message`.
+    ///
+    /// Outranks both of the others, and it is the one case that is not an offer — it is a
+    /// report about something already happening because the reader asked for it. Nothing
+    /// else on this surface can say so: the top-of-history spinner sits at the far end of
+    /// the loaded rows, which is exactly where a reader waiting at the newest message is
+    /// not.
+    case seeking
+    /// The reach for that message ran out of history without finding it: `Message not
+    /// found`. Cleared by its owner after a moment — see ``ConversationSeek``.
+    case seekFailed
     /// Arrivals are waiting behind the frozen tail: `N new messages`.
     case unread(Int)
     /// The reader is far enough up that the way back is worth offering, and nothing is
@@ -24,6 +49,17 @@ enum ConversationJumpControl: Equatable {
     /// Outranked by ``unread`` whenever both apply — the owner's call, and the right one:
     /// a pill that knows something you do not beats one that only offers a journey.
     case latest
+}
+
+/// How a reach for one particular message is going.
+///
+/// Its own type rather than two flags because the three states are exclusive and the
+/// transitions between them are the whole behaviour: nothing → searching → found (back to
+/// nothing) or not found (which decays back to nothing on a timer the owner holds).
+enum ConversationSeek: Equatable {
+    case none
+    case searching
+    case failed
 }
 
 /// The jump control's state, held apart from the rows a conversation renders.
@@ -51,6 +87,10 @@ final class ConversationJumpState {
     /// worth offering. Written by the scaffold, which owns the distance.
     private(set) var isFarFromBottom = false
 
+    /// How a reach for one particular message is going. Written by the model that does the
+    /// paging, because it is the only thing that knows when the row has arrived.
+    private(set) var seek: ConversationSeek = .none
+
     /// The one control to show, or none.
     ///
     /// **Unread always wins.** The owner's ruling, and it matches what the two pills are:
@@ -67,8 +107,20 @@ final class ConversationJumpState {
     /// `visibleRect.minY`: an offset from zero, not a difference between two estimates. It
     /// is the same exact quantity the freeze's own two bands already read.
     var control: ConversationJumpControl? {
+        switch seek {
+        case .searching: return .seeking
+        case .failed: return .seekFailed
+        case .none: break
+        }
         if unreadCount > 0 { return .unread(unreadCount) }
         return isFarFromBottom ? .latest : nil
+    }
+
+    /// Records how the reach for one particular message is going.
+    ///
+    /// Equal values are not written back, for ``hold(count:firstID:)``'s reason.
+    func setSeek(_ state: ConversationSeek) {
+        if seek != state { seek = state }
     }
 
     /// Records how far the reader is from the newest message.
@@ -111,6 +163,12 @@ struct ConversationJumpControls: View {
     var body: some View {
         Group {
             switch state.control {
+            case .seeking:
+                SeekingPill()
+                    .transition(.scale(scale: 0.9).combined(with: .opacity))
+            case .seekFailed:
+                SeekFailedPill()
+                    .transition(.scale(scale: 0.9).combined(with: .opacity))
             case let .unread(count):
                 NewMessagesPill(count: count, action: onJumpToNew)
                     .transition(.scale(scale: 0.9).combined(with: .opacity))
@@ -190,19 +248,67 @@ struct LatestPill: View {
     }
 }
 
+/// What the surface says while it is paging history back toward a message the reader asked
+/// for from somewhere else — search, today.
+///
+/// # Why it is not a button
+///
+/// The other two pills are offers, and pressing them is how the journey happens. This one
+/// reports a journey already under way, so there is nothing to press. It takes the same slot
+/// and the same shape deliberately: a reader who has just tapped a search result is looking
+/// at this corner of the screen either way, and a second visual language for "wait" would be
+/// one more thing to recognise.
+///
+/// It is also the only progress this reach can show. The top-of-history spinner sits at the
+/// far end of the loaded rows — which is exactly where a reader waiting at the newest message
+/// is not — so without this the app pages silently and looks frozen.
+struct SeekingPill: View {
+    var body: some View {
+        JumpPillLabel(text: "Finding message", symbol: nil) {
+            ProgressView()
+                .controlSize(.mini)
+        }
+        .glassEffect(.regular, in: .capsule)
+        .accessibilityLabel("Finding message")
+        // A live region: this appears without the reader doing anything to *this* screen,
+        // and it is the only signal that the tap they made somewhere else is being answered.
+        .accessibilityAddTraits(.updatesFrequently)
+    }
+}
+
+/// What the surface says when the reach ran out of history without finding the message.
+///
+/// Says what happened rather than offering a retry: the reach already walked as far as the
+/// relay would give it, so a second press would walk the same ground to the same end. The
+/// owner clears this after a moment — see ``ChannelTimelineModel/focus(on:)``.
+struct SeekFailedPill: View {
+    var body: some View {
+        JumpPillLabel(text: "Message not found", symbol: "exclamationmark.circle")
+            .glassEffect(.regular, in: .capsule)
+            .accessibilityLabel("Message not found")
+    }
+}
+
 /// The arrow and the words inside either pill.
 ///
 /// Shared again, deliberately. It was inlined into ``NewMessagesPill`` when `↓ Latest` was
 /// withdrawn — with one pill a shared type was a second place to look for one set of
 /// numbers. With two pills swapping places in the same spot on screen, it is the thing that
 /// stops them drifting apart by a point and making the swap visible as a jolt.
-private struct JumpPillLabel: View {
+private struct JumpPillLabel<Leading: View>: View {
     let text: String
+    /// The glyph before the words. `nil` for a pill whose leading slot is filled by
+    /// ``leading`` instead — a spinner cannot also be an SF Symbol.
+    var symbol: String? = "arrow.down"
+    @ViewBuilder var leading: Leading
 
     var body: some View {
         HStack(spacing: 4) {
-            Image(systemName: "arrow.down")
-                .font(.hiveSymbol(.caption2, weight: .semibold))
+            leading
+            if let symbol {
+                Image(systemName: symbol)
+                    .font(.hiveSymbol(.caption2, weight: .semibold))
+            }
             Text(text)
                 .font(.hive(.caption2, weight: .semibold))
                 // The count changes under a still pill; without this the whole label
@@ -214,5 +320,12 @@ private struct JumpPillLabel: View {
         // that is taller, so an accessibility text size grows the capsule instead of
         // being clipped inside it — which a `.frame(height:)` here would do.
         .frame(minHeight: 28)
+    }
+}
+
+private extension JumpPillLabel where Leading == EmptyView {
+    /// A pill whose leading slot is just its glyph, which is three of the four.
+    init(text: String, symbol: String? = "arrow.down") {
+        self.init(text: text, symbol: symbol) { EmptyView() }
     }
 }

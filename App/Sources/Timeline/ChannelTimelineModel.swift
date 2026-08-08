@@ -138,6 +138,26 @@ final class ChannelTimelineModel {
     /// Where that bump lands.
     var jumpTarget: ConversationJumpTarget = .bottom
 
+    /// The message to mark as *the one you came here for*, or `nil` when there is none.
+    ///
+    /// Observable, and read by the row that matches it — so it invalidates the list twice
+    /// per arrival, which is what it costs to say something about one row from outside it.
+    /// That is affordable here and would not be if it changed per frame: it is set once
+    /// when a landing happens and cleared once a moment later.
+    ///
+    /// What draws it is a background, never anything that occupies space. A highlight that
+    /// changed a row's height would move the reader by the growth of every row the stack
+    /// re-estimates around it — the defect ``ConversationReaderPlace/rowDidChangeInPlace()``
+    /// exists to absorb, arriving here as a *new* one at the exact moment the reader has
+    /// just been taken somewhere.
+    /// Settable across the module for ``jumpToken``'s reason: what sets it is the landing,
+    /// and the landings live in `ChannelTimelineModel+Jump.swift`.
+    var highlightedMessageID: String?
+    /// Clears the highlight after its moment. Internal rather than `private` for the reason
+    /// the collaborators below are — `private` is file-scoped, and the jumps live in
+    /// `ChannelTimelineModel+Jump.swift`. Not observable: nothing renders it.
+    @ObservationIgnored var highlightTask: Task<Void, Never>?
+
     /// The `before` cursor most recently handed to `store.timeline(before:)`. A
     /// test seam: it is exactly the keyset position paged from, proving pagination
     /// never falls back to offset paging (spec §Step 1 tests).
@@ -439,6 +459,22 @@ final class ChannelTimelineModel {
     /// a background reconcile has already filled; small enough that the reader is never
     /// waiting on an unbounded walk.
     private static let olderPageBudget = 5
+
+    /// How many pages ``focus(on:)`` may walk back looking for one message. At the page
+    /// size that is a couple of thousand messages, which is far more history than a search
+    /// result has ever sat behind in this app and still a bound rather than a promise —
+    /// the walk can cost a relay round trip per page once it passes what the device holds.
+    ///
+    /// Internal, not `private`: the walk is in `ChannelTimelineModel+Jump.swift`, and
+    /// Swift's `private` is file-scoped.
+    static let focusPageBudget = 40
+    /// How close a landing has to be, in rows, to be worth animating.
+    ///
+    /// About two screens of ordinary messages. Beyond it the travel renders every row it
+    /// passes over and reads as a stutter rather than as a journey — the reasoning is with
+    /// ``ConversationJumpTarget/message(_:animated:)``, and the reason it is a row count
+    /// rather than a distance is that rows are the only quantity here that is not estimated.
+    static let animatedLandingRows = 25
 
     /// Merges an older page into the loaded set and brings its reactions, mentions and
     /// reply participants with it — immediately, rather than waiting on the next commit

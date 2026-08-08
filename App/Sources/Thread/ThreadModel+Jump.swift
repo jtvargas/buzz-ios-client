@@ -27,7 +27,7 @@ extension ThreadModel {
         guard let target = jump.firstUnreadID else { return jumpToLatest() }
         tail.release()
         rebuild()
-        jumpTarget = .message(target)
+        jumpTarget = .message(target, animated: true)
         jumpToken += 1
     }
 
@@ -50,8 +50,39 @@ extension ThreadModel {
     /// resting at the newest reply is the right fallback if it somehow does.
     func landOnOpener() {
         guard rows.contains(where: { $0.id == root }) else { return }
-        jumpTarget = .message(root)
+        jumpTarget = .message(root, animated: true)
         jumpToken += 1
+    }
+
+    /// Lands the reader on one particular reply and marks it — a thread reached from search.
+    ///
+    /// No paging behind it, unlike ``ChannelTimelineModel/focus(on:)``: `store.thread(root:)`
+    /// reads a whole thread in one go, so every reply this surface will ever hold is already
+    /// among ``ThreadModel/rows`` by the time this runs. If the id is not there it is not in
+    /// the thread at all, and resting at the newest reply is the right answer.
+    ///
+    /// Driven from a `.task` for ``landOnOpener()``'s reason — a bump the scaffold has not
+    /// begun watching for is a jump that never happens.
+    func land(on messageID: String) {
+        guard let index = rows.firstIndex(where: { $0.id == messageID }) else { return }
+        let rowsFromNewest = rows.count - 1 - index
+        jumpTarget = .message(
+            messageID, animated: rowsFromNewest <= ChannelTimelineModel.animatedLandingRows
+        )
+        jumpToken += 1
+        highlight(messageID)
+    }
+
+    /// Marks a reply as the one the reader came for, and takes the mark away again. The
+    /// channel's rule, and the same timing — see ``ChannelTimelineModel/highlight(_:)``.
+    func highlight(_ messageID: String) {
+        highlightTask?.cancel()
+        highlightedMessageID = messageID
+        highlightTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(1.6))
+            guard !Task.isCancelled else { return }
+            self?.highlightedMessageID = nil
+        }
     }
 
     /// Whether an own reply has to move the thread at all. Already at the bottom with

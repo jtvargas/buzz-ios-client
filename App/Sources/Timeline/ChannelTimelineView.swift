@@ -62,6 +62,10 @@ struct ChannelTimelineView: View {
     /// message rather than from the sidebar. Only ever consulted while the roster has
     /// nothing to say — see ``EntityNames/conversation(for:knownPeers:)``.
     private let knownPeers: [String]
+    /// One message this conversation was opened *at*, when it was reached from search. The
+    /// screen still opens at its newest message and this is walked back to from there — see
+    /// ``ChannelTimelineModel/focus(on:)``.
+    private let focusMessageID: String?
 
     /// Reserved for the top-of-history sentinel. Constant, and present whenever an
     /// older page may exist: a spinner that appears and disappears is itself a content
@@ -78,7 +82,8 @@ struct ChannelTimelineView: View {
         uploader: @escaping MediaUploaderProvider,
         selfPubkey: String?,
         knownPeers: [String] = [],
-        focusingComposer focusesComposer: Bool = false
+        focusingComposer focusesComposer: Bool = false,
+        focusing focusMessageID: String? = nil
     ) {
         self.init(
             channel: channel,
@@ -95,7 +100,8 @@ struct ChannelTimelineView: View {
             selfPubkey: selfPubkey,
             knownPeers: knownPeers,
             lifecycleEngine: engine,
-            focusingComposer: focusesComposer
+            focusingComposer: focusesComposer,
+            focusing: focusMessageID
         )
     }
 
@@ -124,9 +130,11 @@ struct ChannelTimelineView: View {
         selfPubkey: String?,
         knownPeers: [String] = [],
         lifecycleEngine: SyncEngine? = nil,
-        focusingComposer focusesComposer: Bool = false
+        focusingComposer focusesComposer: Bool = false,
+        focusing focusMessageID: String? = nil
     ) {
         self.focusesComposer = focusesComposer
+        self.focusMessageID = focusMessageID
         self.channel = channel
         channelID = channel.id
         self.store = store
@@ -272,6 +280,10 @@ struct ChannelTimelineView: View {
             )
         }
         .task { await model.run() }
+        // After the first render, never from the prime: the walk ends in a `jumpToken` bump,
+        // and a bump made before the scaffold has installed its `onChange` is a change that
+        // observer never sees — see ``ChannelTimelineModel/focus(on:)``.
+        .task { if let focusMessageID { await model.focus(on: focusMessageID) } }
         .task { await presence.run() }
         // Here rather than inside ``TypingIndicatorView``, which is absent from the view
         // tree until somebody is typing and so could never start its own model — see the
@@ -530,6 +542,9 @@ private extension ChannelTimelineView {
         // The shared constant, not a bare `.padding(.horizontal)`: the day separator starts
         // on this same line, and two defaults agreeing is not the same as one number.
         .padding(.horizontal, MessageRowMetrics.rowLeading)
+        // Outside the padding, so the wash runs the full width of the row rather than
+        // stopping where the text does. See ``View/messageFocusHighlight(_:)``.
+        .messageFocusHighlight(model.highlightedMessageID == row.id)
     }
 
     /// The scaffold's "the top of history is near" report. It arrives as a level

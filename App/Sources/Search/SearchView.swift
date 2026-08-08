@@ -8,6 +8,10 @@ struct SearchView: View {
     @State private var model: SearchModel
     @State private var query = ""
     @State private var path: [ConversationRoute] = []
+    /// A thread opened straight from a result, as ``ActivityView`` opens one from a
+    /// notification: a reply is not reachable inside its channel, so the thread is where the
+    /// result lives and Back belongs to the results rather than to a channel nobody asked for.
+    @State private var openedThread: ThreadRoute?
     @State private var ticker = RelativeTimeTicker()
     @State private var threadReads = ThreadReadMarks()
     @State private var router: DirectMessageRouter
@@ -44,7 +48,20 @@ struct SearchView: View {
                         uploader: { environment.mediaUploader },
                         selfPubkey: selfPubkey,
                         knownPeers: route.knownPeers,
-                        focusingComposer: route.focusesComposer
+                        focusingComposer: route.focusesComposer,
+                        focusing: route.focusMessageID
+                    )
+                }
+                .navigationDestination(item: $openedThread) { route in
+                    ThreadView(
+                        root: route.root,
+                        channel: route.channel,
+                        store: store,
+                        engine: engine,
+                        drafts: environment.drafts,
+                        uploader: { environment.mediaUploader },
+                        selfPubkey: selfPubkey,
+                        landingOn: route.anchor
                     )
                 }
         }
@@ -57,7 +74,10 @@ struct SearchView: View {
             // up after it hides the top of their own results.
             isFieldFocused = false
         }
-        .toolbar(ChannelListTabBar.visibility(conversations: path, openedThread: nil), for: .tabBar)
+        .toolbar(
+            ChannelListTabBar.visibility(conversations: path, openedThread: openedThread),
+            for: .tabBar
+        )
         .environment(\.entityNames, entityNames)
         .environment(\.channelNameMap, ChannelNameMap(channels: model.channels))
         .environment(\.relativeTimeTicker, ticker)
@@ -184,7 +204,22 @@ struct SearchView: View {
         }
     }
 
+    /// Opens the surface the message is actually on, and asks that surface to land on it.
+    ///
+    /// A non-broadcast reply is deliberately excluded from its channel's page — see the
+    /// `NOT EXISTS` against `thread` in BuzzKit's timeline query — so opening the channel for
+    /// one pushes a screen it can never appear in, and the landing would page the entire
+    /// channel back looking for a row that is not in it. Its thread is where it lives.
+    ///
+    /// Straight to the thread rather than through its channel, which is ``ActivityView``'s
+    /// rule for the same shape: Back belongs to the results the reader is working through.
     private func open(message: SearchMessageResult) {
+        if let root = message.threadRootID {
+            openedThread = ThreadRoute(
+                root: root, channel: message.channelID, anchor: .reply(message.id)
+            )
+            return
+        }
         let fallback = ChannelListRow(
             id: message.channelID,
             name: nil,
@@ -198,14 +233,21 @@ struct SearchView: View {
             lastMessageAuthorPubkey: message.pubkey,
             channelType: message.isDirectMessage ? "dm" : nil
         )
-        open(channelID: message.channelID, fallback: fallback)
+        open(channelID: message.channelID, fallback: fallback, focusing: message.id)
     }
 
-    private func open(channelID: String, fallback: ChannelListRow? = nil) {
+    private func open(
+        channelID: String,
+        fallback: ChannelListRow? = nil,
+        focusing focusMessageID: String? = nil
+    ) {
         // Deliberately does *not* clear focus. A push already resigns the field, and
         // forcing the state false on the way out left the field unable to take the keyboard
         // back when the reader returned to it.
-        let route = ConversationRoute(channel: channelRow(for: channelID, fallback: fallback))
+        let route = ConversationRoute(
+            channel: channelRow(for: channelID, fallback: fallback),
+            focusMessageID: focusMessageID
+        )
         path = route.pushed(onto: path)
     }
 

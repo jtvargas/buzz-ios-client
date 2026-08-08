@@ -96,7 +96,8 @@ struct ActivityView: View {
                         uploader: { environment.mediaUploader },
                         selfPubkey: selfPubkey,
                         knownPeers: route.knownPeers,
-                        focusingComposer: route.focusesComposer
+                        focusingComposer: route.focusesComposer,
+                        focusing: route.focusMessageID
                     )
                 }
                 .navigationDestination(item: $openedThread) { route in
