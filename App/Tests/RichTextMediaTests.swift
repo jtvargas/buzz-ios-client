@@ -264,7 +264,7 @@ struct RichTextMediaTests {
     func codeKeepsItsImageSyntax() {
         let parsed = blocks("```\n![image](\(Self.picture))\n```", media: [media()])
 
-        #expect(parsed == [.code("![image](\(Self.picture))", language: nil)])
+        #expect(parsed == [.code("![image](\(Self.picture))", info: nil)])
     }
 
     // MARK: - Spacing and snippets

@@ -60,10 +60,11 @@ struct RichTextTableTests {
     @Test("the table ends at a blank line and what follows parses on its own")
     func tableEndsAtBlankLine() {
         let blocks = RichTextParser.parse("| a |\n| --- |\n| 1 |\n\nafter")
-        #expect(blocks.count == 2)
+        #expect(blocks.count == 3)
         if case .table = blocks[0] {} else { Issue.record("block 0 table") }
-        guard case let .paragraph(text) = blocks[1] else {
-            Issue.record("block 1 paragraph")
+        #expect(blocks[1] == .sourceBlankLine)
+        guard case let .paragraph(text) = blocks[2] else {
+            Issue.record("block 2 paragraph")
             return
         }
         #expect(String(text.characters) == "after")
@@ -74,7 +75,7 @@ struct RichTextTableTests {
         let blocks = RichTextParser.parse("| a |\n| --- |\n| 1 |\n```\ncode\n```")
         #expect(blocks.count == 2)
         if case .table = blocks[0] {} else { Issue.record("block 0 table") }
-        #expect(blocks[1] == .code("code", language: nil))
+        #expect(blocks[1] == .code("code", info: nil))
     }
 
     // MARK: - Alignment

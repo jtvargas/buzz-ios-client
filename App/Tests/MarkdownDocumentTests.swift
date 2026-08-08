@@ -143,7 +143,7 @@ struct MarkdownDocumentTests {
         ```
         """)
 
-        let kinds = message.blocks.map { block -> String in
+        let kinds = message.blocks.compactMap { block -> String? in
             switch block {
             case .heading: "heading"
             case .paragraph: "paragraph"
@@ -151,6 +151,7 @@ struct MarkdownDocumentTests {
             case .quote: "quote"
             case .code: "code"
             case .rule: "rule"
+            case .sourceBlankLine: nil
             default: "other"
             }
         }
@@ -169,8 +170,48 @@ struct MarkdownDocumentTests {
             Issue.record("expected the table-of-contents line to stay a list")
             return
         }
-        let text = String(items[0].content.characters)
+        let text = String(RichTextProbe.inline(of: items[0]).characters)
         #expect(text == "Overview")
+    }
+
+    @Test("the AST owns lazy list continuations without rewriting the document source")
+    func lazyListContinuation() {
+        let message = MarkdownDocumentContent.message(for: "- first line\ncontinued line")
+        guard case let .bulletList(items) = message.blocks.first else {
+            Issue.record("expected a list")
+            return
+        }
+        #expect(String(RichTextProbe.inline(of: items[0]).characters) == "first line\ncontinued line")
+    }
+
+    @Test("a blockquote after a list remains its own block")
+    func quoteAfterListIsNotAContinuation() {
+        let message = MarkdownDocumentContent.message(for: "- item\n> quote")
+        #expect(message.blocks.count == 2)
+        if case .bulletList = message.blocks[0] {} else { Issue.record("expected list first") }
+        if case .quote = message.blocks[1] {} else { Issue.record("expected quote second") }
+    }
+
+    @Test("document HTML preserves nested quote and list-item blocks")
+    func nestedBlocksRenderAsHTML() {
+        let message = MarkdownDocumentContent.message(for: """
+        > before
+        >
+        > ```swift
+        > let x = 1
+        > ```
+
+        - item
+
+          ```bash
+          echo ok
+          ```
+        """)
+        let html = MarkdownDocumentHTML.body(for: message)
+        #expect(html.contains("<blockquote>"))
+        #expect(html.contains("<pre><code class=\"language-swift\">"))
+        #expect(html.contains("<li>"))
+        #expect(html.contains("<pre><code class=\"language-bash\">"))
     }
 
     @Test("a file too long to draw is cut at a line break and says so")

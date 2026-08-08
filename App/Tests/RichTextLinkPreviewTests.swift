@@ -27,10 +27,11 @@ struct RichTextLinkPreviewTests {
     func cardsComeLast() throws {
         let parsed = blocks("shipped it\n\nhttps://github.com/o/r/pull/61")
 
-        #expect(parsed.count == 3)
+        #expect(parsed.count == 4)
         if case .linkPreview = parsed[0] { Issue.record("a card came before the message") }
         if case .linkPreview = parsed[1] { Issue.record("a card came before the message") }
-        guard case let .linkPreview(preview) = parsed[2] else {
+        if case .linkPreview = parsed[2] { Issue.record("a card came before the message") }
+        guard case let .linkPreview(preview) = parsed[3] else {
             Issue.record("the last block is not a card")
             return
         }
@@ -70,6 +71,12 @@ struct RichTextLinkPreviewTests {
         )
 
         #expect(found.map(\.title) == ["/one", "/two", "/three"])
+    }
+
+    @Test("a link nested inside a quote and list still produces a card")
+    func nestedLink() {
+        let found = previewCards("> - [notes](https://example.com/nested)")
+        #expect(found.map(\.title) == ["notes"])
     }
 
     /// The count is the obvious half. The title is the half that broke: joining runs by

@@ -31,14 +31,35 @@ struct RichTextMarkdownWalker {
         for child in children {
             let converted = block(child, listDepth: listDepth)
             guard !converted.isEmpty else { continue }
+            let blankLineCount: Int
             if hasPreviousBlock {
-                let count = min(precedingBlankLineCount(for: child), RichTextParser.maxBlankLineRun)
-                result.append(contentsOf: repeatElement(.sourceBlankLine, count: count))
+                blankLineCount = min(precedingBlankLineCount(for: child), RichTextParser.maxBlankLineRun)
+                result.append(contentsOf: repeatElement(.sourceBlankLine, count: blankLineCount))
+            } else {
+                blankLineCount = 0
             }
-            result.append(contentsOf: converted)
+            append(converted, to: &result, mayMergeList: hasPreviousBlock && blankLineCount == 0)
             hasPreviousBlock = true
         }
         return result
+    }
+
+    /// cmark splits lists when their authored bullet or ordered delimiter changes.
+    /// Hive's value model does not preserve delimiter style, so keep the scanner-era
+    /// behavior and coalesce adjacent same-kind lists when no blank line separates them.
+    private func append(_ blocks: [RichBlock], to result: inout [RichBlock], mayMergeList: Bool) {
+        guard mayMergeList, blocks.count == 1, let incoming = blocks.first, let previous = result.last else {
+            result.append(contentsOf: blocks)
+            return
+        }
+        switch (previous, incoming) {
+        case let (.bulletList(left), .bulletList(right)):
+            result[result.count - 1] = .bulletList(left + right)
+        case let (.orderedList(start, left), .orderedList(_, right)):
+            result[result.count - 1] = .orderedList(start: start, left + right)
+        default:
+            result.append(incoming)
+        }
     }
 
     private func block(_ markup: Markup, listDepth: Int) -> [RichBlock] {
