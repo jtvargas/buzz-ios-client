@@ -192,6 +192,40 @@ struct RichTextParserTests {
         #expect(flattened.contains("level19"))
     }
 
+    @Test("runaway blockquote nesting is clamped at the source, keeping the text")
+    func deepQuoteNestingClamped() {
+        // The crash this bounds is a *parse*-time one: swift-markdown's converter
+        // recurses once per level building the tree, so unlike the list clamp this
+        // cannot be applied to a tree that already exists. 400 levels is well past
+        // anything authored and well short of what it takes to overflow, so this
+        // asserts the bound rather than reproducing the overflow.
+        let markdown = String(repeating: ">", count: 400) + " deep words"
+        let blocks = RichTextParser.parse(markdown)
+        #expect(RichTextProbe.maxQuoteDepth(blocks) <= RichTextParser.maxQuoteDepth)
+        let flattened = String(RichMessage(blocks: blocks).flattenedInline().characters)
+        #expect(flattened.contains("deep words"))
+    }
+
+    @Test("the quote clamp counts CommonMark's own marker shape and leaves ordinary text alone")
+    func quoteDepthClamp() {
+        // Byte-identical below the limit: every message anybody writes takes this path,
+        // so the clamp must not be able to rewrite one.
+        let ordinary = "> a\n> > b\n\nplain paragraph\n\n```\n> not a quote\n```"
+        #expect(RichTextParser.clampingQuoteDepth(ordinary) == ordinary)
+
+        // Markers dropped, text kept — in all three spellings cmark accepts: bare,
+        // spaced, and with up to three spaces of indent before a marker.
+        #expect(RichTextParser.clampingQuoteDepth(">>>> x", limit: 2) == "> > x")
+        #expect(RichTextParser.clampingQuoteDepth("> > > > x", limit: 2) == "> > x")
+        #expect(RichTextParser.clampingQuoteDepth(">   >   >   > x", limit: 2) == "> > x")
+
+        // A marker eats one following space, so four *more* is an indented code block
+        // rather than another level — cmark stops counting there and so does this. One
+        // level, under the limit, untouched.
+        let indentedCode = ">     > x"
+        #expect(RichTextParser.clampingQuoteDepth(indentedCode, limit: 2) == indentedCode)
+    }
+
     @Test("a list item can contain fenced code and a quote can contain a list")
     func nestedBlockShapes() {
         let item = RichTextParser.parse("- before\n\n  ```swift\n  let x = 1\n  ```")

@@ -84,6 +84,19 @@ enum RichTextProbe {
         return deepest
     }
 
+    /// The deepest blockquote nesting in `blocks` (0 when there are no quotes).
+    ///
+    /// Safe to recurse only because the source clamp bounds what can reach here; that
+    /// bound is exactly what this measures.
+    static func maxQuoteDepth(_ blocks: [RichBlock], current: Int = 0) -> Int {
+        var deepest = current
+        for block in blocks {
+            guard case let .quote(quoted) = block else { continue }
+            deepest = max(deepest, maxQuoteDepth(quoted, current: current + 1))
+        }
+        return deepest
+    }
+
     private static func links(in block: RichBlock) -> [URL] {
         switch block {
         case let .paragraph(text), let .heading(_, text):
