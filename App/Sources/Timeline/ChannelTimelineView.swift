@@ -176,6 +176,10 @@ struct ChannelTimelineView: View {
             // back into `State` on every set, which would invalidate this whole view
             // on each scroll threshold crossing.
             isAtBottom: Binding(get: { model.isAtBottom }, set: { model.isAtBottom = $0 }),
+            isFarFromBottom: Binding(
+                get: { model.jump.isFarFromBottom },
+                set: { model.jump.setFarFromBottom($0) }
+            ),
             jumpToken: model.jumpToken,
             jumpTarget: model.jumpTarget,
             contentRevision: model.contentRevision,
@@ -552,7 +556,8 @@ private extension ChannelTimelineView {
             // moves it invalidates that view alone rather than this body and its list.
             ConversationJumpControls(
                 state: model.jump,
-                onJumpToNew: { model.jumpToNewMessages() }
+                onJumpToNew: { model.jumpToNewMessages() },
+                onJumpToLatest: { model.jumpToLatest() }
             )
             MentionSuggestionsView(
                 document: $model.mentionDraft,

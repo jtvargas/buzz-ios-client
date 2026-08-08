@@ -173,6 +173,10 @@ struct ThreadView: View {
             // Hand-written rather than `$model.isAtBottom`, which would write the
             // model reference back into `State` on every scroll threshold crossing.
             isAtBottom: Binding(get: { model.isAtBottom }, set: { model.isAtBottom = $0 }),
+            isFarFromBottom: Binding(
+                get: { model.jump.isFarFromBottom },
+                set: { model.jump.setFarFromBottom($0) }
+            ),
             jumpToken: model.jumpToken,
             jumpTarget: model.jumpTarget,
             contentRevision: model.contentRevision,
@@ -342,7 +346,8 @@ struct ThreadView: View {
             // inside that view and not here.
             ConversationJumpControls(
                 state: model.jump,
-                onJumpToNew: { model.jumpToNewMessages() }
+                onJumpToNew: { model.jumpToNewMessages() },
+                onJumpToLatest: { model.jumpToLatest() }
             )
             MentionSuggestionsView(
                 document: $model.mentionDraft,

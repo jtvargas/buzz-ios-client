@@ -45,6 +45,9 @@ struct ConversationScaffold<Content: View, Bar: View, Accessory: View>: View {
     /// Whether the newest row is in view. The owner freezes its rendered tail while
     /// this is `false`, so an arriving message cannot move the reader's place.
     @Binding var isAtBottom: Bool
+    /// Whether the reader is far enough up for the `↓ Latest` pill. Purely an output —
+    /// see ``Edges/farFromBottom``.
+    @Binding var isFarFromBottom: Bool
     /// Bumped by the owner to force a jump — an own send, or the affordance above the
     /// composer.
     var jumpToken: Int = 0
@@ -149,11 +152,20 @@ struct ConversationScaffold<Content: View, Bar: View, Accessory: View>: View {
     /// each other, so a reader sitting just outside it could flip the state, lose the
     /// freeze, and get no re-freeze because they were still inside the band.
     ///
-    /// A third, wider band — half a viewport — used to be projected beside these two, for
-    /// the `↓ Latest` pill. It is gone with the pill: it was the only distance this shell
-    /// read that no scroll decision depended on, and the state it fed had exactly one
-    /// reader (see ``ConversationJumpState/control``).
     private static var awayFromBottomSlack: CGFloat { 120 }
+    /// The band that counts as *far* from the bottom — where `↓ Latest` is worth offering.
+    ///
+    /// Half a viewport, which is roughly "scrolling back by hand is a journey rather than a
+    /// flick". A fraction of the visible height rather than a point count so it means the
+    /// same thing on every device and at every text size.
+    ///
+    /// This band was deleted with the pill in `b5511fb`, on the grounds that it was the one
+    /// distance this shell read that fed no scroll decision — one more arithmetic-on-
+    /// estimates path through an engine whose content metrics are unreliable. **The
+    /// inversion retired that objection.** Distance-from-newest is now `visibleRect.minY`,
+    /// an offset from the origin rather than a difference against an estimated
+    /// `contentSize.height`, so this reads the same exact number the two bands above do.
+    private static var farFromBottomFraction: CGFloat { 0.5 }
     /// About a screen, so the older page lands before the reader reaches the end.
     private static var topTrigger: CGFloat { 800 }
 
@@ -241,7 +253,8 @@ struct ConversationScaffold<Content: View, Bar: View, Accessory: View>: View {
             return Edges(
                 atBottom: distance <= Self.atBottomSlack,
                 awayFromBottom: distance >= Self.awayFromBottomSlack,
-                nearTop: geometry.contentSize.height - geometry.visibleRect.maxY <= Self.topTrigger
+                nearTop: geometry.contentSize.height - geometry.visibleRect.maxY <= Self.topTrigger,
+                farFromBottom: distance >= geometry.visibleRect.height * Self.farFromBottomFraction
             )
         } action: { _, edges in
             // Hysteresis, not a threshold: between the two bands the current state
@@ -283,6 +296,13 @@ struct ConversationScaffold<Content: View, Bar: View, Accessory: View>: View {
             // Waiting for the reader costs nothing: reaching for history *is* a gesture, and
             // the fetch it starts is the one they asked for.
             if edges.nearTop, place.hasMoved { onReachedTop() }
+
+            // Written straight through, with no hysteresis and no interaction with the two
+            // bands above. Nothing downstream of this changes what the scroll view does —
+            // it decides whether a button is on screen — so the worst a flicker on the band
+            // edge can cost is a pill that fades in and out, which the control's own
+            // `.animation(value:)` already smooths.
+            if isFarFromBottom != edges.farFromBottom { isFarFromBottom = edges.farFromBottom }
         }
         // The owner's commit, ahead of the readings it produces: `onChange` runs in the
         // update pass and a scroll geometry callback runs after layout, so the window is
@@ -507,5 +527,12 @@ struct ConversationScaffold<Content: View, Bar: View, Accessory: View>: View {
         let atBottom: Bool
         let awayFromBottom: Bool
         let nearTop: Bool
+        /// Far enough from the newest message that the way back is worth offering.
+        ///
+        /// Read by the `↓ Latest` pill and by nothing else — deliberately. It must not
+        /// reach a scroll decision: the freeze has its own two bands above, tuned against
+        /// each other with hysteresis, and a third threshold feeding that logic would be
+        /// a second opinion about the same question.
+        let farFromBottom: Bool
     }
 }

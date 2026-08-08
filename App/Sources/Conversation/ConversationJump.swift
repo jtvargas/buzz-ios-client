@@ -18,6 +18,12 @@ enum ConversationJumpTarget: Equatable {
 enum ConversationJumpControl: Equatable {
     /// Arrivals are waiting behind the frozen tail: `N new messages`.
     case unread(Int)
+    /// The reader is far enough up that the way back is worth offering, and nothing is
+    /// waiting behind the freeze: `↓ Latest`.
+    ///
+    /// Outranked by ``unread`` whenever both apply — the owner's call, and the right one:
+    /// a pill that knows something you do not beats one that only offers a journey.
+    case latest
 }
 
 /// The jump control's state, held apart from the rows a conversation renders.
@@ -41,17 +47,37 @@ final class ConversationJumpState {
     /// bottom past everything it just announced.
     private(set) var firstUnreadID: String?
 
+    /// Whether the reader is far enough from the newest message for the way back to be
+    /// worth offering. Written by the scaffold, which owns the distance.
+    private(set) var isFarFromBottom = false
+
     /// The one control to show, or none.
     ///
-    /// Distance no longer reaches this. `↓ Latest` was offered on a half-viewport band and
-    /// answered a question the scroll view already answers — so it sat over the conversation
-    /// for as long as someone read history, which is the whole time it had nothing to say.
-    /// What is left appears only because something arrived, and leaves when it is read.
+    /// **Unread always wins.** The owner's ruling, and it matches what the two pills are:
+    /// one reports that something happened while you were reading, the other offers a
+    /// journey you could already make by scrolling. When both apply, the one carrying news
+    /// is the one to show.
     ///
-    /// That is also why the scaffold no longer projects a second distance band: this was its
-    /// only reader.
+    /// # Why distance is trustworthy here again
+    ///
+    /// `↓ Latest` was withdrawn partly because its half-viewport band was arithmetic over
+    /// `contentSize.height`, which a `LazyVStack` estimates — one more unreliable number in
+    /// a scroll engine already full of them. **The inversion changed that.** In the flipped
+    /// list the newest message sits at the origin, so distance-from-newest is
+    /// `visibleRect.minY`: an offset from zero, not a difference between two estimates. It
+    /// is the same exact quantity the freeze's own two bands already read.
     var control: ConversationJumpControl? {
-        unreadCount > 0 ? .unread(unreadCount) : nil
+        if unreadCount > 0 { return .unread(unreadCount) }
+        return isFarFromBottom ? .latest : nil
+    }
+
+    /// Records how far the reader is from the newest message.
+    ///
+    /// Equal values are not written back, for ``hold(count:firstID:)``'s reason: this is
+    /// fed by a band crossing, but a crossing can be reported repeatedly while a reader
+    /// hovers on the edge of it, and each write would invalidate the pill.
+    func setFarFromBottom(_ isFar: Bool) {
+        if isFarFromBottom != isFar { isFarFromBottom = isFar }
     }
 
     /// Records what the tail is holding back: how many, and the oldest one's id.
@@ -78,12 +104,21 @@ struct ConversationJumpControls: View {
     let state: ConversationJumpState
     /// Land on the first arrival the reader has not seen.
     let onJumpToNew: () -> Void
+    /// Land on the newest message. Already exists for an own send from deep in history —
+    /// this control is a second caller, not new behaviour.
+    let onJumpToLatest: () -> Void
 
     var body: some View {
         Group {
-            if case let .unread(count) = state.control {
+            switch state.control {
+            case let .unread(count):
                 NewMessagesPill(count: count, action: onJumpToNew)
                     .transition(.scale(scale: 0.9).combined(with: .opacity))
+            case .latest:
+                LatestPill(action: onJumpToLatest)
+                    .transition(.scale(scale: 0.9).combined(with: .opacity))
+            case nil:
+                EmptyView()
             }
         }
         // Scoped to whether the control is showing, never to the list's content: an
@@ -125,28 +160,59 @@ struct NewMessagesPill: View {
     var body: some View {
         let label = Self.label(count: count)
         return Button(action: action) {
-            // Inlined from a `JumpPillLabel` that existed so this pill and `↓ Latest` could
-            // not drift apart in metrics. With one pill the shared type was a second place
-            // to look for one set of numbers.
-            HStack(spacing: 4) {
-                Image(systemName: "arrow.down")
-                    .font(.hiveSymbol(.caption2, weight: .semibold))
-                Text(label)
-                    .font(.hive(.caption2, weight: .semibold))
-                    // The count changes under a still pill; without this the whole label
-                    // reflows by a fraction of a point as the digits change width.
-                    .monospacedDigit()
-            }
-            .padding(.horizontal, 10)
-            // A floor rather than a height. The label keeps its intrinsic size wherever
-            // that is taller, so an accessibility text size grows the capsule instead of
-            // being clipped inside it — which a `.frame(height:)` here would do.
-            .frame(minHeight: 28)
+            JumpPillLabel(text: label)
         }
         .buttonStyle(.glass)
         .controlSize(.small)
         .clipShape(.capsule)
         .accessibilityLabel(label)
         .accessibilityHint("Double tap to jump to the first new message")
+    }
+}
+
+/// The `↓ Latest` affordance: the way back, offered once the reader is far enough up that
+/// scrolling there by hand is a journey.
+///
+/// Shown only when nothing is waiting behind the freeze — ``ConversationJumpState/control``
+/// gives the unread pill the slot whenever both apply.
+struct LatestPill: View {
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            JumpPillLabel(text: "Latest")
+        }
+        .buttonStyle(.glass)
+        .controlSize(.small)
+        .clipShape(.capsule)
+        .accessibilityLabel("Latest")
+        .accessibilityHint("Double tap to jump to the newest message")
+    }
+}
+
+/// The arrow and the words inside either pill.
+///
+/// Shared again, deliberately. It was inlined into ``NewMessagesPill`` when `↓ Latest` was
+/// withdrawn — with one pill a shared type was a second place to look for one set of
+/// numbers. With two pills swapping places in the same spot on screen, it is the thing that
+/// stops them drifting apart by a point and making the swap visible as a jolt.
+private struct JumpPillLabel: View {
+    let text: String
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Image(systemName: "arrow.down")
+                .font(.hiveSymbol(.caption2, weight: .semibold))
+            Text(text)
+                .font(.hive(.caption2, weight: .semibold))
+                // The count changes under a still pill; without this the whole label
+                // reflows by a fraction of a point as the digits change width.
+                .monospacedDigit()
+        }
+        .padding(.horizontal, 10)
+        // A floor rather than a height. The label keeps its intrinsic size wherever
+        // that is taller, so an accessibility text size grows the capsule instead of
+        // being clipped inside it — which a `.frame(height:)` here would do.
+        .frame(minHeight: 28)
     }
 }
