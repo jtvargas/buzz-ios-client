@@ -65,13 +65,31 @@ enum RichTextMedia {
     private static func group(_ blocks: [RichBlock]) -> [RichBlock] {
         var result: [RichBlock] = []
         for block in blocks {
-            guard case let .media(items) = block, items.allSatisfy({ $0.kind == .image }),
-                  case .media(let previous)? = result.last, previous.last?.kind == .image
+            guard case let .media(items) = block, items.allSatisfy({ $0.kind == .image })
             else {
                 result.append(block)
                 continue
             }
-            result[result.count - 1] = .media(previous + items)
+            let previousIndex = result.lastIndex { candidate in
+                if case .sourceBlankLine = candidate { return false }
+                return true
+            }
+            guard let previousIndex,
+                  result[(previousIndex + 1)...].allSatisfy({
+                      if case .sourceBlankLine = $0 { return true }
+                      return false
+                  }),
+                  case let .media(previous) = result[previousIndex],
+                  previous.last?.kind == .image
+            else {
+                result.append(block)
+                continue
+            }
+            // Blank lines did not split mosaics before source spacing was restored.
+            // Remove only the spacers between two image blocks and preserve every
+            // other authored spacer in the message.
+            result.removeSubrange((previousIndex + 1)...)
+            result[previousIndex] = .media(previous + items)
         }
         return result
     }

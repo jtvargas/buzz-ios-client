@@ -4,6 +4,117 @@ import UIKit
 // The leaf block views a message is drawn from — lists, code, and the thematic rule.
 // Split out of `RichTextView.swift` so that file is about the message's own layout.
 
+// MARK: - Recursive blocks
+
+/// One block at any level of the rich-content tree. Only recursive branches are type
+/// erased, breaking their result-type cycle without erasing ordinary message blocks.
+struct RichBlockView: View {
+    @Environment(\.claimRowTap) private var claimRowTap
+    @Environment(\.openURL) private var openURL
+
+    let block: RichBlock
+    var attribution: MessageMediaAttribution?
+    var listDepth = 0
+
+    var body: some View {
+        content
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        switch block {
+        case let .paragraph(text):
+            RichTextInline.text(text, base: .body)
+                .font(.hive(.body))
+                .frame(maxWidth: .infinity, alignment: .leading)
+        case let .heading(level, text):
+            RichHeadingView(level: level, text: text)
+        case let .quote(blocks):
+            AnyView(RichQuoteView(blocks: blocks, attribution: attribution, listDepth: listDepth))
+        case let .code(code, info):
+            RichCodeBlock(code: code, info: info)
+        case let .bulletList(items):
+            AnyView(RichListView(
+                items: items,
+                ordered: false,
+                start: 1,
+                depth: listDepth,
+                attribution: attribution
+            ))
+        case let .orderedList(start, items):
+            AnyView(RichListView(
+                items: items,
+                ordered: true,
+                start: start,
+                depth: listDepth,
+                attribution: attribution
+            ))
+        case let .table(table):
+            RichTableView(table: table)
+        case .rule:
+            RichRuleView()
+        case .sourceBlankLine:
+            Text("\n")
+                .font(.hive(.body))
+                .hidden()
+                .accessibilityHidden(true)
+        case let .media(media):
+            MessageMediaGroupView(media: media, onTap: { claimRowTap?() }, attribution: attribution)
+        case let .linkPreview(preview):
+            LinkPreviewCardView(preview: preview) { openURL(preview.url) }
+        }
+    }
+}
+
+private struct RichBlockStack: View {
+    @ScaledMetric(relativeTo: .body) private var blockSpacingScale: CGFloat = 1
+
+    let blocks: [RichBlock]
+    let attribution: MessageMediaAttribution?
+    let listDepth: Int
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(blocks.enumerated()), id: \.offset) { index, block in
+                RichBlockView(block: block, attribution: attribution, listDepth: listDepth)
+                    .padding(.top, gapAbove(index))
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func gapAbove(_ index: Int) -> CGFloat {
+        guard index > 0 else { return 0 }
+        return RichTextSpacing.gap(after: blocks[index - 1], before: blocks[index]) * blockSpacingScale
+    }
+}
+
+private struct RichQuoteView: View {
+    let blocks: [RichBlock]
+    let attribution: MessageMediaAttribution?
+    let listDepth: Int
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            RoundedRectangle(cornerRadius: 1.5)
+                .fill(Color.secondary.opacity(0.5))
+                .frame(width: 3)
+            if case let .paragraph(text)? = blocks.count == 1 ? blocks.first : nil {
+                // Preserve the exact pre-AST leaf path; no extra stack changes its
+                // baseline, wrapping, or ideal-height behavior.
+                RichTextInline.text(text, base: .body)
+                    .font(.hive(.body))
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                RichBlockStack(blocks: blocks, attribution: attribution, listDepth: listDepth)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .richTextIdealHeight()
+    }
+}
+
 // MARK: - Lists
 
 /// A (possibly nested) list. Renders each item's marker + content, then recurses into
@@ -13,16 +124,17 @@ struct RichListView: View {
     let ordered: Bool
     let start: Int
     var depth: Int = 0
+    var attribution: MessageMediaAttribution?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             ForEach(Array(items.enumerated()), id: \.offset) { index, item in
-                VStack(alignment: .leading, spacing: 2) {
-                    RichListRow(ordinal: ordinal(index), item: item)
-                    ForEach(Array(item.children.enumerated()), id: \.offset) { _, child in
-                        childList(child)
-                    }
-                }
+                RichListItemView(
+                    ordinal: ordinal(index),
+                    item: item,
+                    depth: depth,
+                    attribution: attribution
+                )
             }
         }
         .padding(.leading, depth == 0 ? 0 : RichTextStyle.nestedIndent)
@@ -32,15 +144,28 @@ struct RichListView: View {
         ordered ? "\(start + index)." : "•"
     }
 
-    @ViewBuilder
-    private func childList(_ block: RichBlock) -> some View {
-        switch block {
-        case let .bulletList(items):
-            RichListView(items: items, ordered: false, start: 1, depth: depth + 1)
-        case let .orderedList(start, items):
-            RichListView(items: items, ordered: true, start: start, depth: depth + 1)
-        default:
-            EmptyView() // children are only ever nested lists
+}
+
+private struct RichListItemView: View {
+    let ordinal: String
+    let item: RichListItem
+    let depth: Int
+    let attribution: MessageMediaAttribution?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            if case let .paragraph(text)? = item.blocks.first {
+                RichListRow(ordinal: ordinal, text: text, marker: item.marker)
+                ForEach(Array(item.blocks.dropFirst().enumerated()), id: \.offset) { _, block in
+                    RichBlockView(block: block, attribution: attribution, listDepth: depth + 1)
+                        .padding(.leading, block.isList ? 0 : 22)
+                }
+            } else {
+                HStack(alignment: .top, spacing: 6) {
+                    RichListMarkerView(ordinal: ordinal, marker: item.marker)
+                    RichBlockStack(blocks: item.blocks, attribution: attribution, listDepth: depth + 1)
+                }
+            }
         }
     }
 }
@@ -60,12 +185,13 @@ struct RichListView: View {
 private struct RichListRow: View {
     /// The bullet or number this item would draw without a marker of its own.
     let ordinal: String
-    let item: RichListItem
+    let text: AttributedString
+    let marker: RichListMarker?
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
-            marker
-            RichTextInline.text(item.content, base: .body)
+            RichListMarkerView(ordinal: ordinal, marker: marker)
+            RichTextInline.text(text, base: .body)
                 .font(.hive(.body))
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -77,9 +203,14 @@ private struct RichListRow: View {
         .richTextIdealHeight()
     }
 
-    @ViewBuilder
-    private var marker: some View {
-        switch item.marker {
+}
+
+private struct RichListMarkerView: View {
+    let ordinal: String
+    let marker: RichListMarker?
+
+    @ViewBuilder var body: some View {
+        switch marker {
         case .none:
             Text(ordinal)
                 .font(.hive(.body))
@@ -101,6 +232,15 @@ private struct RichListRow: View {
             // is read inside the sentence — which is the only way the state reaches
             // somebody who cannot see the box.
             .accessibilityLabel(isOn ? "checked" : "unchecked")
+    }
+}
+
+private extension RichBlock {
+    var isList: Bool {
+        switch self {
+        case .bulletList, .orderedList: true
+        default: false
+        }
     }
 }
 
@@ -178,13 +318,13 @@ struct RichCodeBlock: View {
     @Environment(\.colorScheme) private var colorScheme
 
     let code: String
-    let language: String?
+    let info: CodeFenceInfo?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            if let language, !language.isEmpty {
+            if let info {
                 HStack(spacing: 8) {
-                    Text(language)
+                    Text(info.language)
                         .font(.hive(.caption2))
                         .foregroundStyle(.secondary)
                         .accessibilityHidden(true)
@@ -199,7 +339,7 @@ struct RichCodeBlock: View {
                 }
             }
             ScrollView(.horizontal) {
-                Text(RichCodeHighlighter.highlight(code, language: language, theme: theme))
+                Text(RichCodeHighlighter.highlight(code, language: info?.highlightLanguage, theme: theme))
                     .font(.hiveMono(fixedSize: RichCodeHighlighter.fontSize))
                     .foregroundStyle(.primary)
                     .lineSpacing(RichCodeHighlighter.fontSize * 0.5)
@@ -209,7 +349,7 @@ struct RichCodeBlock: View {
             }
         }
         .padding(.horizontal, 12)
-        .padding(.top, language == nil || language?.isEmpty == true ? 6 : 2)
+        .padding(.top, info == nil ? 6 : 2)
         .padding(.bottom, 6)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(

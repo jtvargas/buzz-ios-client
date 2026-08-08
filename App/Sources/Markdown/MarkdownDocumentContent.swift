@@ -35,7 +35,7 @@ enum MarkdownDocumentContent {
     /// document the reader believes they have read to the end of.
     static func message(for text: String) -> RichMessage {
         let (body, wasTruncated) = truncated(text)
-        var blocks = RichTextParser.parse(joiningListContinuations(in: body))
+        var blocks = RichTextParser.parse(body)
             .mapInlines(RichTextAutolink.apply)
         if wasTruncated {
             blocks.append(.rule)
@@ -44,49 +44,6 @@ enum MarkdownDocumentContent {
             )))
         }
         return RichMessage(blocks: blocks)
-    }
-
-    /// Joins CommonMark lazy list continuations before the message parser sees them.
-    ///
-    /// The shared parser intentionally accepts only a contiguous run of marked list lines.
-    /// Documents also use unmarked continuation lines, including indented wrapping, and the
-    /// web renderer cannot recover that structure after parsing. This narrow pre-pass handles
-    /// only the no-blank-line case; multi-paragraph list items remain separate blocks.
-    private static func joiningListContinuations(in text: String) -> String {
-        let lines = text
-            .replacingOccurrences(of: "\r\n", with: "\n")
-            .replacingOccurrences(of: "\r", with: "\n")
-            .components(separatedBy: "\n")
-        var joined: [String] = []
-
-        for line in lines {
-            if let previous = joined.last,
-               RichTextParser.listLine(previous) != nil,
-               isListContinuation(line) {
-                joined[joined.count - 1] += " " + line.trimmingCharacters(in: .whitespaces)
-            } else {
-                joined.append(line)
-            }
-        }
-        return joined.joined(separator: "\n")
-    }
-
-    private static func isListContinuation(_ line: String) -> Bool {
-        let trimmed = line.trimmingCharacters(in: .whitespaces)
-        guard !trimmed.isEmpty,
-              RichTextParser.listLine(line) == nil,
-              !isHeading(trimmed),
-              !trimmed.hasPrefix("```"),
-              !RichTextParser.isThematicBreak(trimmed),
-              RichTextParser.tableCells(line) == nil
-        else { return false }
-        return true
-    }
-
-    private static func isHeading(_ trimmed: String) -> Bool {
-        let level = trimmed.prefix { $0 == "#" }.count
-        guard (1...6).contains(level) else { return false }
-        return trimmed.dropFirst(level).hasPrefix(" ")
     }
 
     /// `text` cut to the limit, and whether it was cut.

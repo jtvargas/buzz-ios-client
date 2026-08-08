@@ -35,6 +35,10 @@ enum RichTextSpacing {
     /// the boxed rule, so `code` followed by `## Heading` still opens a new section
     /// rather than merely closing the code block.
     static func gap(after previous: RichBlock, before next: RichBlock) -> CGFloat {
+        // A source spacer owns exactly one authored line of height. Letting the
+        // semantic pair-gap sit beside it would count the same blank line twice.
+        if case .sourceBlankLine = previous { return 0 }
+        if case .sourceBlankLine = next { return 0 }
         if case .heading = next { return beforeHeading }
         if case .rule = next { return aroundRule }
         if case .rule = previous { return aroundRule }

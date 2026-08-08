@@ -10,16 +10,16 @@ import Foundation
 /// `@`-mention / `#`-channel tokens are carried in each block's `AttributedString`
 /// — parsed inline-only, with unsafe link schemes stripped and entities attached
 /// as ``MentionAttribute`` / ``ChannelAttribute`` runs (see ``RichTextEntities``).
-enum RichBlock: Equatable, Sendable {
+indirect enum RichBlock: Equatable, Sendable {
     /// A run of text. Soft line breaks inside it are preserved.
     case paragraph(AttributedString)
     /// A heading, level 1–6.
     case heading(level: Int, AttributedString)
-    /// A block quote, its lines joined.
-    case quote(AttributedString)
-    /// A fenced code block: raw text (NEVER inline- or entity-parsed) and an
-    /// optional language hint from the opening fence.
-    case code(String, language: String?)
+    /// A block quote containing the same block shapes as the document around it.
+    case quote([RichBlock])
+    /// A fenced code block: raw text (NEVER inline- or entity-parsed) and parsed
+    /// language information from the opening fence.
+    case code(String, info: CodeFenceInfo?)
     /// A bulleted list; each element is one item, which may own nested lists.
     case bulletList([RichListItem])
     /// A numbered list starting at `start`; each element is one item, which may own
@@ -30,6 +30,9 @@ enum RichBlock: Equatable, Sendable {
     /// A thematic break — a rule across the message, from a line of `---`, `***`,
     /// `___`, or the reference renderer's own `⸻`.
     case rule
+    /// One blank source line authored between semantic blocks. Runs are bounded by
+    /// the parser and leading/trailing source whitespace never produces this case.
+    case sourceBlankLine
     /// One or more pictures and videos, drawn together where the message put them.
     ///
     /// # Why a block and not an inline
@@ -81,23 +84,17 @@ enum RichListMarker: Equatable, Sendable {
     case radio(Bool)
 }
 
-/// One item of a list: its own inline content, an optional marker that replaces the
-/// list's bullet or number, and any nested lists indented beneath it. The `children`
-/// are themselves ``RichBlock`` list nodes, so an item can carry arbitrarily deep
-/// (bounded) sub-lists that the renderer indents per depth.
+/// One item of a list: an optional marker that replaces the list's bullet or number,
+/// and the full block content authored beneath it.
 struct RichListItem: Equatable, Sendable {
-    /// The item's inline content (emphasis, links, resolved entity tokens).
-    let content: AttributedString
+    /// Paragraphs, quotes, code, tables, or nested lists contained by this item.
+    let blocks: [RichBlock]
     /// A checkbox or radio marker drawn instead of the list's own marker, or `nil` for
     /// an ordinary item. See ``RichListMarker``.
     let marker: RichListMarker?
-    /// Nested list blocks indented under this item, empty for a leaf item.
-    let children: [RichBlock]
-
-    init(content: AttributedString, marker: RichListMarker? = nil, children: [RichBlock] = []) {
-        self.content = content
+    init(blocks: [RichBlock], marker: RichListMarker? = nil) {
+        self.blocks = blocks
         self.marker = marker
-        self.children = children
     }
 }
 
@@ -133,8 +130,8 @@ extension [RichBlock] {
                 .paragraph(transform(text))
             case let .heading(level, text):
                 .heading(level: level, transform(text))
-            case let .quote(text):
-                .quote(transform(text))
+            case let .quote(blocks):
+                .quote(blocks.mapInlines(transform))
             case .code:
                 block // code is never inline-parsed
             case let .bulletList(items):
@@ -145,6 +142,8 @@ extension [RichBlock] {
                 .table(table.mapCells(transform))
             case .rule:
                 block // a rule has no inline to transform
+            case .sourceBlankLine:
+                block // source spacing has no inline to transform
             case .linkPreview:
                 // Derived from the message's links rather than authored, and appended
                 // after both passes that use this walk have already run. There is no
@@ -163,13 +162,11 @@ extension [RichBlock] {
 }
 
 extension RichListItem {
-    /// This item with `transform` applied to its own content and, recursively, to
-    /// every inline of the lists nested under it.
+    /// This item with `transform` applied recursively to every inline it contains.
     func mapInlines(_ transform: (AttributedString) -> AttributedString) -> RichListItem {
         RichListItem(
-            content: transform(content),
-            marker: marker,
-            children: children.mapInlines(transform)
+            blocks: blocks.mapInlines(transform),
+            marker: marker
         )
     }
 }
