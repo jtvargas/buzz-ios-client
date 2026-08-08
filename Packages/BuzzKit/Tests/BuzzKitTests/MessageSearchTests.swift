@@ -290,3 +290,33 @@ struct MessageSearchTests {
         ) ?? 0
     }
 }
+
+extension MessageSearchTests {
+    @Test("authorization may return a short page after the bounded candidate window")
+    func boundedCandidateWindow() async throws {
+        let database = TempDatabase()
+        defer { database.remove() }
+        let store = try database.open()
+        let author = try Fixture()
+        var batch: [NostrEvent] = []
+
+        for index in 0 ..< BuzzEventStore.searchCandidateWindowMultiplier {
+            let message = try author.message(
+                "shared shared shared hidden \(index)",
+                at: 1_000 + Int64(index)
+            )
+            batch.append(message)
+            batch.append(
+                author.event(
+                    .deletion,
+                    tags: [["e", message.id]],
+                    at: 2_000 + Int64(index)
+                )
+            )
+        }
+        batch.append(try author.message("shared visible", at: 3_000))
+        _ = try await store.ingest(batch: batch, phase: .backfill)
+
+        #expect(try store.searchMessages(query: "shared", limit: 1).isEmpty)
+    }
+}
