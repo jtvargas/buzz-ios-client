@@ -272,7 +272,10 @@ struct RichTextMarkdownWalker {
 
     private func inlineFragment(_ markdown: String) -> AttributedString {
         let fragment = Document(parsing: markdown, options: [.disableSmartOpts])
-        guard let container = fragment.children.first else { return AttributedString(markdown) }
+        // `child(at:)` rather than `children.first`: `MarkupChildren` is a `Sequence`
+        // and not a `Collection`, so `first` there is `first(where:)` — the method, not
+        // the element — and the mistake type-checks as a closure rather than a node.
+        guard let container = fragment.child(at: 0) else { return AttributedString(markdown) }
         return inlineChildren(of: container)
     }
 
