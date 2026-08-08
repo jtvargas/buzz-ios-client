@@ -165,22 +165,33 @@ private struct RecentPlacesOverlay: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .overlay(alignment: .topTrailing) {
-                if let shown {
-                    // Declared before the panel so it is beneath it, and transparent rather
-                    // than dimmed: this is a twelve-row shortcut, not a mode, and darkening
-                    // the sidebar would say the app had gone somewhere.
+            // Two overlays, and this is not tidiness. **An `overlay(alignment:)` whose
+            // builder returns more than one view drops the alignment and centres what it
+            // draws.** Rendered and measured: a 260×380 panel asking for `.topTrailing`
+            // inside 440×956 lands at x 84…343, y 294…673 when a scrim shares its builder,
+            // and at x 168…427, y 12…391 when it does not. The first of those is where the
+            // owner found it — floating in the middle of his sidebar. Declaring the scrim
+            // first still puts it beneath the panel, which is the only thing the single
+            // builder was buying.
+            .overlay {
+                if shown != nil {
+                    // Transparent rather than dimmed: this is a twelve-row shortcut, not a
+                    // mode, and darkening the sidebar would say the app had gone somewhere.
                     Color.clear
                         .contentShape(.rect)
                         .onTapGesture { isPresented = false }
                         .accessibilityLabel("Close history")
                         .accessibilityAction { isPresented = false }
+                }
+            }
+            .overlay(alignment: .topTrailing) {
+                if let shown {
                     RecentPlacesPanel(places: shown, names: names) { place in
                         isPresented = false
                         open(place)
                     }
-                    .padding(.trailing, Self.inset)
-                    .padding(.top, Self.inset)
+                    .padding(.trailing, Self.trailingInset)
+                    .padding(.top, Self.topGap)
                     // Grows out of the control that opened it, which is the corner it is
                     // pinned to.
                     .transition(.scale(scale: 0.9, anchor: .topTrailing).combined(with: .opacity))
@@ -193,6 +204,13 @@ private struct RecentPlacesOverlay: ViewModifier {
             }
     }
 
-    /// Clear of the screen's edge by the same amount the toolbar's controls are.
-    private static let inset: CGFloat = 12
+    /// Lines the panel's trailing edge up with the toolbar capsule's, so the two read as one
+    /// control and its list. Measured off the owner's screenshot: the capsule ends 24pt from
+    /// the screen's edge, which is the trailing margin an iOS 26 glass toolbar uses — not the
+    /// 16pt a plain bar would.
+    private static let trailingInset: CGFloat = 24
+    /// The gap under the navigation bar, and the whole of the top offset. An overlay is laid
+    /// out inside its view's safe area, and the sidebar's top safe-area edge *is* the bar's
+    /// bottom — so nothing here has to know how tall the bar is or where the status bar ends.
+    private static let topGap: CGFloat = 8
 }
