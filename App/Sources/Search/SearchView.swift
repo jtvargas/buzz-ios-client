@@ -86,6 +86,10 @@ struct SearchView: View {
                         SearchMessageRow(hit: hit, names: entityNames) {
                             open(message: hit)
                         }
+                        // Clear and not nothing: a row given no background falls back to
+                        // `systemBackground`, which is pure black against this screen's
+                        // `#141414` ground — every result would read as a band.
+                        .listRowBackground(Color.clear)
                     }
                 }
             }
@@ -95,6 +99,7 @@ struct SearchView: View {
                         SearchPersonRow(hit: hit, names: entityNames) {
                             profilePeer = ProfilePeer(pubkey: hit.person.pubkey)
                         }
+                        .listRowBackground(Color.clear)
                     }
                 }
             }
@@ -104,6 +109,7 @@ struct SearchView: View {
                         SearchChannelRow(hit: hit) {
                             open(channel: hit.channel)
                         }
+                        .listRowBackground(Color.clear)
                     }
                 }
             }
