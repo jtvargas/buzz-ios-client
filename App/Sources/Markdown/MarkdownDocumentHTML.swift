@@ -126,8 +126,8 @@ enum MarkdownDocumentHTML {
 
         // Exhaustive serialization of the renderer-neutral block model.
         // swiftlint:disable:next cyclomatic_complexity
-        mutating func block(_ block: RichBlock) -> String {
-            switch block {
+        mutating func block(_ richBlock: RichBlock) -> String {
+            switch richBlock {
             case let .paragraph(text):
                 return "<p>\(inline(text))</p>"
             case let .heading(level, text):

@@ -1,6 +1,18 @@
 import BuzzKit
 import Foundation
 
+/// Name normalisation shared by the resolver and the `#channel` map, so a lookup
+/// keyed at build time matches a candidate scanned at render time: lowercased,
+/// whitespace-collapsed (including non-breaking spaces), and trimmed.
+enum RichTextName {
+    static func normalized(_ raw: String) -> String {
+        raw
+            .split(whereSeparator: { $0 == "\u{00A0}" || $0.isWhitespace })
+            .map { $0.lowercased() }
+            .joined(separator: " ")
+    }
+}
+
 /// The outcome of resolving an `@`-name to a mentioned user.
 struct MentionMatch: Hashable, Sendable {
     let pubkey: String

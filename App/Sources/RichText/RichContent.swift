@@ -10,7 +10,7 @@ import Foundation
 /// `@`-mention / `#`-channel tokens are carried in each block's `AttributedString`
 /// — parsed inline-only, with unsafe link schemes stripped and entities attached
 /// as ``MentionAttribute`` / ``ChannelAttribute`` runs (see ``RichTextEntities``).
-indirect enum RichBlock: Equatable, Sendable {
+enum RichBlock: Equatable, Sendable {
     /// A run of text. Soft line breaks inside it are preserved.
     case paragraph(AttributedString)
     /// A heading, level 1–6.
@@ -141,7 +141,10 @@ extension [RichBlock] {
             case let .table(table):
                 .table(table.mapCells(transform))
             case .rule, .sourceBlankLine, .linkPreview, .media:
-                // These blocks carry no authored inline to transform.
+                // These blocks carry no authored inline to transform. In particular,
+                // media alt text belongs to the attachment: autolinking a URL it names
+                // would make the caption tappable, and entity resolution would turn an
+                // `@` in it into a person the message never mentioned.
                 block
             }
         }
