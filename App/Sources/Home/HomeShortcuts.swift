@@ -33,44 +33,38 @@ struct HomeShortcutCards: View {
     var body: some View {
         HStack(spacing: Self.betweenCards) {
             ForEach(HomeShortcut.allCases) { shortcut in
-                // Only the card with something to offer takes a hold at all — and the menu
-                // hangs off the *card*, never off the row.
+                // The hold is added *to the card the app already had*, and nothing about
+                // that card changes: same button, same press treatment, same label colour.
                 //
-                // **`.contextMenu` cannot be used here, and the reason is the row.** All
-                // three cards share one list row, and a context menu written inside a row
-                // is installed on the row: the hold is then answered anywhere along it, so
-                // holding Later or Drafts opened the Threads menu. It is the same reason
-                // ``ChannelListView`` can write one next to `.swipeActions` and mean the
-                // whole row by it. `Menu` is a control rather than a row decoration, so its
-                // long press is bounded by its label — this card, and nothing either side.
+                // **A `Menu` was tried here and was wrong twice over.** It tints its whole
+                // label with the accent, so the glyph and both lines went amber next to two
+                // white cards; and it carries no button, so ``PressFeedbackButtonStyle`` —
+                // a *button* style — had nothing to attach to and the dip and the wash went
+                // with it. Anything that replaces the control has to re-supply everything
+                // the control was already giving.
                 //
-                // `primaryAction` is what keeps the tap: without it a `Menu` opens on a
-                // tap, and the card stops being a way into the Threads screen at all.
-                //
-                // The cost is this card's press treatment: the wash and the shrink come
-                // from a `PrimitiveButtonStyle`, and there is no button here to carry it.
-                // A hold that opens the right menu is worth more than a tap that dips.
+                // What is bounded here instead is the *preview*: all three cards share one
+                // list row, so the lift takes the row's shape unless the card names its own.
                 if shortcut.offersMarkAllRead {
-                    Menu {
-                        // Not destructive, though it takes the row a delete usually
-                        // occupies in a menu this shape: nothing is removed and nothing
-                        // is published — a mark is this device saying it has looked.
-                        Button("Mark All As Read", systemImage: "checkmark.circle") {
-                            markAllThreadsRead()
-                        }
-                        // Offered but inert at zero rather than absent. A menu item that
-                        // exists only while there is something to clear is one nobody
-                        // finds the first time they go looking for it.
-                        .disabled(count(shortcut) == 0)
-                    } label: {
-                        HomeShortcutCard(
-                            shortcut: shortcut,
-                            count: count(shortcut),
-                            isCalling: isCalling(shortcut)
+                    card(shortcut)
+                        // The lifted shape under the menu — this card, in its own corner
+                        // radius, rather than the whole row it shares with two others.
+                        .contentShape(
+                            .contextMenuPreview,
+                            .rect(cornerRadius: HomeShortcutCard.cornerRadius)
                         )
-                    } primaryAction: {
-                        press(shortcut)
-                    }
+                        .contextMenu {
+                            // Not destructive, though it takes the row a delete usually
+                            // occupies in a menu this shape: nothing is removed and nothing
+                            // is published — a mark is this device saying it has looked.
+                            Button("Mark All As Read", systemImage: "checkmark.circle") {
+                                markAllThreadsRead()
+                            }
+                            // Offered but inert at zero rather than absent. A menu item that
+                            // exists only while there is something to clear is one nobody
+                            // finds the first time they go looking for it.
+                            .disabled(count(shortcut) == 0)
+                        }
                 } else {
                     card(shortcut)
                 }
