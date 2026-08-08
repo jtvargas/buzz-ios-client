@@ -15,8 +15,13 @@ struct RichTextMarkdownWalker {
         let normalized = markdown
             .replacingOccurrences(of: "\r\n", with: "\n")
             .replacingOccurrences(of: "\r", with: "\n")
-        sourceLines = normalized.components(separatedBy: "\n")
-        document = Document(parsing: normalized, options: [.disableSmartOpts])
+        // Ahead of `Document(parsing:)` rather than inside the walk: see
+        // ``RichTextParser/clampingQuoteDepth(_:limit:)`` for why nothing downstream of
+        // this line can bound a blockquote. `sourceLines` comes off the clamped text too,
+        // so the per-cell fragment parse in ``inlineFragment(_:)`` inherits the bound.
+        let bounded = RichTextParser.clampingQuoteDepth(normalized)
+        sourceLines = bounded.components(separatedBy: "\n")
+        document = Document(parsing: bounded, options: [.disableSmartOpts])
     }
 
     var blocks: [RichBlock] {

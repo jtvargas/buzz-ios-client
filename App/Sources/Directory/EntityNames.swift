@@ -336,12 +336,32 @@ struct EntityNames: Equatable, Sendable {
     /// the product rule for "this is a DM": a direct message *is* a channel whose
     /// roster is exactly the two people in it. Any other roster size, an unknown
     /// roster, or a keyless session reads as a channel.
+    ///
+    /// The roster only gets to answer for a room the relay has not already classified.
+    /// A named channel with two people in it — a project channel with one collaborator,
+    /// a `repo-*` forum, a channel opened with a single agent — is the same *shape* as a
+    /// DM and is not one, and the relay says which is which: it is the rule the group
+    /// branch in ``conversation(for:id:knownPeers:)`` already keeps. Left to the shape
+    /// alone, such a channel filed under the DMs titled by whoever else was in it, and
+    /// its real name appeared nowhere in the sidebar.
+    ///
+    /// A `nil` type stays a *don't know* and falls through to the roster, so a DM the
+    /// relay has opened but whose kind 39000 has not landed still classifies — the same
+    /// in-flight case ``unprojectedPeer(in:hint:)`` exists for.
     func directPeer(in channel: String) -> String? {
         guard let selfPubkey else { return nil }
+        if let type = channelsByID[channel]?.channelType, type != Self.directMessageChannelType {
+            return nil
+        }
         let members = snapshot.members(of: channel)
         guard members.count == 2, members.contains(selfPubkey) else { return nil }
         return members.first { $0 != selfPubkey }
     }
+
+    /// The relay's own name for a direct message, the value behind
+    /// ``BuzzKit/ChannelListRow/isDirectMessage``. Named here because this is the one
+    /// place that asks what a type *is not*, which that Boolean cannot express.
+    private static let directMessageChannelType = "dm"
 
     /// The name to render for a channel — its metadata name, or a human placeholder
     /// when the relay has not given it one.

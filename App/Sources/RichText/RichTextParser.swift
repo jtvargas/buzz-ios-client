@@ -6,6 +6,10 @@ enum RichTextParser {
     /// The deepest nested list level materialised from untrusted input. The root
     /// list is level zero; deeper authored levels collapse into level eight.
     static let maxListDepth = 8
+    /// The deepest nested blockquote level accepted from untrusted input, matching
+    /// ``maxListDepth`` because it answers the same question. Excess markers are
+    /// dropped by ``clampingQuoteDepth(_:limit:)`` before anything parses the source.
+    static let maxQuoteDepth = 8
     /// The most authored blank lines retained between two semantic blocks.
     static let maxBlankLineRun = 3
     /// The most cells rendered as a grid before a table falls back to plain text.
@@ -14,6 +18,61 @@ enum RichTextParser {
     /// Parses `markdown` through swift-markdown's CommonMark + GFM AST.
     static func parse(_ markdown: String) -> [RichBlock] {
         RichTextMarkdownWalker(markdown).blocks
+    }
+
+    /// `markdown` with any blockquote nesting past `limit` levels flattened onto `limit`.
+    ///
+    /// # Why this is a *source* pass and not a walk
+    ///
+    /// ``maxListDepth`` can be applied while walking, because by then the tree exists.
+    /// A quote cannot: swift-markdown's converter recurses once per level on the way in
+    /// (`convertBlockQuote` → `convertChildren` → `convertAnyElement` → `convertBlockQuote`),
+    /// so a tree deep enough to need flattening has already overflowed the stack while it
+    /// was being built. cmark does not bound `>` either — its `MAX_LIST_DEPTH` gate sits on
+    /// the list-marker and footnote branches only. Neither does the view chain, which
+    /// recurses again to draw what the walker returns.
+    ///
+    /// A message of a few thousand `>` characters is one line to author, and the event
+    /// stays on the relay: every client rendering that channel dies, and dies again on
+    /// relaunch. This is the only place ahead of all three recursions.
+    ///
+    /// Only the markers are dropped, never the text beside them, and a document already
+    /// within `limit` is returned unchanged rather than rebuilt — so the pass is invisible
+    /// to every message anybody actually writes. That early return is also what keeps it
+    /// away from a fenced block holding `>`-prefixed lines: reaching one at all takes a
+    /// quote somewhere in the same message nested deeper than a reader could see.
+    static func clampingQuoteDepth(_ markdown: String, limit: Int = maxQuoteDepth) -> String {
+        let lines = markdown.components(separatedBy: "\n")
+        guard lines.contains(where: { quoteMarkerScan($0).depth > limit }) else { return markdown }
+        return lines.map { line -> String in
+            let scan = quoteMarkerScan(line)
+            guard scan.depth > limit else { return line }
+            return String(repeating: "> ", count: limit) + line[scan.contentStart...]
+        }
+        .joined(separator: "\n")
+    }
+
+    /// How many blockquote markers open `line`, and where the text after them begins.
+    ///
+    /// CommonMark's own shape: up to three spaces of indent, `>`, then one optional
+    /// space, repeated. A fourth space is an indented code block rather than more
+    /// nesting, so the count stops there exactly where cmark's does.
+    private static func quoteMarkerScan(_ line: String) -> (depth: Int, contentStart: String.Index) {
+        var index = line.startIndex
+        var depth = 0
+        while index < line.endIndex {
+            var probe = index
+            var indent = 0
+            while probe < line.endIndex, line[probe] == " ", indent < 3 {
+                probe = line.index(after: probe)
+                indent += 1
+            }
+            guard probe < line.endIndex, line[probe] == ">" else { break }
+            depth += 1
+            index = line.index(after: probe)
+            if index < line.endIndex, line[index] == " " { index = line.index(after: index) }
+        }
+        return (depth, index)
     }
 
     /// Whether `trimmed` is a thematic break: CommonMark's rule characters or the
