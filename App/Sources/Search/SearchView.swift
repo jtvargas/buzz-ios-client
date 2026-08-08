@@ -7,11 +7,13 @@ struct SearchView: View {
 
     @State private var model: SearchModel
     @State private var query = ""
-    @State private var path: [ConversationRoute] = []
-    /// A thread opened straight from a result, as ``ActivityView`` opens one from a
-    /// notification: a reply is not reachable inside its channel, so the thread is where the
-    /// result lives and Back belongs to the results rather than to a channel nobody asked for.
-    @State private var openedThread: ThreadRoute?
+    /// Everything this stack has pushed, conversations and threads alike — see
+    /// ``SearchRoute`` for why a thread is an element here rather than a binding beside it.
+    @State private var path: [SearchRoute] = []
+    /// The result whose tap has not yet produced a screen. Drawn as a spinner on that row,
+    /// and cleared by the destination's own `onAppear`, so it covers exactly the gap between
+    /// the finger and the answer and never outlives it.
+    @State private var opening: String?
     @State private var ticker = RelativeTimeTicker()
     @State private var threadReads = ThreadReadMarks()
     @State private var router: DirectMessageRouter
@@ -39,30 +41,11 @@ struct SearchView: View {
         NavigationStack(path: $path) {
             content
                 .navigationTitle(HomeTab.search.title)
-                .navigationDestination(for: ConversationRoute.self) { route in
-                    ChannelTimelineView(
-                        channel: route.channel,
-                        store: store,
-                        engine: engine,
-                        drafts: environment.drafts,
-                        uploader: { environment.mediaUploader },
-                        selfPubkey: selfPubkey,
-                        knownPeers: route.knownPeers,
-                        focusingComposer: route.focusesComposer,
-                        focusing: route.focus
-                    )
-                }
-                .navigationDestination(item: $openedThread) { route in
-                    ThreadView(
-                        root: route.root,
-                        channel: route.channel,
-                        store: store,
-                        engine: engine,
-                        drafts: environment.drafts,
-                        uploader: { environment.mediaUploader },
-                        selfPubkey: selfPubkey,
-                        landingOn: route.anchor
-                    )
+                .navigationDestination(for: SearchRoute.self) { route in
+                    destination(for: route)
+                        // The tap has produced a screen, so the row that answered it can stop
+                        // saying it is working on one.
+                        .onAppear { opening = nil }
                 }
         }
         .searchable(text: $query, prompt: "Search messages")
@@ -74,10 +57,9 @@ struct SearchView: View {
             // up after it hides the top of their own results.
             isFieldFocused = false
         }
-        .toolbar(
-            ChannelListTabBar.visibility(conversations: path, openedThread: openedThread),
-            for: .tabBar
-        )
+        // From the path alone, because the path is now the whole stack. Declared here rather
+        // than on the pushed views for ``ChannelListTabBar``'s measured reason.
+        .toolbar(path.isEmpty ? .visible : .hidden, for: .tabBar)
         .environment(\.entityNames, entityNames)
         .environment(\.channelNameMap, ChannelNameMap(channels: model.channels))
         .environment(\.relativeTimeTicker, ticker)
@@ -93,9 +75,12 @@ struct SearchView: View {
                 channel: channelRow(for: opened.channelID),
                 knownPeers: opened.peers
             )
-            path = route.pushed(onto: path)
+            path = SearchRoute.conversation(route).pushed(onto: path)
         }
-        .onChange(of: RecentPlaces.location(path: path, openedThread: nil), initial: true) { _, location in
+        .onChange(
+            of: RecentPlaces.location(path: path.conversations, openedThread: path.openedThread),
+            initial: true
+        ) { _, location in
             environment.recents.visit(location, in: environment.communities.activeID)
         }
         .task { await ticker.run() }
@@ -105,7 +90,7 @@ struct SearchView: View {
     private var content: some View {
         List {
             ForEach(model.messages) { hit in
-                SearchMessageRow(hit: hit, names: entityNames) {
+                SearchMessageRow(hit: hit, names: entityNames, isOpening: opening == hit.id) {
                     open(message: hit)
                 }
                 // Clear and not nothing: a row given no background falls back to
@@ -204,6 +189,36 @@ struct SearchView: View {
         }
     }
 
+    /// The screen a route names.
+    @ViewBuilder
+    private func destination(for route: SearchRoute) -> some View {
+        switch route {
+        case let .conversation(route):
+            ChannelTimelineView(
+                channel: route.channel,
+                store: store,
+                engine: engine,
+                drafts: environment.drafts,
+                uploader: { environment.mediaUploader },
+                selfPubkey: selfPubkey,
+                knownPeers: route.knownPeers,
+                focusingComposer: route.focusesComposer,
+                focusing: route.focus
+            )
+        case let .thread(route):
+            ThreadView(
+                root: route.root,
+                channel: route.channel,
+                store: store,
+                engine: engine,
+                drafts: environment.drafts,
+                uploader: { environment.mediaUploader },
+                selfPubkey: selfPubkey,
+                landingOn: route.anchor
+            )
+        }
+    }
+
     /// Opens the surface the message is actually on, and asks that surface to land on it.
     ///
     /// A non-broadcast reply is deliberately excluded from its channel's page — see the
@@ -211,13 +226,15 @@ struct SearchView: View {
     /// one pushes a screen it can never appear in, and the landing would page the entire
     /// channel back looking for a row that is not in it. Its thread is where it lives.
     ///
-    /// Straight to the thread rather than through its channel, which is ``ActivityView``'s
-    /// rule for the same shape: Back belongs to the results the reader is working through.
+    /// Straight to the thread rather than through its channel: Back belongs to the results the
+    /// reader is working through, not to a channel nobody asked for.
     private func open(message: SearchMessageResult) {
+        opening = message.id
         if let root = message.threadRootID {
-            openedThread = ThreadRoute(
+            let route = ThreadRoute(
                 root: root, channel: message.channelID, anchor: .reply(message.id)
             )
+            path = SearchRoute.thread(route).pushed(onto: path)
             return
         }
         let fallback = ChannelListRow(
@@ -252,7 +269,7 @@ struct SearchView: View {
             channel: channelRow(for: channelID, fallback: fallback),
             focus: focus
         )
-        path = route.pushed(onto: path)
+        path = SearchRoute.conversation(route).pushed(onto: path)
     }
 
     private func channelRow(for channelID: String, fallback: ChannelListRow? = nil) -> ChannelListRow {

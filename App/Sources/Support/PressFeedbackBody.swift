@@ -77,7 +77,29 @@ struct PressFeedbackBody: View {
         // adopter gets the delay taken off whatever it is scrolling inside — see
         // ``ScrollTouchDeliveryView``.
         .immediateScrollTouchDelivery()
-        .onDisappear { release?.cancel() }
+        .onDisappear { settle() }
+    }
+
+    /// Puts the press down when the control leaves the screen with one still showing.
+    ///
+    /// This was `release?.cancel()` alone, which strands it. The release is scheduled on a
+    /// task — it has a turn to wait for, and sometimes ``PressFeedback/minimumVisible`` on top
+    /// — so a control that pushes a screen is very often gone before that task gets to run.
+    /// Cancelling it then leaves ``isShowing`` true with nothing left that would ever set it
+    /// false, and `@State` survives being covered: the row comes back still lit, and stays lit
+    /// until it is pressed again. Every row in the app that navigates had it.
+    ///
+    /// The cancel still has to happen first, or the task it left running would set the flag a
+    /// second time under the reader on the way back.
+    private func settle() {
+        release?.cancel()
+        release = nil
+        guard isShowing else { return }
+        // Nobody is watching this one — the control is off screen — but the curve is what the
+        // *next* change animates with, and leaving the press curve loaded would make the
+        // control's next release play the wrong way round.
+        curve = PressFeedback.cancel
+        isShowing = false
     }
 
     /// Runs the button's action, immediately, and records that this press ended in one.
