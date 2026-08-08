@@ -30,51 +30,34 @@ struct HomeShortcutCards: View {
     /// Reached by holding the Threads card; see ``HomeShortcut/offersMarkAllRead``.
     let markAllThreadsRead: () -> Void
 
-    /// The same relation ``HomeShortcutCard`` sizes itself by, so the hosted card grows with
-    /// its neighbours instead of clipping at an accessibility size.
-    @ScaledMetric(relativeTo: .subheadline) private var typeScale: CGFloat = 1
-
     var body: some View {
         HStack(spacing: Self.betweenCards) {
             ForEach(HomeShortcut.allCases) { shortcut in
                 // The hold is added *to the card the app already had*, and nothing about
-                // that card changes: same button, same press treatment, same label colour.
-                // What changes is only where the card is hosted — see
-                // ``HostedShortcutCard``, which carries the whole argument.
+                // that card changes: same button, same press treatment, same label colour,
+                // same place in the scrolling list. ``ShortcutCardMenu`` carries the whole
+                // argument for why it is UIKit's own interaction and not `.contextMenu`.
                 if shortcut.offersMarkAllRead {
-                    HostedShortcutCard { menuedCard(shortcut) }
-                        // The hosting view has no idea what a card is worth, so it is given
-                        // the height the other two work out for themselves. Same
-                        // `@ScaledMetric` relation, so all three grow together.
-                        .frame(height: HomeShortcutCard.height * typeScale)
+                    card(shortcut).background {
+                        ShortcutCardMenu(
+                            title: "Mark All As Read",
+                            systemImage: "checkmark.circle",
+                            // Offered but inert at zero rather than absent. A menu item that
+                            // exists only while there is something to clear is one nobody
+                            // finds the first time they go looking for it.
+                            isEnabled: count(shortcut) > 0,
+                            action: markAllThreadsRead
+                        )
+                        // A vantage point, never a target — the same rule
+                        // ``ScrollTouchDelivery`` is held to. It must not be in the way of
+                        // the press it sits behind.
+                        .allowsHitTesting(false)
+                    }
                 } else {
                     card(shortcut)
                 }
             }
         }
-    }
-
-    /// The card that answers a hold: the same card as any other, and the menu it offers.
-    ///
-    /// Drawn inside ``HostedShortcutCard``, which is the only reason the menu can mean this
-    /// card rather than the row all three share.
-    private func menuedCard(_ shortcut: HomeShortcut) -> some View {
-        card(shortcut)
-            // The lifted shape under the menu: the card's own corner radius rather than the
-            // square bounds of the view hosting it.
-            .contentShape(.contextMenuPreview, .rect(cornerRadius: HomeShortcutCard.cornerRadius))
-            .contextMenu {
-                // Not destructive, though it takes the row a delete usually occupies in a
-                // menu this shape: nothing is removed and nothing is published — a mark is
-                // this device saying it has looked.
-                Button("Mark All As Read", systemImage: "checkmark.circle") {
-                    markAllThreadsRead()
-                }
-                // Offered but inert at zero rather than absent. A menu item that exists only
-                // while there is something to clear is one nobody finds the first time they
-                // go looking for it.
-                .disabled(count(shortcut) == 0)
-            }
     }
 
     /// A card with nothing under a hold: an ordinary button, and the app's press treatment.
@@ -235,9 +218,7 @@ struct HomeShortcutCard: View {
     /// floor is the content — glyph, title, count, and the padding around them come to
     /// about 78 at default type — so this leaves a little air above the title and no more.
     /// The width is the row's own, divided.
-    /// Not private: ``HomeShortcutCards`` gives the hosted card this same height, because a
-    /// hosting view sizes itself from the slot it is given rather than from what is inside it.
-    static let height: CGFloat = 86
+    private static let height: CGFloat = 86
     /// The card's edge, and so the shape a press is washed in — see ``HomeShortcutCards``.
     /// Reachable from there for that reason alone: a wash drawn on a shape the card does not
     /// have is more visible than no wash at all.
