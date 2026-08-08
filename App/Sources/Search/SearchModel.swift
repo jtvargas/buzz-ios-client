@@ -2,12 +2,17 @@ import BuzzKit
 import Foundation
 import Observation
 
+/// One database read: the message hits, plus the names and rooms needed to draw them.
+///
+/// The directory and the channel list do not depend on the query. They travel with it
+/// because a result row has to name its author and its conversation, and because the
+/// channel list is also the membership set the relay hits are filtered against.
 struct SearchSnapshot: Sendable, Hashable {
-    let results: LocalSearchResults
+    let messages: [MessageSearchHit]
     let directory: DirectorySnapshot
     let channels: [ChannelListRow]
 
-    static let empty = SearchSnapshot(results: .empty, directory: .empty, channels: [])
+    static let empty = SearchSnapshot(messages: [], directory: .empty, channels: [])
 }
 
 struct SearchMessageResult: Sendable, Hashable, Identifiable {
@@ -54,18 +59,27 @@ final class SearchModel {
     typealias RelayLookup = @Sendable (String) async throws -> [RelayMessageSearchHit]
 
     private(set) var current = ""
-    private(set) var results: LocalSearchResults = .empty
+    private(set) var localMessages: [MessageSearchHit] = []
     private(set) var directory: DirectorySnapshot = .empty
     private(set) var channels: [ChannelListRow] = []
     private(set) var isSearching = false
     private(set) var hasSearched = false
     private(set) var errorMessage: String?
 
+    /// Local hits first, then whatever the relay reached that this device had not stored.
+    ///
+    /// A relay hit is dropped unless its channel is in ``channels`` — the rooms this
+    /// identity has joined and not archived. The relay answers a NIP-50 search from
+    /// everything it will show us, so a hit can name a conversation this device cannot
+    /// open: tapping it would push a screen that stays empty forever. A *local* hit needs
+    /// no such filter, because the message being in the local log is what makes the
+    /// conversation openable.
     var messages: [SearchMessageResult] {
-        let local = results.messages.map(SearchMessageResult.init)
+        let local = localMessages.map(SearchMessageResult.init)
         let localIDs = Set(local.map(\.id))
+        let joined = Set(channels.map(\.id))
         let relay = relayMessages
-            .filter { !localIDs.contains($0.id) }
+            .filter { !localIDs.contains($0.id) && joined.contains($0.channelID) }
             .sorted { $0.ordinal < $1.ordinal }
             .map(SearchMessageResult.init)
         return local + relay
@@ -121,7 +135,7 @@ final class SearchModel {
         errorMessage = nil
 
         guard query.count >= 2 else {
-            results = .empty
+            localMessages = []
             relayMessages = []
             isSearching = false
             hasSearched = false
@@ -151,7 +165,7 @@ final class SearchModel {
         do {
             let snapshot = try await lookup(query)
             guard !Task.isCancelled, current == query else { return }
-            results = snapshot.results
+            localMessages = snapshot.messages
             relayMessages = []
             directory = snapshot.directory
             channels = snapshot.channels
@@ -196,7 +210,7 @@ final class SearchModel {
             guard let selfPubkey else { return .empty }
             return try await Task.detached(priority: .userInitiated) {
                 SearchSnapshot(
-                    results: try store.searchLocal(query: query, selfPubkey: selfPubkey),
+                    messages: try store.searchMessages(query: query),
                     directory: try store.directorySnapshot(selfPubkey: selfPubkey),
                     channels: try store.channelList(selfPubkey: selfPubkey)
                 )

@@ -1,18 +1,19 @@
 import BuzzKit
 import SwiftUI
 
-/// Local-first search with its own navigation stack and resolver scope.
+/// Local-first message search with its own navigation stack and resolver scope.
 struct SearchView: View {
     @Environment(AppEnvironment.self) private var environment
 
     @State private var model: SearchModel
     @State private var query = ""
     @State private var path: [ConversationRoute] = []
-    @State private var profilePeer: ProfilePeer?
-    @State private var presence: PresenceModel
     @State private var ticker = RelativeTimeTicker()
     @State private var threadReads = ThreadReadMarks()
     @State private var router: DirectMessageRouter
+    /// This screen presents no keyboard of its own and the search role's field ships no
+    /// Cancel button, so the field's focus is the only handle on the keyboard there is.
+    @FocusState private var isFieldFocused: Bool
 
     private let store: BuzzEventStore
     private let engine: SyncEngine
@@ -23,7 +24,6 @@ struct SearchView: View {
         self.engine = engine
         self.selfPubkey = selfPubkey
         _model = State(initialValue: SearchModel(store: store, selfPubkey: selfPubkey, engine: engine))
-        _presence = State(initialValue: PresenceModel(store: engine.presenceStore))
         _router = State(initialValue: DirectMessageRouter(opener: engine))
     }
 
@@ -48,9 +48,21 @@ struct SearchView: View {
                     )
                 }
         }
-        .searchable(text: $query, prompt: "Search messages, people, and channels")
+        .searchable(text: $query, prompt: "Search messages")
+        .searchFocused($isFieldFocused)
         .onChange(of: query) { _, value in model.search(value) }
-        .onSubmit(of: .search) { model.submit(query) }
+        .onSubmit(of: .search) {
+            model.submit(query)
+            // Submitting is the reader saying they are done typing. Holding the keyboard
+            // up after it hides the top of their own results.
+            isFieldFocused = false
+        }
+        .toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button("Done") { isFieldFocused = false }
+            }
+        }
         .toolbar(ChannelListTabBar.visibility(conversations: path, openedThread: nil), for: .tabBar)
         .environment(\.entityNames, entityNames)
         .environment(\.channelNameMap, ChannelNameMap(channels: model.channels))
@@ -72,83 +84,73 @@ struct SearchView: View {
         .onChange(of: RecentPlaces.location(path: path, openedThread: nil), initial: true) { _, location in
             environment.recents.visit(location, in: environment.communities.activeID)
         }
-        .profileSheet(peer: $profilePeer, presence: presence)
-        .task { await presence.run() }
         .task { await ticker.run() }
     }
 
     @ViewBuilder
     private var content: some View {
         List {
-            if !model.messages.isEmpty {
-                Section("Messages") {
-                    ForEach(model.messages) { hit in
-                        SearchMessageRow(hit: hit, names: entityNames) {
-                            open(message: hit)
-                        }
-                        // Clear and not nothing: a row given no background falls back to
-                        // `systemBackground`, which is pure black against this screen's
-                        // `#141414` ground — every result would read as a band.
-                        .listRowBackground(Color.clear)
-                    }
+            ForEach(model.messages) { hit in
+                SearchMessageRow(hit: hit, names: entityNames) {
+                    open(message: hit)
                 }
-            }
-            if !model.results.people.isEmpty {
-                Section("People") {
-                    ForEach(model.results.people) { hit in
-                        SearchPersonRow(hit: hit, names: entityNames) {
-                            profilePeer = ProfilePeer(pubkey: hit.person.pubkey)
-                        }
-                        .listRowBackground(Color.clear)
-                    }
-                }
-            }
-            if !model.results.channels.isEmpty {
-                Section("Channels") {
-                    ForEach(model.results.channels) { hit in
-                        SearchChannelRow(hit: hit) {
-                            open(channel: hit.channel)
-                        }
-                        .listRowBackground(Color.clear)
-                    }
-                }
+                // Clear and not nothing: a row given no background falls back to
+                // `systemBackground`, which is pure black against this screen's
+                // `#141414` ground — every result would read as a band.
+                .listRowBackground(Color.clear)
             }
         }
         .listStyle(.plain)
+        // The keyboard covers the results it is producing. Dragging the list is the
+        // gesture a reader already reaches for; `Done` and the tap below cover the
+        // states where there is nothing to drag.
+        .scrollDismissesKeyboard(.immediately)
         .hiveScreenGround()
         .overlay { stateOverlay }
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            if model.isSearching {
-                ProgressView()
-                    .controlSize(.small)
-                    .padding(.vertical, 8)
-                    .frame(maxWidth: .infinity)
-                    .background(.bar)
-            }
+    }
+
+    /// The list's one non-row state: searching, failed, empty, or not yet asked.
+    ///
+    /// Centred in the list's own bounds, which the keyboard insets — so the spinner sits
+    /// in the middle of what the reader can actually see rather than under the keys.
+    @ViewBuilder
+    private var stateOverlay: some View {
+        if model.isSearching, model.messages.isEmpty {
+            ProgressView()
+                .controlSize(.large)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .dismissesKeyboard($isFieldFocused)
+        } else if model.messages.isEmpty {
+            emptyState
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .dismissesKeyboard($isFieldFocused)
+        } else if model.isSearching {
+            // Results are already on screen and a newer answer is still coming. A floating
+            // pill says so without displacing the rows or blocking a tap on one.
+            ProgressView()
+                .controlSize(.small)
+                .padding(12)
+                .background(.regularMaterial, in: .circle)
+                .allowsHitTesting(false)
         }
     }
 
     @ViewBuilder
-    private var stateOverlay: some View {
-        if model.messages.isEmpty,
-           model.results.people.isEmpty,
-           model.results.channels.isEmpty,
-           !model.isSearching {
-            if let error = model.errorMessage {
-                ContentUnavailableView(
-                    "Search unavailable",
-                    systemImage: "exclamationmark.magnifyingglass",
-                    description: Text(error)
-                )
-            } else if model.hasSearched {
-                ContentUnavailableView.search(text: model.current)
-            } else {
-                ContentUnavailableView(
-                    "Search",
-                    systemImage: "magnifyingglass",
-                    description: Text("Find messages, people, and channels.")
-                )
-            }
+    private var emptyState: some View {
+        if let error = model.errorMessage {
+            ContentUnavailableView(
+                "Search unavailable",
+                systemImage: "exclamationmark.magnifyingglass",
+                description: Text(error)
+            )
+        } else if model.hasSearched {
+            ContentUnavailableView.search(text: model.current)
+        } else {
+            ContentUnavailableView(
+                "Search messages",
+                systemImage: "magnifyingglass",
+                description: Text("Find any message in the conversations you are in.")
+            )
         }
     }
 
@@ -169,26 +171,27 @@ struct SearchView: View {
         open(channelID: message.channelID, fallback: fallback)
     }
 
-    private func open(channel: BrowsableChannel) {
-        let fallback = ChannelListRow(
-            id: channel.id,
-            name: channel.name,
-            about: channel.about,
-            picture: channel.picture,
-            isPrivate: channel.isPrivate,
-            lastMessageAt: nil,
-            lastMessageSnippet: nil,
-            lastMessageAuthor: nil
-        )
-        open(channelID: channel.id, fallback: fallback)
-    }
-
     private func open(channelID: String, fallback: ChannelListRow? = nil) {
+        // Dropped here rather than on the way back: focus survives a push, so a reader
+        // returning from a conversation would otherwise land on a raised keyboard they
+        // never asked for.
+        isFieldFocused = false
         let route = ConversationRoute(channel: channelRow(for: channelID, fallback: fallback))
         path = route.pushed(onto: path)
     }
 
     private func channelRow(for channelID: String, fallback: ChannelListRow? = nil) -> ChannelListRow {
         ChannelListView.conversationRow(for: channelID, in: model.channels, fallback: fallback)
+    }
+}
+
+private extension View {
+    /// Puts the search field's keyboard away when this view is tapped.
+    ///
+    /// Only ever applied to a state view standing in for an empty list. Over live rows a
+    /// tap gesture would compete with the row buttons for the same touch.
+    func dismissesKeyboard(_ focus: FocusState<Bool>.Binding) -> some View {
+        contentShape(.rect)
+            .onTapGesture { focus.wrappedValue = false }
     }
 }

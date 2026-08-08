@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// The app's tabs: conversations, what has happened to you, and search.
+/// The app's tabs: conversations, what has happened to you, and message search.
 ///
 /// The symbols follow the platform's own convention rather than the tab bar's default
 /// substitution: the tab being read is drawn filled, the others outlined, which is how every
@@ -13,7 +13,7 @@ enum HomeTab: String, CaseIterable, Hashable, Identifiable {
     /// Mentions, replies, approvals and agent updates addressed to you, grouped by
     /// conversation.
     case activity
-    /// Messages, people, and channels already known to this community, plus relay reach.
+    /// Messages already stored on this device, plus whatever the relay can still reach.
     case search
 
     var id: String { rawValue }

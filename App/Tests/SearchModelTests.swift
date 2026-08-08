@@ -45,7 +45,7 @@ struct SearchModelTests {
         model.search("current")
         await probe.waitForQuery("current")
 
-        let current = SearchSnapshot(results: .empty, directory: .empty, channels: [])
+        let current = SearchSnapshot(messages: [], directory: .empty, channels: [])
         await probe.resolve("current", with: current)
         await Task.yield()
         await probe.resolve("old", with: .empty)
@@ -68,7 +68,7 @@ struct SearchModelTests {
 
         model.search("a")
 
-        #expect(model.results == .empty)
+        #expect(model.localMessages.isEmpty)
         #expect(!model.isSearching)
         #expect(!model.hasSearched)
         #expect(await probe.queries.isEmpty)
@@ -97,10 +97,34 @@ struct SearchModelTests {
         #expect(model.messages.map(\.id) == ["local", "first", "second"])
     }
 
-    private func relayHit(id: String, ordinal: Int) -> RelayMessageSearchHit {
+    @Test("a relay hit in a channel this identity has not joined is not offered")
+    func relayHitOutsideMembershipIsDropped() async throws {
+        let database = TempStore()
+        defer { database.remove() }
+        let store = try database.open()
+        let mine = relayHit(id: "mine", ordinal: 0)
+        let elsewhere = relayHit(id: "elsewhere", channelID: "stranger", ordinal: 1)
+        let local = localSnapshot(id: "local")
+        let model = SearchModel(
+            store: store,
+            selfPubkey: "reader",
+            debounce: .zero,
+            lookup: { _ in local },
+            relayLookup: { _ in [mine, elsewhere] }
+        )
+
+        model.search("bees")
+        while model.isSearching { await Task.yield() }
+
+        // The local hit's own channel is not filtered on: being in the local log is what
+        // makes it openable, whether or not the channel is still in the membership set.
+        #expect(model.messages.map(\.id) == ["local", "mine"])
+    }
+
+    private func relayHit(id: String, channelID: String = "channel", ordinal: Int) -> RelayMessageSearchHit {
         RelayMessageSearchHit(
             id: id,
-            channelID: "channel",
+            channelID: channelID,
             pubkey: "author",
             createdAt: Int64(ordinal),
             content: "bees",
@@ -110,25 +134,30 @@ struct SearchModelTests {
     }
 
     private func localSnapshot(id: String) -> SearchSnapshot {
-        return SearchSnapshot(
-            results: LocalSearchResults(
-                messages: [MessageSearchHit(
-                    id: id,
-                    channelID: "channel",
-                    pubkey: "author",
-                    createdAt: 1,
-                    content: "bees",
-                    matchRanges: [SearchMatchRange(location: 0, length: 4)],
-                    rank: -1,
-                    authorName: nil,
-                    authorPicture: nil,
-                    isDirectMessage: false
-                )],
-                people: [],
-                channels: []
-            ),
+        SearchSnapshot(
+            messages: [MessageSearchHit(
+                id: id,
+                channelID: "channel",
+                pubkey: "author",
+                createdAt: 1,
+                content: "bees",
+                matchRanges: [SearchMatchRange(location: 0, length: 4)],
+                rank: -1,
+                authorName: nil,
+                authorPicture: nil,
+                isDirectMessage: false
+            )],
             directory: .empty,
-            channels: []
+            channels: [ChannelListRow(
+                id: "channel",
+                name: "Channel",
+                about: nil,
+                picture: nil,
+                isPrivate: false,
+                lastMessageAt: nil,
+                lastMessageSnippet: nil,
+                lastMessageAuthor: nil
+            )]
         )
     }
 }
