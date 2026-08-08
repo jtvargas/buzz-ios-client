@@ -160,6 +160,10 @@ targets:
         NSCameraUsageDescription: >-
           Hive uses the camera to take photos you attach to messages, and to scan the
           pairing QR code shown on your desktop.
+        NSMicrophoneUsageDescription: >-
+          Hive uses the microphone only while you dictate text into a message.
+        NSSpeechRecognitionUsageDescription: >-
+          Hive uses on-device speech recognition to turn your dictation into message text.
         # Add-only, deliberately: Hive never reads the photo library, and the prompt a
         # reader is shown should promise no more than the app will do. The read-side
         # `NSPhotoLibraryUsageDescription` is absent for that reason — the composer's
