@@ -521,10 +521,16 @@ struct ConversationScaffold<Content: View, Bar: View, Accessory: View>: View {
                 // `.bottom` in flipped space is the target row's visual top edge, so the first
                 // thing under the reader's eye is the first message they have not read.
                 proxy.scrollTo(id, anchor: .bottom)
-                // Landing on a message is the reader choosing a place that is not the
-                // newest one, exactly as a drag is. Without this, the next content change
-                // would put them back at the bottom they deliberately left.
-                place.hasMoved = true
+                // Landing on a message is the reader choosing a place that is not the newest
+                // one, exactly as a drag is.
+                //
+                // This was `place.hasMoved = true`, which is half of it and reads as the
+                // whole: `hasMoved` says the place is the reader's, and `anchoredDistance`
+                // says what the place *is*. The second one still holds the distance they had
+                // before the jump — the bottom — so the first content change to arrive
+                // corrected them straight back to it, which is the landing that arrives and
+                // then walks away again.
+                place.jumpToMessageBegan()
             }
         }
     }

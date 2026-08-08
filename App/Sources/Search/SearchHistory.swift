@@ -11,7 +11,15 @@ struct RecentSearch: Codable, Hashable, Identifiable {
     var id: String { term }
 }
 
-/// The terms this reader has searched for, newest first.
+/// The terms this reader has searched for in one community, newest first.
+///
+/// # Why per community
+///
+/// Because search *is* per community — one store is open at a time and a query never crosses
+/// them — so a term carried over is an offer to run a search that cannot return what it
+/// returned last time. It is also the wrong thing to show: the terms are the names of that
+/// community's people, channels and work. The owner's rule, and the same shape the recently
+/// visited places already follow.
 ///
 /// # Why `UserDefaults` and not the store
 ///
@@ -21,29 +29,51 @@ struct RecentSearch: Codable, Hashable, Identifiable {
 /// requirement, and would be one more thing to remember to delete in
 /// ``BuzzEventStore/wipe()``. It is a handful of short strings — a defaults key is the honest
 /// size of the problem.
-///
-/// It is *not* shared across identities on purpose either: the key is the whole app's, and a
-/// term is not a secret about a conversation. If that ever changes, this is the one place to
-/// change it.
 @MainActor
 @Observable
 final class SearchHistory {
-    /// How many terms are kept. The owner's number.
+    /// How many terms are kept, per community. The owner's number.
     ///
     /// Enough that the list is genuinely a history rather than a peek at the last few, and
     /// small enough that the whole thing is one small write per search and one decode per
-    /// launch.
+    /// community switch.
     static let limit = 40
 
     private(set) var terms: [RecentSearch] = []
 
     private let defaults: UserDefaults
-    private let key: String
+    private let prefix: String
+    /// The community whose terms are loaded. `nil` before one is active, which is a real state
+    /// on a cold launch — and one that must not be given a bucket of its own, or the first
+    /// search of a session lands somewhere the reader will never see it again.
+    private var community: UUID?
 
-    init(defaults: UserDefaults = .standard, key: String = "search.recentTerms") {
+    init(defaults: UserDefaults = .standard, prefix: String = "search.recentTerms") {
         self.defaults = defaults
-        self.key = key
-        terms = Self.decode(defaults.data(forKey: key))
+        self.prefix = prefix
+    }
+
+    /// Loads the terms for a community, and files nothing until one is named.
+    ///
+    /// Idempotent: the view drives this from the active community, which re-reports the same
+    /// id across every unrelated change.
+    func activate(community id: UUID?) {
+        guard community != id else { return }
+        community = id
+        terms = id.map { Self.decode(defaults.data(forKey: Self.key(prefix, $0))) } ?? []
+    }
+
+    /// Where this community's terms are written, or `nil` while there is no community — in
+    /// which case nothing is recorded rather than recorded somewhere unreachable.
+    private var key: String? {
+        community.map { Self.key(prefix, $0) }
+    }
+
+    /// The defaults key one community's terms live under. `uuidString` rather than the
+    /// interpolated description, so the key cannot change if `Community.ID` ever stops being
+    /// a `UUID` without this failing to compile first.
+    private static func key(_ prefix: String, _ id: UUID) -> String {
+        "\(prefix).\(id.uuidString)"
     }
 
     /// Files a term the reader actually searched for.
@@ -56,7 +86,7 @@ final class SearchHistory {
     /// duplicate every time would spend all forty slots on whatever the reader looks up most.
     func record(_ term: String) {
         let trimmed = term.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
+        guard !trimmed.isEmpty, community != nil else { return }
         var updated = terms.filter { $0.term.caseInsensitiveCompare(trimmed) != .orderedSame }
         updated.insert(RecentSearch(term: trimmed, searchedAt: .now), at: 0)
         terms = Array(updated.prefix(Self.limit))
@@ -77,6 +107,7 @@ final class SearchHistory {
     }
 
     private func persist() {
+        guard let key else { return }
         // A failure here loses the history and nothing else, and there is nothing useful to
         // tell the reader about it — the list on screen is already correct.
         defaults.set(try? JSONEncoder().encode(terms), forKey: key)

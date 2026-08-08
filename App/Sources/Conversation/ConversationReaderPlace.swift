@@ -175,6 +175,25 @@ final class ConversationReaderPlace {
     /// the newest message — and because the jumps that reach here are asked for by a reader
     /// who is not at the bottom (``ChannelTimelineModel/shouldJumpToOwnSend``).
     private(set) var isLandingOnNewest = false
+    /// Whether a jump to *one particular message* has been issued and not yet measured.
+    ///
+    /// # Why this is not covered by ``hasMoved`` alone
+    ///
+    /// Because the correction needs two things from a reader who is parked away from the
+    /// newest message, and a landing supplies them a frame apart. ``hasMoved`` says the place
+    /// is theirs; ``anchoredDistance`` says what the place *is*. A landing sets the first
+    /// immediately and cannot know the second — the distance depends on the heights of rows
+    /// the stack has not measured yet — so for the window between them `anchoredDistance` is
+    /// still the distance they had *before* the jump, which is the bottom.
+    ///
+    /// Left to itself, ``correction(for:atBottomSlack:)`` reads that stale anchor, finds it
+    /// inside `atBottomSlack`, and answers `.bottom`. The reader watches the conversation
+    /// arrive at the message they asked for and then walk back to the newest one — which is
+    /// exactly what was reported, and why it read as a re-render rather than as a correction.
+    ///
+    /// So the window is named: while it is open nothing is corrected at all, and it closes on
+    /// the first stable reading, which is the one that makes the landing their anchor.
+    private(set) var isLandingOnMessage = false
 
     /// The distance last seen while the height was holding still and no settling window was
     /// open — the reader's own place, as opposed to a place a correction put them in.
@@ -273,6 +292,23 @@ final class ConversationReaderPlace {
     func readerTookHold() {
         hasMoved = true
         isLandingOnNewest = false
+        // Their finger outranks a landing that has not settled: wherever they have dragged to
+        // is their place, and the next stable reading anchors it.
+        isLandingOnMessage = false
+    }
+
+    /// A jump to one particular message has just been issued — from search, or from the
+    /// unread pill.
+    ///
+    /// The inverse of ``jumpToNewestBegan()`` in the one way that matters. That one clears
+    /// ``hasMoved`` because a jump to the newest message *makes* the reader someone the
+    /// "belongs at its newest message" invariant applies to. This one is the opposite claim:
+    /// the reader has asked to be somewhere specific, so from here their place is their own
+    /// and the invariant must not reach them.
+    func jumpToMessageBegan() {
+        hasMoved = true
+        isLandingOnNewest = false
+        isLandingOnMessage = true
     }
 
     /// A jump to the newest message has just been issued.
@@ -294,6 +330,7 @@ final class ConversationReaderPlace {
     func jumpToNewestBegan() {
         hasMoved = false
         isLandingOnNewest = true
+        isLandingOnMessage = false
     }
 
     /// A scroll has come to rest. Says whether the jump that started it still has work to do.
@@ -356,7 +393,13 @@ final class ConversationReaderPlace {
             // A finger on the list is the exception, and not really one: nothing is corrected
             // while the reader is scrolling, so where they have put the conversation *is*
             // their place, window or no window.
-            if settling == 0 || isScrolling { anchoredDistance = span.distance }
+            if settling == 0 || isScrolling {
+                anchoredDistance = span.distance
+                // The landing has been measured and is now simply where the reader is. This is
+                // the only place that closes that window, and it is the right one: it is the
+                // moment the distance being recorded is the landing's own.
+                isLandingOnMessage = false
+            }
             return .none
         }
         stableRun = 0
@@ -366,6 +409,11 @@ final class ConversationReaderPlace {
         guard settling > 0 else { return .none }
         settling -= 1
         guard !isScrolling else { return .none }
+        // A landing in flight is corrected toward nothing, because there is nothing yet to
+        // correct toward — see ``isLandingOnMessage``. Ahead of the invariant below, which
+        // would otherwise answer `.bottom` on the strength of an anchor belonging to where the
+        // reader was before they asked to be moved.
+        guard !isLandingOnMessage else { return .none }
         // A conversation nobody has moved belongs at its newest message, and so does one
         // whose reader is already there. Both rules agree about them, and separate only
         // over the reader below.

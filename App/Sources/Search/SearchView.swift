@@ -88,6 +88,12 @@ struct SearchView: View {
         ) { _, location in
             environment.recents.visit(location, in: environment.communities.activeID)
         }
+        // The history is per community, like the places the reader has visited. Driven from
+        // here rather than read at init: the active community is not resolved when this view
+        // is constructed, and it changes underneath a screen that is never rebuilt.
+        .onChange(of: environment.communities.activeID, initial: true) { _, id in
+            history.activate(community: id)
+        }
         .task { await ticker.run() }
     }
 
