@@ -116,23 +116,30 @@ struct SearchView: View {
         // states where there is nothing to drag.
         .scrollDismissesKeyboard(.immediately)
         .hiveScreenGround()
-        .overlay {
-            // Centred inside the bottom safe area rather than inside the frame. Which of
-            // the two the keyboard actually shrinks here is not something to assume — the
-            // bottom `safeAreaInset` this replaced was reported drawing *under* the keys —
-            // and subtracting the inset is correct either way: it is the keyboard's height
-            // when the frame runs behind it and about zero when the frame already stops
-            // above it.
-            GeometryReader { proxy in
-                ZStack(alignment: .bottom) {
-                    stateOverlay
-                    hideKeyboardButton
-                }
-                .frame(
-                    width: proxy.size.width,
-                    height: max(0, proxy.size.height - proxy.safeAreaInsets.bottom)
-                )
-            }
+        // Plainly centred, with no arithmetic over the safe area.
+        //
+        // This used to subtract the bottom inset from the container's height, on the argument
+        // that it was "correct either way" — the keyboard's height if the frame ran behind the
+        // keys, and about zero if it did not. It is not correct either way, and the owner's
+        // screenshot settles which: a control bottom-aligned in that frame landed a full
+        // keyboard *above* the keyboard, so `proxy.size.height` had already been shrunk and
+        // the subtraction took the keyboard off twice. A centred spinner hid it by being
+        // merely too high; a control with a definite place could not.
+        //
+        // Measured rather than reasoned, which is the only way this question has ever been
+        // settled on this screen.
+        .overlay { stateOverlay }
+        // The way out of the keyboard, lifted by the keyboard itself.
+        //
+        // The mechanism the composer already uses and the app has measured:
+        // ``ConversationScaffold`` carries a `safeAreaBar` whose entire keyboard behaviour is
+        // that the inset lifts it. No arithmetic, so there is nothing to get wrong twice.
+        //
+        // It lands just above the search field, which on this tab docks above the keys — the
+        // nearest thing this screen has to the row the invite sheet puts its `Done` in, since
+        // that row here belongs to the tab bar and takes nothing of ours.
+        .safeAreaInset(edge: .bottom) {
+            hideKeyboardButton
         }
     }
 
@@ -229,17 +236,24 @@ struct SearchView: View {
     @ViewBuilder
     private var hideKeyboardButton: some View {
         if isFieldFocused {
-            Button {
-                isFieldFocused = false
-            } label: {
-                Label("Hide", systemImage: "keyboard.chevron.compact.down")
-                    .font(.hive(.caption, weight: .semibold))
+            HStack {
+                Spacer()
+                Button {
+                    isFieldFocused = false
+                } label: {
+                    Label("Hide", systemImage: "keyboard.chevron.compact.down")
+                        .font(.hive(.subheadline, weight: .semibold))
+                }
+                .buttonStyle(.glass)
+                .controlSize(.small)
+                .clipShape(.capsule)
             }
-            .buttonStyle(.glass)
-            .controlSize(.small)
-            .clipShape(.capsule)
-            .padding(.bottom, 10)
-            .transition(.scale(scale: 0.9).combined(with: .opacity))
+            // Trailing and just above the keys, which is where the invite screen's `Done`
+            // sits — the owner's reference, and the place iOS itself puts this control.
+            .padding(.horizontal, 16)
+            .padding(.bottom, 8)
+            .transition(.opacity)
+            .animation(.smooth(duration: 0.15), value: isFieldFocused)
         }
     }
 
