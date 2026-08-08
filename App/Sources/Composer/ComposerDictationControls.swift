@@ -27,16 +27,27 @@ struct ComposerDictationControls: View {
                 .frame(maxWidth: .infinity)
 
             Button(action: finish) {
-                Image(systemName: "checkmark")
-                    .font(.hiveSymbol(.body, weight: .semibold))
-                    .foregroundStyle(phase == .listening ? Color.black : Color.secondary)
-                    .frame(width: controlDiameter, height: controlDiameter)
-                    .background(finishDisc, in: .circle)
-                    .frame(width: hitTarget, height: hitTarget)
+                Group {
+                    if phase == .finishing {
+                        // Inside the disc, in place of the checkmark. The owner's rule, and
+                        // the same one that moved `preparing` into the microphone: a press is
+                        // answered on the control that was pressed. In the middle of the row
+                        // it read as a second, unrelated thing happening.
+                        ProgressView()
+                            .controlSize(.small)
+                    } else {
+                        Image(systemName: "checkmark")
+                            .font(.hiveSymbol(.body, weight: .semibold))
+                            .foregroundStyle(phase == .listening ? Color.black : Color.secondary)
+                    }
+                }
+                .frame(width: controlDiameter, height: controlDiameter)
+                .background(finishDisc, in: .circle)
+                .frame(width: hitTarget, height: hitTarget)
             }
             .buttonStyle(.hivePress(.control, in: .circle))
             .disabled(phase != .listening)
-            .accessibilityLabel("Finish dictation")
+            .accessibilityLabel(phase == .finishing ? "Finishing dictation" : "Finish dictation")
         }
         .frame(minHeight: hitTarget)
         .padding(.horizontal, 4)
@@ -51,15 +62,15 @@ struct ComposerDictationControls: View {
             // press belongs on the thing that was pressed, and putting it where the waveform
             // will be announces a surface that is not ready to be shown.
             EmptyView()
-        case .listening:
+        case .listening, .finishing:
+            // The waveform stays through `finishing` — it simply stops moving, because no
+            // more audio arrives. Swapping it for a spinner emptied the row at the exact
+            // moment the reader is waiting to see their words land, and the wait is already
+            // being reported by the button they pressed.
             DictationWaveform(levels: levels)
                 .frame(height: DictationWaveform.maxHeight)
                 .accessibilityElement()
                 .accessibilityLabel("Listening")
-        case .finishing:
-            ProgressView()
-                .controlSize(.small)
-                .accessibilityLabel("Finishing dictation")
         case .idle:
             EmptyView()
         }
