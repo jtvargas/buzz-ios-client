@@ -146,6 +146,36 @@ struct EntityNamesTests {
         #expect(conversation.title == "Jarvis")
     }
 
+    @Test("the relay's type decides a two-member room, not the roster shape")
+    func twoMemberRoomsFollowTheRelayType() {
+        // The shape a DM and a one-collaborator channel share, told apart by the only
+        // thing that knows: `#markdown-samples` is you and one agent, a `repo-*` forum is
+        // you and one teammate. Both filed under the other party's name, and the
+        // channel's own name reached no part of the sidebar.
+        let resolver = names(
+            entities: [
+                DirectoryEntity(pubkey: me, profileName: "Me"),
+                DirectoryEntity(pubkey: agent, agentName: "Jarvis", isAgent: true),
+            ],
+            rosters: ["room-3": [me, agent], "room-4": [me, agent], "dm-3": [me, agent]],
+            channels: [
+                channel("room-3", name: "markdown-samples", type: "stream"),
+                channel("room-4", name: "repo-hit21", type: "forum"),
+                channel("dm-3", name: "DM", isPrivate: true, type: "dm"),
+            ],
+            selfPubkey: me
+        )
+
+        for id in ["room-3", "room-4"] {
+            #expect(resolver.conversation(for: id).kind == .channel)
+            #expect(resolver.directPeer(in: id) == nil)
+        }
+        #expect(resolver.conversation(for: "room-3").title == "markdown-samples")
+        #expect(resolver.conversation(for: "room-4").title == "repo-hit21")
+        // And the type that *is* a DM still resolves a peer, on the same roster shape.
+        #expect(resolver.directPeer(in: "dm-3") == agent)
+    }
+
     @Test("three members, a roster without the local identity, or no identity all read as channels")
     func channelDerivation() {
         let entities = [
