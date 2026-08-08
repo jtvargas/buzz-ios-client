@@ -17,29 +17,35 @@ import SwiftUI
 /// always had — the toolbar must not draw a background of its own behind this — and the
 /// shape it hides is now a capsule around two controls rather than a hexagon around one.
 ///
-/// # The glass is not interactive
+/// # The history is a real popover
 ///
-/// `.interactive()` would answer a press on either control by lighting the whole capsule,
-/// which says "you pressed this pair" when the reader pressed one of two things. Each
-/// button already answers for itself, in its own circle, through ``PressFeedback``.
+/// It is presented from here, by this button, as the system's own dropdown. That is the
+/// owner's ask and it is also the only anchor that can be right: a popover points at the
+/// control that opened it, and drawing the list anywhere else means re-deriving where that
+/// control happens to be.
 ///
-/// # The history is not opened from here
-///
-/// This button owns a flag and nothing else. The list it shows is drawn by the sidebar, as
-/// part of the sidebar — see ``RecentPlacesPanel`` for the crashes that came of presenting
-/// it from a toolbar item instead. A toolbar item is the single worst place in this app to
-/// hang a presentation off: it is rebuilt by every message, heartbeat and profile that
-/// lands.
+/// A popover is a hazard in a view that rebuilds — its content reaches UIKit as a
+/// preference, so a content value that changes makes SwiftUI dismiss and re-present it, and
+/// a toolbar item is rebuilt by every message, heartbeat and picture that lands. Nothing
+/// here changes: the popover is handed one ``RecentPlacesHistory``, a class, and the rows
+/// inside it are filled *before* it is presented. See that type for the full account.
 struct HomeToolbarControls: View {
-    /// Whether the history is on screen. Owned by the screen that draws it.
-    @Binding var showsHistory: Bool
     /// The shared resolver, for your picture and your initials.
     let names: EntityNames
     /// The engine's state, drawn as the dot on your face.
     let state: SyncEngine.State
     /// Your pubkey — your picture, your initials, and the monogram's colour seed.
     let selfPubkey: String
+    /// The history, asked for at the moment the clock is pressed. A function rather than a
+    /// list, so reading it registers no dependency on the directory it resolves through.
+    let history: () -> [RecentPlaceRow]
+    /// Goes where a row asked to go, once the popover carrying it has gone.
+    let openPlace: (RecentPlace) -> Void
     let openAccount: () -> Void
+
+    @State private var isShowingHistory = false
+    /// The popover's whole content, and the one thing it is handed. Held across rebuilds.
+    @State private var places = RecentPlacesHistory()
 
     var body: some View {
         HStack(spacing: 0) {
@@ -52,16 +58,16 @@ struct HomeToolbarControls: View {
                 action: openAccount
             )
         }
-        .glassEffect(.regular, in: .capsule)
+        // Interactive and themed, at the owner's word. `.interactive()` lets the capsule
+        // answer a press with the material's own lift, on top of the shrink each button
+        // already plays for itself; the tint is the accent the chosen theme carries, so the
+        // one control that sits over the sidebar's ground belongs to the theme rather than
+        // being the single neutral object on a coloured screen.
+        .glassEffect(.regular.tint(.hiveAccent).interactive(), in: .capsule)
     }
 
     private var historyButton: some View {
-        Button {
-            // A toggle rather than a set, so the control that opened the panel is also the
-            // one that closes it — pressing it again while it is up is the gesture anyone
-            // tries first, and the scrim below the toolbar cannot catch that press.
-            showsHistory.toggle()
-        } label: {
+        Button(action: presentHistory) {
             Image(systemName: Self.symbol)
                 .font(.hiveSymbol(fixedSize: Self.glyphPointSize, weight: .regular))
                 .foregroundStyle(.primary)
@@ -71,6 +77,31 @@ struct HomeToolbarControls: View {
         .buttonStyle(.hivePress(.control, in: .circle))
         .accessibilityLabel("History")
         .accessibilityHint("Shows the places you visited recently")
+        // Anchored to this control, arrow on top, so it hangs beneath the clock.
+        // `presentationCompactAdaptation(.popover)` — said by the content — is what stops
+        // iPhone adapting it into a sheet from the bottom of the screen.
+        .popover(isPresented: $isShowingHistory, arrowEdge: .top) {
+            RecentPlacesPanel(history: places)
+        }
+        // Fired by the popover's dismissal, which is the earliest moment a navigation may
+        // start without racing it away — the rule ``ComposerAttachButton`` documents, and
+        // the one whose absence crashed this feature.
+        .onChange(of: isShowingHistory) { _, presented in
+            guard !presented, let place = places.chosen else { return }
+            places.chosen = nil
+            openPlace(place)
+        }
+    }
+
+    private func presentHistory() {
+        // The same entry the sidebar's headings and the composer's `+` play, because it is
+        // the same event: a disclosure opening.
+        HiveHaptics.play(.disclosureToggled)
+        places.chosen = nil
+        // Read here rather than in the body, so the popover's content is settled before it
+        // is presented and nothing about it moves while it is up.
+        places.rows = history()
+        isShowingHistory = true
     }
 
     /// The clock with the arrow running back around it, at the owner's word. Named here

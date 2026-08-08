@@ -94,7 +94,6 @@ struct ChannelListView: View {
     /// than inside the panel because three things move it: the rightward drag, the heading's
     /// tap, and the panel's own strip.
     @State private var workspacePanel = WorkspacePanelState()
-    @State private var showsHistory = false
 
     @Binding private var notificationRoute: InAppNotificationRoute?
     @Binding private var visibleNotificationLocation: InAppNotificationLocation?
@@ -192,20 +191,11 @@ struct ChannelListView: View {
                     // *else* would make the two ways in two different features.
                     workspacePanel.setOpen(true)
                 }
-                // Where you have been, hanging off the toolbar's clock — drawn here rather than
-                // presented from it, and before the communities panel so that panel covers it.
-                .recentPlacesOverlay(
-                    isPresented: $showsHistory,
-                    places: { recentPlaces },
-                    names: names,
-                    open: openRecent
-                )
                 // The communities, over the sidebar. Both layers are declared here, in this
                 // order, so the panel is above the darkness it casts.
                 .overlay { WorkspacePanelScrim(state: workspacePanel) }
                 .overlay(alignment: .leading) { workspacePanelOverlay }
-                // Refused while the history is up: the next press belongs to its scrim.
-                .workspacePanelDrag(workspacePanel, isAvailable: path.isEmpty && openedThread == nil && !showsHistory)
+                .workspacePanelDrag(workspacePanel, isAvailable: path.isEmpty && openedThread == nil)
                 // Drag left anywhere here to reopen the conversation just left — the
                 // system's back swipe, mirrored. Declared inside the stack because the
                 // transition it drives is that stack's own push.
@@ -580,20 +570,28 @@ private extension ChannelListView {
         }
     }
 
-    /// The toolbar's trailing pair: your history, and you. The list itself is the sidebar's.
+    /// The toolbar's trailing pair: your history, and you. It presents its own popover.
     func homeControls(names: EntityNames) -> some View {
         HomeToolbarControls(
-            showsHistory: $showsHistory,
             names: names,
             state: environment.engineState,
             selfPubkey: environment.selfPubkeyHex ?? "",
+            history: { recentPlaceRows(names: names) },
+            openPlace: openRecent,
             openAccount: { showAccount = true }
         )
     }
 
-    /// The history for the community shown, less anything that has since left the sidebar.
-    var recentPlaces: [RecentPlace] {
-        environment.recents.resolved(among: model.visibleChannels, in: environment.communities.activeID)
+    /// The history for the community shown, less anything that has since left the sidebar,
+    /// each place resolved to the name and mark the app is using for it right now.
+    ///
+    /// Called from the clock's action and nowhere else. Resolving here — rather than inside
+    /// the popover, a row at a time — is what keeps the presented content still: see
+    /// ``RecentPlacesHistory``.
+    func recentPlaceRows(names: EntityNames) -> [RecentPlaceRow] {
+        environment.recents
+            .resolved(among: model.visibleChannels, in: environment.communities.activeID)
+            .map { RecentPlaceRow(place: $0, conversation: names.conversation(for: $0.channelID)) }
     }
 
     /// The same jump a tapped banner is: to a conversation or a thread, closing what was open.
