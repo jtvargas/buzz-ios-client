@@ -57,12 +57,6 @@ struct SearchView: View {
             // up after it hides the top of their own results.
             isFieldFocused = false
         }
-        .toolbar {
-            ToolbarItemGroup(placement: .keyboard) {
-                Spacer()
-                Button("Done") { isFieldFocused = false }
-            }
-        }
         .toolbar(ChannelListTabBar.visibility(conversations: path, openedThread: nil), for: .tabBar)
         .environment(\.entityNames, entityNames)
         .environment(\.channelNameMap, ChannelNameMap(channels: model.channels))
@@ -106,13 +100,24 @@ struct SearchView: View {
         // states where there is nothing to drag.
         .scrollDismissesKeyboard(.immediately)
         .hiveScreenGround()
-        .overlay { stateOverlay }
+        .overlay {
+            // Centred inside the bottom safe area rather than inside the frame. Which of
+            // the two the keyboard actually shrinks here is not something to assume — the
+            // bottom `safeAreaInset` this replaced was reported drawing *under* the keys —
+            // and subtracting the inset is correct either way: it is the keyboard's height
+            // when the frame runs behind it and about zero when the frame already stops
+            // above it.
+            GeometryReader { proxy in
+                stateOverlay
+                    .frame(
+                        width: proxy.size.width,
+                        height: max(0, proxy.size.height - proxy.safeAreaInsets.bottom)
+                    )
+            }
+        }
     }
 
     /// The list's one non-row state: searching, failed, empty, or not yet asked.
-    ///
-    /// Centred in the list's own bounds, which the keyboard insets — so the spinner sits
-    /// in the middle of what the reader can actually see rather than under the keys.
     @ViewBuilder
     private var stateOverlay: some View {
         if model.isSearching, model.messages.isEmpty {
@@ -135,22 +140,47 @@ struct SearchView: View {
         }
     }
 
+    /// The empty screen, and the one place a `Done` can be *seen*.
+    ///
+    /// A `.keyboard`-placement toolbar item renders nothing for a search-role tab's field:
+    /// that field is presented by the tab bar, outside this stack's toolbar scope. Verified
+    /// on device — the row never appeared. So the affordance lives in the only content this
+    /// screen draws while there is nothing to scroll, which is also the state that has no
+    /// other way out.
     @ViewBuilder
     private var emptyState: some View {
         if let error = model.errorMessage {
-            ContentUnavailableView(
-                "Search unavailable",
-                systemImage: "exclamationmark.magnifyingglass",
-                description: Text(error)
-            )
+            ContentUnavailableView {
+                Label("Search unavailable", systemImage: "exclamationmark.magnifyingglass")
+            } description: {
+                Text(error)
+            } actions: {
+                dismissKeyboardButton
+            }
         } else if model.hasSearched {
-            ContentUnavailableView.search(text: model.current)
+            ContentUnavailableView {
+                Label("No results", systemImage: "magnifyingglass")
+            } description: {
+                Text("No message matches “\(model.current)”.")
+            } actions: {
+                dismissKeyboardButton
+            }
         } else {
-            ContentUnavailableView(
-                "Search messages",
-                systemImage: "magnifyingglass",
-                description: Text("Find any message in the conversations you are in.")
-            )
+            ContentUnavailableView {
+                Label("Search messages", systemImage: "magnifyingglass")
+            } description: {
+                Text("Find any message in the conversations you are in.")
+            } actions: {
+                dismissKeyboardButton
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var dismissKeyboardButton: some View {
+        if isFieldFocused {
+            Button("Done") { isFieldFocused = false }
+                .buttonStyle(.borderedProminent)
         }
     }
 
@@ -172,10 +202,9 @@ struct SearchView: View {
     }
 
     private func open(channelID: String, fallback: ChannelListRow? = nil) {
-        // Dropped here rather than on the way back: focus survives a push, so a reader
-        // returning from a conversation would otherwise land on a raised keyboard they
-        // never asked for.
-        isFieldFocused = false
+        // Deliberately does *not* clear focus. A push already resigns the field, and
+        // forcing the state false on the way out left the field unable to take the keyboard
+        // back when the reader returned to it.
         let route = ConversationRoute(channel: channelRow(for: channelID, fallback: fallback))
         path = route.pushed(onto: path)
     }
