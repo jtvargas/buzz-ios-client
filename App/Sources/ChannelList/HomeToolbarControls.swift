@@ -72,6 +72,14 @@ struct HomeToolbarControls: View {
         // The menu's own highlight answers the press, and the capsule's interactive glass
         // lifts under it. A `hivePress` shrink on top of both is a third answer to one
         // touch, and it is the one that does not belong to the system.
+        //
+        // The tint is what a `UIMenu` draws its row glyphs in, and the window sets it to
+        // the theme's accent for the things that genuinely want it — the caret, the swipe
+        // actions, a `Link`. A history is a list of places rather than a set of actions, so
+        // its `#`, locks and faces are label-coloured here, as they are in the sidebar this
+        // list is a shortcut into. Set on the menu rather than inside it: the content is
+        // presented by UIKit and takes the environment from the control that opened it.
+        .tint(.primary)
         .accessibilityLabel("History")
         .accessibilityHint("Shows the places you visited recently")
     }
