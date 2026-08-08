@@ -46,8 +46,13 @@ struct AccountAvatarButton: View {
         // avatar and is rarely the part anyone sees; what answers the finger here is the
         // shrink, and naming the shape is what stops the state dot's corner catching a
         // rounded-rectangle edge on the one frame the picture has not loaded.
-        .buttonStyle(.hivePress(.control, in: PointyHexagon()))
-        .glassEffect(.regular.interactive(), in: PointyHexagon())
+        //
+        // The glass is no longer here. This button shares one capsule with the history
+        // button beside it — see ``HomeToolbarControls`` — and glass drawn inside glass is
+        // a second refraction of the same background. The hexagon went with it, at the
+        // owner's word: a hexagon inside a capsule is two shapes disagreeing about what
+        // this control is.
+        .buttonStyle(.hivePress(.control, in: .circle))
         .accessibilityLabel("Account")
         // The state rides as the control's value rather than in its label, so VoiceOver
         // says "Account, live" and the button is still found by its name.

@@ -145,6 +145,15 @@ struct ActivityView: View {
             )
             path = route.pushed(onto: path)
         }
+        // This tab is a way *into* a conversation as much as the sidebar is, so a place
+        // reached from here is a place visited. The same shared derivation and the same
+        // shared list the sidebar writes to — see ``RecentPlaces``.
+        .onChange(
+            of: RecentPlaces.location(path: path, openedThread: openedThread),
+            initial: true
+        ) { _, location in
+            environment.recents.visit(location, in: environment.communities.activeID)
+        }
         .task { await model.run() }
         .task { await ticker.run() }
     }
