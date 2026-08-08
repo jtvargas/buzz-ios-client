@@ -8,8 +8,9 @@ public extension BuzzEventStore {
     /// The app defers the wipe decision to login: it keeps the store for a same-key
     /// re-login (fast, history intact) and calls this only when a *different* key
     /// takes over. Everything derivable from the relay is dropped — the append-only
-    /// `event` log (which cascades `event_tag`), every projection, and the precious
-    /// local tables (`outbox`, `outbox_media`, `channel_sync`, `read_state`,
+    /// `event` log (which cascades `event_tag`), the message-search index, every
+    /// projection, and the precious local tables (`outbox`, `outbox_media`,
+    /// `channel_sync`, `read_state`,
     /// `thread_fetch`, `composer_draft` — the last of which is the reason drafts are
     /// stored here at all rather than in `UserDefaults`). `meta` is preserved so
     /// the projection version still matches and no rebuild is triggered; the empty
@@ -28,6 +29,10 @@ public extension BuzzEventStore {
     func wipe() async throws {
         try await writer.write { db in
             try db.execute(sql: "DELETE FROM event") // ON DELETE CASCADE clears event_tag
+            // The event-delete trigger removes each token row. Keep the explicit bulk
+            // delete as the forensic-clean invariant: a future trigger change must not
+            // leave the previous identity's search terms for the next session.
+            try db.execute(sql: "DELETE FROM message_search")
             try db.execute(sql: "DELETE FROM outbox_media")
             try db.execute(sql: "DELETE FROM outbox")
             try db.execute(sql: "DELETE FROM channel_sync")
