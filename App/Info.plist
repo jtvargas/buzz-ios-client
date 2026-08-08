@@ -46,8 +46,12 @@
 	<string>Hive uses the camera to take photos you attach to messages, and to scan the pairing QR code shown on your desktop.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Hive connects to the Buzz relay you configure, which may be on your local or Tailscale network.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Hive uses the microphone only while you dictate text into a message.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Hive saves a picture from a conversation to your photo library when you ask it to.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Hive uses on-device speech recognition to turn your dictation into message text.</string>
 	<key>UIAppFonts</key>
 	<array>
 		<string>InterVariable.ttf</string>

@@ -21,6 +21,9 @@ final class MentionAutocompleteModel {
     /// from. Not observable for the same reason ``activeRange`` is not: it moves on
     /// every keystroke and no view reads it.
     @ObservationIgnored private var cursor = 0
+    /// The last UIKit selection, retained for system-originated edits such as composer
+    /// dictation. Unlike autocomplete, dictation can replace a selected range.
+    @ObservationIgnored private(set) var selection = NSRange(location: 0, length: 0)
     var isComposerFocused = false
 
     private let channel: String
@@ -86,6 +89,7 @@ final class MentionAutocompleteModel {
         // is presented with the caret at its end, which is where ``TokenTextView`` puts
         // it on the first render.
         cursor = document.preferredCursor ?? (document.text as NSString).length
+        selection = NSRange(location: cursor, length: 0)
         refresh()
     }
 
@@ -94,6 +98,12 @@ final class MentionAutocompleteModel {
     /// no longer under the caret, and completion still filtered on the last word typed
     /// rather than on the word being edited.
     func updateSelection(_ selection: NSRange) {
+        let textLength = (document.text as NSString).length
+        let location = min(max(selection.location, 0), textLength)
+        self.selection = NSRange(
+            location: location,
+            length: min(max(selection.length, 0), textLength - location)
+        )
         // A range selection has no single insertion point, so there is nothing to
         // complete — `@ad` with two of its characters selected is not a query anyone is
         // still typing.
@@ -106,7 +116,7 @@ final class MentionAutocompleteModel {
         // was left the panel closed for good, because the caret matched and the selection
         // that closed it had not moved anything. `refresh` already declines to write when
         // the result is unchanged, which is the cheap guard that actually holds.
-        cursor = min(max(selection.location, 0), (document.text as NSString).length)
+        cursor = location
         refresh()
     }
 

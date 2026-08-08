@@ -1,6 +1,12 @@
 import BuzzKit
 import PhotosUI
 import SwiftUI
+import UIKit
+
+// This view documents and owns the complete shared composer surface. Dictation adds one
+// stateful mode to that same surface, so splitting it solely at a line-count boundary would
+// hide the focus and draft invariants its controls depend on.
+// swiftlint:disable file_length
 
 /// The shared channel/thread composer: the floating bar, and nothing else.
 /// # One glass surface
@@ -80,6 +86,7 @@ struct MessageComposerView: View {
     /// Whether the keyboard was up when the add tile was tapped — read on the tap, because
     /// by the time the picker has gone the answer has changed.
     @State private var wasFocusedBeforeAddMore = false
+    @State private var dictation = ComposerDictationModel()
 
     /// Drawn diameter of the send disc.
     ///
@@ -211,6 +218,10 @@ struct MessageComposerView: View {
             autocomplete.update(for: newValue)
             onTextChange(newValue.text)
         }
+        .onChange(of: dictation.document) { _, dictatedDocument in
+            guard let dictatedDocument, dictatedDocument != document else { return }
+            document = dictatedDocument
+        }
         // The panel is already hidden while the composer is unfocused, but hidden is not
         // closed: the query behind it stayed active, so dismissing the keyboard with its
         // own hide key and bringing it back re-opened the panel on a mention the author
@@ -222,6 +233,29 @@ struct MessageComposerView: View {
         .task {
             autocomplete.update(for: document)
             await autocomplete.run()
+        }
+        .onDisappear {
+            dictation.cancelForDisappearance()
+        }
+        .alert(
+            dictation.notice?.title ?? "Dictation",
+            isPresented: Binding(
+                get: { dictation.notice != nil },
+                set: { if !$0 { dictation.notice = nil } }
+            ),
+            presenting: dictation.notice
+        ) { notice in
+            if notice.offersSettings {
+                Button("Open Settings") {
+                    guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
+                    UIApplication.shared.open(url)
+                }
+                Button("Cancel", role: .cancel) {}
+            } else {
+                Button("OK", role: .cancel) {}
+            }
+        } message: { notice in
+            Text(notice.message)
         }
     }
 
@@ -245,7 +279,7 @@ struct MessageComposerView: View {
             // scrub, durable staging and five-picture cap without restating any of them.
             onPasteImages: { attachments.add($0.map(PastedPicture.init)) },
             placeholder: placeholder,
-            isEditable: isEnabled,
+            isEditable: isEnabled && !dictation.isActive,
             onSelectionChange: autocomplete.updateSelection
         )
         .frame(maxWidth: .infinity)
@@ -276,23 +310,55 @@ struct MessageComposerView: View {
     /// of ink, so the row reads as evenly spaced without a gap of its own. The 8 this used to
     /// carry only ever came off the `Spacer`, so the `+` and send have not moved.
     private var controls: some View {
+        ZStack {
+            if dictation.isActive {
+                ComposerDictationControls(
+                    phase: dictation.phase,
+                    levels: dictation.levels,
+                    preparationProgress: dictation.preparationProgress,
+                    controlDiameter: controlDiameter,
+                    hitTarget: hitTarget,
+                    cancel: cancelDictation,
+                    finish: finishDictation
+                )
+                .transition(.opacity.combined(with: .scale(scale: 0.96)))
+            } else {
+                standardControls
+                    .transition(.opacity.combined(with: .scale(scale: 0.96)))
+            }
+        }
+        .frame(minHeight: hitTarget)
+    }
+
+    private var standardControls: some View {
         HStack(spacing: 0) {
             attachButton
             ComposerTriggerButton(kind: .user, hitTarget: hitTarget, insert: insertTrigger)
             ComposerTriggerButton(kind: .channel, hitTarget: hitTarget, insert: insertTrigger)
             Spacer(minLength: 0)
+            dictationButton
             sendButton
         }
-        // Both controls draw at `controlDiameter` and keep a full 44pt target, so the row
-        // stays compact without shrinking what a thumb has to hit.
         .frame(minHeight: hitTarget)
         .padding(.horizontal, 4)
-        // Behind the buttons, so they still receive their own taps.
         .background {
             Color.clear
                 .contentShape(.rect)
                 .onTapGesture { autocomplete.isComposerFocused = true }
         }
+    }
+
+    private var dictationButton: some View {
+        Button(action: startDictation) {
+            Image(systemName: "waveform")
+                .font(.hiveSymbol(.body, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: controlDiameter, height: controlDiameter)
+                .frame(width: hitTarget, height: hitTarget)
+        }
+        .buttonStyle(.hivePress(.control, in: .circle))
+        .disabled(!isEnabled)
+        .accessibilityLabel("Start dictation")
     }
 
     /// The `+`, and the card, picker and notice it presents — all of which live in
@@ -339,6 +405,29 @@ struct MessageComposerView: View {
     /// ``MentionAutocompleteModel/insertTrigger(_:into:)``.
     private func insertTrigger(_ kind: MentionKind) {
         autocomplete.insertTrigger(kind, into: &document)
+    }
+
+    private func startDictation() {
+        autocomplete.dismissComposer()
+        HiveHaptics.play(.disclosureToggled)
+        withAnimation(.snappy(duration: 0.22)) {
+            dictation.start(from: document, selection: autocomplete.selection)
+        }
+    }
+
+    private func cancelDictation() {
+        // Cancel is deliberately silent; its absence of feedback distinguishes it from
+        // starting and from committing dictated text.
+        withAnimation(.snappy(duration: 0.22)) {
+            dictation.cancel()
+        }
+    }
+
+    private func finishDictation() {
+        HiveHaptics.play(.suggestionPicked)
+        withAnimation(.snappy(duration: 0.22)) {
+            dictation.finish()
+        }
     }
 
     /// A tinted disc drawn at ``controlDiameter`` inside a full ``hitTarget``.
