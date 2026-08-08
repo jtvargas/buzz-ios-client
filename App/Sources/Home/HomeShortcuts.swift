@@ -33,26 +33,44 @@ struct HomeShortcutCards: View {
     var body: some View {
         HStack(spacing: Self.betweenCards) {
             ForEach(HomeShortcut.allCases) { shortcut in
-                // Only the card with something to offer gets the interaction at all. A
-                // `.contextMenu` with an empty builder is not nothing: the hold still lifts
-                // the card and blurs the screen behind it, then dismisses with no menu,
-                // which reads as a control that broke rather than one that was never there.
-                // The branch is decided by the case and not by any state, so a card's
-                // identity cannot change under it while it is on screen.
+                // Only the card with something to offer takes a hold at all — and the menu
+                // hangs off the *card*, never off the row.
+                //
+                // **`.contextMenu` cannot be used here, and the reason is the row.** All
+                // three cards share one list row, and a context menu written inside a row
+                // is installed on the row: the hold is then answered anywhere along it, so
+                // holding Later or Drafts opened the Threads menu. It is the same reason
+                // ``ChannelListView`` can write one next to `.swipeActions` and mean the
+                // whole row by it. `Menu` is a control rather than a row decoration, so its
+                // long press is bounded by its label — this card, and nothing either side.
+                //
+                // `primaryAction` is what keeps the tap: without it a `Menu` opens on a
+                // tap, and the card stops being a way into the Threads screen at all.
+                //
+                // The cost is this card's press treatment: the wash and the shrink come
+                // from a `PrimitiveButtonStyle`, and there is no button here to carry it.
+                // A hold that opens the right menu is worth more than a tap that dips.
                 if shortcut.offersMarkAllRead {
-                    card(shortcut)
-                        .contextMenu {
-                            // Not destructive, though it takes the row a delete usually
-                            // occupies in a menu this shape: nothing is removed and nothing
-                            // is published — a mark is this device saying it has looked.
-                            Button("Mark All As Read", systemImage: "checkmark.circle") {
-                                markAllThreadsRead()
-                            }
-                            // Offered but inert at zero rather than absent. A menu item
-                            // that exists only while there is something to clear is one
-                            // nobody finds the first time they go looking for it.
-                            .disabled(count(shortcut) == 0)
+                    Menu {
+                        // Not destructive, though it takes the row a delete usually
+                        // occupies in a menu this shape: nothing is removed and nothing
+                        // is published — a mark is this device saying it has looked.
+                        Button("Mark All As Read", systemImage: "checkmark.circle") {
+                            markAllThreadsRead()
                         }
+                        // Offered but inert at zero rather than absent. A menu item that
+                        // exists only while there is something to clear is one nobody
+                        // finds the first time they go looking for it.
+                        .disabled(count(shortcut) == 0)
+                    } label: {
+                        HomeShortcutCard(
+                            shortcut: shortcut,
+                            count: count(shortcut),
+                            isCalling: isCalling(shortcut)
+                        )
+                    } primaryAction: {
+                        press(shortcut)
+                    }
                 } else {
                     card(shortcut)
                 }
@@ -60,7 +78,7 @@ struct HomeShortcutCards: View {
         }
     }
 
-    /// One card, and the press treatment every card shares.
+    /// A card with nothing under a hold: an ordinary button, and the app's press treatment.
     private func card(_ shortcut: HomeShortcut) -> some View {
         Button { press(shortcut) } label: {
             HomeShortcutCard(
