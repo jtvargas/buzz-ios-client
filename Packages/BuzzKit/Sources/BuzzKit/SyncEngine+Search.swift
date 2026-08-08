@@ -7,6 +7,7 @@ public struct RelayMessageSearchHit: Sendable, Hashable, Identifiable {
     public let channelID: String
     public let pubkey: String
     public let createdAt: Int64
+    /// A bounded excerpt centered on the first match, not the full message body.
     public let content: String
     public let matchRanges: [SearchMatchRange]
     /// The event's arrival position. NIP-50 exposes relevance through order only: the relay
@@ -50,13 +51,14 @@ public extension SyncEngine {
             guard event.kind == .channelMessage, event.isValid, let channelID = event.groupID else {
                 return nil
             }
+            let snippet = Self.searchSnippet(in: event.content, terms: text)
             return RelayMessageSearchHit(
                 id: event.id,
                 channelID: channelID,
                 pubkey: event.pubkey,
                 createdAt: event.createdAt,
-                content: event.content,
-                matchRanges: Self.searchRanges(in: event.content, terms: text),
+                content: snippet.content,
+                matchRanges: snippet.ranges,
                 ordinal: ordinal
             )
         }
@@ -64,6 +66,44 @@ public extension SyncEngine {
 }
 
 private extension SyncEngine {
+    /// A result row shows one relevant window rather than enumerating distant matches.
+    /// Local FTS chooses its best window; relay hits use the first match in relay order.
+    static func searchSnippet(
+        in content: String,
+        terms: String
+    ) -> (content: String, ranges: [SearchMatchRange]) {
+        let ranges = searchRanges(in: content, terms: terms)
+        guard let first = ranges.first,
+              let match = Range(NSRange(location: first.location, length: first.length), in: content)
+        else { return (content, ranges) }
+
+        var words: [Range<String.Index>] = []
+        content.enumerateSubstrings(
+            in: content.startIndex ..< content.endIndex,
+            options: .byWords
+        ) { _, range, _, _ in
+            words.append(range)
+        }
+        guard words.count > BuzzEventStore.searchSnippetTokenCount else {
+            return (content, ranges)
+        }
+        guard let matchIndex = words.firstIndex(where: { $0.overlaps(match) }) else {
+            return (content, ranges)
+        }
+
+        let tokenCount = BuzzEventStore.searchSnippetTokenCount
+        var lower = max(0, matchIndex - tokenCount / 2)
+        let upper = min(words.count, lower + tokenCount)
+        lower = max(0, upper - tokenCount)
+
+        let excerptStart = lower == 0 ? content.startIndex : words[lower].lowerBound
+        let excerptEnd = upper == words.count ? content.endIndex : words[upper - 1].upperBound
+        var snippet = String(content[excerptStart ..< excerptEnd])
+        if lower > 0 { snippet = "… \(snippet)" }
+        if upper < words.count { snippet += " …" }
+        return (snippet, searchRanges(in: snippet, terms: terms))
+    }
+
     static func searchRanges(in content: String, terms: String) -> [SearchMatchRange] {
         terms.split(whereSeparator: \.isWhitespace).flatMap { term in
             var ranges: [SearchMatchRange] = []

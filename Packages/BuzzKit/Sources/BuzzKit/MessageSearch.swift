@@ -23,6 +23,7 @@ public struct MessageSearchHit: Sendable, Hashable, Identifiable {
     public let channelID: String
     public let pubkey: String
     public let createdAt: Int64
+    /// A bounded excerpt centered on one best match, not the full message body.
     public let content: String
     public let matchRanges: [SearchMatchRange]
     /// FTS5's bm25 score. Lower values rank ahead of higher ones.
@@ -71,6 +72,8 @@ public extension BuzzEventStore {
 extension BuzzEventStore {
     static let maxSearchTerms = 16
     static let searchCandidateWindowMultiplier = 10
+    /// One best 18-token window keeps a typical excerpt inside the row's three lines.
+    static let searchSnippetTokenCount = 18
 
     static func fetchMessageSearch(
         _ db: Database,
@@ -87,6 +90,7 @@ extension BuzzEventStore {
                 "match": match,
                 "open": markers.open,
                 "close": markers.close,
+                "snippetTokens": searchSnippetTokenCount,
                 "channelID": channelID,
                 "limit": limit,
                 "window": candidateWindow,
@@ -128,7 +132,9 @@ extension BuzzEventStore {
         WITH candidate AS (
             SELECT message_search.rowid AS source_rowid,
                    bm25(message_search) AS rank,
-                   highlight(message_search, 0, :open, :close) AS marked_content
+                   snippet(
+                       message_search, 0, :open, :close, '…', :snippetTokens
+                   ) AS marked_content
               FROM message_search
         \(messageSearchCandidateScope(channelScoped: channelScoped))
              ORDER BY bm25(message_search)

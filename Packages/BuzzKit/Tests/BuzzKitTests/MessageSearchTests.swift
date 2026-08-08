@@ -292,6 +292,28 @@ struct MessageSearchTests {
 }
 
 extension MessageSearchTests {
+    @Test("long messages return a bounded snippet centered on the match")
+    func matchCenteredSnippet() async throws {
+        let database = TempDatabase()
+        defer { database.remove() }
+        let store = try database.open()
+        let author = try Fixture()
+        let prefix = (1 ... 30).map { "preface\($0)" }.joined(separator: " ")
+        _ = try await store.ingest(
+            batch: [try author.message("\(prefix) needle trailing words", at: 1_000)],
+            phase: .backfill
+        )
+
+        let hit = try #require(try store.searchMessages(query: "needle").first)
+        #expect(hit.content.hasPrefix("…"))
+        #expect(!hit.content.contains("preface1 "))
+        let range = try #require(hit.matchRanges.first)
+        let match = (hit.content as NSString).substring(
+            with: NSRange(location: range.location, length: range.length)
+        )
+        #expect(match == "needle")
+    }
+
     @Test("authorization may return a short page after the bounded candidate window")
     func boundedCandidateWindow() async throws {
         let database = TempDatabase()
