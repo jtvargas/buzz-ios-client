@@ -109,6 +109,9 @@ struct RecentPlacesPopover: View {
     /// popover that tall stops reading as attached to the control that opened it.
     private static let maxHeight: CGFloat = 380
     private static let horizontalPadding: CGFloat = 16
-    /// The sidebar's own glyph size, so the marks line up with the list this list is about.
-    private static let markSize: CGFloat = 28
+    /// Smaller than the sidebar's mark, at the owner's word. This list is a shortcut rather
+    /// than a place to read: the rows are half the width of the sidebar's and the name is
+    /// what identifies them, so a mark at the sidebar's size dominates a row it is only
+    /// meant to categorise.
+    private static let markSize: CGFloat = 22
 }

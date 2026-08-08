@@ -574,13 +574,13 @@ private extension ChannelListView {
 
     /// The toolbar's trailing pair: your history, and you.
     ///
-    /// The history is resolved here — against this pass's channel list and the active
-    /// community — rather than inside the popover, so a place whose conversation has left
-    /// the sidebar is gone from the list rather than offered and then refused.
+    /// Handed a *question* rather than an answer: resolving the history here — against the
+    /// live list, so a place whose conversation left the sidebar is dropped rather than
+    /// offered and then refused — would make the toolbar item depend on the history, and
+    /// opening a place changes it. See ``HomeToolbarControls/history``.
     func homeControls(names: EntityNames) -> some View {
-        let community = environment.communities.activeID
-        return HomeToolbarControls(
-            places: environment.recents.resolved(among: model.visibleChannels, in: community),
+        HomeToolbarControls(
+            resolvePlaces: { recentPlaces },
             names: names,
             state: environment.engineState,
             selfPubkey: environment.selfPubkeyHex ?? "",
@@ -595,6 +595,12 @@ private extension ChannelListView {
                 ))
             }
         )
+    }
+
+    /// The history, for the community the sidebar is showing. Read on a press, never in a body.
+    var recentPlaces: [RecentPlace] {
+        let community = environment.communities.activeID
+        return environment.recents.resolved(among: model.visibleChannels, in: community)
     }
 
     /// The Threads and Later cards, in one row above the conversations — one list row
