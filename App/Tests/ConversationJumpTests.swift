@@ -77,7 +77,7 @@ struct ConversationJumpTests {
         // Everything is rendered — it is a boundary, not a filter — and the scroll is
         // aimed at the oldest arrival rather than at the bottom past all three.
         #expect(model.rows.map(\.content) == ["read", "first new", "second new", "third new"])
-        #expect(model.jumpTarget == .message(first.id))
+        #expect(model.jumpTarget == .message(first.id, animated: true))
         #expect(model.jumpToken == 1)
         #expect(model.jump.unreadCount == 0)
 
@@ -177,7 +177,7 @@ struct ConversationJumpTests {
         await waitUntil { model.jump.unreadCount == 2 }
 
         model.jumpToNewMessages()
-        #expect(model.jumpTarget == .message(reply.id))
+        #expect(model.jumpTarget == .message(reply.id, animated: true))
         #expect(model.jump.unreadCount == 0)
         #expect(model.rows.count == 3)
     }

@@ -26,7 +26,7 @@ struct ConversationMark: View {
     /// Ignored for a direct message of either size. A face names the person and a count
     /// names how many of them there are, both of which are more use than a symbol — and a
     /// thread in a DM is still a conversation with those same people.
-    var symbol: String?
+    var glyph: AppGlyph?
 
     var body: some View {
         switch conversation.kind {
@@ -39,12 +39,16 @@ struct ConversationMark: View {
             //
             // Still laid out in the `size` box the tile occupied, so the names to its right
             // stay on the one leading edge they share with every avatar in the list.
-            Image(systemName: symbol ?? (conversation.isPrivate ? "lock.fill" : "number"))
-                // A step up from the tiled `.subheadline`: inside a filled square the glyph
-                // borrowed the square's presence, and at that size on bare ground it reads
-                // as a smaller mark than the 30-point faces it sits in a column with.
-                .font(.hiveSymbol(.title3, weight: .semibold))
-                .foregroundStyle(glyphTint)
+            // A step up from the tiled `.subheadline`: inside a filled square the glyph
+            // borrowed the square's presence, and at that size on bare ground it reads as a
+            // smaller mark than the 30-point faces it sits in a column with. 20 points is
+            // `.title3`, said as a number because artwork cannot be sized by a font.
+            GlyphView(
+                glyph ?? .symbol(conversation.isPrivate ? "lock.fill" : "number"),
+                height: 20,
+                relativeTo: .title3
+            )
+            .foregroundStyle(glyphTint)
                 .frame(width: size, height: size)
                 .accessibilityHidden(true)
         case .group:

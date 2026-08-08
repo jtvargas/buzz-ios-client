@@ -141,13 +141,27 @@ struct HomeShortcutCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Self.betweenLines) {
-            Image(systemName: shortcut.symbol(hasItems: Self.hasSomethingWaiting(count)))
-                // Bold, in the text's own colour: at this size a glyph in the regular
-                // weight reads as thinner than the word under it, which is what made the
-                // card look assembled out of two different things.
-                .font(.hiveSymbol(.title3, weight: .bold))
-                .foregroundStyle(.primary)
-                .accessibilityHidden(true)
+            Group {
+                switch shortcut.glyph(hasItems: Self.hasSomethingWaiting(count)) {
+                case let .symbol(name):
+                    Image(systemName: name)
+                        // Bold, in the text's own colour: at this size a glyph in the regular
+                        // weight reads as thinner than the word under it, which is what made
+                        // the card look assembled out of two different things.
+                        .font(.hiveSymbol(.title3, weight: .bold))
+                case let .asset(name):
+                    // Matched by *height*, not by a square frame: this drawing is half again
+                    // as wide as it is tall, and boxing it would shrink it to the width and
+                    // leave it visibly shorter than the symbols on the cards either side.
+                    // There is no weight to ask for — the artwork carries its own.
+                    Image(name)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(height: Self.glyphHeight)
+                }
+            }
+            .foregroundStyle(.primary)
+            .accessibilityHidden(true)
             Spacer(minLength: Self.underGlyph)
             Text(shortcut.title)
                 .font(.hive(.subheadline, weight: .semibold))
@@ -251,6 +265,11 @@ struct HomeShortcutCard: View {
     /// left over above it, which is what puts the glyph at the top of the card and the two
     /// lines of text at the bottom of it rather than spreading all three evenly.
     private static let underGlyph: CGFloat = 8
+    /// The height the app's own card artwork is drawn at.
+    ///
+    /// Matched to what `.title3` bold gives a system symbol on the cards either side, so three
+    /// cards in a row read as one set. A height and not a square: see the call site.
+    private static let glyphHeight: CGFloat = 20
     /// Three short bands, none of them cramped, and no taller than they need to be: the
     /// cards are a place to go from, and the conversations under them are the screen. The
     /// floor is the content — glyph, title, count, and the padding around them come to
@@ -297,11 +316,16 @@ enum HomeShortcut: String, CaseIterable, Hashable, Identifiable {
         }
     }
 
-    var symbol: String {
+    /// The system symbol this card draws, or `nil` for one that draws the app's own artwork.
+    ///
+    /// Threads is the owner's: `text.append` was the nearest thing in the library to what he
+    /// wanted and never the same drawing. Everything below that asked the symbol a question —
+    /// is there a `.fill` cut, does the glyph carry the "something is waiting" signal on its
+    /// own — answers correctly for `nil` without a `case .threads` anywhere, because the
+    /// answer to both is no and it always was.
+    var symbol: String? {
         switch self {
-        // The same mark a thread's own heading carries, so the shortcut and the screen
-        // it opens are recognisably the same thing.
-        case .threads: "text.append"
+        case .threads: nil
         case .later: "bookmark"
         // What sending looks like, unsent.
         case .drafts: "paperplane"
@@ -316,14 +340,21 @@ enum HomeShortcut: String, CaseIterable, Hashable, Identifiable {
     /// next destination silently opts out of.
     ///
     /// The filled name is resolved at runtime rather than assumed. Not every SF Symbol
-    /// ships a filled counterpart — ``threads``' `text.append` does not — and asking for a
-    /// name the system does not have draws nothing at all, silently, which is the exact
-    /// trap ``symbol`` is already pinned against in `HomeShortcutTests`. A shortcut
-    /// without one simply keeps its outline in both states.
-    func symbol(hasItems: Bool) -> String {
-        guard hasItems else { return symbol }
-        return filledSymbol ?? symbol
+    /// ships a filled counterpart, and asking for a name the system does not have draws
+    /// nothing at all, silently, which is the exact trap this is pinned against in
+    /// `HomeShortcutTests`. A shortcut without one simply keeps its outline in both states —
+    /// as does one drawing the app's own artwork, which ships a single cut.
+    func glyph(hasItems: Bool) -> AppGlyph {
+        guard let symbol else { return .asset(Self.threadsGlyph) }
+        guard hasItems else { return .symbol(symbol) }
+        return .symbol(filledSymbol ?? symbol)
     }
+
+    /// The owner's own threads drawing: a play mark beside a list.
+    ///
+    /// A constant because a name that resolves to nothing draws nothing, and one constant is
+    /// what a test can assert exists.
+    static let threadsGlyph = "ThreadsGlyph"
 
     /// Whether this card's glyph can say "there is something here" on its own — whether the
     /// system ships a `.fill` cut of ``symbol``. The ones that can do not also spend the
@@ -347,6 +378,7 @@ enum HomeShortcut: String, CaseIterable, Hashable, Identifiable {
     /// nothing at all, silently, which is the exact trap ``symbol`` is pinned against in
     /// `HomeShortcutTests`.
     private var filledSymbol: String? {
+        guard let symbol else { return nil }
         let filled = "\(symbol).fill"
         return UIImage(systemName: filled) != nil ? filled : nil
     }

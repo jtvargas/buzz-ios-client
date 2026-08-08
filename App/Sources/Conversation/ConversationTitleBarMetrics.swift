@@ -79,7 +79,7 @@ extension ConversationTitleBar {
     /// heading into the `…` menu on a narrow screen.
     static func reservedChrome(for mark: Mark) -> CGFloat {
         switch mark {
-        case .none, .symbol, .count:
+        case .none, .glyph, .count:
             glyphChrome
         case .avatar, .community:
             // The face or community mark, less the glyph it stands in for: a `#` at `.title3`

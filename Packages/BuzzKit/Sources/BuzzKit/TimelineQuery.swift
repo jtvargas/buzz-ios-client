@@ -58,9 +58,10 @@ extension BuzzEventStore {
                e.kind              AS kind,
                e.content           AS content,
                (SELECT ed.content FROM edit ed
-                 WHERE ed.target_id = e.id
-                   AND (ed.pubkey = e.pubkey OR ed.pubkey = eo.owner_pubkey)
-                 ORDER BY ed.created_at DESC, ed.event_id DESC
+                 WHERE \(authorizedEditWhere(
+                     edit: "ed", target: "e.id", author: "e.pubkey", owner: "eo.owner_pubkey"
+                 ))
+                 ORDER BY \(authorizedEditOrder(edit: "ed"))
                  LIMIT 1)          AS edited,
                \(deletionApplies(target: "e.id", author: "e.pubkey", owner: "eo.owner_pubkey")) AS deleted,
                rc.payload          AS rich,
@@ -239,11 +240,47 @@ extension BuzzEventStore {
     private static let editedTags = """
     (SELECT ev.tags FROM edit ed
        JOIN event ev ON ev.id = ed.event_id
-      WHERE ed.target_id = e.id
-        AND (ed.pubkey = e.pubkey OR ed.pubkey = eo.owner_pubkey)
-      ORDER BY ed.created_at DESC, ed.event_id DESC
+      WHERE \(authorizedEditWhere(
+          edit: "ed", target: "e.id", author: "e.pubkey", owner: "eo.owner_pubkey"
+      ))
+      ORDER BY \(authorizedEditOrder(edit: "ed"))
       LIMIT 1)
     """
+
+    /// The authority half of selecting one edit, shared with message search.
+    ///
+    /// Keeping this expression and the order below in one place is what makes a
+    /// search result's text identical to the timeline row it opens. `edit`, `target`,
+    /// `author`, and `owner` are SQL expressions or aliases supplied by the caller.
+    static func authorizedEditWhere(
+        edit: String,
+        target: String,
+        author: String,
+        owner: String
+    ) -> String {
+        "\(edit).target_id = \(target) AND (\(edit).pubkey = \(author) OR \(edit).pubkey = \(owner))"
+    }
+
+    /// Newest-wins order for authorized edits, including the same-second tie break.
+    static func authorizedEditOrder(edit: String) -> String {
+        "\(edit).created_at DESC, \(edit).event_id DESC"
+    }
+
+    /// The source event whose content currently renders for a target, when edited.
+    static func newestAuthorizedEditEventID(
+        target: String,
+        author: String,
+        owner: String
+    ) -> String {
+        """
+        (SELECT ed.event_id FROM edit ed
+          WHERE \(authorizedEditWhere(
+              edit: "ed", target: target, author: author, owner: owner
+          ))
+          ORDER BY \(authorizedEditOrder(edit: "ed"))
+          LIMIT 1)
+        """
+    }
 
     /// The read-time deletion-authority predicate, widened per NIP-OA.
     ///

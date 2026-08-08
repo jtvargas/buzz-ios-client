@@ -83,7 +83,7 @@ struct ActivityView: View {
     var body: some View {
         NavigationStack(path: $path) {
             content
-                .conversationTitle(mark: .symbol(Self.symbol), title: HomeTab.activity.title)
+                .conversationTitle(mark: .glyph(Self.glyph), title: HomeTab.activity.title)
                 // The same pull the sidebar and the Threads screen offer. This screen
                 // summarises every channel, so a stale one misleads here exactly as much.
                 .refreshable { await engine.refresh() }
@@ -96,7 +96,8 @@ struct ActivityView: View {
                         uploader: { environment.mediaUploader },
                         selfPubkey: selfPubkey,
                         knownPeers: route.knownPeers,
-                        focusingComposer: route.focusesComposer
+                        focusingComposer: route.focusesComposer,
+                        focusing: route.focus
                     )
                 }
                 .navigationDestination(item: $openedThread) { route in
@@ -190,11 +191,17 @@ struct ActivityView: View {
     private func emptyState(isFiltered: Bool, isEmpty: Bool) -> some View {
         if model.hasLoaded, isEmpty {
             if isFiltered {
-                ContentUnavailableView(
-                    "Nothing under \(filter.title)",
-                    systemImage: Self.symbol,
-                    description: Text("Other activity may be waiting under the chips above.")
-                )
+                // The long form, because the short one takes a system symbol name and this
+                // mark is the app's own drawing now.
+                ContentUnavailableView {
+                    Label {
+                        Text("Nothing under \(filter.title)")
+                    } icon: {
+                        GlyphView(Self.glyph, height: 48, relativeTo: .largeTitle)
+                    }
+                } description: {
+                    Text("Other activity may be waiting under the chips above.")
+                }
             } else {
                 ContentUnavailableView(
                     "You're all caught up",
@@ -310,9 +317,12 @@ struct ActivityView: View {
         )
     }
 
-    /// The mark on the heading — the tab's own symbol, so the bar and the bar's screen say
-    /// the same thing. Named here so a test can check the system actually has it.
-    static let symbol = "bell"
+    /// The mark on the heading — the tab's own glyph, so the bar and the bar's screen say the
+    /// same thing. The *unselected* cut: a heading is a label, not a state, and the solid one
+    /// is what the tab bar says about where you are.
+    ///
+    /// Named here so a test can check it resolves to something.
+    static let glyph = HomeTab.activity.icon(isSelected: false)
 
     /// Matched to ``ThreadsView``'s, so the two "what have I missed" lists in this app are
     /// laid out identically. Tighter vertically than that screen's 18, because a row here is

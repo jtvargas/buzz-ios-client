@@ -196,7 +196,7 @@ struct MessageActionsSheet: View {
         if let onReplyInThread, !isReadOnly {
             // The thread's own mark, not a reply arrow: `text.append` is what the thread
             // heading and the Threads tab already use, so the symbol means one thing.
-            actionRow("Reply in thread", symbol: ThreadView.threadSymbol) {
+            actionRow("Reply in thread", glyph: ThreadView.threadGlyph) {
                 onReplyInThread()
                 dismiss()
             }
@@ -311,10 +311,20 @@ struct MessageActionsSheet: View {
         role: ButtonRole? = nil,
         action: @escaping () -> Void
     ) -> some View {
+        actionRow(title, glyph: .symbol(symbol), role: role, action: action)
+    }
+
+    private func actionRow(
+        _ title: String,
+        glyph: AppGlyph,
+        role: ButtonRole? = nil,
+        action: @escaping () -> Void
+    ) -> some View {
         Button(role: role, action: action) {
             HStack(spacing: 16) {
-                Image(systemName: symbol)
-                    .font(.hiveSymbol(.body))
+                // 17 points is `.body`, said as a number because artwork takes its size from
+                // a frame rather than from a font — see ``GlyphView``.
+                GlyphView(glyph, height: 17, weight: .regular)
                     // A fixed gutter so the labels start on one line whatever width each
                     // glyph happens to draw at.
                     .frame(width: 24)

@@ -417,6 +417,10 @@ enum Schema {
             try createOutboxMediaTable(db)
         }
 
+        migrator.registerMigration("v14.message-search") { db in
+            try createMessageSearch(db)
+        }
+
         return migrator
     }
 

@@ -108,7 +108,7 @@ struct RootView: View {
         }
     }
 
-    /// The two destinations.
+    /// The three destinations.
     ///
     /// Each tab owns its own `NavigationStack` — the channel list's is inside
     /// ``ChannelListView``, with the app-wide resolvers injected above it — so a push in one
@@ -156,6 +156,15 @@ struct RootView: View {
                 } label: {
                     label(for: .activity)
                 }
+                Tab(value: HomeTab.search, role: .search) {
+                    SearchView(
+                        store: store,
+                        engine: engine,
+                        selfPubkey: environment.selfPubkeyHex
+                    )
+                } label: {
+                    label(for: .search)
+                }
             }
             // A screen asked for from outside the app — Siri, Spotlight, the Shortcuts app —
             // arrives as a destination on ``AppNavigator``. This half selects the tab that
@@ -196,8 +205,17 @@ struct RootView: View {
         }
     }
 
+    @ViewBuilder
     private func label(for item: HomeTab) -> some View {
-        Label(item.title, systemImage: item.symbol(isSelected: tab == item))
+        switch item.icon(isSelected: tab == item) {
+        case let .symbol(name):
+            Label(item.title, systemImage: name)
+        case let .asset(name):
+            // `Label(_:image:)`, so the tab bar gets an image it can size and tint itself.
+            // The asset is template-rendered, which is what makes it take the selected tint
+            // the way the symbols either side of it do.
+            Label(item.title, image: name)
+        }
     }
 }
 

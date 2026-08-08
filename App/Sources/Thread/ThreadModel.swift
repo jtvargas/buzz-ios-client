@@ -97,6 +97,13 @@ final class ThreadModel {
     /// Where the next bump of ``jumpToken`` lands.
     var jumpTarget: ConversationJumpTarget = .bottom
 
+    /// The reply to mark as the one the reader came for, or `nil`. The channel timeline's
+    /// own — see ``ChannelTimelineModel/highlightedMessageID``, including why what draws it
+    /// must never take up space.
+    var highlightedMessageID: String?
+    /// Clears that mark after its moment. Not observable: nothing renders it.
+    @ObservationIgnored var highlightTask: Task<Void, Never>?
+
     private let store: BuzzEventStore
     /// Internal rather than `private` because the send that uses it lives beside this
     /// file, in `ThreadModel+Sending.swift` — Swift's `private` is file-scoped. Same

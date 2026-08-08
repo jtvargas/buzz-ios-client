@@ -12,25 +12,78 @@ struct HomeNavigationTests {
 
     @Test("the selected tab is filled and the others are not")
     func selectedTabIsFilled() {
-        #expect(HomeTab.home.symbol(isSelected: false) == "house")
-        #expect(HomeTab.home.symbol(isSelected: true) == "house.fill")
-        #expect(HomeTab.activity.symbol(isSelected: false) == "bell")
-        #expect(HomeTab.activity.symbol(isSelected: true) == "bell.fill")
+        // Home draws the app's own artwork: `home` and `home.fill` are not system symbols —
+        // `house` has been in the library since 2019 and `home` has never been in it — so the
+        // owner's pair ships in the asset catalogue. The *rule* is the same as `.fill`'s, and
+        // that is what this pins.
+        #expect(HomeTab.home.icon(isSelected: false) == .asset("TabHome"))
+        #expect(HomeTab.home.icon(isSelected: true) == .asset("TabHomeFill"))
+        #expect(HomeTab.activity.icon(isSelected: false) == .asset("TabActivity"))
+        #expect(HomeTab.activity.icon(isSelected: true) == .asset("TabActivityFill"))
+        #expect(HomeTab.search.icon(isSelected: false) == .symbol("magnifyingglass"))
+        #expect(HomeTab.search.icon(isSelected: true) == .symbol("magnifyingglass"))
     }
 
-    @Test("every symbol either tab can draw exists on this system")
-    func tabSymbolsExist() {
+    @Test("every glyph either tab can draw exists")
+    func tabGlyphsExist() {
         // A `.fill` variant that does not exist renders as nothing at all, silently — the
-        // trap ``ThreadView/threadSymbol`` is pinned against, and one a derived name is
-        // especially exposed to.
+        // trap ``ThreadView/threadGlyph`` is pinned against, and one a derived name is
+        // especially exposed to. An asset name is exposed to the identical trap through a
+        // different door: a typo, or an imageset that never made it into the bundle, is also
+        // a blank tab and no error. Both are checked, each the only way its kind can be.
         for tab in HomeTab.allCases {
             for selected in [true, false] {
-                let symbol = tab.symbol(isSelected: selected)
-                #expect(UIImage(systemName: symbol) != nil, "\(symbol) is missing")
+                switch tab.icon(isSelected: selected) {
+                case let .symbol(name):
+                    #expect(UIImage(systemName: name) != nil, "symbol \(name) is missing")
+                case let .asset(name):
+                    #expect(UIImage(named: name) != nil, "asset \(name) is missing")
+                }
             }
         }
-        #expect(UIImage(systemName: ActivityView.symbol) != nil)
+        // The two headings that name a screen rather than a conversation, checked the same
+        // way their kinds require.
+        switch ActivityView.glyph {
+        case let .symbol(name): #expect(UIImage(systemName: name) != nil)
+        case let .asset(name): #expect(UIImage(named: name) != nil, "asset \(name) is missing")
+        }
         #expect(UIImage(systemName: ChannelListView.communitySymbol) != nil)
+    }
+
+    @Test("every tab that draws its own artwork has both cuts, and both are templates")
+    func tabArtworkIsComplete() {
+        // The two tables have to agree: a tab in one and not the other draws nothing in one of
+        // its two states, and nothing at runtime says so. And a drawing shipped non-template
+        // is black on a dark bar with no selected tint at all — one key in `Contents.json`,
+        // invisible until somebody looks at the tab bar.
+        for tab in HomeTab.allCases where tab.symbol == nil {
+            for selected in [true, false] {
+                guard case let .asset(name) = tab.icon(isSelected: selected) else {
+                    Issue.record("\(tab) has no symbol, so it must name artwork")
+                    continue
+                }
+                let image = UIImage(named: name)
+                #expect(image != nil, "asset \(name) is missing")
+                #expect(image?.renderingMode == .alwaysTemplate, "\(name) is not a template")
+            }
+        }
+        // And the selected cut is a *different* drawing, or the tab never changes.
+        for tab in HomeTab.allCases where tab.symbol == nil {
+            #expect(tab.icon(isSelected: true) != tab.icon(isSelected: false))
+        }
+    }
+
+    @Test("the home tab's artwork is a template, so the tab bar tints it")
+    func homeArtworkIsTemplate() {
+        // Without this the icon ships as-drawn — solid black on a dark tab bar, and no
+        // selected state at all, because the tint that says "you are here" is applied to a
+        // template's alpha and to nothing else. It is one key in `Contents.json` and nothing
+        // in the running app complains when it is absent.
+        for name in ["TabHome", "TabHomeFill"] {
+            let image = UIImage(named: name)
+            #expect(image != nil, "asset \(name) is missing")
+            #expect(image?.renderingMode == .alwaysTemplate, "\(name) is not a template")
+        }
     }
 
     @Test("the workspace's own heading is the only one drawn in the accent")
@@ -43,8 +96,11 @@ struct HomeNavigationTests {
         // The other three headings — Activity, a thread, a channel — write their mark plainly
         // as `.symbol(name)`, so the *default* is what keeps them out of the accent. Pinned
         // here because flipping that default would recolour three screens silently.
-        for symbol in [ActivityView.symbol, ThreadView.threadSymbol, "number"] {
-            #expect(ConversationTitleBar.Mark.symbol(symbol) == .symbol(symbol, accented: false))
+        #expect(ConversationTitleBar.Mark.symbol("number") == .symbol("number", accented: false))
+        // The thread's and Activity's marks are the app's own artwork rather than symbols, and
+        // take the same default from the other side of the enum.
+        for glyph in [ThreadView.threadGlyph, ActivityView.glyph] {
+            #expect(ConversationTitleBar.Mark.glyph(glyph) == .glyph(glyph, accented: false))
         }
     }
 

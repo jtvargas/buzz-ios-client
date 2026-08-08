@@ -34,7 +34,7 @@ struct DraftRow: View {
                 conversation: conversation,
                 size: Self.markSize,
                 glyphTint: .primary,
-                symbol: DraftRowMark.symbol(for: summary, in: conversation)
+                glyph: DraftRowMark.glyph(for: summary, in: conversation)
             )
             VStack(alignment: .leading, spacing: Self.betweenLines) {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
@@ -96,12 +96,12 @@ struct DraftRow: View {
 /// `nil` leaves ``ConversationMark`` to draw what it draws everywhere else — the `#`, the
 /// lock, or the peer's face.
 enum DraftRowMark {
-    static func symbol(for summary: ComposerDraftSummary, in conversation: ConversationIdentity) -> String? {
+    static func glyph(for summary: ComposerDraftSummary, in conversation: ConversationIdentity) -> AppGlyph? {
         // A thread inside a channel is a different destination from the channel, and this
         // list is the one place the two sit next to each other. A thread inside a direct
         // message keeps the face: it is still a conversation with that person.
         guard summary.rootID != nil, conversation.kind == .channel else { return nil }
-        return ThreadView.threadSymbol
+        return ThreadView.threadGlyph
     }
 }
 

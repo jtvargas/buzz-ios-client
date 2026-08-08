@@ -62,6 +62,23 @@ struct ChannelTimelineView: View {
     /// message rather than from the sidebar. Only ever consulted while the roster has
     /// nothing to say — see ``EntityNames/conversation(for:knownPeers:)``.
     private let knownPeers: [String]
+    /// One message this conversation was opened *at*, when it was reached from search. The
+    /// screen still opens at its newest message and this is walked back to from there — see
+    /// ``ChannelTimelineModel/focus(on:sentAt:)``.
+    private let focus: ConversationFocus?
+
+    /// The link to the message this screen was opened at, for the reach panel to offer when
+    /// it could not get there.
+    ///
+    /// No thread root: this path is the one where the message's own threading is exactly what
+    /// is not known — a reply this device holds would have opened its thread from the search
+    /// results instead of arriving here. The link resolves without it.
+    private var reachLinkURL: URL? {
+        guard let focus else { return nil }
+        return MessageLink.url(
+            channelID: channelID, messageID: focus.messageID, threadRootID: nil
+        )
+    }
 
     /// Reserved for the top-of-history sentinel. Constant, and present whenever an
     /// older page may exist: a spinner that appears and disappears is itself a content
@@ -78,7 +95,8 @@ struct ChannelTimelineView: View {
         uploader: @escaping MediaUploaderProvider,
         selfPubkey: String?,
         knownPeers: [String] = [],
-        focusingComposer focusesComposer: Bool = false
+        focusingComposer focusesComposer: Bool = false,
+        focusing focus: ConversationFocus? = nil
     ) {
         self.init(
             channel: channel,
@@ -95,7 +113,8 @@ struct ChannelTimelineView: View {
             selfPubkey: selfPubkey,
             knownPeers: knownPeers,
             lifecycleEngine: engine,
-            focusingComposer: focusesComposer
+            focusingComposer: focusesComposer,
+            focusing: focus
         )
     }
 
@@ -124,9 +143,11 @@ struct ChannelTimelineView: View {
         selfPubkey: String?,
         knownPeers: [String] = [],
         lifecycleEngine: SyncEngine? = nil,
-        focusingComposer focusesComposer: Bool = false
+        focusingComposer focusesComposer: Bool = false,
+        focusing focus: ConversationFocus? = nil
     ) {
         self.focusesComposer = focusesComposer
+        self.focus = focus
         self.channel = channel
         channelID = channel.id
         self.store = store
@@ -196,6 +217,26 @@ struct ChannelTimelineView: View {
             accessory
         }
         .overlay { emptyState }
+        // Above the conversation and below nothing: the reach is the only thing on this
+        // screen the reader is waiting on, and it has controls they have to be able to hit.
+        // Hit testing is off for everything but the panel — see ``MessageReachPanel``.
+        .overlay {
+            MessageReachPanel(
+                seek: model.jump.seek,
+                onCancel: { model.cancelFocus() },
+                onRetry: { model.retryFocus() },
+                onCopyLink: reachLinkURL.map { url in
+                    {
+                        UIPasteboard.general.string = url.absoluteString
+                        HiveHaptics.play(.suggestionPicked)
+                        // Copying answers the report, so it takes it away — pressing a control
+                        // and being left looking at the same failure reads as the press not
+                        // having landed.
+                        model.cancelFocus()
+                    }
+                }
+            )
+        }
         .focusesComposerOnArrival(focusesComposer) { model.mentionAutocomplete.isComposerFocused = true }
         .modifier(header)
         // A conversation takes the whole screen. The tab bar is not just visual clutter
@@ -268,10 +309,33 @@ struct ChannelTimelineView: View {
                 // dead bar.
                 joiner: lifecycleEngine,
                 lifecycleEngine: lifecycleEngine,
+                // Carried, because a thread can now be pushed from here *at* one of its
+                // replies — the walk below discovers that a message it was sent to find is
+                // one this page excludes. Every other push from this screen leaves it at
+                // the default.
+                landingOn: route.anchor,
                 focusingComposer: route.focusesComposer
             )
         }
         .task { await model.run() }
+        // After the first render, never from the prime: the reach ends in a `jumpToken` bump,
+        // and a bump made before the scaffold has installed its `onChange` is a change that
+        // observer never sees — see ``ChannelTimelineModel/focus(on:sentAt:)``.
+        //
+        // Started rather than awaited: the reader can cancel it and run it again, so no one
+        // attempt is the answer. What it *finds* comes back through `focusThreadRoot` below.
+        .task { if let focus { model.startFocus(focus) } }
+        .onDisappear { model.cancelFocus() }
+        // A message that turns out to be a thread reply is only discoverable once the reach
+        // has been past its place in history and stored it — see
+        // ``ChannelTimelineModel/FocusOutcome/inThread(root:)``. The other endings have
+        // already said what they had to say on the surface itself.
+        .onChange(of: model.focusThreadRoot) { _, root in
+            guard let root, let focus else { return }
+            openedThread = ThreadRoute(
+                root: root, channel: channelID, anchor: .reply(focus.messageID)
+            )
+        }
         .task { await presence.run() }
         // Here rather than inside ``TypingIndicatorView``, which is absent from the view
         // tree until somebody is typing and so could never start its own model — see the
@@ -530,6 +594,9 @@ private extension ChannelTimelineView {
         // The shared constant, not a bare `.padding(.horizontal)`: the day separator starts
         // on this same line, and two defaults agreeing is not the same as one number.
         .padding(.horizontal, MessageRowMetrics.rowLeading)
+        // Outside the padding, so the wash runs the full width of the row rather than
+        // stopping where the text does. See ``View/messageFocusHighlight(_:)``.
+        .messageFocusHighlight(model.highlightedMessageID == row.id)
     }
 
     /// The scaffold's "the top of history is near" report. It arrives as a level

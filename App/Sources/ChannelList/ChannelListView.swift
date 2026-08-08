@@ -218,7 +218,8 @@ struct ChannelListView: View {
                         uploader: { environment.mediaUploader },
                         selfPubkey: environment.selfPubkeyHex,
                         knownPeers: route.knownPeers,
-                        focusingComposer: route.focusesComposer
+                        focusingComposer: route.focusesComposer,
+                        focusing: route.focus
                     )
                 }
                 .toolbar {

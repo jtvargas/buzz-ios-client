@@ -80,14 +80,14 @@ struct DraftsScreenTests {
     @Test("a channel thread draws the thread's mark; a channel and a DM draw their own")
     func rowMark() {
         let channel = identity(title: "design")
-        #expect(DraftRowMark.symbol(for: summary(), in: channel) == nil)
-        #expect(DraftRowMark.symbol(for: summary(root: "opener"), in: channel) == ThreadView.threadSymbol)
+        #expect(DraftRowMark.glyph(for: summary(), in: channel) == nil)
+        #expect(DraftRowMark.glyph(for: summary(root: "opener"), in: channel) == ThreadView.threadGlyph)
 
         // A face names the person, which is more use than any symbol — including in their
         // threads.
         let dm = identity(title: "Allison Drake", kind: .direct)
-        #expect(DraftRowMark.symbol(for: summary(), in: dm) == nil)
-        #expect(DraftRowMark.symbol(for: summary(root: "opener"), in: dm) == nil)
+        #expect(DraftRowMark.glyph(for: summary(), in: dm) == nil)
+        #expect(DraftRowMark.glyph(for: summary(root: "opener"), in: dm) == nil)
     }
 
     // MARK: - Where a press goes

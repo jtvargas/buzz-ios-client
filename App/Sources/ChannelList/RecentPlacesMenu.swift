@@ -68,7 +68,9 @@ struct RecentPlacesMenu: View {
                 // what tells a thread from the channel around it when both are listed —
                 // and both can be, which is the point of remembering threads separately.
                 Text("Thread")
-                Image(systemName: ThreadView.threadSymbol)
+                // Plain: a `Menu` row's image is sized by UIKit, so a frame here would be
+                // overruled and a font would reach only one of the two kinds.
+                ThreadView.threadGlyph.image
             }
         } else if row.conversation.kind == .agent {
             Button {

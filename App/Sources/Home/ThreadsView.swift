@@ -159,11 +159,17 @@ struct ThreadsView: View {
     @ViewBuilder
     private var emptyState: some View {
         if model.hasLoaded, model.threads.isEmpty {
-            ContentUnavailableView(
-                "No threads yet",
-                systemImage: ThreadView.threadSymbol,
-                description: Text("Replies to a message appear here as a thread.")
-            )
+            ContentUnavailableView {
+                // The long form, because the short one takes a system symbol name and this
+                // mark is the app's own drawing now.
+                Label {
+                    Text("No threads yet")
+                } icon: {
+                    GlyphView(ThreadView.threadGlyph, height: 48, relativeTo: .largeTitle)
+                }
+            } description: {
+                Text("Replies to a message appear here as a thread.")
+            }
         }
     }
 

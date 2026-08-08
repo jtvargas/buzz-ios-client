@@ -214,11 +214,20 @@ struct MessageSurfaceTests {
             == .avatar(url: URL(string: "https://example.test/a.png"), seed: "peer-1", initials: "AL"))
     }
 
-    @Test("the thread heading's glyph is a symbol the system actually has")
-    func threadSymbolExists() {
-        // A name SF Symbols does not know renders as nothing at all, with no warning — so the
-        // glyph would simply be missing on device and nowhere else.
-        #expect(UIImage(systemName: ThreadView.threadSymbol) != nil)
+    @Test("the thread heading's glyph is artwork that is actually in the bundle")
+    func threadGlyphExists() {
+        // A name that resolves to nothing renders as nothing at all, with no warning — so the
+        // glyph would simply be missing on device and nowhere else. It is the app's own
+        // drawing now, so the question is asked of the bundle rather than of SF Symbols, and
+        // the rendering intent matters too: shipped non-template it would be black artwork on
+        // a dark heading, which is invisible rather than merely wrong.
+        guard case let .asset(name) = ThreadView.threadGlyph else {
+            Issue.record("the thread mark is expected to be the app's own artwork")
+            return
+        }
+        let image = UIImage(named: name)
+        #expect(image != nil, "asset \(name) is missing")
+        #expect(image?.renderingMode == .alwaysTemplate)
     }
 
     private func identity(_ kind: ConversationIdentity.Kind) -> ConversationIdentity {
