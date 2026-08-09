@@ -84,4 +84,10 @@ extension ChannelListView {
             )
         }
     }
+
+    /// The static above fed this view's live channel list — the form every caller inside the
+    /// view wants, and the reason ``ChannelListView/model`` is not `private`.
+    func conversationRow(for channelID: String, fallback: ChannelListRow? = nil) -> ChannelListRow {
+        Self.conversationRow(for: channelID, in: model.channels, fallback: fallback)
+    }
 }

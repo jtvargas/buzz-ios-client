@@ -19,10 +19,19 @@ import SwiftUI
 ///
 /// It decides about the tab bar for the whole stack rather than leaving that to each
 /// pushed view — see ``ChannelListTabBar``, which holds the measurements that put it here.
+///
+/// # Why some of this state is not `private`
+///
+/// The eleven `@State var`s below — the surfaces that can sit on top of the sidebar, plus the
+/// channel list itself — are read and written by `ChannelListView+Notifications.swift`, which
+/// owns every navigation request arriving from *outside* this view tree. That split is not
+/// taste: this file sits against swiftlint's 1000-line **error** ceiling, and a `private`
+/// member is unreachable from an extension in another file, so the two go together. Everything
+/// still `private` is local to this file, and nothing beyond those two files writes any of it.
 struct ChannelListView: View {
     @Environment(AppEnvironment.self) private var environment
 
-    @State private var model: ChannelListModel
+    @State var model: ChannelListModel
     @State private var presence: PresenceModel
     @State private var directory: EntityDirectoryModel
     @State private var ticker = RelativeTimeTicker()
@@ -52,30 +61,30 @@ struct ChannelListView: View {
     /// several times a second for bytes that did not change. Refreshed by the `task` below,
     /// keyed on the community and the filename, so a new icon still lands.
     @State private var activeCommunityIcon: Data?
-    @State private var showAccount = false
+    @State var showAccount = false
     /// Whether the channel browser is up — the Channels heading's `+`.
-    @State private var showsBrowseChannels = false
+    @State var showsBrowseChannels = false
     /// Whether the new-channel sheet is up. No trigger sets it from this screen any
     /// more — creating moved inside the browser — but the seam stays attached: it is
     /// the documented adoption point for the sheet, and a fixture can still drive it.
-    @State private var showsCreateChannel = false
+    @State var showsCreateChannel = false
     /// Whether the new-direct-message sheet is up.
-    @State private var showsNewDirectMessage = false
+    @State var showsNewDirectMessage = false
     /// The Threads screen, when it is pushed. A value rather than a `Bool` so it goes
     /// through `navigationDestination(item:)` like every other push in the app.
-    @State private var showsThreads: ThreadsRoute?
+    @State var showsThreads: ThreadsRoute?
     /// The Drafts screen, when it is pushed. A value rather than a `Bool`, like every
     /// other push here.
-    @State private var showsDrafts: DraftsRoute?
+    @State var showsDrafts: DraftsRoute?
     /// The thread the **Threads screen** has open, hoisted out of ``ThreadsView`` to here.
     ///
     /// State in the wrong place, but for ``ChannelListTabBar``: this stack has to know about
     /// every push that hides the tab bar, and a `@State` inside ``ThreadsView`` is a push it
     /// cannot see. Only the storage moved — that screen still declares the destination.
-    @State private var openedThread: ThreadRoute?
+    @State var openedThread: ThreadRoute?
     /// The pushed Later screen. A route rather than a `Bool` so it sits alongside the
     /// other programmatic pushes this stack owns.
-    @State private var showsLater: LaterRoute?
+    @State var showsLater: LaterRoute?
     /// Drives the Later screen and keeps the scheduled alerts in step. Built here rather
     /// than inside the screen so the shortcut card's count is live whether or not anyone
     /// has opened it.
@@ -87,13 +96,13 @@ struct ChannelListView: View {
     /// "is this conversation already on the stack?" is not a question it can answer, and
     /// the answer is what stops a DM opened from inside itself stacking on itself
     /// (see ``ConversationRoute/pushed(onto:)``).
-    @State private var path: [ConversationRoute] = []
+    @State var path: [ConversationRoute] = []
     /// Where the reader last was, for the leftward drag that takes them back to it.
     @State private var resume = ConversationResume()
     /// How far the communities panel is out — 0 closed, 1 over the sidebar. Held here rather
     /// than inside the panel because three things move it: the rightward drag, the heading's
     /// tap, and the panel's own strip.
-    @State private var workspacePanel = WorkspacePanelState()
+    @State var workspacePanel = WorkspacePanelState()
 
     @Binding private var notificationRoute: InAppNotificationRoute?
     @Binding private var visibleNotificationLocation: InAppNotificationLocation?
@@ -697,30 +706,6 @@ private extension ChannelListView {
         }
     }
 
-    /// Opens a screen the system asked for — see ``AppDestination``.
-    ///
-    /// Not ``press(_:)``. A card is tapped by somebody already looking at the sidebar, so it
-    /// pushes onto whatever is there; an intent arrives from outside with no idea what is
-    /// open, and landing *on top of* a conversation would give the reader a screen they have
-    /// to undo before they can do anything else. So this pops first — the same conclusion
-    /// the reminder alert reached, for the same reason.
-    ///
-    /// Idempotent on the screen being asked for: asking for Threads while Threads is already
-    /// open leaves it exactly where it is rather than popping and re-pushing it, which would
-    /// be a visible flinch for no change of destination.
-    func open(_ destination: AppDestination) {
-        openedThread = nil
-        path = []
-        if destination != .threads { showsThreads = nil }
-        if destination != .later { showsLater = nil }
-        if destination != .drafts { showsDrafts = nil }
-        switch destination {
-        case .threads: if showsThreads == nil { showsThreads = ThreadsRoute() }
-        case .later: if showsLater == nil { showsLater = LaterRoute() }
-        case .drafts: if showsDrafts == nil { showsDrafts = DraftsRoute() }
-        }
-    }
-
     /// A heading and the rows it introduces, in **one** list cell.
     ///
     /// One cell and not one per row: a `List` will not size a cell to nothing, so a section of
@@ -891,82 +876,6 @@ private extension ChannelListView {
 // MARK: - Derivation
 
 private extension ChannelListView {
-    /// Opens one navigation request originating outside this view tree.
-    ///
-    /// The route is derived in ``ChannelListView/route(for:)``, which reads nothing this holds.
-    func open(_ target: AppTarget) {
-        if case let .destination(destination) = target { return open(destination) }
-        guard let route = Self.route(for: target) else { return }
-        openNotification(route)
-    }
-
-    /// Where this stack is — shared with the Activity tab's, which asks the same question.
-    var notificationLocation: InAppNotificationLocation? {
-        RecentPlaces.location(path: path, openedThread: openedThread)
-    }
-
-    /// Jumps to a conversation or a thread, closing whatever was open on the way.
-    ///
-    /// # Why closing and opening cannot share an update
-    ///
-    /// `navigationDestination(item:)` does not simply push. It presents by truncating the
-    /// stack back to the depth it was asked *from* — `programmaticallyPresentView(_:fromDepth:)`
-    /// — and if the path is being emptied in the same pass, that depth no longer exists and
-    /// `AnyNavigationPath.HomogeneousBoxBase.removeLast(_:)` trips a Swift precondition. Two
-    /// of the owner's eleven crash reports are exactly that stack. The old shape here wrote
-    /// `path = []` and `openedThread = …` back to back, which is that crash spelled out.
-    ///
-    /// So: unwind, then present on the next turn of the main actor — and only pay for the
-    /// second turn when there is something to unwind, so the common jump from the sidebar
-    /// stays a single transition.
-    ///
-    /// The sheets are closed on the same first pass for the same reason rather than a proven
-    /// one: dismissing a presentation while a push begins is the other crash signature in
-    /// those reports, and nothing here needs the two to be simultaneous.
-    func openNotification(_ route: InAppNotificationRoute) {
-        guard hasOpenSurface else { return present(route) }
-
-        // Unanimated, so the reader sees one movement — the arrival — rather than a pop
-        // followed by a push.
-        var silent = Transaction()
-        silent.disablesAnimations = true
-        withTransaction(silent) { closeOpenSurfaces() }
-        Task { @MainActor in present(route) }
-    }
-
-    /// Whether anything is on top of the sidebar: a pushed screen, an item destination, a
-    /// sheet, or the workspace panel.
-    private var hasOpenSurface: Bool {
-        workspacePanel.isOpen || showAccount || showsBrowseChannels || showsCreateChannel
-            || showsNewDirectMessage || !path.isEmpty || openedThread != nil
-            || showsDrafts != nil || showsThreads != nil || showsLater != nil
-    }
-
-    private func closeOpenSurfaces() {
-        workspacePanel.setOpen(false)
-        showAccount = false
-        showsBrowseChannels = false
-        showsCreateChannel = false
-        showsNewDirectMessage = false
-        showsDrafts = nil
-        showsThreads = nil
-        showsLater = nil
-        openedThread = nil
-        path = []
-    }
-
-    /// The push itself, onto a stack that is already empty.
-    private func present(_ route: InAppNotificationRoute) {
-        switch route.location {
-        case let .channel(channelID):
-            path = [ConversationRoute(
-                channel: conversationRow(for: channelID, fallback: route.fallbackChannel)
-            )]
-        case let .thread(channelID, rootID):
-            openedThread = ThreadRoute(root: rootID, channel: channelID, anchor: .latestReply)
-        }
-    }
-
     /// The resolver for this pass of the body: the live directory snapshot composed with
     /// the live channel list. Rebuilt only when one of those changes, and proportional to
     /// the identities that have *no* name, not to the roster.
@@ -978,15 +887,6 @@ private extension ChannelListView {
         )
     }
 
-    /// The row to push for a channel just opened or created.
-    ///
-    /// The live list first, so one conversation is one row value wherever it was reached
-    /// from. A brand-new channel may not be in that list yet: the relay publishes a
-    /// channel's metadata *after* it commits the channel, so the id is authoritative before
-    /// the name is. Rather than block navigation on a read-back that can lose that race,
-    /// this synthesises the minimum row the destination needs — everything a reader sees is
-    /// resolved by ``EntityNames``. Two calls can legitimately answer with the same row;
-    /// keeping one instance on the stack is ``ConversationRoute/pushed(onto:)``'s job.
     /// Opens the conversation a draft belongs to, with the composer already focused.
     ///
     /// Both destinations push *over* the Drafts screen rather than replacing it, so backing
@@ -1012,10 +912,6 @@ private extension ChannelListView {
             )
             path = route.pushed(onto: path)
         }
-    }
-
-    func conversationRow(for channelID: String, fallback: ChannelListRow? = nil) -> ChannelListRow {
-        Self.conversationRow(for: channelID, in: model.channels, fallback: fallback)
     }
 
     /// The sections and rows for this pass, resolved once for the whole list.
