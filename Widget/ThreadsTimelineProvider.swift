@@ -30,7 +30,7 @@ struct ThreadsTimelineProvider: TimelineProvider {
     /// The gallery preview and the transient state. Deliberately does not hit the network:
     /// this is drawn while the reader is scrolling a picker, and a request there would be
     /// both slow and pointless.
-    func getSnapshot(in _: Context, completion: @escaping (ThreadsEntry) -> Void) {
+    func getSnapshot(in _: Context, completion: @escaping @Sendable (ThreadsEntry) -> Void) {
         guard let snapshot = ThreadsWidgetSnapshot.load() else {
             completion(ThreadsEntry(date: Date(), state: .needsApp))
             return
@@ -44,7 +44,12 @@ struct ThreadsTimelineProvider: TimelineProvider {
         ))))
     }
 
-    func getTimeline(in _: Context, completion: @escaping (Timeline<ThreadsEntry>) -> Void) {
+    /// `@Sendable` is written out rather than inherited. The protocol declares it
+    /// (`WidgetKit.swiftinterface`: `completion: @escaping @Sendable …`), but a conformance
+    /// that omits the attribute still satisfies the requirement while typing the parameter
+    /// as non-`Sendable` locally — and under Swift 6 the fetch below then cannot capture it,
+    /// with an error that reads as a problem with the `Task` rather than with the signature.
+    func getTimeline(in _: Context, completion: @escaping @Sendable (Timeline<ThreadsEntry>) -> Void) {
         Task {
             completion(await timeline())
         }

@@ -43,7 +43,8 @@ enum ThreadsWidgetSnapshotWriter {
         // the reader has already read is exactly the thread the next reply arrives in, and
         // a watchlist built from unread threads would be blind to it — the widget would
         // only ever confirm numbers the app had already computed.
-        guard let threads = try? store.threadActivity(selfPubkey: selfPubkeyHex, limit: ThreadsWidgetSnapshot.watchlistLimit),
+        let watchlistLimit = ThreadsWidgetSnapshot.watchlistLimit
+        guard let threads = try? store.threadActivity(selfPubkey: selfPubkeyHex, limit: watchlistLimit),
               !threads.isEmpty
         else {
             // No participation, no watchlist — but still write, so the widget can draw a

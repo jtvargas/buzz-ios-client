@@ -107,7 +107,7 @@ extension ThreadsWidgetSnapshot {
     /// Writes this snapshot as the whole of ``defaultsKey``.
     func save(to defaults: UserDefaults? = ThreadsWidgetSnapshot.sharedDefaults) {
         guard let defaults, let data = try? JSONEncoder().encode(self) else { return }
-        defaults.set(data, forKey: defaultsKey)
+        defaults.set(data, forKey: Self.defaultsKey)
     }
 
     /// Removes the snapshot — what signing out has to do, or the widget goes on showing
