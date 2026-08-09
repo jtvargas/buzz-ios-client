@@ -28,6 +28,7 @@ struct ComposerAttachButton: View {
 
     @State private var isShowingMenu = false
     @State private var isShowingPhotosPicker = false
+    @State private var isShowingFileImporter = false
     @State private var pickedPhotos: [PhotosPickerItem] = []
     @State private var wasFocusedBeforePresentation = false
 
@@ -86,6 +87,28 @@ struct ComposerAttachButton: View {
             selection: $pickedPhotos,
             attachments: attachments
         )
+        // `.item` — every type there is — because that is what the official clients
+        // offer: the Flutter one opens `file_selector.openFile` with no type groups
+        // and lets the relay decide (`mobile/lib/shared/relay/media_upload.dart`).
+        // Narrowing it here would make Hive the only client that cannot send a file
+        // the others can.
+        //
+        // `allowsMultipleSelection` is on so a file pick can fill the same five-item
+        // message a photo pick can. The cap is applied on the way back rather than
+        // here, in ``ComposerAttachmentsModel/add(_:)``, which is the one place that
+        // can see what the composer is already holding.
+        .fileImporter(
+            isPresented: $isShowingFileImporter,
+            allowedContentTypes: [.item],
+            allowsMultipleSelection: true
+        ) { result in
+            switch result {
+            case let .success(urls):
+                attachments.add(urls.map(ComposerFilePick.init(url:)))
+            case let .failure(error):
+                attachments.report(error)
+            }
+        }
         // Fired by the card's *disappearance* — the earliest moment another modal
         // may be presented without racing it away. A card dismissed without a
         // choice (tapped outside) falls through to the focus handover instead.
@@ -99,6 +122,10 @@ struct ComposerAttachButton: View {
             }
         }
         .onChange(of: isShowingPhotosPicker) { _, isPresented in
+            guard !isPresented else { return }
+            restoreFocusIfSettled()
+        }
+        .onChange(of: isShowingFileImporter) { _, isPresented in
             guard !isPresented else { return }
             restoreFocusIfSettled()
         }
@@ -156,6 +183,13 @@ struct ComposerAttachButton: View {
                 return
             }
             attachments.presentCamera()
+        case .files:
+            guard attachments.remainingCapacity > 0 else {
+                attachments.reportAtCapacity()
+                restoreFocusIfSettled()
+                return
+            }
+            isShowingFileImporter = true
         }
     }
 

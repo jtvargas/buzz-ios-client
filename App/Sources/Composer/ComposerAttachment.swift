@@ -39,9 +39,22 @@ struct ComposerAttachment: Identifiable {
     /// which is what an author who picked it twice asked for.
     let id: UUID
     /// The picture itself, once it has been decoded. `nil` for the moment between
-    /// the pick landing and the decode finishing.
+    /// the pick landing and the decode finishing — and permanently for a file, which
+    /// has nothing to draw.
     var preview: UIImage?
     var state: State
+    /// The file's name when this attachment is a document rather than a picture, and
+    /// `nil` when it is a picture.
+    ///
+    /// Set when the pick lands rather than derived from the payload afterwards,
+    /// because the tile is on screen during preparation and has to know *then* which
+    /// of the two things it is drawing. Deriving it from the ready payload's MIME
+    /// would leave the tile guessing for exactly as long as the bytes take to load —
+    /// which is the whole time anyone is looking at it.
+    var documentName: String?
+
+    /// Whether this attachment is a file rather than a picture.
+    var isDocument: Bool { documentName != nil }
 
     var localPayload: LocalPayload? {
         guard case let .ready(payload) = state else { return nil }
@@ -69,10 +82,25 @@ struct ComposerAttachment: Identifiable {
 protocol ComposerPickedItem: Sendable {
     /// What the source calls this, when it has a name worth carrying. Pictures do
     /// not — they are rendered, not named — so this is `nil` for a photo pick and
-    /// is here for the file attachment that comes later.
+    /// carries the filename for a file import.
     var suggestedFilename: String? { get }
+    /// Whether bytes that are not a picture are still a valid attachment from this
+    /// source.
+    ///
+    /// A photo pick says no: something the photo library handed over that ImageIO
+    /// cannot open is a failure worth naming, not a file to send. A file import says
+    /// yes, which is the whole difference between the two — everything else about
+    /// them is shared.
+    ///
+    /// Defaulted, so the existing conformances say nothing and mean what they always
+    /// meant.
+    var isDocument: Bool { get }
     /// The bytes, however the source produces them.
     func loadData() async throws -> Data
+}
+
+extension ComposerPickedItem {
+    var isDocument: Bool { false }
 }
 
 /// What can go wrong on the way from a pick to an attachment.

@@ -99,6 +99,10 @@ actor StubPickedItemGate {
 struct StubPickedItem: ComposerPickedItem {
     let data: Data
     var suggestedFilename: String?
+    /// Whether this stands in for a file import rather than a photo pick. It is the
+    /// only thing that differs between the two sources: bytes that are not a picture
+    /// are an attachment from one and a failure from the other.
+    var isDocument = false
     var gate: StubPickedItemGate?
     /// Fails the *load*, before anything reaches the uploader — what a picker
     /// returning an item it cannot produce bytes for looks like.

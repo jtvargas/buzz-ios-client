@@ -2,13 +2,14 @@ import SwiftUI
 
 /// What the composer's `+` can attach.
 ///
-/// A list rather than a switch, because the next three entries are already known:
-/// the mobile client's own menu is Camera, Photos, Video, Files, and this one is
-/// the same menu with the last two not built yet. Adding one is a case here and a
-/// branch in ``MessageComposerView``'s handler — not a new surface.
+/// A list rather than a switch, because the remaining entry is already known: the
+/// mobile client's own menu is Camera, Photos, Video, Files, and this one is the
+/// same menu without Video. Adding one is a case here and a branch in
+/// ``ComposerAttachButton``'s handler — not a new surface.
 enum ComposerAttachmentSource: String, CaseIterable, Identifiable {
     case photos
     case camera
+    case files
 
     var id: String { rawValue }
 
@@ -16,6 +17,7 @@ enum ComposerAttachmentSource: String, CaseIterable, Identifiable {
         switch self {
         case .photos: "Photos"
         case .camera: "Camera"
+        case .files: "Files"
         }
     }
 
@@ -25,6 +27,10 @@ enum ComposerAttachmentSource: String, CaseIterable, Identifiable {
         switch self {
         case .photos: "photo.on.rectangle"
         case .camera: "camera"
+        // `doc` rather than `folder`: what is attached is a document, and the folder
+        // is only the place it was found. It is also the glyph the file tile draws,
+        // so the menu row and the thing it produces are the same picture.
+        case .files: "doc"
         }
     }
 
@@ -32,7 +38,7 @@ enum ComposerAttachmentSource: String, CaseIterable, Identifiable {
     /// future menu item cannot silently present a route that has not been built yet.
     var isBuilt: Bool {
         switch self {
-        case .photos, .camera: true
+        case .photos, .camera, .files: true
         }
     }
 }

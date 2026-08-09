@@ -198,8 +198,16 @@ final class ComposerAttachmentsModel {
         guard !accepted.isEmpty else { return }
 
         let ids = accepted.map { _ in UUID() }
-        attachments.append(contentsOf: ids.map {
-            ComposerAttachment(id: $0, preview: nil, state: .preparing)
+        attachments.append(contentsOf: zip(ids, accepted).map { id, item in
+            // The name is taken now rather than when the bytes land, so the tile knows
+            // which of the two things it is drawing for the whole time it is on screen
+            // — see ``ComposerAttachment/documentName``.
+            ComposerAttachment(
+                id: id,
+                preview: nil,
+                state: .preparing,
+                documentName: item.isDocument ? item.suggestedFilename : nil
+            )
         })
 
         let batch = Task { [weak self] in
@@ -242,10 +250,16 @@ final class ComposerAttachmentsModel {
     /// trimmed and the existing capacity error is surfaced.
     func restore(_ payloads: [ComposerAttachment.LocalPayload]) {
         attachments.insert(contentsOf: payloads.map { payload in
-            ComposerAttachment(
+            // A file comes back as a file. `UIImage(data:)` answers `nil` for a PDF, so
+            // the preview is already right — but without the name the tile would draw
+            // the blank square a picture-still-decoding uses, and a returning file
+            // attachment would be indistinguishable from a broken photo.
+            let isPicture = payload.mimeType.hasPrefix("image/")
+            return ComposerAttachment(
                 id: UUID(),
-                preview: UIImage(data: payload.data),
-                state: .ready(payload)
+                preview: isPicture ? UIImage(data: payload.data) : nil,
+                state: .ready(payload),
+                documentName: isPicture ? nil : payload.filename
             )
         }, at: 0)
         guard attachments.count > Self.selectionLimit else { return }
@@ -298,22 +312,54 @@ final class ComposerAttachmentsModel {
             let data = try await Self.within(
                 sourceDeadline, or: .sourceTimedOut, item.loadData
             )
-            let prepared = try await ComposerImagePreparation.prepare(data)
-            applyPreview(UIImage(data: prepared.preview), to: id)
-            applyState(
-                .ready(.init(
-                    data: prepared.data,
-                    mimeType: prepared.mimeType,
-                    filename: item.suggestedFilename
-                )),
-                to: id
-            )
+            // Every pick is offered to the picture pipeline first, files included, and
+            // that ordering is the privacy property rather than a convenience: a photo
+            // reached through *Files* is still re-rendered and scrubbed here, so it
+            // cannot publish the GPS coordinates in its EXIF. Routing documents around
+            // this step would have quietly opened that back up for one of the two ways
+            // into the same photo.
+            do {
+                let prepared = try await ComposerImagePreparation.prepare(data)
+                applyPreview(UIImage(data: prepared.preview), to: id)
+                applyState(
+                    .ready(.init(
+                        data: prepared.data,
+                        mimeType: prepared.mimeType,
+                        filename: item.suggestedFilename
+                    )),
+                    to: id
+                )
+            } catch ComposerImagePreparation.Failure.notAPicture where item.isDocument {
+                // Not a picture, and the source said that is fine. The bytes go up as
+                // they are — nothing to scrub, because nothing here can read the format
+                // well enough to know what would need scrubbing, and the relay stores a
+                // generic file byte-for-byte.
+                try applyDocument(data, item: item, to: id)
+            }
         } catch is CancellationError {
             attachments.removeAll { $0.id == id }
         } catch {
             attachments.removeAll { $0.id == id }
             report(error)
         }
+    }
+
+    /// Stages a file attachment: the bytes as picked, under the type its name implies.
+    ///
+    /// The local policy check runs *here*, before the row goes ready, so a 90 MB video
+    /// or an executable is refused while the author is still composing rather than at
+    /// send — which is the difference between a tile that never appears and a message
+    /// that fails on its way out. It mirrors the relay and does not replace it; the
+    /// relay decides from the bytes (see ``MediaUploadClient/policyFailure(mimeType:byteCount:)``).
+    private func applyDocument(_ data: Data, item: any ComposerPickedItem, to id: UUID) throws {
+        let mimeType = (item as? ComposerFilePick)?.mimeType ?? "application/octet-stream"
+        if let failure = MediaUploadClient.policyFailure(mimeType: mimeType, byteCount: data.count) {
+            throw failure
+        }
+        applyState(
+            .ready(.init(data: data, mimeType: mimeType, filename: item.suggestedFilename)),
+            to: id
+        )
     }
 
     /// Writes a decoded preview into a row that is still there.
@@ -331,37 +377,4 @@ final class ComposerAttachmentsModel {
         attachments[index].state = state
     }
 
-    /// One line, in the author's terms, for local preparation failures.
-    static func describe(_ error: Error) -> String {
-        switch error {
-        case MediaUploadError.rejectedByPolicy:
-            "The relay wouldn't store that picture."
-        case MediaUploadError.unsupportedType:
-            "That kind of file can't be sent yet."
-        case ComposerImagePreparation.Failure.notAPicture:
-            "That file isn't a picture."
-        case ComposerImagePreparation.Failure.couldNotConvert:
-            "Couldn't convert that picture for sending."
-        case ComposerImagePreparation.Failure.animationCannotBeCleaned:
-            // Deliberately says what is true rather than "couldn't send": the only way to
-            // strip this one is to decode it, and decoding an animation loses the animation.
-            "That animation carries data that can't be removed without flattening it."
-        case ComposerAttachmentError.noUploader:
-            // Not "sign in": this is reached while the workspace is still opening — on
-            // launch, or on a community switch — and an author who is already signed in
-            // would be told to do the thing they have just done. Says what is true and
-            // what waiting will fix.
-            "This conversation isn't ready for pictures yet — try again in a moment."
-        case ComposerAttachmentError.sourceTimedOut:
-            // Names iCloud because that is what it almost always is, and because it is the
-            // one the author can actually do something about.
-            "That picture took too long to load — it may still be in iCloud."
-        case ComposerAttachmentError.uploadTimedOut:
-            "That picture took too long to upload."
-        case ComposerAttachmentError.tooMany:
-            "You can attach \(selectionLimit) pictures at a time."
-        default:
-            "Couldn't upload that picture."
-        }
-    }
 }
