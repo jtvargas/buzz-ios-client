@@ -145,6 +145,20 @@ struct ComposerFileAttachmentTests {
         #expect(MediaUploadClient.policyFailure(mimeType: "audio/mpeg", byteCount: 1_024) == nil)
     }
 
+    /// A picture, unlike a file, still has to be one of the four the relay stores.
+    ///
+    /// The generic-file route refuses anything sniffed as `image/*`, so an unsupported
+    /// picture has nowhere to land — HEIC being the one that matters, since it is what
+    /// the camera writes.
+    @Test("An unsupported picture is still refused locally")
+    func unsupportedPictureIsRefused() {
+        #expect(
+            MediaUploadClient.policyFailure(mimeType: "image/heic", byteCount: 1_024)
+                == .unsupportedType("image/heic")
+        )
+        #expect(MediaUploadClient.policyFailure(mimeType: "image/png", byteCount: 1_024) == nil)
+    }
+
     // MARK: - The type a file declares
 
     @Test("A file's type comes from its extension, falling back to opaque bytes")

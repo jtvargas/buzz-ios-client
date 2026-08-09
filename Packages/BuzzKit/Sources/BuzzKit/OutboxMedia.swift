@@ -8,13 +8,28 @@ public struct OutboxMedia: Sendable, Equatable {
     public let fileExtension: String
     public let mimeType: String
     public let size: Int
+    /// Where this blob already is.
+    ///
+    /// `.staged` for anything the pump still has to upload, which is every picture.
+    /// A **file** is uploaded before the event is signed — the relay has to tell us
+    /// its type and extension before they can go in the message — so it is recorded
+    /// as `.uploaded` and the pump correctly finds nothing left to do for it.
+    public let state: OutboxMediaState
 
-    public init(sha256: String, ordinal: Int, fileExtension: String, mimeType: String, size: Int) {
+    public init(
+        sha256: String,
+        ordinal: Int,
+        fileExtension: String,
+        mimeType: String,
+        size: Int,
+        state: OutboxMediaState = .staged
+    ) {
         self.sha256 = sha256
         self.ordinal = ordinal
         self.fileExtension = fileExtension
         self.mimeType = mimeType
         self.size = size
+        self.state = state
     }
 }
 
@@ -350,7 +365,7 @@ public extension BuzzEventStore {
                     item.fileExtension,
                     item.mimeType,
                     item.size,
-                    OutboxMediaState.staged.rawValue,
+                    item.state.rawValue,
                 ]
             )
         }

@@ -55,6 +55,16 @@ public extension MediaUploadClient {
     static func policyFailure(mimeType: String, byteCount: Int) -> MediaUploadError? {
         if byteCount > maxFileBytes { return .tooLarge(bytes: byteCount, max: maxFileBytes) }
         if blockedFileTypes.contains(mimeType) { return .unsupportedType(mimeType) }
+        // A picture must be one of the four the relay stores. This is not the old
+        // "images only" rule wearing a new coat — it applies *only* to something
+        // already claiming to be an image, and it mirrors a real refusal: the generic
+        // file route rejects anything it sniffs as `image/*` outright
+        // (`validation.rs:190-195`), so an unsupported picture has nowhere to land.
+        // HEIC is the one that matters — it is what an iPhone camera writes, and it is
+        // why the composer transcodes before anything reaches here.
+        if mimeType.hasPrefix("image/"), !supportedImageTypes.contains(mimeType) {
+            return .unsupportedType(mimeType)
+        }
         return nil
     }
 }
