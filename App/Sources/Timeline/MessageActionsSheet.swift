@@ -40,7 +40,7 @@ struct MessageActionsSheet: View {
     @State private var draft = ""
 
     /// Where the sheet rests before anything is pushed onto it. The owner's number, raised
-    /// from 320 to 360 (2026-08-02) when "Copy Link To Message" made the list one row longer.
+    /// from 320 to 360 (2026-08-02) when "Copy Link" made the list one row longer.
     /// Named rather than written twice: the initial detent and the detent *set* must agree,
     /// and two literals are two places to change one of them.
     private static let restingHeight: CGFloat = 360
@@ -212,7 +212,7 @@ struct MessageActionsSheet: View {
             UIPasteboard.general.string = target.row.content
             dismiss()
         }
-        actionRow("Copy Link To Message", symbol: "link") {
+        actionRow("Copy Link", symbol: "link") {
             if let url = MessageLink.url(
                 channelID: target.channelID,
                 messageID: target.row.id,
