@@ -334,6 +334,12 @@ final class ComposerAttachmentsModel {
                 // they are — nothing to scrub, because nothing here can read the format
                 // well enough to know what would need scrubbing, and the relay stores a
                 // generic file byte-for-byte.
+                //
+                // This is where a PDF lands, and for a while it did not: the picture
+                // pipeline answered a PDF with `couldNotConvert` rather than this,
+                // because ImageIO opens one and only the decode below refuses it. A
+                // document is routed by what this device can *decode*, never by what
+                // ImageIO is willing to open — see ``ComposerImagePreparation/Failure``.
                 try applyDocument(data, item: item, to: id)
             }
         } catch is CancellationError {

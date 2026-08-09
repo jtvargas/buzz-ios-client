@@ -26,7 +26,12 @@ struct ComposerFileAttachmentTests {
         }
     }
 
-    /// Bytes ImageIO cannot open — a stand-in for every document.
+    /// Bytes *neither* decoder can open — the easy half of the document case.
+    ///
+    /// Deliberately not a real PDF, despite the header: what it stands in for is a
+    /// file nothing here can read at all. The hard half — a document one decoder
+    /// opens and the other refuses — is ``TestDocument/pdf()``, and it is where the
+    /// defect lived.
     static func documentBytes() -> Data {
         Data("%PDF-1.4\nnot really a pdf, but nothing can decode it as a picture\n".utf8)
     }
@@ -53,6 +58,34 @@ struct ComposerFileAttachmentTests {
         // decides to draw a document tile instead of a blank picture.
         #expect(attachment?.preview == nil)
         #expect(attachment?.documentName == "report.pdf")
+    }
+
+    /// A real PDF, which is the case the fixture above cannot express.
+    ///
+    /// The owner's report, pinned. ImageIO opens a PDF, so it walks past the thumbnail
+    /// gate and reaches the decode — which refuses it. While that arrived as
+    /// ``ComposerImagePreparation/Failure/couldNotConvert`` the document fallback never
+    /// caught it, and every PDF was reported as a picture that had gone wrong.
+    ///
+    /// The tell is `preview == nil`: a PDF *has* a thumbnail ImageIO would happily draw,
+    /// so a preview here would mean the picture route claimed it after all.
+    @Test("A PDF is attached as a file, not refused as a broken picture")
+    func pdfBecomesFileAttachment() async {
+        let model = ComposerAttachmentsModel()
+        model.add([StubPickedItem(
+            data: TestDocument.pdf(),
+            suggestedFilename: "Q3 report.pdf",
+            isDocument: true
+        )])
+        await Self.waitUntil { !model.isAttaching }
+
+        #expect(model.uploadError == nil)
+        let attachment = try? #require(model.attachments.first)
+        #expect(attachment?.isReady == true)
+        #expect(attachment?.documentName == "Q3 report.pdf")
+        #expect(attachment?.preview == nil)
+        // Untouched: the file route sends the bytes as picked.
+        #expect(attachment?.localPayload?.data == TestDocument.pdf())
     }
 
     /// The same bytes from the photo library are still a failure.

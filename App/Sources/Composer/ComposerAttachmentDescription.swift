@@ -22,7 +22,11 @@ extension ComposerAttachmentsModel {
     private static func relayDescription(_ error: Error) -> String? {
         switch error {
         case MediaUploadError.rejectedByPolicy:
-            "The relay wouldn't store that picture."
+            // "That", not "that picture". A file reaches this too, and it is the refusal
+            // a file is most likely to meet: the relay declines audio outright until it
+            // has a sanitiser for the container (`buzz-media/validation.rs:188-195`).
+            // The error carries no type, so naming one here would be a guess.
+            "The relay wouldn't store that."
         case MediaUploadError.unsupportedType:
             // Names the kinds rather than only refusing: what the relay blocks is web
             // pages and programs, and an author who picked one is otherwise left
@@ -40,7 +44,8 @@ extension ComposerAttachmentsModel {
         switch error {
         case ComposerImagePreparation.Failure.notAPicture:
             // Reached from the photo library only: a file import routes bytes that are
-            // not a picture to the document path instead of failing here.
+            // not a picture to the document path instead of failing here — which is
+            // exactly what a PDF now does, and for a while did not.
             "That file isn't a picture."
         case ComposerImagePreparation.Failure.couldNotConvert:
             "Couldn't convert that picture for sending."
@@ -53,13 +58,14 @@ extension ComposerAttachmentsModel {
             // launch, or on a community switch — and an author who is already signed in
             // would be told to do the thing they have just done. Says what is true and
             // what waiting will fix.
-            "This conversation isn't ready for pictures yet — try again in a moment."
+            "This conversation isn't ready for attachments yet — try again in a moment."
         case ComposerAttachmentError.sourceTimedOut:
             // Names iCloud because that is what it almost always is, and because it is the
-            // one the author can actually do something about.
-            "That picture took too long to load — it may still be in iCloud."
+            // one the author can actually do something about. True of both sources now:
+            // a photo waits on iCloud Photos and a file waits on iCloud Drive.
+            "That took too long to load — it may still be in iCloud."
         case ComposerAttachmentError.uploadTimedOut:
-            "That picture took too long to upload."
+            "That took too long to upload."
         case ComposerAttachmentError.emptyPick:
             "That file is empty."
         case ComposerAttachmentError.tooMany:

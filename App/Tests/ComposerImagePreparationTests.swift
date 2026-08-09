@@ -144,6 +144,30 @@ struct ComposerImagePreparationTests {
         }
     }
 
+    /// The case the test above cannot reach, and the one that shipped broken.
+    ///
+    /// ImageIO opens a PDF — it renders the first page — so a PDF walks past the
+    /// thumbnail gate and is refused only by the decode below it. Reported as
+    /// ``ComposerImagePreparation/Failure/couldNotConvert``, that told an author their
+    /// document was a picture that had gone wrong, and it stopped a document pick from
+    /// falling through to the file route it belongs on.
+    ///
+    /// The first expectation is what keeps this honest. Without it, an ImageIO that
+    /// declined to open a PDF would make the second one pass for the wrong reason, and
+    /// the regression could come back under a green test.
+    @Test("a PDF opens in ImageIO and is still not a picture")
+    func pdfIsNotAPicture() async throws {
+        let pdf = TestDocument.pdf()
+
+        #expect(
+            RemoteImageLoader.downsample(pdf, maxPixelSize: ComposerImagePreparation.previewPixelSize) != nil,
+            "the fixture must reproduce the disagreement: ImageIO has to open it"
+        )
+        await #expect(throws: ComposerImagePreparation.Failure.notAPicture) {
+            try await ComposerImagePreparation.prepare(pdf)
+        }
+    }
+
     /// The preview is a real, decodable picture — it is what the strip draws, and a
     /// tile that cannot decode its own thumbnail shows an empty box.
     @Test("the preview decodes and is no larger than the tile needs")
