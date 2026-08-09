@@ -41,7 +41,7 @@ struct HapticVocabularyTests {
         // The seventh. Soft was already `reaction`'s, so what separates these two is the
         // volume and not the style — which is the point rather than a workaround: an arrival
         // has to be quieter than a tapped one, not merely different from it.
-        #expect(HiveHaptic.messageArrived.pattern == .impact(.soft, intensity: 0.55))
+        #expect(HiveHaptic.messageArrived.pattern == .impact(.soft, intensity: 0.85))
     }
 
     @Test("the one haptic nobody asked for is the quietest")

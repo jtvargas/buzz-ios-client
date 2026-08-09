@@ -72,9 +72,16 @@ enum HiveHaptic: Equatable, CaseIterable {
     /// Which is why it carries an intensity and none of the others do. `.soft` is already
     /// ``reaction``'s, and picking a *different* style would only have made the arrival
     /// differently loud; the axis this needed was volume, and `impactOccurred(intensity:)` is
-    /// UIKit's own knob for it. Soft at a little over half is a diffuse nudge rather than a
-    /// tick — which is the literal reading of the owner's "a little haptic", and is also what
-    /// keeps an arrival from ever being mistaken for something the reader did.
+    /// UIKit's own knob for it. Soft is the diffuse one — a nudge rather than a tick, which is
+    /// the literal reading of the owner's "a little haptic" and is what keeps an arrival from
+    /// being mistaken for something the reader did.
+    ///
+    /// It shipped at 0.55 and the owner could not feel it at all. Most of that was
+    /// ``HiveHaptics/impacts`` — a generator released before the hardware answered — but 0.55
+    /// of the app's *softest* style was aiming at the floor as well, so both moved. 0.85 is
+    /// still the quietest thing here and still below every haptic that answers a touch, which
+    /// is the property `theUnpromptedEventIsTheQuietest` actually guards; the exact number is
+    /// the owner's to move.
     case messageArrived
 
     /// What UIKit is asked to play.
@@ -104,7 +111,7 @@ enum HiveHaptic: Equatable, CaseIterable {
         case .delete: .notification(.warning)
         case .suggestionPicked: .selection
         case .disclosureToggled: .impact(.rigid)
-        case .messageArrived: .impact(.soft, intensity: 0.55)
+        case .messageArrived: .impact(.soft, intensity: 0.85)
         }
     }
 }
@@ -126,15 +133,44 @@ enum HiveHaptic: Equatable, CaseIterable {
 /// off at the source, and a generator on a device with them disabled plays nothing.
 @MainActor
 enum HiveHaptics {
+    /// The generators, kept alive between plays.
+    ///
+    /// Not a micro-optimisation — a correctness fix, and the owner found it. A generator
+    /// built inline (`UIImpactFeedbackGenerator(style:).impactOccurred()`) is released at the
+    /// end of that statement, and UIKit's feedback is a *request* to a piece of hardware
+    /// rather than a synchronous call: released too early it can play weakly or not at all.
+    /// Every other haptic here rides a touch, and a finger already on the glass has usually
+    /// warmed the Taptic Engine — so the defect stayed invisible until ``HiveHaptic/messageArrived``
+    /// asked it to play with nothing having been touched, and it played nothing.
+    ///
+    /// Keyed by style so the seven share three objects. `nonisolated(unsafe)` is not needed:
+    /// the enum is `@MainActor` and so is every caller.
+    private static var impacts: [UIImpactFeedbackGenerator.FeedbackStyle: UIImpactFeedbackGenerator] = [:]
+    private static let notifications = UINotificationFeedbackGenerator()
+    private static let selections = UISelectionFeedbackGenerator()
+
     /// Plays `haptic` now.
     static func play(_ haptic: HiveHaptic) {
         switch haptic.pattern {
         case let .impact(style, intensity):
-            UIImpactFeedbackGenerator(style: style).impactOccurred(intensity: intensity)
+            let engine = generator(style)
+            engine.impactOccurred(intensity: intensity)
+            // Re-arm for the next one: a generator that has just played is idle again, and
+            // the reaction and send haptics both come in bursts.
+            engine.prepare()
         case let .notification(type):
-            UINotificationFeedbackGenerator().notificationOccurred(type)
+            notifications.notificationOccurred(type)
         case .selection:
-            UISelectionFeedbackGenerator().selectionChanged()
+            selections.selectionChanged()
         }
+    }
+
+    private static func generator(
+        _ style: UIImpactFeedbackGenerator.FeedbackStyle
+    ) -> UIImpactFeedbackGenerator {
+        if let existing = impacts[style] { return existing }
+        let made = UIImpactFeedbackGenerator(style: style)
+        impacts[style] = made
+        return made
     }
 }
