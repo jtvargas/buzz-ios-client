@@ -192,12 +192,27 @@ private extension MessageMediaExport {
             // serve the error at 200, and some serve a real picture as
             // `application/octet-stream`, which is why an unrecognised type passes and only a
             // type that is positively *not* an image is refused.
+            //
+            // A file cannot use that test — `application/octet-stream` is the *expected*
+            // answer for one, and the relay names an unsniffable blob `.bin` — so it gets
+            // the narrowest form of the same guard instead. A served page is still a lost
+            // object, and Quick Look would render the error page as the document. Only a
+            // file that declares itself a page may be served as one, and the relay refuses
+            // to store those in the first place.
             if let http = response as? HTTPURLResponse {
                 guard (200 ..< 300).contains(http.statusCode) else { throw Failure.download }
-                if media.kind == .image,
-                   let served = http.mimeType.flatMap({ UTType(mimeType: $0) }),
-                   !served.conforms(to: .image) {
-                    throw Failure.download
+                let served = http.mimeType.flatMap { UTType(mimeType: $0) }
+                switch media.kind {
+                case .image:
+                    if let served, !served.conforms(to: .image) { throw Failure.download }
+                case .file, .video:
+                    // Video shares the file's test rather than the picture's: `video/mp4`
+                    // is positively not an image, so the branch above would refuse every
+                    // one of them the day a video is exportable.
+                    let declared = media.mimeType.flatMap { UTType(mimeType: $0) }
+                    if let served, served.conforms(to: .html), declared?.conforms(to: .html) != true {
+                        throw Failure.download
+                    }
                 }
             }
             guard !data.isEmpty else { throw Failure.download }
