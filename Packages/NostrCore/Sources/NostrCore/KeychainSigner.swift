@@ -28,14 +28,28 @@ protocol KeychainStore: Sendable {
 /// mid-replacement cannot destroy the only copy of an identity key.
 struct SystemKeychainStore: KeychainStore {
     let service: String
+    /// The Keychain access group the item lives in, or `nil` for the app's own.
+    ///
+    /// `nil` is not the same as naming the default group, and the difference is why this
+    /// is optional rather than a string with a default. An item saved without the
+    /// attribute lands in the first group the binary is entitled to and a *query* without
+    /// it searches every group the binary can reach — so leaving it absent keeps an
+    /// existing install's key exactly where it is and still finds it after a shared group
+    /// is added to the entitlements. Naming a group is for the two callers that mean it:
+    /// the copy that publishes a key to an extension, and the extension reading it back.
+    var accessGroup: String?
 
     private func baseQuery(account: String) -> [String: Any] {
-        [
+        var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
             kSecUseDataProtectionKeychain as String: true,
         ]
+        if let accessGroup {
+            query[kSecAttrAccessGroup as String] = accessGroup
+        }
+        return query
     }
 
     func save(_ secret: Data, account: String) throws {
@@ -99,8 +113,20 @@ public struct KeychainSigner: EventSigner {
     public static let defaultService = "chat.buzz.nostrcore.identity"
 
     /// Creates a signer backed by the system Keychain.
-    public init(account: String, service: String = KeychainSigner.defaultService) {
-        self.init(account: account, keychain: SystemKeychainStore(service: service))
+    ///
+    /// - Parameter accessGroup: the Keychain access group to address, or `nil` — the
+    ///   default, and what every caller inside the app passes — to address the app's own
+    ///   items wherever they already live. An extension sharing this identity names the
+    ///   group explicitly, because it has no default in common with the app.
+    public init(
+        account: String,
+        service: String = KeychainSigner.defaultService,
+        accessGroup: String? = nil
+    ) {
+        self.init(
+            account: account,
+            keychain: SystemKeychainStore(service: service, accessGroup: accessGroup)
+        )
     }
 
     /// Creates a signer over a supplied store — the injection seam tests use.
@@ -131,6 +157,26 @@ public struct KeychainSigner: EventSigner {
     /// Removes the stored key; a missing key is not an error.
     public func delete() throws {
         try keychain.delete(account: account)
+    }
+
+    /// Publishes this account's key into `accessGroup` so an extension signing as the same
+    /// identity can read it, **leaving the original item untouched**.
+    ///
+    /// A copy rather than a move, and deliberately so. Relocating a Keychain item means
+    /// writing the new one and deleting the old, and the window between those two calls is
+    /// the only moment in this app's life when an identity key exists in exactly one place
+    /// that neither reader is looking at. `save` already refuses to open that window for a
+    /// *replacement* (`SystemKeychainStore` updates in place); this keeps the same promise
+    /// for a relocation by not relocating at all. The cost is a second copy of the secret
+    /// on the device, in a group only this app's own binaries are entitled to — which is
+    /// the same trust boundary the first copy already sits behind.
+    ///
+    /// Idempotent: a second call overwrites the copy with the same bytes. Silent when this
+    /// account holds no key, because "nothing to publish" is a state, not a failure.
+    public func copyKey(toAccessGroup accessGroup: String, service: String = KeychainSigner.defaultService) throws {
+        guard let key = try loadPrivateKey() else { return }
+        let shared = SystemKeychainStore(service: service, accessGroup: accessGroup)
+        try shared.save(key.rawRepresentation, account: account)
     }
 
     // MARK: - EventSigner

@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- The container the Threads widget reads its snapshot from. -->
+	<key>com.apple.security.application-groups</key>
+	<array>
+		<string>group.com.jtvargas.hive</string>
+	</array>
+	<!--
+	  The app's OWN group is listed first, deliberately and load-bearingly.
+
+	  Adding this entitlement at all changes what "no access group" means: an item saved
+	  without `kSecAttrAccessGroup` lands in the FIRST group in this array. Every identity
+	  key on an existing install was saved before this file existed, so it sits in
+	  `$(AppIdentifierPrefix)com.jtvargas.hive` — and naming the shared group first would
+	  quietly start writing new keys somewhere else while the old ones stayed put. Listing
+	  the app's own group first leaves the default exactly where it has always been; the
+	  shared group is reached only by the two call sites that name it.
+	-->
+	<key>keychain-access-groups</key>
+	<array>
+		<string>$(AppIdentifierPrefix)com.jtvargas.hive</string>
+		<string>$(AppIdentifierPrefix)com.jtvargas.hive.shared</string>
+	</array>
+</dict>
+</plist>

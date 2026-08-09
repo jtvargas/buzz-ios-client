@@ -37,6 +37,10 @@ extension AppEnvironment {
             if deleteAndVerifyKey(custody) == .keyNotCleared {
                 result = .keyNotCleared
             }
+            // And the copy published for the widget. Every community is swept, not just
+            // the active one: the copy outlives a community switch by design, so the only
+            // safe assumption at sign-out is that any of them may hold one.
+            ThreadsWidgetSnapshotWriter.clear(keychainAccount: community.keychainAccount)
         }
         await teardownSession()
         setPhase(.needsIdentity)
@@ -79,6 +83,13 @@ extension AppEnvironment {
             let drafts = self.drafts
             Task { await drafts?.flush() }
         }
+        // The Threads widget's handoff, on both edges and outside the engine guard for the
+        // same reason drafts are: this is a read of what is already on disk, and it has to
+        // happen on the way out whether or not a socket is up. Leaving the foreground is
+        // the moment the reader is about to be looking at their Home Screen.
+        if phase == .active || phase == .background {
+            refreshThreadsWidgetSnapshot()
+        }
         guard let engine else { return }
         let heartbeat = self.heartbeat
         Task {
@@ -94,6 +105,21 @@ extension AppEnvironment {
             @unknown default:
                 break
             }
+        }
+    }
+
+    /// Rebuilds the Threads widget's App Group snapshot for the active community.
+    ///
+    /// A no-op before a session is mounted — there is no store to read and no identity to
+    /// publish, which is the cold state the widget draws as an invitation to open the app.
+    func refreshThreadsWidgetSnapshot() {
+        guard let store, let selfPubkeyHex, let community = communities.active else { return }
+        Task {
+            await ThreadsWidgetSnapshotWriter.write(
+                store: store,
+                selfPubkeyHex: selfPubkeyHex,
+                community: community
+            )
         }
     }
 
