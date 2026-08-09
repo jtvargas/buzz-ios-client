@@ -905,7 +905,44 @@ private extension ChannelListView {
         RecentPlaces.location(path: path, openedThread: openedThread)
     }
 
+    /// Jumps to a conversation or a thread, closing whatever was open on the way.
+    ///
+    /// # Why closing and opening cannot share an update
+    ///
+    /// `navigationDestination(item:)` does not simply push. It presents by truncating the
+    /// stack back to the depth it was asked *from* — `programmaticallyPresentView(_:fromDepth:)`
+    /// — and if the path is being emptied in the same pass, that depth no longer exists and
+    /// `AnyNavigationPath.HomogeneousBoxBase.removeLast(_:)` trips a Swift precondition. Two
+    /// of the owner's eleven crash reports are exactly that stack. The old shape here wrote
+    /// `path = []` and `openedThread = …` back to back, which is that crash spelled out.
+    ///
+    /// So: unwind, then present on the next turn of the main actor — and only pay for the
+    /// second turn when there is something to unwind, so the common jump from the sidebar
+    /// stays a single transition.
+    ///
+    /// The sheets are closed on the same first pass for the same reason rather than a proven
+    /// one: dismissing a presentation while a push begins is the other crash signature in
+    /// those reports, and nothing here needs the two to be simultaneous.
     func openNotification(_ route: InAppNotificationRoute) {
+        guard hasOpenSurface else { return present(route) }
+
+        // Unanimated, so the reader sees one movement — the arrival — rather than a pop
+        // followed by a push.
+        var silent = Transaction()
+        silent.disablesAnimations = true
+        withTransaction(silent) { closeOpenSurfaces() }
+        Task { @MainActor in present(route) }
+    }
+
+    /// Whether anything is on top of the sidebar: a pushed screen, an item destination, a
+    /// sheet, or the workspace panel.
+    private var hasOpenSurface: Bool {
+        workspacePanel.isOpen || showAccount || showsBrowseChannels || showsCreateChannel
+            || showsNewDirectMessage || !path.isEmpty || openedThread != nil
+            || showsDrafts != nil || showsThreads != nil || showsLater != nil
+    }
+
+    private func closeOpenSurfaces() {
         workspacePanel.setOpen(false)
         showAccount = false
         showsBrowseChannels = false
@@ -914,15 +951,18 @@ private extension ChannelListView {
         showsDrafts = nil
         showsThreads = nil
         showsLater = nil
+        openedThread = nil
+        path = []
+    }
 
+    /// The push itself, onto a stack that is already empty.
+    private func present(_ route: InAppNotificationRoute) {
         switch route.location {
         case let .channel(channelID):
-            openedThread = nil
             path = [ConversationRoute(
                 channel: conversationRow(for: channelID, fallback: route.fallbackChannel)
             )]
         case let .thread(channelID, rootID):
-            path = []
             openedThread = ThreadRoute(root: rootID, channel: channelID, anchor: .latestReply)
         }
     }

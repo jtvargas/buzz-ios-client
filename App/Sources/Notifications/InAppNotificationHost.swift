@@ -54,8 +54,13 @@ struct InAppNotificationHost<Content: View>: View {
             }
             .animation(animation, value: model.current?.id)
             .task { await model.run() }
+            // Keyed on the notification's id, so this is exactly "a banner just became the
+            // one on screen" — once per banner, never on a re-render, and never when one is
+            // replaced by nothing. Both of the things that belong to that moment live here:
+            // the touch that announces it, and the clock that takes it away.
             .task(id: model.current?.id) {
                 guard model.current != nil else { return }
+                HiveHaptics.play(.messageArrived)
                 try? await Task.sleep(for: .seconds(5))
                 guard !Task.isCancelled else { return }
                 dismiss()
@@ -68,14 +73,22 @@ struct InAppNotificationHost<Content: View>: View {
             }
     }
 
+    /// Bounce carries the overshoot: the card travels a little past where it lands and settles
+    /// back, which is the system banner's own entrance and the reason it reads as a physical
+    /// thing dropping in rather than a rectangle being switched on.
     private var animation: Animation? {
-        reduceMotion ? .easeOut(duration: 0.12) : .spring(duration: 0.42, bounce: 0.16)
+        reduceMotion ? .easeOut(duration: 0.12) : .spring(duration: 0.42, bounce: 0.22)
     }
 
+    /// Insertion also grows the last 3% into place, anchored at the top so the card appears to
+    /// come *from* the edge it is sliding out of. Removal deliberately does not shrink — a
+    /// dismissal should leave immediately, not perform.
     private var transition: AnyTransition {
         guard !reduceMotion else { return .opacity }
         return .asymmetric(
-            insertion: .move(edge: .top).combined(with: .opacity),
+            insertion: .move(edge: .top)
+                .combined(with: .opacity)
+                .combined(with: .scale(scale: 0.97, anchor: .top)),
             removal: .move(edge: .top).combined(with: .opacity)
         )
     }
