@@ -3,8 +3,12 @@ import SwiftUI
 
 /// Hosts the community-scoped observer above the tab stacks, so one banner can arrive over
 /// either tab while navigation remains owned by Home.
+///
+/// The card itself is not drawn here — it is drawn in its own window, because an overlay
+/// anywhere in this tree is underneath any sheet the app presents. See
+/// ``InAppNotificationWindowController``. What stays here is everything that is not drawing:
+/// the observer, the visibility rules, the auto-dismiss clock and the arrival haptic.
 struct InAppNotificationHost<Content: View>: View {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var model: InAppNotificationModel
 
     let isForeground: Bool
@@ -36,23 +40,16 @@ struct InAppNotificationHost<Content: View>: View {
 
     var body: some View {
         content()
-            .overlay(alignment: .top) {
-                if let notification = model.current {
-                    InAppNotificationBanner(notification: notification) {
+            .background(
+                InAppNotificationWindowPresenter(
+                    notification: model.current,
+                    open: { notification in
                         onOpen(notification.route)
                         dismiss()
-                    } dismiss: {
-                        dismiss()
-                    }
-                    .id(notification.id)
-                    .frame(maxWidth: 520)
-                    .padding(.horizontal, 12)
-                    .safeAreaPadding(.top, 8)
-                    .transition(transition)
-                    .zIndex(1)
-                }
-            }
-            .animation(animation, value: model.current?.id)
+                    },
+                    dismiss: dismiss
+                )
+            )
             .task { await model.run() }
             // Keyed on the notification's id, so this is exactly "a banner just became the
             // one on screen" — once per banner, never on a re-render, and never when one is
@@ -73,27 +70,9 @@ struct InAppNotificationHost<Content: View>: View {
             }
     }
 
-    /// Bounce carries the overshoot: the card travels a little past where it lands and settles
-    /// back, which is the system banner's own entrance and the reason it reads as a physical
-    /// thing dropping in rather than a rectangle being switched on.
-    private var animation: Animation? {
-        reduceMotion ? .easeOut(duration: 0.12) : .spring(duration: 0.42, bounce: 0.22)
-    }
-
-    /// Insertion also grows the last 3% into place, anchored at the top so the card appears to
-    /// come *from* the edge it is sliding out of. Removal deliberately does not shrink — a
-    /// dismissal should leave immediately, not perform.
-    private var transition: AnyTransition {
-        guard !reduceMotion else { return .opacity }
-        return .asymmetric(
-            insertion: .move(edge: .top)
-                .combined(with: .opacity)
-                .combined(with: .scale(scale: 0.97, anchor: .top)),
-            removal: .move(edge: .top).combined(with: .opacity)
-        )
-    }
-
+    /// Unanimated here on purpose: the card's entrance and exit are animated inside the
+    /// overlay window, which is the only place that can see them.
     private func dismiss() {
-        withAnimation(animation) { model.dismissCurrent() }
+        model.dismissCurrent()
     }
 }
