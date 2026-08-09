@@ -108,7 +108,11 @@ enum ThreadsCountFetcher {
         awaiting roots: [String]
     ) -> Result {
         let rootSet = Set(roots)
-        let replyLimitReached = events.count { $0.kind == .channelMessage } >= pageLimit
+        let replies = events.filter { $0.kind == .channelMessage && !rootSet.contains($0.id) }
+        // Only the replies are measured against the page limit. The roots come back on
+        // their own filter, and counting them here would raise the "N+" flag on a page the
+        // relay never actually filled.
+        let replyLimitReached = replies.count >= pageLimit
 
         // Which watched roots came back alive. Filter 2 asked for all of them by id, so a
         // root missing here is one the relay would not serve — deleted, or in a channel
@@ -120,7 +124,10 @@ enum ThreadsCountFetcher {
         let frontiers = signer.map { mergedFrontiers(from: events, signer: $0) } ?? [:]
 
         var newestForeignReply: [String: Int64] = [:]
-        for event in events where event.kind == .channelMessage && !rootSet.contains(event.id) {
+        for event in replies {
+            // The NIP-10 root marker, not "any `e` tag": a reply quoting a second thread
+            // carries two, and bucketing on the wrong one would credit a reply to a thread
+            // it was never in.
             guard event.pubkey != snapshot.selfPubkeyHex,
                   let rootID = event.threadReference.rootID,
                   rootSet.contains(rootID)
@@ -142,11 +149,19 @@ enum ThreadsCountFetcher {
     /// across all of them, because read state is a grow-only max register and a stale slot
     /// must never pull a frontier backwards.
     private static func mergedFrontiers(from events: [NostrEvent], signer: KeychainSigner) -> [String: Int64] {
+        let blobs = events.filter { $0.kind == .readState }
+        guard !blobs.isEmpty else { return [:] }
+        // The key is loaded once, not once per blob: each `loadPrivateKey` is a Keychain
+        // round trip, and this runs inside an extension the system may stop at any moment.
+        guard let key = try? signer.loadPrivateKey(),
+              let conversationKey = try? NIP44.conversationKey(privateKey: key, peer: key.publicKey)
+        else { return [:] }
+
         var merged: [String: Int64] = [:]
         // Synchronous decryption on purpose: `decryptToSelf` is `async` only because the
         // signer protocol is, and a widget timeline has no reason to interleave here.
-        for event in events where event.kind == .readState {
-            guard let plaintext = try? decryptSynchronously(event.content, with: signer),
+        for event in blobs {
+            guard let plaintext = try? NIP44.decrypt(event.content, conversationKey: conversationKey),
                   let parsed = try? JSONSerialization.jsonObject(with: Data(plaintext.utf8)),
                   let record = parsed as? [String: Any],
                   record["v"] as? Int == 1,
@@ -162,13 +177,6 @@ enum ThreadsCountFetcher {
         return merged
     }
 
-    /// NIP-44 decrypt-to-self without the actor hop `KeychainSigner.decryptToSelf` implies.
-    private static func decryptSynchronously(_ ciphertext: String, with signer: KeychainSigner) throws -> String {
-        guard let key = try signer.loadPrivateKey() else { throw FetchError.identityUnavailable }
-        let conversationKey = try NIP44.conversationKey(privateKey: key, peer: key.publicKey)
-        return try NIP44.decrypt(ciphertext, conversationKey: conversationKey)
-    }
-
     enum FetchError: Error, Equatable {
         /// The snapshot's endpoint did not parse as a URL.
         case malformedEndpoint
@@ -178,8 +186,8 @@ enum ThreadsCountFetcher {
         case httpStatus(Int)
         /// A 2xx whose body was not a JSON array of events.
         case unreadableResponse
-        /// The shared Keychain group holds no key for this account — the app has not run
-        /// since the widget was added, or the reader has signed out.
-        case identityUnavailable
+        // A missing key is deliberately not a case here: the signing path already throws
+        // `KeychainError.keyNotFound`, and a second name for the same state is one the
+        // caller would have to learn without gaining anything.
     }
 }
