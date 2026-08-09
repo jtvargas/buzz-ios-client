@@ -240,6 +240,8 @@ enum MarkdownDocumentHTML {
             case .video:
                 let poster = media.posterURL.map { " poster=\"\(attribute($0))\"" } ?? ""
                 return "<video controls preload=\"metadata\" src=\"\(source)\"\(poster)>\(alt)</video>"
+            case .file:
+                return "<a href=\"\(source)\">\(text(media.filename ?? "File"))</a>"
             }
         }
 

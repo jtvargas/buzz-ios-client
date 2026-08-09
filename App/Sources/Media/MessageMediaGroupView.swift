@@ -186,6 +186,8 @@ private extension MessageMediaMosaicCellView {
         switch media.kind {
         case .video:
             MessageMediaVideoPlaceholder(media: media)
+        case .file:
+            EmptyView()
         case .image:
             imageContent
         }
@@ -287,7 +289,7 @@ private extension MessageMediaMosaicCellView {
     }
 
     var loadState: MessageMediaDescription.LoadState {
-        if media.kind == .video { return .loaded }
+        if media.kind == .video || media.kind == .file { return .loaded }
         if displayedImage != nil { return .loaded }
         return hasFailed ? .failed : .loading
     }
@@ -297,7 +299,7 @@ private extension MessageMediaMosaicCellView {
         case (.image, .loaded): [.isImage, .isButton]
         case (.image, .failed): isRetryable ? [.isButton] : []
         case (.image, .loading): [.isImage]
-        case (.video, _): []
+        case (.video, _), (.file, _): []
         }
     }
 }

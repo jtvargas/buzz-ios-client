@@ -74,6 +74,7 @@ extension RichMessage {
         switch kind {
         case .image: "Image"
         case .video: "Video"
+        case .file: "File"
         }
     }
 

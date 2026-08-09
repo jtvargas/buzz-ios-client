@@ -150,6 +150,8 @@ private extension MessageMediaView {
         switch media.kind {
         case .video:
             MessageMediaVideoPlaceholder(media: media)
+        case .file:
+            EmptyView()
         case .image:
             imageContent
         }
@@ -275,7 +277,7 @@ private extension MessageMediaView {
     }
 
     var loadState: MessageMediaDescription.LoadState {
-        if media.kind == .video { return .loaded }
+        if media.kind == .video || media.kind == .file { return .loaded }
         if displayedImage != nil { return .loaded }
         return hasFailed ? .failed : .loading
     }
@@ -287,7 +289,7 @@ private extension MessageMediaView {
         case (.image, .loading): [.isImage]
         // A placeholder for something that cannot be played is static text, and saying
         // "button" over it would promise an action there is not one of.
-        case (.video, _): []
+        case (.video, _), (.file, _): []
         }
     }
 }
