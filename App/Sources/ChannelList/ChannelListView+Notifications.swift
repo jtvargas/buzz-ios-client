@@ -102,14 +102,28 @@ extension ChannelListView {
     }
 
     /// The push itself, onto a stack that is already empty.
+    ///
+    /// Both branches aim at the *message* when the route names one, which is the whole reason
+    /// a tapped banner feels like an answer rather than a room to search: the surface opens,
+    /// walks back to that message and washes it once. It is the landing search already
+    /// performs, reached through the same two mechanisms — nothing here is new.
+    ///
+    /// `.latestReply` is the fallback and not the rule. A thread reached without a message —
+    /// an App Intent, a recent place — still wants its newest reply, which is where somebody
+    /// who came to catch up belongs.
     private func present(_ route: InAppNotificationRoute) {
         switch route.location {
         case let .channel(channelID):
             path = [ConversationRoute(
-                channel: conversationRow(for: channelID, fallback: route.fallbackChannel)
+                channel: conversationRow(for: channelID, fallback: route.fallbackChannel),
+                focus: route.focus
             )]
         case let .thread(channelID, rootID):
-            openedThread = ThreadRoute(root: rootID, channel: channelID, anchor: .latestReply)
+            openedThread = ThreadRoute(
+                root: rootID,
+                channel: channelID,
+                anchor: route.focus.map { .reply($0.messageID) } ?? .latestReply
+            )
         }
     }
 }
