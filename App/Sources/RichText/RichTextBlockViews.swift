@@ -60,6 +60,8 @@ struct RichBlockView: View {
                 .accessibilityHidden(true)
         case let .media(media):
             MessageMediaGroupView(media: media, onTap: { claimRowTap?() }, attribution: attribution)
+        case let .file(file):
+            FileAttachmentCard(file: file)
         case let .linkPreview(preview):
             LinkPreviewCardView(preview: preview) { openURL(preview.url) }
         }

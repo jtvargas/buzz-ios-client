@@ -158,6 +158,9 @@ enum MarkdownDocumentHTML {
                 return "<div class=\"source-blank-line\" aria-hidden=\"true\"></div>"
             case let .media(items):
                 return items.map(media).joined(separator: "\n")
+            case let .file(file):
+                let label = text(file.filename ?? "File")
+                return "<p><a href=\"\(attribute(file.url))\">\(label)</a></p>"
             case let .linkPreview(preview):
                 return "<p><a href=\"\(attribute(preview.url.absoluteString))\">\(text(preview.title))</a></p>"
             }

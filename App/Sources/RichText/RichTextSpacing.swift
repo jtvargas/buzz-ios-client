@@ -66,7 +66,7 @@ enum RichTextSpacing {
     /// message, and a stack of them reads as one set of references at this gap.
     private static func isBoxed(_ block: RichBlock) -> Bool {
         switch block {
-        case .code, .table, .media, .linkPreview: true
+        case .code, .table, .file, .media, .linkPreview: true
         default: false
         }
     }
