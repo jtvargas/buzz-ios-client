@@ -29,12 +29,21 @@ public extension SyncEngine {
                     filename: payload.filename,
                     mimeType: payload.mimeType
                 ) else { throw OutboxError.mediaStagingFailed }
-                // Empty for a file, whose predicted URL is a bare hash by design. This
-                // is a local staging filename and nothing downstream reads it as a
-                // type — the upload sends `mimeType` from the row beside it.
+                // **Not taken from the predicted URL for a file.** A file's URL is a
+                // bare hash on purpose, so its `pathExtension` is empty — and an empty
+                // one is refused by `MediaStagingStore`, which builds a real filename
+                // from this and rejects anything that would not make one
+                // (`OutboxMedia.swift:120-127`). That refusal is right; it is this key
+                // that had no business being derived from the URL.
+                //
+                // The two are unrelated concerns. This names a file in a local staging
+                // directory; the URL names a blob on the relay. Nothing reads this back
+                // as a type — the upload sends `mimeType` from the row beside it — so
+                // `bin` for opaque bytes is both valid and honest.
+                let predictedExtension = URL(string: descriptor.url)?.pathExtension ?? ""
                 let key = StagedMediaKey(
                     sha256: descriptor.sha256,
-                    fileExtension: URL(string: descriptor.url)?.pathExtension ?? ""
+                    fileExtension: predictedExtension.isEmpty ? "bin" : predictedExtension
                 )
                 try mediaStagingStore.write(payload.data, for: key)
                 stagedKeys.append(key)
