@@ -4,7 +4,7 @@ import Foundation
 import Photos
 import UniformTypeIdentifiers
 
-/// Getting an attachment *out* of the app: onto the camera roll, or into the share sheet.
+/// Getting an attachment's original bytes onto disk for preview, saving, or sharing.
 ///
 /// # Why this fetches the picture again
 ///
@@ -41,7 +41,7 @@ enum MessageMediaExport {
 
         var errorDescription: String? {
             switch self {
-            case .download: "Hive couldn't download this picture. Check your connection and try again."
+            case .download: "Hive couldn't download this attachment. Check your connection and try again."
             case .photoLibraryDenied:
                 "Hive isn't allowed to add to your photo library. You can change that in Settings."
             case .save: "Hive couldn't save this picture to your photo library."
@@ -74,7 +74,7 @@ enum MessageMediaExport {
     ) async throws -> URL {
         guard let source = URL(string: media.url) else { throw Failure.download }
         let (data, response) = try await fetchData(
-            from: source, session: session, authorization: authorization
+            media, from: source, session: session, authorization: authorization
         )
         let name = filename(for: media, responseMIMEType: (response as? HTTPURLResponse)?.mimeType)
         do {
@@ -125,6 +125,11 @@ enum MessageMediaExport {
     static let maximumStemLength = 64
 
     static func filename(for media: MessageMedia, responseMIMEType: String?) -> String {
+        if media.kind == .file {
+            if let filename = safeFilename(media.filename) { return filename }
+            return genericFilename(for: media, responseMIMEType: responseMIMEType)
+        }
+
         let stem = URL(string: media.url)?.deletingPathExtension().lastPathComponent
         let name = stem.flatMap { $0.isEmpty || $0.count > maximumStemLength ? nil : $0 } ?? "image"
         let declared = media.mimeType.flatMap { UTType(mimeType: $0) }
@@ -137,12 +142,40 @@ enum MessageMediaExport {
             .first { $0.conforms(to: .image) }
         return "\(name).\(type?.preferredFilenameExtension ?? "jpg")"
     }
+
+    private static func genericFilename(for media: MessageMedia, responseMIMEType: String?) -> String {
+        let url = URL(string: media.url)
+        let stem = url?.deletingPathExtension().lastPathComponent
+        let name = stem.flatMap { $0.isEmpty || $0.count > maximumStemLength ? nil : $0 } ?? "file"
+        let declared = media.mimeType.flatMap { UTType(mimeType: $0)?.preferredFilenameExtension }
+        let served = responseMIMEType.flatMap { UTType(mimeType: $0)?.preferredFilenameExtension }
+        let carried = url?.pathExtension
+        let extensionName = [declared, served, carried]
+            .compactMap { value in value.flatMap { $0.isEmpty ? nil : $0 } }
+            .first ?? "bin"
+        return "\(name).\(extensionName)"
+    }
+
+    private static func safeFilename(_ raw: String?) -> String? {
+        guard let raw else { return nil }
+        let component = raw.split(whereSeparator: { $0 == "/" || $0 == "\\" }).last.map(String.init) ?? ""
+        let cleaned = component.unicodeScalars
+            .filter { !CharacterSet.controlCharacters.contains($0) }
+            .map(String.init)
+            .joined()
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleaned.isEmpty, cleaned != ".", cleaned != ".." else { return nil }
+        return cleaned.count <= 200
+            ? cleaned
+            : String(cleaned.prefix(160)) + String(cleaned.suffix(40))
+    }
 }
 
 // MARK: - Fetching
 
 private extension MessageMediaExport {
     static func fetchData(
+        _ media: MessageMedia,
         from source: URL,
         session: URLSession,
         authorization: (any MediaReadAuthorizing)?
@@ -159,11 +192,27 @@ private extension MessageMediaExport {
             // serve the error at 200, and some serve a real picture as
             // `application/octet-stream`, which is why an unrecognised type passes and only a
             // type that is positively *not* an image is refused.
+            //
+            // A file cannot use that test — `application/octet-stream` is the *expected*
+            // answer for one, and the relay names an unsniffable blob `.bin` — so it gets
+            // the narrowest form of the same guard instead. A served page is still a lost
+            // object, and Quick Look would render the error page as the document. Only a
+            // file that declares itself a page may be served as one, and the relay refuses
+            // to store those in the first place.
             if let http = response as? HTTPURLResponse {
                 guard (200 ..< 300).contains(http.statusCode) else { throw Failure.download }
-                if let served = http.mimeType.flatMap({ UTType(mimeType: $0) }),
-                   !served.conforms(to: .image) {
-                    throw Failure.download
+                let served = http.mimeType.flatMap { UTType(mimeType: $0) }
+                switch media.kind {
+                case .image:
+                    if let served, !served.conforms(to: .image) { throw Failure.download }
+                case .file, .video:
+                    // Video shares the file's test rather than the picture's: `video/mp4`
+                    // is positively not an image, so the branch above would refuse every
+                    // one of them the day a video is exportable.
+                    let declared = media.mimeType.flatMap { UTType(mimeType: $0) }
+                    if let served, served.conforms(to: .html), declared?.conforms(to: .html) != true {
+                        throw Failure.download
+                    }
                 }
             }
             guard !data.isEmpty else { throw Failure.download }

@@ -5,6 +5,24 @@ public extension SyncEngine {
     /// Stages a media message durably, commits it as authored-but-held, and starts
     /// its uploads above the view tree. The ordinary outbox drain sees it only
     /// after every staged blob has landed.
+    ///
+    /// # Pictures are predicted; files are uploaded first
+    ///
+    /// A picture's descriptor can be worked out here, because the composer *chose* the
+    /// format — see ``BlobDescriptor/predicted(data:baseURL:filename:)``. That is what
+    /// lets a photo message commit and appear instantly while its bytes go up behind it.
+    ///
+    /// A file's cannot. The relay derives both its extension and its MIME by sniffing
+    /// the bytes, then rejects any `imeta` that disagrees with what it stored
+    /// (`buzz-relay/handlers/imeta.rs:257-262`, `:399-414`) — so a guess here produces
+    /// a message the relay refuses, which is precisely what shipped and had to be
+    /// taken back. **A file is therefore uploaded before the event is signed, and the
+    /// message is composed from the descriptor the relay hands back.** Nothing is
+    /// predicted, so nothing can drift.
+    ///
+    /// The cost is honest and small: a message carrying a file appears when its upload
+    /// finishes rather than immediately, and a failed upload is reported before the
+    /// message exists rather than after it has been sent and cannot be delivered.
     @discardableResult
     func enqueueMediaMessage(
         kind: EventKind = .channelMessage,
@@ -14,7 +32,7 @@ public extension SyncEngine {
         media: [OutboundMediaPayload],
         maxContentBytes: Int = OutboxPolicy.maxContentBytes
     ) async throws -> OutboxEntry {
-        guard let mediaBaseURL, mediaUploader != nil, let mediaStagingStore else {
+        guard let mediaBaseURL, let mediaUploader, let mediaStagingStore else {
             throw OutboxError.mediaUnavailable
         }
 
@@ -23,24 +41,46 @@ public extension SyncEngine {
         var stagedKeys: [StagedMediaKey] = []
         do {
             for (ordinal, payload) in media.enumerated() {
-                guard let descriptor = BlobDescriptor.predicted(
+                if let descriptor = BlobDescriptor.predicted(
                     data: payload.data,
                     baseURL: mediaBaseURL,
                     filename: payload.filename
-                ) else { throw OutboxError.mediaStagingFailed }
-                let key = StagedMediaKey(
-                    sha256: descriptor.sha256,
-                    fileExtension: URL(string: descriptor.url)?.pathExtension ?? ""
+                ) {
+                    let key = StagedMediaKey(
+                        sha256: descriptor.sha256,
+                        fileExtension: URL(string: descriptor.url)?.pathExtension ?? ""
+                    )
+                    try mediaStagingStore.write(payload.data, for: key)
+                    stagedKeys.append(key)
+                    descriptors.append(descriptor)
+                    rows.append(OutboxMedia(
+                        sha256: descriptor.sha256,
+                        ordinal: ordinal,
+                        fileExtension: key.fileExtension,
+                        mimeType: descriptor.type,
+                        size: descriptor.size
+                    ))
+                    continue
+                }
+
+                // Not a picture: ask the relay what it is rather than claiming to know.
+                let descriptor = try await mediaUploader.upload(
+                    data: payload.data,
+                    mimeType: payload.mimeType ?? "application/octet-stream",
+                    filename: payload.filename
                 )
-                try mediaStagingStore.write(payload.data, for: key)
-                stagedKeys.append(key)
                 descriptors.append(descriptor)
+                // Recorded as already uploaded, so the pump has nothing left to do for
+                // it and `releaseAwaitingMedia` fires as soon as the pictures beside it
+                // land. The bytes are not staged: staging exists to survive a process
+                // death *before* an upload, and this one is already on the relay.
                 rows.append(OutboxMedia(
                     sha256: descriptor.sha256,
                     ordinal: ordinal,
-                    fileExtension: key.fileExtension,
+                    fileExtension: URL(string: descriptor.url)?.pathExtension ?? "bin",
                     mimeType: descriptor.type,
-                    size: descriptor.size
+                    size: descriptor.size,
+                    state: .uploaded
                 ))
             }
         } catch {

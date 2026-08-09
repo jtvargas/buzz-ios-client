@@ -131,6 +131,8 @@ struct ComposerAttachmentStrip: View {
                 Image(uiImage: preview)
                     .resizable()
                     .scaledToFill()
+            } else if let name = attachment.documentName {
+                document(named: name)
             }
             if attachment.isPreparing {
                 // One spinner, one meaning: this picture is being loaded and scrubbed
@@ -144,9 +146,34 @@ struct ComposerAttachmentStrip: View {
         }
     }
 
+    /// A file's tile: a glyph and the name, in the same 72pt square a picture gets.
+    ///
+    /// A file has nothing to show, so the tile shows what it *is* — and the name is
+    /// the part that matters, because five documents are told apart by nothing else.
+    /// The picture case can rely on the picture; this cannot.
+    private func document(named name: String) -> some View {
+        VStack(spacing: 4) {
+            Image(systemName: "doc")
+                .font(.hiveSymbol(.title3))
+                .foregroundStyle(.secondary)
+            // Two lines and a middle truncation, so `Q3-report-final.pdf` keeps both
+            // the thing it is called and the extension that says what it is. Tail
+            // truncation would take the extension, which is the half a glance needs.
+            Text(name)
+                .font(.hive(.caption2))
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+                .truncationMode(.middle)
+                .multilineTextAlignment(.center)
+        }
+        .padding(.horizontal, 4)
+    }
+
     private func accessibilityLabel(for attachment: ComposerAttachment) -> String {
-        if attachment.isPreparing { return "Picture, preparing" }
-        return "Picture"
+        guard let name = attachment.documentName else {
+            return attachment.isPreparing ? "Picture, preparing" : "Picture"
+        }
+        return attachment.isPreparing ? "File, \(name), preparing" : "File, \(name)"
     }
 
     private func removeButton(for attachment: ComposerAttachment) -> some View {

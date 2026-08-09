@@ -117,7 +117,7 @@ enum RichTextLinkPreview {
                 table.cellsInReadingOrder.flatMap { links(in: $0) }
             // A fenced block is raw text that was never inline-parsed, a rule has no
             // words, and an attachment's URL is the picture rather than a link to it.
-            case .code, .rule, .sourceBlankLine, .media, .linkPreview:
+            case .code, .rule, .sourceBlankLine, .file, .media, .linkPreview:
                 []
             }
         }

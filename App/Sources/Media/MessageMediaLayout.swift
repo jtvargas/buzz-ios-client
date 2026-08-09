@@ -142,7 +142,7 @@ extension MessageMediaLayout {
     static func fallbackAspectRatio(for kind: MessageMediaKind) -> CGFloat {
         switch kind {
         case .image: unknownImageAspectRatio
-        case .video: unknownVideoAspectRatio
+        case .video, .file: unknownVideoAspectRatio
         }
     }
 

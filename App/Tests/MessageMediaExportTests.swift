@@ -1,8 +1,9 @@
 import BuzzKit
+import Foundation
 @testable import Hive
 import Testing
 
-/// The name a picture leaves the app under.
+/// The name an attachment leaves the app under.
 ///
 /// # Why this is worth a test at all
 ///
@@ -16,6 +17,14 @@ import Testing
 struct MessageMediaExportTests {
     private func media(url: String, mimeType: String? = nil) -> MessageMedia {
         MessageMedia(url: url, kind: .image, mimeType: mimeType)
+    }
+
+    private func file(
+        url: String,
+        mimeType: String? = nil,
+        filename: String? = nil
+    ) -> MessageMedia {
+        MessageMedia(url: url, kind: .file, mimeType: mimeType, filename: filename)
     }
 
     @Test("A content-addressed URL with no extension takes one from the declared type")
@@ -104,4 +113,144 @@ struct MessageMediaExportTests {
         )
         #expect(name == "image.png")
     }
+
+    @Test("A file's imeta filename wins over an opaque relay URL and MIME")
+    func authoredFileNameWins() {
+        let name = MessageMediaExport.filename(
+            for: file(
+                url: "https://media.example/a3702f85.bin",
+                mimeType: "application/octet-stream",
+                filename: "addresses.csv"
+            ),
+            responseMIMEType: "application/octet-stream"
+        )
+        #expect(name == "addresses.csv")
+    }
+
+    @Test("An unsafe path in imeta is reduced to its filename")
+    func authoredFileNameIsSafe() {
+        let name = MessageMediaExport.filename(
+            for: file(url: "https://media.example/a.bin", filename: "../../reports/quarterly.pdf"),
+            responseMIMEType: nil
+        )
+        #expect(name == "quarterly.pdf")
+    }
+
+    @Test("A file without an authored name prefers declared type over the URL extension")
+    func declaredFileTypeNamesTheFile() {
+        let name = MessageMediaExport.filename(
+            for: file(url: "https://media.example/abc123.bin", mimeType: "application/pdf"),
+            responseMIMEType: "application/octet-stream"
+        )
+        #expect(name == "abc123.pdf")
+    }
+
+    @Test("A non-image response can be written under the imeta filename for Quick Look")
+    func fileResponseCanBeFetched() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [StubFileExportProtocol.self]
+        let attachment = file(
+            url: "https://file-export.test/report.bin",
+            mimeType: "application/pdf",
+            filename: "report.pdf"
+        )
+
+        let local = try await MessageMediaExport.fetch(
+            attachment,
+            session: URLSession(configuration: configuration)
+        )
+        defer { try? FileManager.default.removeItem(at: local.deletingLastPathComponent()) }
+
+        #expect(local.lastPathComponent == "report.pdf")
+        #expect(try Data(contentsOf: local) == StubFileExportProtocol.body)
+    }
+
+    /// The lost-object case, for a file rather than a picture.
+    ///
+    /// A media host that no longer has the blob answers with a *page* at 200 rather than
+    /// with an error. The picture path has always refused that — a served type that is
+    /// positively not an image — but a file cannot reuse the test, because
+    /// `application/octet-stream` is the expected answer for one. Without a guard of its
+    /// own the page is written under the authored name and Quick Look renders the error
+    /// page as the document.
+    @Test("A file whose host answers with a page is refused rather than previewed")
+    func fileErrorPageIsRefused() async {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [StubHTMLErrorProtocol.self]
+        let attachment = file(
+            url: "https://file-lost.test/report.bin",
+            mimeType: "application/pdf",
+            filename: "report.pdf"
+        )
+
+        await #expect(throws: MessageMediaExport.Failure.download) {
+            try await MessageMediaExport.fetch(
+                attachment,
+                session: URLSession(configuration: configuration)
+            )
+        }
+    }
+
+    @Test("File card sizes use Desktop's binary units and precision")
+    func fileCardByteCounts() {
+        #expect(FileAttachmentCard.formatByteCount(820) == "820 B")
+        #expect(FileAttachmentCard.formatByteCount(1024) == "1.0 KB")
+        #expect(FileAttachmentCard.formatByteCount(3_250_586) == "3.1 MB")
+        #expect(FileAttachmentCard.formatByteCount(nil) == nil)
+    }
+}
+
+/// A host that still answers but has lost the object: an HTML error page, served at 200.
+private final class StubHTMLErrorProtocol: URLProtocol {
+    override static func canInit(with request: URLRequest) -> Bool {
+        request.url?.host == "file-lost.test"
+    }
+
+    override static func canonicalRequest(for request: URLRequest) -> URLRequest {
+        request
+    }
+
+    override func startLoading() {
+        guard let client, let url = request.url,
+              let response = HTTPURLResponse(
+                  url: url,
+                  statusCode: 200,
+                  httpVersion: "HTTP/1.1",
+                  headerFields: ["Content-Type": "text/html; charset=utf-8"]
+              )
+        else { return }
+        client.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client.urlProtocol(self, didLoad: Data("<html><body>Not Found</body></html>".utf8))
+        client.urlProtocolDidFinishLoading(self)
+    }
+
+    override func stopLoading() {}
+}
+
+private final class StubFileExportProtocol: URLProtocol {
+    static let body = Data("%PDF-1.7\npreview".utf8)
+
+    override static func canInit(with request: URLRequest) -> Bool {
+        request.url?.host == "file-export.test"
+    }
+
+    override static func canonicalRequest(for request: URLRequest) -> URLRequest {
+        request
+    }
+
+    override func startLoading() {
+        guard let client, let url = request.url,
+              let response = HTTPURLResponse(
+                  url: url,
+                  statusCode: 200,
+                  httpVersion: "HTTP/1.1",
+                  headerFields: ["Content-Type": "application/pdf"]
+              )
+        else { return }
+        client.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client.urlProtocol(self, didLoad: Self.body)
+        client.urlProtocolDidFinishLoading(self)
+    }
+
+    override func stopLoading() {}
 }

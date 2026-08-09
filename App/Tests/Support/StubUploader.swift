@@ -99,6 +99,10 @@ actor StubPickedItemGate {
 struct StubPickedItem: ComposerPickedItem {
     let data: Data
     var suggestedFilename: String?
+    /// Whether this stands in for a file import rather than a photo pick. It is the
+    /// only thing that differs between the two sources: bytes that are not a picture
+    /// are an attachment from one and a failure from the other.
+    var isDocument = false
     var gate: StubPickedItemGate?
     /// Fails the *load*, before anything reaches the uploader — what a picker
     /// returning an item it cannot produce bytes for looks like.
@@ -341,5 +345,40 @@ enum TestPicture {
             UIColor.systemTeal.setFill()
             context.fill(CGRect(origin: .zero, size: size))
         }
+    }
+}
+
+/// Real documents, for the same reason ``TestPicture`` holds real pictures — and for
+/// one more that arbitrary bytes cannot express.
+///
+/// A file of nonsense is refused by *both* decoders, so it never reaches the place
+/// where they disagree. The whole defect lived in that gap: ImageIO opens a PDF and
+/// `UIImage` refuses it, so a document that ImageIO cannot open proves nothing about
+/// the route a document takes. These bytes have to be a document something can read.
+enum TestDocument {
+    /// A valid one-page PDF, small enough to read here.
+    ///
+    /// Assembled rather than embedded so the cross-reference offsets are computed
+    /// from the body itself: a PDF with a wrong `xref` is exactly the kind of thing
+    /// a parser may repair, and a fixture that only works by repair would be one
+    /// version of ImageIO away from silently testing nothing.
+    static func pdf() -> Data {
+        let objects = [
+            "1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n",
+            "2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n",
+            "3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 72 72]>>endobj\n",
+        ]
+        var body = "%PDF-1.4\n"
+        var offsets: [Int] = []
+        for object in objects {
+            offsets.append(body.utf8.count)
+            body += object
+        }
+        let startxref = body.utf8.count
+        body += "xref\n0 \(objects.count + 1)\n0000000000 65535 f \n"
+        for offset in offsets { body += String(format: "%010d 00000 n \n", offset) }
+        body += "trailer<</Size \(objects.count + 1)/Root 1 0 R>>\n"
+        body += "startxref\n\(startxref)\n%%EOF\n"
+        return Data(body.utf8)
     }
 }

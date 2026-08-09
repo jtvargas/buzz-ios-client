@@ -31,6 +31,8 @@ enum MessageMediaDescription {
         switch media.kind {
         case .video:
             return alt.map { "\($0), video attachment" } ?? "Video attachment"
+        case .file:
+            return media.filename ?? "File attachment"
         case .image:
             switch state {
             case .loading:
@@ -70,6 +72,8 @@ enum MessageMediaDescription {
         switch media.kind {
         case .video:
             return trimmed(media.alt) ?? fileName(for: media.url) ?? "Video"
+        case .file:
+            return media.filename ?? fileName(for: media.url) ?? "File"
         case .image:
             guard state == .failed else { return "" }
             return trimmed(media.alt) ?? "Image unavailable"

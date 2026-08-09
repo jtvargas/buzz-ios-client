@@ -54,6 +54,9 @@ enum RichBlock: Equatable, Sendable {
     /// them as one mosaic rather than as several attachments in a row. A single entry is
     /// the common case and draws exactly as one attachment always has.
     case media([MessageMedia])
+    /// A generic file named by an explicit markdown link and described by matching
+    /// `imeta`. Kept separate from media so it never enters picture layout or viewers.
+    case file(MessageMedia)
     /// A card for a link the message points at, appended after everything the author
     /// wrote — see ``RichTextLinkPreview``.
     ///
@@ -140,7 +143,7 @@ extension [RichBlock] {
                 .orderedList(start: start, items.map { $0.mapInlines(transform) })
             case let .table(table):
                 .table(table.mapCells(transform))
-            case .rule, .sourceBlankLine, .linkPreview, .media:
+            case .rule, .sourceBlankLine, .file, .linkPreview, .media:
                 // These blocks carry no authored inline to transform. In particular,
                 // media alt text belongs to the attachment: autolinking a URL it names
                 // would make the caption tappable, and entity resolution would turn an

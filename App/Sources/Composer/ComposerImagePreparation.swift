@@ -58,10 +58,21 @@ enum ComposerImagePreparation {
     }
 
     enum Failure: Error, Equatable {
-        /// ImageIO could not open these bytes, so whatever was picked, it was not
-        /// a picture this device can read.
+        /// This device cannot decode these bytes as a picture, so whatever was
+        /// picked, it is not one.
+        ///
+        /// Thrown from **either** decoder, and that is the whole point: ImageIO
+        /// opens strictly more than `UIImage` renders, so the two disagree and a
+        /// payload only one of them accepts is still not a picture. **A PDF is the
+        /// case that proves it** — ImageIO renders its first page happily, `UIImage`
+        /// refuses the same bytes outright. Reported as ``couldNotConvert``, that
+        /// disagreement told an author their document was a broken picture; it is
+        /// this, and a document pick answers it by going up as a file.
         case notAPicture
-        /// It is a picture, and re-encoding it produced nothing.
+        /// It *is* a picture — this device decoded it — and re-encoding it produced
+        /// nothing. Distinct from ``notAPicture`` because only that one may fall back
+        /// to sending the bytes untouched: a picture that failed to re-encode still
+        /// carries the EXIF this pipeline exists to strip.
         case couldNotConvert
         /// An animation carries something that cannot be taken off without
         /// decoding it, and decoding it would cost the animation.
@@ -89,10 +100,12 @@ enum ComposerImagePreparation {
 
     /// Reads `data` and returns bytes the relay will accept.
     nonisolated static func prepare(_ data: Data) async throws -> Prepared {
-        // Also the "is this a picture at all" test: ImageIO opens every format
-        // this app can send and every format it cannot, so a payload it will not
-        // open is not one worth uploading to find out. Transform is on, so a photo
-        // shot in portrait thumbnails upright.
+        // The *first* half of the "is this a picture at all" test, and not the
+        // deciding one: ImageIO opens every format this app can send and a good
+        // many it cannot — a PDF among them — so failing here proves not-a-picture
+        // while passing proves very little. What decides is the decode in
+        // ``renderedInSRGB``. Transform is on, so a photo shot in portrait
+        // thumbnails upright.
         guard let thumbnail = RemoteImageLoader.downsample(data, maxPixelSize: previewPixelSize),
               let preview = thumbnail.jpegData(compressionQuality: previewQuality)
         else { throw Failure.notAPicture }
@@ -132,18 +145,23 @@ enum ComposerImagePreparation {
     }
 
     /// Re-renders in sRGB, encodes, and scrubs what the encoder still wrote.
+    ///
+    /// Two guards rather than one, and they are different questions: the first asks
+    /// whether this is a picture at all, the second whether a picture this device
+    /// decoded could be written back out. Only the first has an answer other than
+    /// failure — see ``Failure/notAPicture``.
     private nonisolated static func encodedJPEG(_ data: Data) throws -> Data {
-        guard let upright = renderedInSRGB(data),
-              let encoded = upright.jpegData(compressionQuality: conversionQuality)
-        else { throw Failure.couldNotConvert }
+        guard let upright = renderedInSRGB(data) else { throw Failure.notAPicture }
+        guard let encoded = upright.jpegData(compressionQuality: conversionQuality) else {
+            throw Failure.couldNotConvert
+        }
         return try ImageMetadataScrub.scrubJPEG(encoded)
     }
 
     /// The same for PNG, which keeps transparency where JPEG would flatten it.
     private nonisolated static func encodedPNG(_ data: Data) throws -> Data {
-        guard let upright = renderedInSRGB(data), let encoded = upright.pngData() else {
-            throw Failure.couldNotConvert
-        }
+        guard let upright = renderedInSRGB(data) else { throw Failure.notAPicture }
+        guard let encoded = upright.pngData() else { throw Failure.couldNotConvert }
         return try ImageMetadataScrub.scrubPNG(encoded)
     }
 

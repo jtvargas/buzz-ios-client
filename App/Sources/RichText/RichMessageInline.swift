@@ -17,6 +17,8 @@ extension RichMessage {
         return result
     }
 
+    // Exhaustive flattening of the renderer-neutral block model.
+    // swiftlint:disable:next cyclomatic_complexity
     private static func inline(of block: RichBlock) -> AttributedString {
         switch block {
         case let .paragraph(text):
@@ -40,6 +42,8 @@ extension RichMessage {
             return AttributedString()
         case let .media(items):
             return AttributedString(noun(for: items))
+        case let .file(file):
+            return AttributedString(file.filename ?? "File")
         case .linkPreview:
             // Nothing, and for the opposite reason to a picture's. A card is a *second*
             // rendering of a link whose text is still in the message, so the snippet
@@ -74,6 +78,7 @@ extension RichMessage {
         switch kind {
         case .image: "Image"
         case .video: "Video"
+        case .file: "File"
         }
     }
 

@@ -234,7 +234,7 @@ struct ComposerAttachmentsTests {
 
         #expect(model.attachments.isEmpty)
         #expect(!model.isAttaching, "the send gate is still held shut by a picture that gave up")
-        #expect(model.uploadError == "That picture took too long to load — it may still be in iCloud.")
+        #expect(model.uploadError == "That took too long to load — it may still be in iCloud.")
     }
 
     /// The race's own contract, which every deadline above rests on: the loser answers too —

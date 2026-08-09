@@ -148,6 +148,8 @@ public enum MediaUploadError: Error, Equatable, Sendable {
     case malformedResponse
     /// This file's type is not one the relay stores.
     case unsupportedType(String)
+    /// The file is larger than the relay will take, refused before the bytes go.
+    case tooLarge(bytes: Int, max: Int)
 }
 
 /// Puts bytes on the relay's blob store and hands back what it stored.
@@ -185,11 +187,9 @@ public struct MediaUploadClient: Sendable {
 
     /// The types the relay stores as pictures.
     ///
-    /// Enforced here rather than left to the relay so an unsupported pick fails
-    /// on this device with a name for what went wrong, instead of costing an
-    /// upload of the bytes to be told the same thing. **HEIC is deliberately
-    /// absent**: it is what an iPhone camera writes by default and the relay does
-    /// not take it, so the picking side transcodes before it ever reaches here.
+    /// **HEIC is deliberately absent**: it is what an iPhone camera writes by default
+    /// and the relay does not take it, so the picking side transcodes before it ever
+    /// reaches here.
     public static let supportedImageTypes: Set<String> = [
         "image/jpeg", "image/png", "image/gif", "image/webp",
     ]
@@ -223,8 +223,8 @@ public struct MediaUploadClient: Sendable {
         mimeType: String,
         filename: String? = nil
     ) async throws -> BlobDescriptor {
-        guard Self.supportedImageTypes.contains(mimeType) else {
-            throw MediaUploadError.unsupportedType(mimeType)
+        if let failure = Self.policyFailure(mimeType: mimeType, byteCount: data.count) {
+            throw failure
         }
         let digest = Self.sha256Hex(data)
         let headers = try await headers(sha256: digest, mimeType: mimeType)

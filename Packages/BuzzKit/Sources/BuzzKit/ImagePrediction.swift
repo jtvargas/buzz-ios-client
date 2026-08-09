@@ -141,11 +141,31 @@ enum ImagePrediction {
 }
 
 public extension BlobDescriptor {
-    /// The descriptor the relay is expected to return for these exact image bytes.
+    /// The descriptor the relay is expected to return for these exact **image** bytes.
     ///
-    /// The four format-to-extension cases mirror `buzz-media`'s `mime_to_ext`.
-    /// The URL is rooted at the relay origin because the server publishes media
-    /// at `{scheme}://{tenant_host}/media`, independent of its upload fallback.
+    /// # Why predicting is safe for a picture and impossible for a file
+    ///
+    /// A message is signed before its blobs are uploaded, so its content has to name
+    /// URLs that do not exist yet. For a picture that is sound: the composer *forces*
+    /// the format — every still is re-encoded to JPEG or PNG on the way in
+    /// (``ComposerImagePreparation``) — so the relay's own byte sniff cannot disagree
+    /// with what is claimed here. We chose the answer.
+    ///
+    /// For a generic file it is not sound and cannot be made so. The relay decides a
+    /// file's extension *and* its MIME by sniffing (`buzz-media/validation.rs:183-206`),
+    /// then refuses any `imeta` whose `m` differs from what it stored
+    /// (`buzz-relay/handlers/imeta.rs:257-262`) and any url that is not
+    /// `<sha256>.<ext>` (`:399-414`). A CSV has no signature at all, so nothing here
+    /// can know it becomes `application/octet-stream` under `.bin` — and a wrong guess
+    /// is a message the relay rejects outright.
+    ///
+    /// **So files are not predicted. They are uploaded first and composed from the
+    /// descriptor the relay hands back** — see `SyncEngine.enqueueMediaMessage`.
+    /// Returning `nil` for non-image bytes is what routes them there.
+    ///
+    /// The four format-to-extension cases mirror `buzz-media`'s `mime_to_ext`. The URL
+    /// is rooted at the relay origin because the server publishes media at
+    /// `{scheme}://{tenant_host}/media`, independent of its upload fallback.
     static func predicted(
         data: Data,
         baseURL: URL,

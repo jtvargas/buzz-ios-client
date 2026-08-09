@@ -304,3 +304,55 @@ struct RecordedUpload: Sendable {
     let headers: [String: String]
     let body: Data
 }
+
+/// What a *file* attachment predicts, which is deliberately nothing.
+///
+/// Its own suite rather than more of ``MediaUploadTests``: that one is about the
+/// upload header's contract with the relay, and this is about which of two paths a
+/// payload takes before any header exists.
+@Suite("Media prediction routing")
+struct MediaPredictionRoutingTests {
+    /// Prediction refusing a file is the *mechanism*, not a gap.
+    ///
+    /// The relay derives a generic file's extension and MIME by sniffing its bytes and
+    /// then rejects any `imeta` that disagrees, so nothing here can safely claim to
+    /// know either — a CSV has no signature at all. Returning `nil` is what routes a
+    /// file to the upload-first path, where the relay's own answer is used instead.
+    @Test("a file is not predicted, so it takes the upload-first path")
+    func filesAreNotPredicted() throws {
+        let csv = Data("name,qty\nwidget,3\n".utf8)
+        let base = try #require(URL(string: "https://tenant.example/"))
+        #expect(BlobDescriptor.predicted(data: csv, baseURL: base, filename: "stock.csv") == nil)
+        #expect(BlobDescriptor.predicted(data: Data([0, 1, 2, 3]), baseURL: base) == nil)
+    }
+
+    /// A picture still predicts, because the composer chose its format — that is the
+    /// whole reason the two are treated differently.
+    @Test("a picture still predicts a URL the relay will agree with")
+    func picturesStillPredict() throws {
+        let png = try #require(ImageFixture.png(width: 8, height: 8))
+        let descriptor = try #require(BlobDescriptor.predicted(
+            data: png,
+            baseURL: #require(URL(string: "https://tenant.example/"))
+        ))
+        // `<hash>.<ext>` is the only shape the relay accepts in an imeta url
+        // (`handlers/imeta.rs:399-414`); a bare hash is refused.
+        let digest = SHA256.hash(data: png).map { String(format: "%02x", $0) }.joined()
+        #expect(descriptor.url == "https://tenant.example/media/\(digest).png")
+    }
+
+    /// The message body has to route a file to the link form rather than the picture
+    /// form. This holds for the relay-returned descriptor exactly as it did before.
+    @Test("a non-image descriptor renders as a named link")
+    func fileRendersAsLink() {
+        let descriptor = BlobDescriptor(
+            url: "https://tenant.example/media/\(String(repeating: "a", count: 64)).bin",
+            sha256: String(repeating: "a", count: 64),
+            size: 12,
+            type: "application/octet-stream",
+            uploaded: 0,
+            filename: "stock.csv"
+        )
+        #expect(descriptor.markdownReference() == "[stock.csv](\(descriptor.url))")
+    }
+}

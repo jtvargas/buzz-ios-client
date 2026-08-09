@@ -8,13 +8,28 @@ public struct OutboxMedia: Sendable, Equatable {
     public let fileExtension: String
     public let mimeType: String
     public let size: Int
+    /// Where this blob already is.
+    ///
+    /// `.staged` for anything the pump still has to upload, which is every picture.
+    /// A **file** is uploaded before the event is signed — the relay has to tell us
+    /// its type and extension before they can go in the message — so it is recorded
+    /// as `.uploaded` and the pump correctly finds nothing left to do for it.
+    public let state: OutboxMediaState
 
-    public init(sha256: String, ordinal: Int, fileExtension: String, mimeType: String, size: Int) {
+    public init(
+        sha256: String,
+        ordinal: Int,
+        fileExtension: String,
+        mimeType: String,
+        size: Int,
+        state: OutboxMediaState = .staged
+    ) {
         self.sha256 = sha256
         self.ordinal = ordinal
         self.fileExtension = fileExtension
         self.mimeType = mimeType
         self.size = size
+        self.state = state
     }
 }
 
@@ -22,10 +37,21 @@ public struct OutboxMedia: Sendable, Equatable {
 public struct OutboundMediaPayload: Sendable, Equatable {
     public let data: Data
     public let filename: String?
+    /// What the composer decided these bytes are, for a payload that is not a picture.
+    ///
+    /// Carried rather than re-derived, because for a file it *cannot* be derived: a
+    /// CSV and a plain text file have no magic signature at all, and the only thing
+    /// that tells one from the other is the extension the author picked it by.
+    ///
+    /// `nil` for pictures, and that is not laziness — picture bytes are
+    /// self-describing, so the prediction reads the format straight out of them and a
+    /// declared type could only disagree with what is actually there.
+    public let mimeType: String?
 
-    public init(data: Data, filename: String? = nil) {
+    public init(data: Data, filename: String? = nil, mimeType: String? = nil) {
         self.data = data
         self.filename = filename
+        self.mimeType = mimeType
     }
 }
 
@@ -339,7 +365,7 @@ public extension BuzzEventStore {
                     item.fileExtension,
                     item.mimeType,
                     item.size,
-                    OutboxMediaState.staged.rawValue,
+                    item.state.rawValue,
                 ]
             )
         }

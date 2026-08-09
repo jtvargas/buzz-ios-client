@@ -1,9 +1,8 @@
 import BuzzKit
 import Foundation
 
-/// The media stage: lifts the pictures a message *places* out of its paragraphs and into
-/// ``RichBlock/media(_:)`` blocks, describing each from the `imeta` tag that names the
-/// same URL.
+/// The attachment stage: lifts pictures and explicitly linked files out of paragraphs
+/// into their own blocks, described from the `imeta` tag naming the same URL.
 ///
 /// # Where an attachment goes, and who decides
 ///
@@ -33,8 +32,8 @@ import Foundation
 /// ``RichTextEntities`` ever see them — so a picture can never also appear as a link or
 /// a mention beside itself, which is the duplication this ordering exists to prevent.
 enum RichTextMedia {
-    /// `blocks` with every markdown image lifted into its own media block, described by
-    /// whichever of `media` names the same URL.
+    /// `blocks` with every markdown image and described file link lifted into its own
+    /// attachment block.
     ///
     /// Only paragraphs are opened up. A heading, a quote, a list item or a table cell
     /// keeps an image as the alt text it already renders as: those blocks are one
@@ -48,7 +47,8 @@ enum RichTextMedia {
         // matching ``MessageMedia/parse(tags:)``, which already de-duplicates.
         let described = Dictionary(media.map { ($0.url, $0) }, uniquingKeysWith: { first, _ in first })
         let lifted = blocks.flatMap { block -> [RichBlock] in
-            guard case let .paragraph(text) = block, carriesImage(text) else { return [block] }
+            guard case let .paragraph(text) = block, carriesAttachment(text, describedBy: described)
+            else { return [block] }
             return split(text, describedBy: described)
         }
         return group(lifted)
@@ -94,8 +94,15 @@ enum RichTextMedia {
         return result
     }
 
-    private static func carriesImage(_ text: AttributedString) -> Bool {
-        text.runs.contains { $0.imageURL != nil }
+    private static func carriesAttachment(
+        _ text: AttributedString,
+        describedBy described: [String: MessageMedia]
+    ) -> Bool {
+        text.runs.contains { run in
+            if run.imageURL != nil { return true }
+            guard let link = run.link else { return false }
+            return described[link.absoluteString]?.kind == .file
+        }
     }
 
     // MARK: - Splitting a paragraph
@@ -113,22 +120,73 @@ enum RichTextMedia {
     ) -> [RichBlock] {
         var blocks: [RichBlock] = []
         var pending = AttributedString()
+        var pendingFile: MessageMedia?
+        var pendingFileLabel = ""
+
+        func appendPendingFile() {
+            guard let pendingFile else { return }
+            blocks.append(.file(describeFile(pendingFile, linkLabel: pendingFileLabel)))
+            pendingFileLabel = ""
+        }
 
         for run in text.runs {
-            guard let imageURL = run.imageURL else {
-                pending.append(text[run.range])
+            if let imageURL = run.imageURL {
+                appendPendingFile()
+                pendingFile = nil
+                appendParagraph(pending, to: &blocks)
+                pending = AttributedString()
+                let attachment = describe(
+                    imageURL,
+                    alt: String(text[run.range].characters),
+                    by: described[imageURL.absoluteString]
+                )
+                if attachment.kind == .file {
+                    blocks.append(.file(attachment))
+                } else {
+                    blocks.append(.media([attachment]))
+                }
                 continue
             }
-            appendParagraph(pending, to: &blocks)
-            pending = AttributedString()
-            blocks.append(.media([describe(
-                imageURL,
-                alt: String(text[run.range].characters),
-                by: described[imageURL.absoluteString]
-            )]))
+
+            if let link = run.link,
+               let file = described[link.absoluteString],
+               file.kind == .file {
+                appendParagraph(pending, to: &blocks)
+                pending = AttributedString()
+                if pendingFile?.url != file.url {
+                    appendPendingFile()
+                    pendingFile = file
+                }
+                pendingFileLabel += String(text[run.range].characters)
+                continue
+            }
+
+            appendPendingFile()
+            pendingFile = nil
+            pending.append(text[run.range])
         }
+        appendPendingFile()
         appendParagraph(pending, to: &blocks)
         return blocks
+    }
+
+    private static func describeFile(_ file: MessageMedia, linkLabel: String) -> MessageMedia {
+        if let filename = file.filename?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !filename.isEmpty {
+            return file
+        }
+        let label = linkLabel.trimmingCharacters(in: .whitespacesAndNewlines)
+        return MessageMedia(
+            url: file.url,
+            kind: .file,
+            mimeType: file.mimeType,
+            pixelSize: file.pixelSize,
+            posterURL: file.posterURL,
+            alt: file.alt,
+            sha256: file.sha256,
+            filename: label.isEmpty ? nil : label,
+            byteCount: file.byteCount
+        )
     }
 
     private static func appendParagraph(_ text: AttributedString, to blocks: inout [RichBlock]) {
@@ -188,7 +246,10 @@ enum RichTextMedia {
             mimeType: entry.mimeType,
             pixelSize: entry.pixelSize,
             posterURL: entry.posterURL,
-            alt: alt
+            alt: alt,
+            sha256: entry.sha256,
+            filename: entry.filename,
+            byteCount: entry.byteCount
         )
     }
 

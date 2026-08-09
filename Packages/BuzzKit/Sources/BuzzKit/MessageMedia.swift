@@ -2,14 +2,13 @@ import Foundation
 
 /// What a piece of message media *is*, as far as anything that draws it is concerned.
 ///
-/// The case exists before the renderer for it does. Video is carried through the whole
-/// pipeline — parsed, classified, stored on the row — and simply not drawn yet, so
-/// adding it later is a branch in one view rather than a change to the model, the
-/// projection, and every test that reads them. A URL this cannot classify is not
-/// media: it stays a link in the text, which is what it already was.
+/// Video is carried through the whole pipeline even though it is not drawn yet. A generic
+/// file is licensed only by an `imeta` tag; URL-only classification deliberately remains
+/// `nil` so an ordinary link does not become an attachment or lose its link preview.
 public enum MessageMediaKind: String, Sendable, Hashable, Codable {
     case image
     case video
+    case file
 
     /// What a URL is, as far as anything that draws it is concerned, or `nil` when
     /// nothing here can say.
@@ -79,6 +78,10 @@ public struct MessageMedia: Sendable, Hashable, Codable, Identifiable {
     /// would work on this relay and break on any deployment that serves blobs under a
     /// different shape; the tag states it outright.
     public let sha256: String?
+    /// The sender-visible name of a generic file, from `imeta`'s `filename` field.
+    public let filename: String?
+    /// The attachment's declared byte count, from `imeta`'s `size` field.
+    public let byteCount: Int?
 
     public var id: String { url }
 
@@ -98,7 +101,9 @@ public struct MessageMedia: Sendable, Hashable, Codable, Identifiable {
         pixelSize: CGSize? = nil,
         posterURL: String? = nil,
         alt: String? = nil,
-        sha256: String? = nil
+        sha256: String? = nil,
+        filename: String? = nil,
+        byteCount: Int? = nil
     ) {
         self.url = url
         self.kind = kind
@@ -107,6 +112,8 @@ public struct MessageMedia: Sendable, Hashable, Codable, Identifiable {
         self.posterURL = posterURL
         self.alt = alt
         self.sha256 = sha256
+        self.filename = filename
+        self.byteCount = byteCount
     }
 }
 
@@ -119,9 +126,9 @@ public extension MessageMedia {
     /// (NIP-92), so each entry is split on its *first* space only — a value may contain
     /// spaces, and `alt` routinely does.
     ///
-    /// A tag with no `url`, or one this cannot classify, is dropped rather than carried
-    /// as an unknown: the URL is still in the message text, where it renders as a link.
-    /// Dropping it here means "not media", not "lost".
+    /// A tag with no `url` is dropped. A URL whose path and MIME do not identify a picture
+    /// or video is a generic file because the event's `imeta` tag explicitly describes it
+    /// as an attachment; the same URL without that tag remains an ordinary link.
     static func parse(tags: [[String]]) -> [MessageMedia] {
         var seen = Set<String>()
         var media: [MessageMedia] = []
@@ -138,7 +145,7 @@ public extension MessageMedia {
             }
 
             guard let url = fields["url"], !url.isEmpty, !seen.contains(url) else { continue }
-            guard let kind = MessageMediaKind(url: url, mimeType: fields["m"]) else { continue }
+            let kind = MessageMediaKind(url: url, mimeType: fields["m"]) ?? .file
             seen.insert(url)
 
             media.append(
@@ -149,7 +156,9 @@ public extension MessageMedia {
                     pixelSize: pixelSize(fields["dim"]),
                     posterURL: fields["image"] ?? fields["thumb"],
                     alt: fields["alt"],
-                    sha256: fields["x"]
+                    sha256: fields["x"],
+                    filename: fields["filename"],
+                    byteCount: byteCount(fields["size"])
                 )
             )
         }
@@ -164,5 +173,10 @@ public extension MessageMedia {
               width.isFinite, height.isFinite
         else { return nil }
         return CGSize(width: width, height: height)
+    }
+
+    private static func byteCount(_ size: String?) -> Int? {
+        guard let size, let value = Int(size), value >= 0 else { return nil }
+        return value
     }
 }
