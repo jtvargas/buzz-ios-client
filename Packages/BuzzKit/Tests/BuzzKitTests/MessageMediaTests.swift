@@ -68,6 +68,8 @@ struct MessageMediaTests {
         ("image/png", MessageMediaKind.image),
         ("image/gif", .image),
         ("video/mp4", .video),
+        ("application/octet-stream", .file),
+        ("application/pdf", .file),
     ])
     func mimeDecides(type: String, expected: MessageMediaKind) {
         let media = MessageMedia.parse(tags: [imeta("url https://example.com/file", "m \(type)")])
@@ -89,17 +91,17 @@ struct MessageMediaTests {
         #expect(media.first?.kind == .image)
     }
 
-    @Test("a declared video this app cannot play is not carried as a video")
-    func unplayableVideoIsDropped() {
+    @Test("a declared video this app cannot play is carried as a generic file")
+    func unplayableVideoBecomesAFile() {
         // The extension says mp4 and the author says quicktime. The author wins: this
         // is the one place a fallback to the path would be second-guessing the tag.
         let media = MessageMedia.parse(tags: [
             imeta("url https://example.com/a.mp4", "m video/quicktime"),
         ])
-        #expect(media.isEmpty)
+        #expect(media.first?.kind == .file)
     }
 
-    // MARK: - What is refused
+    // MARK: - Validation
 
     @Test("a tag with no usable URL is dropped", arguments: [
         ["imeta"],
@@ -110,10 +112,36 @@ struct MessageMediaTests {
         #expect(MessageMedia.parse(tags: [tag]).isEmpty)
     }
 
-    @Test("a URL of no recognisable kind stays a link rather than becoming media")
+    @Test("imeta licenses an unclassifiable URL as a file without changing URL-only classification")
     func unclassifiable() {
-        #expect(MessageMedia.parse(tags: [imeta("url https://example.com/a.pdf")]).isEmpty)
-        #expect(MessageMedia.parse(tags: [imeta("url https://example.com/page")]).isEmpty)
+        let url = "https://example.com/a.bin"
+        #expect(MessageMediaKind(url: url) == nil)
+        #expect(MessageMedia.parse(tags: [imeta("url \(url)")]).first?.kind == .file)
+    }
+
+    @Test("a generic file carries its sender-visible name and nonnegative byte count")
+    func fileMetadata() throws {
+        let media = MessageMedia.parse(tags: [
+            imeta(
+                "url https://example.com/a.bin",
+                "m application/octet-stream",
+                "size 328",
+                "filename addresses.csv"
+            ),
+        ])
+
+        let file = try #require(media.first)
+        #expect(file.kind == .file)
+        #expect(file.filename == "addresses.csv")
+        #expect(file.byteCount == 328)
+    }
+
+    @Test("an invalid file size is absent")
+    func invalidFileSize() {
+        let media = MessageMedia.parse(tags: [
+            imeta("url https://example.com/a.pdf", "m application/pdf", "size -1"),
+        ])
+        #expect(media.first?.byteCount == nil)
     }
 
     @Test("tags that are not imeta are ignored")

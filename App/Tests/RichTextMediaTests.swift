@@ -3,6 +3,10 @@ import Foundation
 @testable import Hive
 import Testing
 
+// All attachment-placement invariants stay in one suite so changes to the lift are
+// reviewed against pictures, videos, and files together.
+// swiftlint:disable file_length
+
 /// Where a message's pictures end up, what describes them, and the one thing the memo
 /// must never do with them.
 ///
@@ -11,6 +15,7 @@ import Testing
 /// names. Anything that reads a URL out of an `imeta` tag and appends it to the message
 /// renders a document nobody published, and these are what would catch it.
 @Suite("Rich text media")
+// swiftlint:disable:next type_body_length
 struct RichTextMediaTests {
     private static let picture = "https://relay.example/media/abc.png"
     private static let second = "https://relay.example/media/def.jpg"
@@ -19,9 +24,18 @@ struct RichTextMediaTests {
         _ url: String = RichTextMediaTests.picture,
         kind: MessageMediaKind = .image,
         pixelSize: CGSize? = nil,
-        alt: String? = nil
+        alt: String? = nil,
+        filename: String? = nil,
+        byteCount: Int? = nil
     ) -> MessageMedia {
-        MessageMedia(url: url, kind: kind, pixelSize: pixelSize, alt: alt)
+        MessageMedia(
+            url: url,
+            kind: kind,
+            pixelSize: pixelSize,
+            alt: alt,
+            filename: filename,
+            byteCount: byteCount
+        )
     }
 
     private func blocks(_ text: String, media: [MessageMedia] = []) -> [RichBlock] {
@@ -38,6 +52,11 @@ struct RichTextMediaTests {
     private func attachedGroup(_ block: RichBlock?) -> [MessageMedia]? {
         guard case let .media(media) = block else { return nil }
         return media
+    }
+
+    private func attachedFile(_ block: RichBlock?) -> MessageMedia? {
+        guard case let .file(file) = block else { return nil }
+        return file
     }
 
     // MARK: - The text places it
@@ -170,6 +189,52 @@ struct RichTextMediaTests {
         #expect(attached(parsed[0])?.url == Self.picture)
     }
 
+    // MARK: - Explicit file links
+
+    @Test("an explicit file link becomes one file block before autolinking")
+    func explicitFileLinkIsLifted() {
+        let url = "https://relay.example/media/a370.bin"
+        let parsed = blocks(
+            "[addresses.csv](\(url))",
+            media: [media(url, kind: .file, filename: "addresses.csv", byteCount: 328)]
+        )
+
+        #expect(parsed.count == 1)
+        #expect(attachedFile(parsed.first)?.url == url)
+        #expect(attachedFile(parsed.first)?.filename == "addresses.csv")
+        #expect(attachedFile(parsed.first)?.byteCount == 328)
+        #expect(RichTextProbe.firstLink(parsed) == nil)
+    }
+
+    @Test("a file link mid-sentence splits the paragraph around the card")
+    func fileLinkMidSentence() {
+        let url = "https://relay.example/media/report.pdf"
+        let parsed = blocks(
+            "read [report.pdf](\(url)) today",
+            media: [media(url, kind: .file, filename: "report.pdf")]
+        )
+
+        #expect(parsed.count == 3)
+        #expect(String(RichTextProbe.inline(of: parsed[0]).characters) == "read")
+        #expect(attachedFile(parsed[1])?.filename == "report.pdf")
+        #expect(String(RichTextProbe.inline(of: parsed[2]).characters) == "today")
+    }
+
+    @Test("adjacent files remain separate cards rather than joining a picture mosaic")
+    func filesDoNotFold() {
+        let first = "https://relay.example/media/first.bin"
+        let second = "https://relay.example/media/second.bin"
+        let parsed = blocks(
+            "[first.csv](\(first))\n[second.pdf](\(second))",
+            media: [
+                media(first, kind: .file, filename: "first.csv"),
+                media(second, kind: .file, filename: "second.pdf"),
+            ]
+        )
+
+        #expect(parsed.compactMap { attachedFile($0)?.filename } == ["first.csv", "second.pdf"])
+    }
+
     // MARK: - imeta describes
 
     @Test("the matching imeta entry supplies the size the layout reserves")
@@ -276,6 +341,17 @@ struct RichTextMediaTests {
         #expect(RichTextSpacing.gap(after: picture, before: picture) == RichTextSpacing.aroundBoxed)
     }
 
+    @Test("a file card takes framed-block spacing and contributes its filename to snippets")
+    func fileSpacingAndSnippet() {
+        let text = RichBlock.paragraph(AttributedString("words"))
+        let file = media(kind: .file, filename: "addresses.csv")
+        let block = RichBlock.file(file)
+
+        #expect(RichTextSpacing.gap(after: text, before: block) == RichTextSpacing.aroundBoxed)
+        #expect(RichTextSpacing.gap(after: block, before: text) == RichTextSpacing.aroundBoxed)
+        #expect(String(RichMessage(blocks: [block]).flattenedInline().characters) == "addresses.csv")
+    }
+
     @Test("a picture-only message previews as what it is rather than as nothing")
     func snippetNamesTheAttachment() {
         let message = RichMessage.make(
@@ -355,3 +431,5 @@ struct RichTextMediaTests {
         #expect(first == second)
     }
 }
+
+// swiftlint:enable file_length
