@@ -246,6 +246,61 @@ struct MediaUploadTests {
         #expect(BlobDescriptor.predictedTypeAndExtension(for: .heic) == nil)
     }
 
+    /// The defect that shipped: prediction was image-only, so a file could not be
+    /// staged and every send carrying one failed with "couldn't save those pictures".
+    ///
+    /// CSV is the case that found it and the sharpest one to pin — it has **no magic
+    /// signature at all**, so neither this device nor the relay can name it from its
+    /// bytes, and any attempt to predict an extension here would be a guess.
+    @Test("a file with no magic signature is predicted at its bare hash")
+    func predictsFileDescriptorAtBareHash() throws {
+        let csv = Data("name,qty\nwidget,3\n".utf8)
+        let descriptor = try #require(BlobDescriptor.predicted(
+            data: csv,
+            baseURL: #require(URL(string: "https://tenant.example:8443/socket?old=1")),
+            filename: "stock.csv",
+            mimeType: "text/csv"
+        ))
+        let digest = SHA256.hash(data: csv).map { String(format: "%02x", $0) }.joined()
+
+        // No extension: the relay resolves it from its own sidecar, so this cannot
+        // disagree with what it stored.
+        #expect(descriptor.url == "https://tenant.example:8443/media/\(digest)")
+        #expect(descriptor.sha256 == digest)
+        #expect(descriptor.type == "text/csv")
+        #expect(descriptor.filename == "stock.csv")
+        // A file has none of these, and sending them empty would put meaningless
+        // entries in the message's `imeta` tag.
+        #expect(descriptor.dim == nil)
+        #expect(descriptor.blurhash == nil)
+        #expect(descriptor.thumb == nil)
+    }
+
+    @Test("a file with no declared type is predicted as opaque bytes")
+    func predictsUntypedFile() throws {
+        let bytes = Data([0x00, 0x01, 0x02, 0x03])
+        let descriptor = try #require(BlobDescriptor.predicted(
+            data: bytes,
+            baseURL: #require(URL(string: "https://tenant.example/")),
+            filename: "blob"
+        ))
+        #expect(descriptor.type == "application/octet-stream")
+    }
+
+    /// The message body has to route a file to the link form rather than the picture
+    /// form, which is what makes the declared type above matter at all.
+    @Test("a predicted file renders as a named link, not a picture")
+    func fileRendersAsLink() throws {
+        let csv = Data("a,b\n1,2\n".utf8)
+        let descriptor = try #require(BlobDescriptor.predicted(
+            data: csv,
+            baseURL: #require(URL(string: "https://tenant.example/")),
+            filename: "stock.csv",
+            mimeType: "text/csv"
+        ))
+        #expect(descriptor.markdownReference() == "[stock.csv](\(descriptor.url))")
+    }
+
     @Test("a blob with nothing optional produces the four required entries only")
     func imetaOmitsAbsentFields() {
         let bare = BlobDescriptor(

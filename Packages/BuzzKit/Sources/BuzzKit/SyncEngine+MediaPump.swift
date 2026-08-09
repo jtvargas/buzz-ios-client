@@ -26,8 +26,12 @@ public extension SyncEngine {
                 guard let descriptor = BlobDescriptor.predicted(
                     data: payload.data,
                     baseURL: mediaBaseURL,
-                    filename: payload.filename
+                    filename: payload.filename,
+                    mimeType: payload.mimeType
                 ) else { throw OutboxError.mediaStagingFailed }
+                // Empty for a file, whose predicted URL is a bare hash by design. This
+                // is a local staging filename and nothing downstream reads it as a
+                // type — the upload sends `mimeType` from the row beside it.
                 let key = StagedMediaKey(
                     sha256: descriptor.sha256,
                     fileExtension: URL(string: descriptor.url)?.pathExtension ?? ""

@@ -47,7 +47,7 @@ extension ChannelTimelineModel {
                         mentioning: mentionPubkeys,
                         sender: selfPubkey
                     ),
-                    media: media.map { OutboundMediaPayload(data: $0.data, filename: $0.filename) }
+                    media: media.map { OutboundMediaPayload(data: $0.data, filename: $0.filename, mimeType: $0.mimeType) }
                 )
                 // The message has an id now, so the trip that started at the tap can finish
                 // on the message itself rather than on whatever was newest when it began.

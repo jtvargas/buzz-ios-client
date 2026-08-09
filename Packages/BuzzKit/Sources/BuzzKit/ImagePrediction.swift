@@ -141,24 +141,60 @@ enum ImagePrediction {
 }
 
 public extension BlobDescriptor {
-    /// The descriptor the relay is expected to return for these exact image bytes.
+    /// The descriptor the relay is expected to return for these exact bytes.
     ///
-    /// The four format-to-extension cases mirror `buzz-media`'s `mime_to_ext`.
-    /// The URL is rooted at the relay origin because the server publishes media
-    /// at `{scheme}://{tenant_host}/media`, independent of its upload fallback.
+    /// # Why a prediction exists at all
+    ///
+    /// The message is signed and shown *before* its blobs have been uploaded, so its
+    /// content has to name a URL that does not exist yet. That is safe because the
+    /// relay stores what it is given byte-for-byte and addresses it by SHA-256 — the
+    /// hash is knowable here, so the URL is too.
+    ///
+    /// # Pictures and files predict differently, and the difference is the extension
+    ///
+    /// For a picture the format is *in the bytes*, so the extension the relay will use
+    /// can be read straight off them; the four cases mirror `buzz-media`'s `mime_to_ext`.
+    ///
+    /// For a file it cannot. The relay decides a generic file's extension by sniffing
+    /// (`validation.rs:183-206`), and a CSV — the case that found this — has no magic
+    /// signature at all, so it is stored as `application/octet-stream` under `.bin`.
+    /// Reproducing that here would mean carrying a copy of the relay's sniffer and
+    /// keeping the two in step for ever, and the failure mode when they drift is a
+    /// message pointing at a URL that never resolves.
+    ///
+    /// So a file does not predict an extension: **the relay serves a blob by bare
+    /// hash** — `GET /media/<sha256>`, extension resolved from its own sidecar
+    /// (`api/media.rs:588-594`) — and that is the URL a file gets. Nothing to keep in
+    /// step, and nothing to guess.
+    ///
+    /// The URL is rooted at the relay origin because the server publishes media at
+    /// `{scheme}://{tenant_host}/media`, independent of its upload fallback.
+    ///
+    /// - Parameter mimeType: what the composer decided a *file's* bytes are. Ignored
+    ///   for a picture, whose bytes say so themselves.
     static func predicted(
         data: Data,
         baseURL: URL,
-        filename: String? = nil
+        filename: String? = nil,
+        mimeType: String? = nil
     ) -> BlobDescriptor? {
-        guard let format = ImageByteFormat.detect(data),
-              let mapping = predictedTypeAndExtension(for: format),
-              let dimensions = ImagePrediction.dimensions(of: data),
-              let blurhash = ImagePrediction.blurHash(of: data),
-              var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false),
+        guard var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false),
               components.scheme != nil,
               components.host != nil
         else { return nil }
+
+        guard let format = ImageByteFormat.detect(data),
+              let mapping = predictedTypeAndExtension(for: format),
+              let dimensions = ImagePrediction.dimensions(of: data),
+              let blurhash = ImagePrediction.blurHash(of: data)
+        else {
+            return predictedFile(
+                data: data,
+                components: components,
+                filename: filename,
+                mimeType: mimeType
+            )
+        }
 
         let digest = MediaUploadClient.sha256Hex(data)
         components.user = nil
@@ -179,6 +215,46 @@ public extension BlobDescriptor {
             dim: dimensions,
             blurhash: blurhash,
             thumb: thumb,
+            filename: filename
+        )
+    }
+
+    /// The descriptor for bytes that are not a picture — see ``predicted(data:baseURL:filename:mimeType:)``.
+    ///
+    /// No `dim`, no `blurhash`, no `thumb`: a file has none of them, and the relay
+    /// writes an empty sidecar for exactly those fields on this route
+    /// (`upload.rs:264-275`). Sending them empty rather than absent would put
+    /// meaningless `dim `/`blurhash ` entries in the message's `imeta` tag.
+    private static func predictedFile(
+        data: Data,
+        components: URLComponents,
+        filename: String?,
+        mimeType: String?
+    ) -> BlobDescriptor? {
+        var components = components
+        let digest = MediaUploadClient.sha256Hex(data)
+        components.user = nil
+        components.password = nil
+        // Bare hash, deliberately — the relay resolves the extension from its sidecar,
+        // so this cannot disagree with what it stored.
+        components.path = "/media/\(digest)"
+        components.query = nil
+        components.fragment = nil
+        guard let url = components.url?.absoluteString else { return nil }
+
+        return BlobDescriptor(
+            url: url,
+            sha256: digest,
+            size: data.count,
+            // The relay will store what it sniffs, which for an unsignatured file is
+            // `application/octet-stream`. What is claimed here only has to be honest
+            // enough for ``markdownReference()`` to route it away from the picture
+            // case, which any non-`image/` value does.
+            type: mimeType ?? "application/octet-stream",
+            uploaded: 0,
+            dim: nil,
+            blurhash: nil,
+            thumb: nil,
             filename: filename
         )
     }

@@ -22,10 +22,21 @@ public struct OutboxMedia: Sendable, Equatable {
 public struct OutboundMediaPayload: Sendable, Equatable {
     public let data: Data
     public let filename: String?
+    /// What the composer decided these bytes are, for a payload that is not a picture.
+    ///
+    /// Carried rather than re-derived, because for a file it *cannot* be derived: a
+    /// CSV and a plain text file have no magic signature at all, and the only thing
+    /// that tells one from the other is the extension the author picked it by.
+    ///
+    /// `nil` for pictures, and that is not laziness — picture bytes are
+    /// self-describing, so the prediction reads the format straight out of them and a
+    /// declared type could only disagree with what is actually there.
+    public let mimeType: String?
 
-    public init(data: Data, filename: String? = nil) {
+    public init(data: Data, filename: String? = nil, mimeType: String? = nil) {
         self.data = data
         self.filename = filename
+        self.mimeType = mimeType
     }
 }
 
