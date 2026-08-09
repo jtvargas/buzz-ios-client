@@ -8,7 +8,9 @@ struct FileAttachmentCard: View {
     let file: MessageMedia
 
     @State private var isLoading = false
-    @State private var preview: Preview?
+    /// The downloaded file, once it is on disk. Non-`nil` is what raises the preview, and
+    /// Quick Look clears it again when it closes.
+    @State private var previewURL: URL?
     @State private var showsFailure = false
 
     var body: some View {
@@ -61,9 +63,12 @@ struct FileAttachmentCard: View {
         .accessibilityActions {
             Button("Preview file", action: open)
         }
-        .sheet(item: $preview) { preview in
-            FileQuickLookPreview(url: preview.url)
-                .ignoresSafeArea()
+        // Deliberately not a `.sheet`. Quick Look draws its close, search and share controls
+        // only when it is *presented*; a sheet embeds it as a child, where it decides it is
+        // not modal and renders the document bare. See ``FileQuickLookPresenter``.
+        .background {
+            FileQuickLookPresenter(url: $previewURL)
+                .allowsHitTesting(false)
         }
         .alert("Couldn't Open File", isPresented: $showsFailure) {
             Button("OK", role: .cancel) {}
@@ -90,11 +95,6 @@ extension FileAttachmentCard {
         return "\(number) \(units[unit])"
     }
 
-    private struct Preview: Identifiable {
-        let url: URL
-        var id: URL { url }
-    }
-
     private var filename: String {
         let name = file.filename?.trimmingCharacters(in: .whitespacesAndNewlines)
         return name.flatMap { $0.isEmpty ? nil : $0 } ?? "File"
@@ -118,7 +118,7 @@ extension FileAttachmentCard {
                     authorization: environment?.mediaReadAuthorizer
                 )
                 guard !Task.isCancelled else { return }
-                preview = Preview(url: url)
+                previewURL = url
             } catch {
                 guard !Task.isCancelled else { return }
                 showsFailure = true
