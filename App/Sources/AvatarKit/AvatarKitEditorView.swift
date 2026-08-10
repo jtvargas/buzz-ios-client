@@ -66,11 +66,6 @@ struct AvatarKitEditorView: View {
         // on its way to the relay is of the combination that was on screen when Done was
         // pressed, and a shuffle landing mid-flight would save a face nobody chose.
         .disabled(isPreparing)
-        // The tiles this screen drew are worth tens of megabytes and are worth nothing to
-        // anyone else — every other surface draws a *finished* avatar, never a part. Handing
-        // them back on the way out is why the cache is an `NSCache` and not a dictionary;
-        // ``AvatarKitThumbnails/prewarm(_:)`` is what redraws them if the reader returns.
-        .onDisappear { AvatarKitThumbnails.removeAll() }
     }
 
     // MARK: - The layer board
