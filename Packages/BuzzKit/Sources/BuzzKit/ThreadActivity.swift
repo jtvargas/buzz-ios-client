@@ -105,6 +105,13 @@ public struct ThreadActivity: Sendable, Hashable, Identifiable {
 public struct UnreadThread: Sendable, Hashable, Identifiable {
     /// The thread's root event id.
     public let rootID: String
+    /// The channel the root lives in — the **root's** own `h`, the same route every other
+    /// read here takes to a thread's channel, because `thread.channel_id` is nullable.
+    ///
+    /// Carried so a surface can ask which of these threads belong to a channel the reader
+    /// has just had open. That is the whole reason it exists: the count itself stays
+    /// workspace-wide, and nothing else about this type is channel-scoped.
+    public let channelID: String
     /// Replies newer than the channel's read frontier, written by somebody else.
     public let newReplyCount: Int
     /// The newest surviving reply's `created_at`, the reader's own included — what this list
@@ -127,8 +134,15 @@ public struct UnreadThread: Sendable, Hashable, Identifiable {
 
     public var id: String { rootID }
 
-    public init(rootID: String, newReplyCount: Int, latestReplyAt: Int64, latestReplyByOthersAt: Int64) {
+    public init(
+        rootID: String,
+        channelID: String,
+        newReplyCount: Int,
+        latestReplyAt: Int64,
+        latestReplyByOthersAt: Int64
+    ) {
         self.rootID = rootID
+        self.channelID = channelID
         self.newReplyCount = newReplyCount
         self.latestReplyAt = latestReplyAt
         self.latestReplyByOthersAt = latestReplyByOthersAt

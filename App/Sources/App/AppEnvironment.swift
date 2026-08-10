@@ -66,6 +66,27 @@ final class AppEnvironment {
     /// The authority behind the currently mounted channel list. On retry this
     /// moves through `.checking` without unmounting the workspace.
     private(set) var channelDirectoryStatus: ChannelDirectoryStatus = .checking
+    /// Whether the sidebar may say the directory is stale
+    /// (``ChannelDirectoryFallbackBanner``).
+    ///
+    /// Deliberately *not* `channelDirectoryStatus == .cachedFallback`, which is the fact and
+    /// not the sentence to say about it. Coming back to the foreground asks for a directory
+    /// refresh in the same turn it resumes the socket (``SyncEngine/enterForeground()``), so
+    /// a phone whose radio has not woken yet fails that first fetch in a few hundred
+    /// milliseconds — and the socket's own `.ready`, moments later, starts the fetch that
+    /// succeeds. Drawn off the raw status, the banner announced a failure the app was already
+    /// in the middle of repairing, on every single return to the app. So a fallback verdict
+    /// has ``fallbackBannerGrace`` to be taken back by an answer before it reaches the screen.
+    ///
+    /// Only an authoritative answer lowers it, matching the rule one layer over
+    /// (``ChannelListModel/adopt(_:snapshot:)``): the engine cycles back through `.checking`
+    /// on every retry, and a reader watching Retry blink out and back learns nothing from it.
+    private(set) var showsDirectoryFallbackBanner = false
+    /// How long a failed refresh has to be taken back before it is worth saying. Long enough
+    /// to cover the resume-then-answer sequence above, short enough that a reader who really
+    /// is offline is not left wondering — the sidebar's own rows are already on screen
+    /// throughout, so nothing is being withheld but the sentence.
+    static let fallbackBannerGrace: Duration = .seconds(3)
 
     /// Every community on this device, and which one is being read.
     private(set) var communities: CommunityDirectory
@@ -227,6 +248,8 @@ final class AppEnvironment {
 
     var engineStateTask: Task<Void, Never>?
     var directoryStatusTask: Task<Void, Never>?
+    /// The armed grace above, or `nil` when none is waiting.
+    private var fallbackBannerTask: Task<Void, Never>?
     /// The last community transition handed to ``serialisingTransitions(_:)``, which the
     /// next one waits on. `nil` until the first one runs.
     ///
@@ -464,6 +487,8 @@ final class AppEnvironment {
         engineStateTask = nil
         directoryStatusTask?.cancel()
         directoryStatusTask = nil
+        fallbackBannerTask?.cancel()
+        fallbackBannerTask = nil
         // Let a start in flight finish rather than interleaving with it. `SyncEngine.start`
         // suspends on work that cannot be cancelled, so a `stop()` landing mid-start returns
         // first and then start *resumes*, re-arming the observers, the presence sweep and
@@ -501,6 +526,7 @@ final class AppEnvironment {
         engineState = .stopped
         hasConnectedBefore = false
         channelDirectoryStatus = .checking
+        showsDirectoryFallbackBanner = false
     }
 
     /// Applies the active community's per-community Siri preference immediately.
@@ -558,7 +584,7 @@ final class AppEnvironment {
         directoryStatusTask = Task { [weak self] in
             let statuses = await engine.channelDirectoryStatuses()
             for await status in statuses {
-                self?.channelDirectoryStatus = status
+                self?.adoptDirectoryStatus(status)
             }
         }
     }
@@ -569,5 +595,40 @@ final class AppEnvironment {
         /// gate's path, where the alternative is presenting an empty workspace that will
         /// say "connecting" until the reader gives up.
         case relayMembershipRequired
+    }
+}
+
+extension AppEnvironment {
+    /// Records a directory verdict, and decides whether it is one to say out loud yet — see
+    /// ``showsDirectoryFallbackBanner``.
+    ///
+    /// In an extension so the grace does not push the class body over SwiftLint's
+    /// `type_body_length`; it is the observer's other half and belongs beside it.
+    func adoptDirectoryStatus(_ status: ChannelDirectoryStatus) {
+        channelDirectoryStatus = status
+        switch status {
+        case .authoritative:
+            fallbackBannerTask?.cancel()
+            fallbackBannerTask = nil
+            showsDirectoryFallbackBanner = false
+        case .cachedFallback:
+            // At most one grace per outage. Re-arming it on each failed retry would let a
+            // relay that fails faster than the grace hold the banner off for ever.
+            guard !showsDirectoryFallbackBanner, fallbackBannerTask == nil else { return }
+            fallbackBannerTask = Task { [weak self, grace = Self.fallbackBannerGrace] in
+                try? await Task.sleep(for: grace)
+                guard !Task.isCancelled else { return }
+                self?.fallbackBannerTask = nil
+                // Re-read rather than trusted: the cancel above covers an answer arriving,
+                // and this covers a teardown that took the session out from under it.
+                guard self?.channelDirectoryStatus == .cachedFallback else { return }
+                self?.showsDirectoryFallbackBanner = true
+            }
+        case .checking:
+            // Neither arms nor disarms. A retry is not news, and a banner that blinks out on
+            // every one of them teaches the reader nothing — the same reason
+            // ``ChannelListModel/adopt(_:snapshot:)`` keeps its surface across both verdicts.
+            break
+        }
     }
 }

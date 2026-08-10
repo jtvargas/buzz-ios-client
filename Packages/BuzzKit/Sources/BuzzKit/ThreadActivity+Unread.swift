@@ -32,6 +32,7 @@ extension BuzzEventStore {
         ]).map { row in
             UnreadThread(
                 rootID: row["root_id"],
+                channelID: row["channel_id"],
                 newReplyCount: row["new_count"] ?? 0,
                 latestReplyAt: row["latest_reply_at"] ?? 0,
                 // Unreachable: `HAVING new_count > 0` guarantees a reply by somebody else,
@@ -75,6 +76,10 @@ extension BuzzEventStore {
         \(threadRepliesForCandidatesCTE),
         \(threadParticipantRootsCTE)
         SELECT r.root_id           AS root_id,
+               -- The root's own scope, not `thread.channel_id`, which is nullable. Safe in
+               -- the `GROUP BY r.root_id` because a root is one event with one `h`, and the
+               -- `WHERE` below has already refused a NULL one.
+               root2.h             AS channel_id,
                MAX(r.created_at)   AS latest_reply_at,
                MAX(CASE
                      WHEN :selfPubkey IS NULL OR r.pubkey <> :selfPubkey
