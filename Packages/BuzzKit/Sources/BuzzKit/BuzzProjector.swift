@@ -99,8 +99,8 @@ struct BuzzProjector: EventProjecting {
             sql: """
             INSERT INTO channel
                 (id, name, about, topic, purpose, picture, is_private, is_archived,
-                 channel_type, source_event_id, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 channel_type, ttl_seconds, ttl_deadline, source_event_id, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 name = excluded.name,
                 about = excluded.about,
@@ -110,6 +110,8 @@ struct BuzzProjector: EventProjecting {
                 is_private = excluded.is_private,
                 is_archived = excluded.is_archived,
                 channel_type = excluded.channel_type,
+                ttl_seconds = excluded.ttl_seconds,
+                ttl_deadline = excluded.ttl_deadline,
                 source_event_id = excluded.source_event_id,
                 updated_at = excluded.updated_at
             WHERE excluded.updated_at > channel.updated_at
@@ -133,10 +135,25 @@ struct BuzzProjector: EventProjecting {
                         && $0[1].lowercased() == "true"
                 },
                 channelType(of: event),
+                event.firstValue(forTag: "ttl").flatMap(Int64.init),
+                event.firstValue(forTag: "ttl_deadline")
+                    .flatMap(rfc3339)
+                    .map { Int64($0.timeIntervalSince1970) },
                 event.id,
                 event.createdAt,
             ]
         )
+    }
+
+    /// The relay writes `chrono::DateTime::to_rfc3339`, which may include fractional
+    /// seconds. `ISO8601DateFormatter` requires separate option sets for the two shapes.
+    private static func rfc3339(_ text: String) -> Date? {
+        let withFraction = ISO8601DateFormatter()
+        withFraction.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = withFraction.date(from: text) { return date }
+        let plain = ISO8601DateFormatter()
+        plain.formatOptions = [.withInternetDateTime]
+        return plain.date(from: text)
     }
 
     /// What kind of room this is, from the relay's own `["t", <type>]` on kind 39000 —
