@@ -286,11 +286,39 @@ extension BuzzEventStore {
     )
     """
 
-    /// Roots with a surviving reply authored by the current reader.
+    /// Roots the current reader is in: they wrote a surviving reply, or a surviving reply
+    /// names them.
     ///
     /// Shared by the recent-activity and unread reads so participation has one definition:
     /// the root author qualifies directly, while a reply qualifies only while it survives
     /// the same deletion rule used by ``threadRepliesCTE``.
+    ///
+    /// # Why being named counts
+    ///
+    /// Replying can be a one-word "ok"; being `@`-named is somebody asking *you*, and it is
+    /// the stronger claim on attention of the two. Without the second arm a thread you were
+    /// asked a question in — and never answered — stays out of the Threads card forever,
+    /// which is exactly the thread most worth surfacing. It shows in Activity either way, so
+    /// the old behaviour lost nothing permanently; it just put the two surfaces at odds.
+    ///
+    /// The `HAVING new_count > 0` gate on the consuming read is unchanged, so this widens
+    /// *which threads are eligible* and not what counts as unread within one.
+    ///
+    /// Both arms are plain binary `=` on the pubkey, never `COLLATE NOCASE`, which cannot use
+    /// either index — the reasoning and the measurement are written out at
+    /// ``fetchRecentMentions``. The mention arm is driven from `event_tag_lookup (name,
+    /// value)`, an exact match on both columns and therefore the selective side;
+    /// `thread.event_id` is that table's primary key, so the other half of the join is a
+    /// point lookup.
+    ///
+    /// **The assumption that buys, stated rather than implied:** an *author* pubkey is always
+    /// lowercase because ``NostrCore/Hex`` decodes strictly, but a **tag value is stored
+    /// verbatim** — ``BuzzEventStore/insertTags(_:into:)`` writes `tag[1]` as the authoring
+    /// client wrote it, and ``RecentMentionRanks/rank(of:)`` exists partly because of that.
+    /// So a client that wrote uppercase hex in a `p` tag would not be matched here. Every
+    /// pubkey comparison in BuzzKit already rests on the same assumption; the honest fix, if
+    /// one is ever needed, is normalising on the way *into* `event_tag` rather than paying
+    /// for case folding on every read.
     static let threadParticipantRootsCTE = """
     participant AS (
         SELECT DISTINCT t.root_id AS root_id
@@ -299,10 +327,26 @@ extension BuzzEventStore {
         WHERE :selfPubkey IS NOT NULL
           AND t.pubkey = :selfPubkey
           AND NOT \(deletionApplies(target: "t.event_id", author: "t.pubkey", owner: "teo.owner_pubkey"))
+        UNION
+        SELECT DISTINCT t.root_id AS root_id
+        FROM event_tag et
+        JOIN thread t ON t.event_id = et.event_id
+        LEFT JOIN event_owner teo ON teo.event_id = t.event_id
+        WHERE :selfPubkey IS NOT NULL
+          AND et.name = 'p'
+          AND et.value = :selfPubkey
+          AND NOT \(deletionApplies(target: "t.event_id", author: "t.pubkey", owner: "teo.owner_pubkey"))
     )
     """
 
     /// The shared root-or-surviving-reply participation rule.
+    ///
+    /// The last arm is the root's own mentions, and it cannot be folded into ``participant``:
+    /// a root is **not** a `thread` row — ``BuzzProjector`` writes one only for an event that
+    /// resolves to a parent *and* a root — so a CTE built by joining `thread` sees every
+    /// mention in a reply and never the one in the opening message. Asked here instead, where
+    /// the root's id is in scope. `event_tag`'s primary key is `(event_id, name, position)`,
+    /// so this is a prefix lookup rather than a scan.
     static func threadParticipationPredicate(rootID: String, rootAuthor: String) -> String {
         """
         (
@@ -312,6 +356,13 @@ extension BuzzEventStore {
                     SELECT 1
                     FROM participant
                     WHERE participant.root_id = \(rootID)
+                  )
+              OR EXISTS (
+                    SELECT 1
+                    FROM event_tag rt
+                    WHERE rt.event_id = \(rootID)
+                      AND rt.name = 'p'
+                      AND rt.value = :selfPubkey
                   )
         )
         """
