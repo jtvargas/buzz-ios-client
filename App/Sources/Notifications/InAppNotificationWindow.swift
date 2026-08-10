@@ -16,6 +16,24 @@ import UIKit
 /// Nothing about the card changes — it is the same SwiftUI view with the same gestures, and
 /// the app keeps using native sheets and native Quick Look underneath it.
 ///
+/// # Why the model calls this directly, and no view does
+///
+/// Handing the card over used to be the job of ``InAppNotificationScenePresenter/updateUIView``.
+/// That works right up until it is needed: **UIKit detaches the presenting view tree from the
+/// window once a full-screen modal has finished animating in, and SwiftUI then stops running
+/// body and `updateUIView` for that tree entirely, flushing only on dismiss.** Quick Look is
+/// presented full screen. So with a PDF open the message landed, the model raised a banner, and
+/// nothing downstream of a view update ran — no card and, because the arrival haptic was fired
+/// from a `.task(id:)`, no buzz either. It looked like two bugs and was one.
+///
+/// Measured rather than reasoned: a driven fixture (`-fixtureInAppNotificationOverPreview`)
+/// raised a banner behind a real preview and the update pass arrived fifteen seconds later, at
+/// the instant Done was tapped.
+///
+/// So this object is driven from ``InAppNotificationModel``, which is a plain observable with
+/// no view lifetime of its own. What is left for a view is the one thing a view is actually
+/// needed for: saying which scene the app is in. See ``InAppNotificationScenePresenter``.
+///
 /// # Not swallowing the app
 ///
 /// A full-screen window on top of everything is a full-screen touch target unless it is told
@@ -27,28 +45,76 @@ import UIKit
 ///    rather than on something inside it — the standard overlay-window idiom.
 /// 2. The window's `isUserInteractionEnabled` is **false whenever no banner is up**, which is
 ///    almost all of the time. That one needs nothing to be true about SwiftUI: with no card on
-///    screen the window cannot take a touch at all.
+///    screen the window cannot take a touch at all. It is derived from the card here rather
+///    than set by callers, so the two cannot drift apart.
 @MainActor
 final class InAppNotificationWindowController {
     private var window: PassthroughWindow?
+    /// Held because it is no longer the window's root — the root is a plain container, so that
+    /// the card's own bounds can answer the passthrough question. See `makeWindow(in:)`.
+    private var host: UIHostingController<InAppNotificationLayer>?
 
-    /// Puts `layer` on screen in the overlay window, creating it on the first banner.
+    /// The scene the app is in, remembered from the last time a view could see one.
     ///
-    /// - Parameter scene: the scene the app is actually in, read from a view that is in it —
-    ///   never guessed from `UIApplication.shared.connectedScenes`, which has no answer during
-    ///   a scene transition.
-    func present(_ layer: InAppNotificationLayer, in scene: UIWindowScene, isInteractive: Bool) {
-        let window = window ?? makeWindow(in: scene)
-        (window.rootViewController as? UIHostingController<InAppNotificationLayer>)?.rootView = layer
-        window.isUserInteractionEnabled = isInteractive
+    /// Remembered rather than read on demand, because the moment this window matters most is
+    /// exactly the moment no view in the app can answer: a detached tree's `window` is `nil`,
+    /// so a lookup at present-time would fail for every banner raised over a preview. It is
+    /// also why this is not read from `UIApplication.shared.connectedScenes`, which has no
+    /// answer during a scene transition and the wrong one on iPad.
+    ///
+    /// Weak because the scene owns the window rather than the other way round, and a scene
+    /// that goes away must not be held open by this.
+    private weak var scene: UIWindowScene?
+
+    /// Remembers the scene while a view can see one. Called on every update of the presenter,
+    /// so the answer is refreshed whenever the app is not covered — including after a scene
+    /// change, and at launch long before any banner exists.
+    func observe(_ scene: UIWindowScene?) {
+        guard let scene else { return }
+        self.scene = scene
+    }
+
+    /// Draws `notification`, or nothing, in the overlay window — creating it on the first card.
+    ///
+    /// A no-op before any view has reported a scene. That is only reachable before the app has
+    /// drawn a frame, which is earlier than the first message can arrive.
+    func show(
+        _ notification: InAppNotification?,
+        open: @escaping (InAppNotification) -> Void,
+        dismiss: @escaping () -> Void
+    ) {
+        guard let window = window ?? scene.map(makeWindow(in:)) else { return }
+        // Reset before drawing: with no card there is nothing to hit, and the layer reports a
+        // frame only while it has one to report.
+        window.cardFrame = .zero
+        host?.rootView = InAppNotificationLayer(
+            notification: notification,
+            open: open,
+            dismiss: dismiss,
+            reportFrame: { [weak window] frame in window?.cardFrame = frame }
+        )
+        window.isUserInteractionEnabled = notification != nil
+    }
+
+    /// Takes the window down with the view that owned it.
+    ///
+    /// Necessary rather than tidy: a visible `UIWindow` is retained by its scene, not by this
+    /// object, so letting the controller go does **not** take the window with it. Without this
+    /// a community switch or a sign-out — both of which rebuild the host — would leave the old
+    /// window on the scene and stand a second one on top of it.
+    func teardown() {
+        window?.isHidden = true
+        window?.rootViewController = nil
+        window = nil
+        host = nil
     }
 
     private func makeWindow(in scene: UIWindowScene) -> PassthroughWindow {
         let made = PassthroughWindow(windowScene: scene)
-        let host = UIHostingController(rootView: InAppNotificationLayer(notification: nil))
+        let card = UIHostingController(rootView: InAppNotificationLayer(notification: nil))
         // Clear on both, or the window paints a black sheet over the app.
-        host.view.backgroundColor = .clear
-        made.rootViewController = host
+        card.view.backgroundColor = .clear
+        made.rootViewController = card
         made.backgroundColor = .clear
         // Above alerts, which is where a notification belongs: an alert is something the
         // reader is answering, and a banner that hid behind one would be gone by the time
@@ -59,16 +125,36 @@ final class InAppNotificationWindowController {
         // from whatever the reader was typing in.
         made.isHidden = false
         window = made
+        host = card
         return made
     }
 }
 
-/// A window that only takes the touches its content actually wants.
+/// A window that only takes the touches that land on the card itself.
+///
+/// # Why the rule is a rectangle and not a view identity
+///
+/// The obvious spelling — reject the hit when it is the hosting controller's own view — cannot
+/// work here, because a full-screen `_UIHostingView` answers with *itself* for a point on the
+/// card and for empty space alike. Measured on device-class simulator: (200, 90) over the card
+/// and (200, 600) over nothing both reported `_UIHostingView<InAppNotificationLayer>`. So that
+/// rule either rejects every tap on the banner or hands the window the whole screen.
+///
+/// Sizing the hosting view to the card instead *does* make identity work, and it was tried:
+/// it also stops the card drawing over a presented Quick Look, which is the entire point of
+/// this window. Measured both ways — the card appeared over an ordinary screen and never over
+/// the preview.
+///
+/// So the geometry is carried explicitly. ``InAppNotificationLayer`` reports the card's frame
+/// as it lays out, and this window admits touches inside that rectangle and nothing else.
 private final class PassthroughWindow: UIWindow {
+    /// Where the card is, in this window's coordinates. `.zero` whenever no card is up, which
+    /// makes the empty case reject by the same rule rather than by a second one.
+    var cardFrame: CGRect = .zero
+
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
-        guard let hit = super.hitTest(point, with: event) else { return nil }
-        // The hosting controller's own view means the point missed everything drawn in it.
-        return hit === rootViewController?.view ? nil : hit
+        guard cardFrame.contains(point) else { return nil }
+        return super.hitTest(point, with: event)
     }
 }
 
@@ -79,6 +165,9 @@ struct InAppNotificationLayer: View {
     var notification: InAppNotification?
     var open: (InAppNotification) -> Void = { _ in }
     var dismiss: () -> Void = {}
+    /// Hands the card's laid-out frame to the window, which is the only thing that knows which
+    /// touches belong to the banner. See ``PassthroughWindow``.
+    var reportFrame: (CGRect) -> Void = { _ in }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -92,6 +181,15 @@ struct InAppNotificationLayer: View {
                 .frame(maxWidth: 520)
                 .padding(.horizontal, 12)
                 .safeAreaPadding(.top, 8)
+                .background {
+                    GeometryReader { proxy in
+                        // `.global` in a window-backed hierarchy is that window's own
+                        // coordinate space, which is the space `hitTest` is asked about.
+                        Color.clear.onChange(of: proxy.frame(in: .global), initial: true) { _, frame in
+                            reportFrame(frame)
+                        }
+                    }
+                }
                 .transition(transition)
             }
             Spacer(minLength: 0)
@@ -120,35 +218,65 @@ struct InAppNotificationLayer: View {
     }
 }
 
-/// Carries the current banner into the overlay window, and carries the app's scene back out.
+/// Carries the app's scene out to the overlay window, and takes that window down again.
+///
+/// Two jobs, and deliberately not a third — the card itself goes straight from the model to
+/// ``InAppNotificationWindowController``, for the reason set out there.
 ///
 /// A representable rather than a reach into `UIApplication`: this view is *in* the scene the
 /// banner belongs to, so `window?.windowScene` is the answer rather than a guess. It draws
 /// nothing and takes no touches — it exists to be somewhere in the hierarchy.
-struct InAppNotificationWindowPresenter: UIViewRepresentable {
-    let notification: InAppNotification?
-    let open: (InAppNotification) -> Void
-    let dismiss: () -> Void
+///
+/// `controller` is passed in rather than made in `makeCoordinator` because the model owns it
+/// and calls it; this view only needs to be handed the same object, so that `dismantleUIView`
+/// reaches the window that is actually up.
+///
+/// # Why the scene is read in `didMoveToWindow` and not in `updateUIView`
+///
+/// Because `updateUIView` runs exactly once here, and it is the wrong once. This view's only
+/// input is a reference that never changes, so after the first pass SwiftUI has no reason to
+/// update it again — and on that first pass the view has been made but not yet added to a
+/// window, so the scene is `nil`. Reading it there yields a controller that never learns where
+/// it is and silently draws nothing, which is the shape of the bug this file exists to fix
+/// wearing different clothes. `didMoveToWindow` is UIKit telling us the answer changed, and
+/// owes nothing to SwiftUI's update scheduling.
+struct InAppNotificationScenePresenter: UIViewRepresentable {
+    let controller: InAppNotificationWindowController
 
     func makeCoordinator() -> InAppNotificationWindowController {
-        InAppNotificationWindowController()
+        controller
     }
 
     func makeUIView(context: Context) -> UIView {
-        let view = UIView()
+        let view = SceneReportingView()
         view.isUserInteractionEnabled = false
         view.isHidden = true
+        // Captured directly rather than through `context.coordinator` inside the closure, so
+        // the view holds the controller and not the SwiftUI context.
+        let controller = context.coordinator
+        view.report = { scene in
+            MainActor.assumeIsolated { controller.observe(scene) }
+        }
         return view
     }
 
-    func updateUIView(_ uiView: UIView, context: Context) {
-        // `window` is nil for the first update, before this view is in the hierarchy. Nothing
-        // to do then: a banner cannot exist that early, and the next update has a scene.
-        guard let scene = uiView.window?.windowScene else { return }
-        context.coordinator.present(
-            InAppNotificationLayer(notification: notification, open: open, dismiss: dismiss),
-            in: scene,
-            isInteractive: notification != nil
-        )
+    func updateUIView(_: UIView, context _: Context) {}
+
+    static func dismantleUIView(_: UIView, coordinator: InAppNotificationWindowController) {
+        coordinator.teardown()
+    }
+}
+
+/// Reports the scene it lands in, every time that changes.
+///
+/// Nil when a full-screen presentation detaches the tree, which ``InAppNotificationWindowController/observe(_:)``
+/// deliberately ignores — the last real scene stays remembered, and that is what lets a banner
+/// be raised over a preview.
+private final class SceneReportingView: UIView {
+    var report: ((UIWindowScene?) -> Void)?
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        report?(window?.windowScene)
     }
 }
