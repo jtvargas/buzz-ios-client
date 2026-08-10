@@ -94,6 +94,17 @@ enum AvatarKitThumbnails {
         return drawn
     }
 
+    /// Hands back every tile drawn so far.
+    ///
+    /// Said when the editor closes and again when the app backgrounds — the two moments this
+    /// screen's tens of megabytes are certainly not being looked at. The comment above the
+    /// cache asks for exactly this and had no caller: `NSCache` gives the lot back *when the
+    /// system is short of memory*, which a suspended process never gets to act on. Reopening
+    /// the editor redraws what it had, which is what ``prewarm(_:)`` already exists to do.
+    static func removeAll() {
+        cache.removeAllObjects()
+    }
+
     /// Draws `thumbnails` in the order given, yielding between each so the run never holds a
     /// frame, and stopping the moment the task is cancelled.
     ///

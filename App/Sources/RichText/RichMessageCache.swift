@@ -103,8 +103,12 @@ enum RichMessageCache {
         return message
     }
 
-    /// Drops every cached message. For tests that assert re-resolution without
-    /// relying on key distinctness.
+    /// Drops every cached message.
+    ///
+    /// Said from ``AppCaches`` when the app backgrounds and when a session ends, and by tests
+    /// that assert re-resolution without relying on key distinctness. Rendering is a pure
+    /// function of the text and the resolver, so an emptied cache costs a re-parse and can
+    /// never cost a wrong answer.
     static func removeAll() {
         cache.removeAllObjects()
     }

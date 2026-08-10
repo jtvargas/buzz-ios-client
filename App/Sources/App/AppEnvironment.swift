@@ -400,6 +400,10 @@ final class AppEnvironment {
                 // Beside the wipe, so "a different key never sees the last one's drafts"
                 // holds in memory wherever the handover happens, not only on sign-out.
                 drafts.reset()
+                // Same argument, same handover: ``BuzzEventStore/wipe()`` is documented
+                // forensic-clean on disk, and would otherwise return with the previous
+                // key's faces and message bodies still decoded in memory.
+                AppCaches.releaseAll()
             }
             recordOwner(intendedPubkey, of: community)
         }
@@ -518,6 +522,10 @@ final class AppEnvironment {
         // Held in memory otherwise — see ``ComposerDrafts/reset()``.
         drafts?.reset()
         drafts = nil
+        // The `static` caches, which no key on ``RootView`` can reach: faces, attachment
+        // bitmaps and rendered message bodies belonging to the session being taken down.
+        // This is the list the type comment above asks new community-scoped state to join.
+        AppCaches.releaseAll()
         store = nil
         signer = nil
         selfPubkeyHex = nil

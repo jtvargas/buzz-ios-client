@@ -95,6 +95,14 @@ enum RichCodeHighlighter {
         return "\(theme == .light ? "L" : "D")\(language.utf8.count):\(language)\(code)" as NSString
     }
 
+    /// Drops every highlighted block.
+    ///
+    /// Said when the app backgrounds and when a session ends. Highlighting is a pure function
+    /// of the fence's text, so the only cost of being wrong here is doing it again.
+    static func removeAll() {
+        cache.removeAllObjects()
+    }
+
     /// A reference box, because `NSCache` holds objects and `AttributedString` is a value.
     private final class Memo: Sendable {
         let text: AttributedString
