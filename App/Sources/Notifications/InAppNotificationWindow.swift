@@ -50,8 +50,8 @@ import UIKit
 @MainActor
 final class InAppNotificationWindowController {
     private var window: PassthroughWindow?
-    /// Held because it is no longer the window's root — the root is a plain container, so that
-    /// the card's own bounds can answer the passthrough question. See `makeWindow(in:)`.
+    /// Held so the root view can be replaced directly even while the app's own presenting
+    /// hierarchy is detached beneath this window.
     private var host: UIHostingController<InAppNotificationLayer>?
 
     /// The scene the app is in, remembered from the last time a view could see one.
@@ -59,8 +59,8 @@ final class InAppNotificationWindowController {
     /// Remembered rather than read on demand, because the moment this window matters most is
     /// exactly the moment no view in the app can answer: a detached tree's `window` is `nil`,
     /// so a lookup at present-time would fail for every banner raised over a preview. It is
-    /// also why this is not read from `UIApplication.shared.connectedScenes`, which has no
-    /// answer during a scene transition and the wrong one on iPad.
+    /// also why `UIApplication.shared.connectedScenes` is only a last-chance fallback here:
+    /// it has no answer during a transition and can name the wrong scene on iPad.
     ///
     /// Weak because the scene owns the window rather than the other way round, and a scene
     /// that goes away must not be held open by this.
@@ -70,20 +70,46 @@ final class InAppNotificationWindowController {
     /// so the answer is refreshed whenever the app is not covered — including after a scene
     /// change, and at launch long before any banner exists.
     func observe(_ scene: UIWindowScene?) {
-        guard let scene else { return }
+        guard let scene else {
+            InAppNotificationDiagnostics.record(
+                "scene transition=ignored-nil remembered=\(self.scene != nil)"
+            )
+            return
+        }
+        let transition = if self.scene == nil {
+            "nil-to-scene"
+        } else if self.scene === scene {
+            "same-scene"
+        } else {
+            "scene-to-scene"
+        }
+        InAppNotificationDiagnostics.record("scene transition=\(transition)")
         self.scene = scene
     }
 
     /// Draws `notification`, or nothing, in the overlay window — creating it on the first card.
     ///
-    /// A no-op before any view has reported a scene. That is only reachable before the app has
-    /// drawn a frame, which is earlier than the first message can arrive.
+    /// The presenter remains the authoritative scene source. If that weak reference has died,
+    /// a foreground scene is recovered as a last chance; without either, the drop is recorded.
     func show(
         _ notification: InAppNotification?,
         open: @escaping (InAppNotification) -> Void,
         dismiss: @escaping () -> Void
     ) {
-        guard let window = window ?? scene.map(makeWindow(in:)) else { return }
+        if window == nil, scene == nil {
+            scene = UIApplication.shared.connectedScenes
+                .compactMap { $0 as? UIWindowScene }
+                .first { $0.activationState == .foregroundActive }
+            InAppNotificationDiagnostics.record(
+                "scene fallback=\(scene == nil ? "not-found" : "foreground-active")"
+            )
+        }
+        guard let window = window ?? scene.map(makeWindow(in:)) else {
+            InAppNotificationDiagnostics.record(
+                "show outcome=dropped-no-scene notification=\(notification?.id ?? "nil")"
+            )
+            return
+        }
         // Reset before drawing: with no card there is nothing to hit, and the layer reports a
         // frame only while it has one to report.
         window.cardFrame = .zero
@@ -140,20 +166,25 @@ final class InAppNotificationWindowController {
 /// and (200, 600) over nothing both reported `_UIHostingView<InAppNotificationLayer>`. So that
 /// rule either rejects every tap on the banner or hands the window the whole screen.
 ///
-/// Sizing the hosting view to the card instead *does* make identity work, and it was tried:
-/// it also stops the card drawing over a presented Quick Look, which is the entire point of
-/// this window. Measured both ways — the card appeared over an ordinary screen and never over
-/// the preview.
-///
 /// So the geometry is carried explicitly. ``InAppNotificationLayer`` reports the card's frame
-/// as it lays out, and this window admits touches inside that rectangle and nothing else.
+/// as it lays out, and this window admits touches inside that rectangle and nothing else. The
+/// hosting view stays full-screen so SwiftUI owns the top-edge safe-area layout; window level,
+/// not the hosting view's size, is what keeps the banner above presented content.
 private final class PassthroughWindow: UIWindow {
     /// Where the card is, in this window's coordinates. `.zero` whenever no card is up, which
     /// makes the empty case reject by the same rule rather than by a second one.
     var cardFrame: CGRect = .zero
 
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
-        guard cardFrame.contains(point) else { return nil }
+        guard cardFrame.contains(point) else {
+            InAppNotificationDiagnostics.record(
+                "hitTest outcome=passthrough point=\(point) cardFrame=\(cardFrame)"
+            )
+            return nil
+        }
+        InAppNotificationDiagnostics.record(
+            "hitTest outcome=admit point=\(point) cardFrame=\(cardFrame)"
+        )
         return super.hitTest(point, with: event)
     }
 }
@@ -179,8 +210,6 @@ struct InAppNotificationLayer: View {
                 }
                 .id(notification.id)
                 .frame(maxWidth: 520)
-                .padding(.horizontal, 12)
-                .safeAreaPadding(.top, 8)
                 .background {
                     GeometryReader { proxy in
                         // `.global` in a window-backed hierarchy is that window's own
@@ -190,6 +219,8 @@ struct InAppNotificationLayer: View {
                         }
                     }
                 }
+                .padding(.horizontal, 12)
+                .safeAreaPadding(.top, 8)
                 .transition(transition)
             }
             Spacer(minLength: 0)
