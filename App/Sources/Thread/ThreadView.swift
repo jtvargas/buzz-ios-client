@@ -226,12 +226,14 @@ struct ThreadView: View {
             )
         }
         .profileSheet(peer: $profilePeer, presence: presence)
-        // The channel's reactor list, from the same hold on a chip.
+        // The channel's reactor list, from the same hold on a chip, opening the same
+        // profile sheet a reply's avatar opens.
         .reactionReactorsSheet(
             target: $reactionReactors,
             store: store,
             presenceStore: presenceStore,
-            selfPubkey: model.selfPubkey
+            selfPubkey: model.selfPubkey,
+            onOpenProfile: { profilePeer = ProfilePeer(pubkey: $0) }
         )
         // The channel's sheet, minus "Reply in thread": this *is* the thread.
         .messageActionsSheet(

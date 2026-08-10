@@ -269,12 +269,16 @@ struct ChannelTimelineView: View {
         // The same modifier a thread uses, so the two surfaces cannot present a
         // different profile sheet for the same tap.
         .profileSheet(peer: $profilePeer, presence: presence)
-        // Likewise the reactor list, from the same hold on a chip.
+        // Likewise the reactor list, from the same hold on a chip. Tapping somebody in it
+        // hands back a pubkey once that sheet has closed, and it opens the *same* profile
+        // sheet an avatar in the timeline opens — the reader's own tap on a name and their
+        // tap on a reactor cannot show two different things.
         .reactionReactorsSheet(
             target: $reactionReactors,
             store: store,
             presenceStore: presenceStore,
-            selfPubkey: selfPubkey
+            selfPubkey: selfPubkey,
+            onOpenProfile: { profilePeer = ProfilePeer(pubkey: $0) }
         )
         // Likewise the same actions sheet, from the same long press. The channel is the
         // surface that offers "Reply in thread", because it is the one with a thread to

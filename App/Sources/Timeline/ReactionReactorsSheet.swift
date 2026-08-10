@@ -68,13 +68,19 @@ struct ReactionReactorsSheet: View {
     @State private var model: ReactionReactorsModel
     @State private var presence: PresenceModel
     @State private var selected: String
+    /// Names whoever was tapped and closes. The profile is opened by the surface that
+    /// presented this sheet, once this sheet has gone — see
+    /// ``ReactionReactorsSheetModifier``.
+    private let onSelectPerson: (String) -> Void
 
     init(
         target: ReactionReactorsTarget,
         store: BuzzEventStore,
         presenceStore: PresenceStore,
-        selfPubkey: String?
+        selfPubkey: String?,
+        onSelectPerson: @escaping (String) -> Void
     ) {
+        self.onSelectPerson = onSelectPerson
         _model = State(initialValue: ReactionReactorsModel(
             targetID: target.messageID,
             store: store,
@@ -133,7 +139,8 @@ struct ReactionReactorsSheet: View {
                         // produced it has already landed.
                         isLoading: false,
                         emptyMessage: "Nobody has reacted with this yet.",
-                        presence: presence
+                        presence: presence,
+                        onSelect: select(_:)
                     )
                     .tag(group.emoji)
                 }
@@ -146,6 +153,18 @@ struct ReactionReactorsSheet: View {
             // See ``SwiftUI/View/hiveSheetGround()``.
             .safeAreaInset(edge: .top, spacing: 0) { strip }
         }
+    }
+
+    /// Hands the tapped person to the presenting surface and closes.
+    ///
+    /// Named and *then* dismissed, rather than dismissed and then named: the owner's call
+    /// is that the profile replaces this sheet rather than stacking on it, and the
+    /// presentation that follows cannot start until this one has finished going —
+    /// starting it here would be a second modal transition running over a dismissal, which
+    /// UIKit drops. The surface picks it up in `sheet(item:onDismiss:)`.
+    private func select(_ pubkey: String) {
+        onSelectPerson(pubkey)
+        dismiss()
     }
 
     /// The message's reactions across the top, the selected one underlined — the tab bar
@@ -211,19 +230,60 @@ extension View {
     /// ``messageActionsSheet(target:actions:isReadOnly:onReplyInThread:onRemind:)`` is one:
     /// the channel and a thread open the same sheet from the same hold, and a second copy
     /// is a second place for the two to drift.
+    /// `onOpenProfile` is raised after this sheet has gone, with whoever was tapped — the
+    /// presenting surface opens its own profile sheet in this one's place.
     func reactionReactorsSheet(
         target: Binding<ReactionReactorsTarget?>,
         store: BuzzEventStore,
         presenceStore: PresenceStore,
-        selfPubkey: String?
+        selfPubkey: String?,
+        onOpenProfile: @escaping (String) -> Void
     ) -> some View {
-        sheet(item: target) { target in
+        modifier(
+            ReactionReactorsSheetModifier(
+                target: target,
+                store: store,
+                presenceStore: presenceStore,
+                selfPubkey: selfPubkey,
+                onOpenProfile: onOpenProfile
+            )
+        )
+    }
+}
+
+/// Presents the reactor list, and defers the profile it asks for until it has closed.
+///
+/// The same arrangement ``MessageActionsSheetModifier`` uses for "Reply in thread", and
+/// for the same reason: a presentation started from inside a sheet that is dismissing is
+/// two modal transitions over each other, and UIKit drops the second.
+/// `sheet(item:onDismiss:)` is the hook that says this one has actually gone — and it
+/// fires for a swipe-down as well as for a tap, which is why the request is a stored
+/// pubkey rather than a closure fired on the way out.
+private struct ReactionReactorsSheetModifier: ViewModifier {
+    @Binding var target: ReactionReactorsTarget?
+    let store: BuzzEventStore
+    let presenceStore: PresenceStore
+    let selfPubkey: String?
+    let onOpenProfile: (String) -> Void
+
+    /// Whose profile the sheet asked for, held until the sheet has gone.
+    @State private var pendingProfile: String?
+
+    func body(content: Content) -> some View {
+        content.sheet(item: $target, onDismiss: openPendingProfile) { target in
             ReactionReactorsSheet(
                 target: target,
                 store: store,
                 presenceStore: presenceStore,
-                selfPubkey: selfPubkey
+                selfPubkey: selfPubkey,
+                onSelectPerson: { pendingProfile = $0 }
             )
         }
+    }
+
+    private func openPendingProfile() {
+        guard let pubkey = pendingProfile else { return }
+        pendingProfile = nil
+        onOpenProfile(pubkey)
     }
 }

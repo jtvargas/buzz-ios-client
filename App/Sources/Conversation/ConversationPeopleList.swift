@@ -94,6 +94,13 @@ struct ConversationPeopleList: View {
     /// is per-model, and a second one started here would be a second subscription for the
     /// same answer the presenting surface already has.
     let presence: PresenceModel
+    /// What tapping somebody does, or `nil` for a list that only reads.
+    ///
+    /// Optional rather than always-on because two of this list's three call sites offer
+    /// nothing to open: the channel roster and a thread's participants are read-only
+    /// today, and a row that highlights under the finger and then does nothing reads as a
+    /// broken control. The reactor sheet passes one.
+    var onSelect: ((String) -> Void)?
 
     @Environment(\.entityNames) private var names
 
@@ -109,14 +116,7 @@ struct ConversationPeopleList: View {
                     }
                 } else {
                     ForEach(people) { person in
-                        ConversationPersonRow(
-                            pubkey: person.pubkey,
-                            name: names.name(for: person.pubkey),
-                            picture: names.picture(for: person.pubkey) ?? person.fallbackPicture,
-                            initials: names.initials(for: person.pubkey),
-                            detail: person.detail,
-                            isOnline: presence.isOnline(person.pubkey)
-                        )
+                        row(for: person)
                     }
                 }
             } header: {
@@ -125,6 +125,37 @@ struct ConversationPeopleList: View {
                 }
             }
         }
+    }
+
+    /// One person, as a control where there is somewhere to go and as plain content
+    /// where there is not.
+    ///
+    /// The branch is on a value fixed for the life of a call site, so the two forms never
+    /// swap under a finger — a row that changed identity mid-press would lose the press.
+    @ViewBuilder
+    private func row(for person: ConversationPerson) -> some View {
+        if let onSelect {
+            Button { onSelect(person.pubkey) } label: {
+                content(for: person)
+            }
+            // A full-width row in a list, so the row emphasis rather than the control's —
+            // see ``PressFeedbackButtonStyle/Emphasis``.
+            .buttonStyle(.hivePress(.row))
+            .accessibilityHint("Double tap to view profile")
+        } else {
+            content(for: person)
+        }
+    }
+
+    private func content(for person: ConversationPerson) -> some View {
+        ConversationPersonRow(
+            pubkey: person.pubkey,
+            name: names.name(for: person.pubkey),
+            picture: names.picture(for: person.pubkey) ?? person.fallbackPicture,
+            initials: names.initials(for: person.pubkey),
+            detail: person.detail,
+            isOnline: presence.isOnline(person.pubkey)
+        )
     }
 
     /// `1 person` / `12 people`. Written out rather than a bare number because it is a
