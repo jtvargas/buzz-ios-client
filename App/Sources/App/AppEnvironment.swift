@@ -193,6 +193,22 @@ final class AppEnvironment {
     /// discarding it, and switching back finds that community's history where it was left.
     let recents = RecentPlaces()
 
+    /// Which threads have been seen on this device, and how far.
+    ///
+    /// Here for exactly ``recents``' reason, and it was not always: all three tabs host a
+    /// ``ThreadView``, so all three write these marks — and each used to own a private
+    /// instance. Every instance loads `UserDefaults` once at `init` and persists the *whole*
+    /// dictionary on every write, so a mark written in one tab was invisible to the others and
+    /// the next write from a stale one dropped it. A thread read on Home came back unseen
+    /// after reading a different thread in Activity, which reads as the Threads count being
+    /// unreliable rather than as anything losing data.
+    ///
+    /// One instance is the whole fix: with a single owner there is no stale replica to write
+    /// over the newest state. It survives a community switch — the marks are keyed by thread
+    /// root and the store they persist to is device-wide, so there is nothing community-scoped
+    /// here to discard.
+    let threadReads = ThreadReadMarks()
+
     /// The active community's Siri/Spotlight index and the status Settings renders.
     let conversationEntityIndex = ConversationEntityIndex()
 

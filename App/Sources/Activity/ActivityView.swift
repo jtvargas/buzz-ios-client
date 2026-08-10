@@ -51,10 +51,6 @@ struct ActivityView: View {
     /// reason ``ChannelListView`` gives: the path has to be *readable* for
     /// ``ConversationRoute/pushed(onto:)`` to keep a conversation off its own stack.
     @State private var path: [AppRoute] = []
-    /// This device's per-thread read marks. Its own instance rather than the sidebar's:
-    /// ``ThreadReadMarks`` persists to `UserDefaults`, so both tabs read and write the same
-    /// storage and a thread read in one is read in the other on the next pass.
-    @State private var threadReads = ThreadReadMarks()
     /// Opens a direct message from a profile sheet presented inside this stack.
     @State private var router: DirectMessageRouter
 
@@ -100,7 +96,7 @@ struct ActivityView: View {
         .environment(\.entityNames, entityNames)
         .environment(\.channelNameMap, ChannelNameMap(channels: model.channels))
         .environment(\.relativeTimeTicker, ticker)
-        .environment(\.threadReadMarks, threadReads)
+        .environment(\.threadReadMarks, environment.threadReads)
         .environment(\.directMessageRouter, router)
         .environment(\.pushRoute, PushRouteAction { route in
             path = route.pushed(onto: path)
@@ -264,7 +260,7 @@ struct ActivityView: View {
         // frontier is the only honest answer for a conversation keyed by channel.
         guard !entry.isDirectMessage else { return entry.unreadCount }
         guard let rootID = entry.rootID else { return entry.unreadCount }
-        return threadReads.hasUnseen(rootID, latestReplyByOthersAt: entry.latest.createdAt)
+        return environment.threadReads.hasUnseen(rootID, latestReplyByOthersAt: entry.latest.createdAt)
             ? entry.unreadCount
             : 0
     }

@@ -43,12 +43,8 @@ struct ChannelListView: View {
     /// The reader's starred conversations, on this device. Owned here because this view
     /// both groups by it and offers the action that changes it.
     @State private var starred = StarredConversations()
-    /// How far this device has read into each thread. Owned here for the same reason the
-    /// stars are: this view draws the number the marks subtract from, and it is the one
-    /// place above both the Threads screen and the thread views that write them.
-    @State private var threadReads = ThreadReadMarks()
-    /// Every composer holding unsent text. Owned here for the reason the thread read
-    /// marks are: this view draws the count and the pushed screen draws the list.
+    /// Every composer holding unsent text. Owned here because this view draws the count and
+    /// the pushed screen draws the list.
     @State private var draftsModel: DraftsModel
     /// The active community's picture, read from disk once per icon rather than once per
     /// `body`.
@@ -292,7 +288,7 @@ struct ChannelListView: View {
         .environment(\.channelNameMap, channelNames)
         .environment(\.entityNames, names)
         .environment(\.relativeTimeTicker, ticker)
-        .environment(\.threadReadMarks, threadReads)
+        .environment(\.threadReadMarks, environment.threadReads)
         .environment(\.directMessageRouter, router)
         .environment(\.pushRoute, PushRouteAction { route in
             path = route.pushed(onto: path)
@@ -576,7 +572,7 @@ private extension ChannelListView {
     /// holding both, because they are a set of destinations rather than two rows.
     var shortcuts: some View {
         HomeShortcutCards(count: count(for:), isCalling: isCalling(_:), press: press(_:),
-                          markAllThreadsRead: { threadReads.markAllSeen(among: model.unreadThreads) })
+                          markAllThreadsRead: { environment.threadReads.markAllSeen(among: model.unreadThreads) })
             .listRowInsets(Self.cardsInsets)
             .listRowSeparator(.hidden)
             .listRowBackground(Color.clear)
@@ -709,13 +705,13 @@ private extension ChannelListView {
         guard !visited.isEmpty else { return }
         // `markAllSeen` is grow-only and silent when nothing moves, so a channel with no
         // unread threads costs one filter and no write.
-        threadReads.markAllSeen(among: model.unreadThreads.filter { visited.contains($0.channelID) })
+        environment.threadReads.markAllSeen(among: model.unreadThreads.filter { visited.contains($0.channelID) })
     }
 
     func count(for shortcut: HomeShortcut) -> Int {
         switch shortcut {
         // The store's unread threads, less the ones this device has opened or replied in.
-        case .threads: threadReads.unseenCount(among: model.unreadThreads)
+        case .threads: environment.threadReads.unseenCount(among: model.unreadThreads)
         // Reminders still waiting, live from the store.
         case .later: laterModel?.pending.count ?? 0
         // Live from the store, de-duplicated so a keystroke does not move the card.
