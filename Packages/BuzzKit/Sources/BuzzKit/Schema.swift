@@ -71,7 +71,11 @@ enum Schema {
     /// of `isAgent` permanently false. The correct value is already in the log, on every
     /// kind:39002 in it, so the rebuild recovers it without a resync. Without the bump
     /// the fix would only reach a channel whose roster happens to change again.
-    static let projectionVersion = 10
+    ///
+    /// Version 11 adds `channel.ttl_seconds` and `channel.ttl_deadline`. Both values
+    /// already live on kind-39000 tags in the log, so rebuilding the disposable channel
+    /// projection recovers them without a resync.
+    static let projectionVersion = 11
 
     /// The `meta` key under which the applied projection version is recorded.
     static let projectionVersionKey = "projection_version"
@@ -460,6 +464,12 @@ enum Schema {
             -- has to be re-derived from the log to answer tomorrow's. NULL for a channel
             -- whose metadata predates the tag, which is a *don't know* and not a `stream`.
             channel_type    TEXT,
+            -- Optional ephemeral lifetime from the relay's `ttl` and `ttl_deadline`
+            -- tags. The deadline is stored as Unix seconds so readers never need to
+            -- parse the relay's timestamp on the UI path. NULL means not provided;
+            -- it must not be collapsed to zero, which is a different value.
+            ttl_seconds     INTEGER,
+            ttl_deadline    INTEGER,
             source_event_id TEXT NOT NULL,
             updated_at      INTEGER NOT NULL
         )

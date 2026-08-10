@@ -29,6 +29,49 @@ struct ProjectionTests {
         #expect(about == ["the main room"])
     }
 
+    @Test("projects ephemeral lifetime tags as nullable integers")
+    func projectsChannelLifetime() async throws {
+        let database = TempDatabase()
+        defer { database.remove() }
+        let store = try database.open()
+        let relay = try Fixture()
+
+        _ = try await store.ingest(batch: [
+            relay.event(
+                .groupMetadata,
+                #"{"name":"Huddle"}"#,
+                tags: [
+                    ["d", "room-1"],
+                    ["ttl", "3600"],
+                    ["ttl_deadline", "2026-08-10T19:53:00.123456+00:00"],
+                ],
+                at: 1000
+            ),
+        ], phase: .backfill)
+
+        #expect(try await store.strings(
+            """
+            SELECT CAST(ttl_seconds AS TEXT) || '|' || CAST(ttl_deadline AS TEXT) AS lifetime
+              FROM channel WHERE id = 'room-1'
+            """,
+            column: "lifetime"
+        ) == ["3600|1786391580"])
+
+        _ = try await store.ingest(batch: [
+            relay.event(
+                .groupMetadata,
+                #"{"name":"Ordinary"}"#,
+                tags: [["d", "room-1"]],
+                at: 1001
+            ),
+        ], phase: .live)
+
+        #expect(try await store.strings(
+            "SELECT typeof(ttl_seconds) || '|' || typeof(ttl_deadline) AS lifetime FROM channel",
+            column: "lifetime"
+        ) == ["null|null"])
+    }
+
     @Test("a staler channel event resent after a newer one does not clobber it")
     func channelStalenessGuard() async throws {
         // A relay can resend an older addressable after a reconnect; the newer one
