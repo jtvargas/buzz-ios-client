@@ -110,14 +110,16 @@ final class InAppNotificationWindowController {
             )
             return
         }
-        // Reset before drawing: with no card there is nothing to hit, and the layer reports a
-        // frame only while it has one to report.
-        window.cardFrame = .zero
+        // Name whose frames count from here on; the reset comes with it. The card being
+        // replaced keeps laying out while it animates away, so its reports outlive this call
+        // and would otherwise overwrite that reset — see ``PassthroughWindow/currentCardID``.
+        let card = notification?.id
+        window.currentCardID = card
         host?.rootView = InAppNotificationLayer(
             notification: notification,
             open: open,
             dismiss: dismiss,
-            reportFrame: { [weak window] frame in window?.cardFrame = frame }
+            reportFrame: { [weak window] frame in window?.report(frame, from: card) }
         )
         window.isUserInteractionEnabled = notification != nil
     }
@@ -173,7 +175,42 @@ final class InAppNotificationWindowController {
 private final class PassthroughWindow: UIWindow {
     /// Where the card is, in this window's coordinates. `.zero` whenever no card is up, which
     /// makes the empty case reject by the same rule rather than by a second one.
-    var cardFrame: CGRect = .zero
+    private(set) var cardFrame: CGRect = .zero
+
+    /// Which card's reports are believed. Set before the root view is replaced, and it is the
+    /// only thing that makes `.zero` stick.
+    ///
+    /// A removal is animated, so the outgoing card lays out for another ~0.4s *after* the
+    /// controller has already reset the frame — and every one of those passes reported its
+    /// new position, the last of them off the top of the screen. The window was therefore
+    /// left believing a card sat at roughly `(12, -34, 416, 96)` forever: harmless for touches
+    /// (`isUserInteractionEnabled` is false with no card), but it made `hitTest` log a line
+    /// for every touch anywhere in the app, which is exactly what its own guard exists to
+    /// prevent, and it filled the bounded diagnostics buffer with them.
+    ///
+    /// The id is captured in the reporting closure when the card is handed over, so a
+    /// departing card carries the id it was shown with and a nil `currentCardID` — or the id
+    /// of the card that replaced it — rejects it. Comparing against the *current* notification
+    /// is what a frame-shape or an animation-completion test cannot do: a departing card's
+    /// frames are legitimate geometry, just not for the card that is up now.
+    ///
+    /// Clearing the frame is derived from this rather than done beside it, so the two cannot
+    /// drift — and only on an actual change of card. Zeroing on every assignment would break
+    /// a repeat `show` of the *same* notification: the banner carries `.id(notification.id)`,
+    /// so an unchanged id rebuilds nothing, `onChange` sees no new frame and never re-reports,
+    /// and the card would be left on screen with an empty rectangle — untappable.
+    var currentCardID: String? {
+        didSet {
+            guard oldValue != currentCardID else { return }
+            cardFrame = .zero
+        }
+    }
+
+    /// Takes a laid-out frame from `card`, and ignores it unless that card is the one up now.
+    func report(_ frame: CGRect, from card: String?) {
+        guard card == currentCardID else { return }
+        cardFrame = frame
+    }
 
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
         guard cardFrame.contains(point) else {
