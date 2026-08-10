@@ -82,18 +82,40 @@ final class InAppNotificationModel {
     }
 
     private func apply(_ feed: [ActivityEntry], insertedEventIDs: Set<String>) {
-        guard isForeground else { return }
+        guard isForeground else {
+            InAppNotificationDiagnostics.record("apply outcome=no-candidate reason=background")
+            return
+        }
 
-        let newest = feed.lazy
-            .filter { entry in
-                entry.unreadCount > 0 && insertedEventIDs.contains(entry.latest.id)
+        var consideredEntry = false
+        for entry in feed where insertedEventIDs.contains(entry.latest.id) {
+            consideredEntry = true
+            let notification = InAppNotification(entry: entry)
+            let isVisible = notification.location.isVisible(in: visibleLocation)
+            let verdict = "id=\(notification.id) unreadCount=\(entry.unreadCount) " +
+                "qualifies=\(notification.qualifies) isVisible=\(isVisible)"
+
+            guard entry.unreadCount > 0 else {
+                InAppNotificationDiagnostics.record("apply outcome=suppressed-zero-unread \(verdict)")
+                continue
             }
-            .map(InAppNotification.init)
-            .first { notification in
-                notification.qualifies
-                    && !notification.location.isVisible(in: visibleLocation)
+            guard notification.qualifies else {
+                InAppNotificationDiagnostics.record("apply outcome=no-candidate \(verdict)")
+                continue
             }
-        if let newest { show(newest) }
+            guard !isVisible else {
+                InAppNotificationDiagnostics.record("apply outcome=suppressed-visible \(verdict)")
+                continue
+            }
+
+            InAppNotificationDiagnostics.record("apply outcome=shown \(verdict)")
+            show(notification)
+            return
+        }
+
+        if !consideredEntry {
+            InAppNotificationDiagnostics.record("apply outcome=no-candidate reason=no-inserted-feed-entry")
+        }
     }
 
     /// The one place `current` moves, and the reason it is the only one.
@@ -106,6 +128,9 @@ final class InAppNotificationModel {
     /// full-screen touch target over the whole app, and a clock left running from the previous
     /// card retires this one early.
     private func show(_ notification: InAppNotification?) {
+        // When both values are nil there cannot be a live retirement task: every path that
+        // clears `current` cancels and clears it below. Keep this before cancellation so a
+        // replay of the visible id cannot cancel that card's retirement without replacing it.
         guard notification?.id != current?.id else { return }
         current = notification
         retirement?.cancel()
