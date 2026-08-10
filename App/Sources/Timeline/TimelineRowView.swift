@@ -122,6 +122,14 @@ struct TimelineRowView: View {
     /// the Threads screen's summaries — where the row then keeps its plain tap and a long
     /// press does nothing, rather than arming a gesture with nowhere to go.
     var onLongPress: (() -> Void)?
+    /// Show who reacted with one of this message's chips. Absent on a surface that presents
+    /// no sheet — the Threads screen's summaries — where a chip then keeps its tap and a
+    /// hold does nothing, rather than arming a gesture with nowhere to go.
+    ///
+    /// Separate from ``onLongPress`` rather than a variant of it: holding a chip asks a
+    /// different question from holding the message, and the owner's rule (2026-08-10) is
+    /// that a chip is carved out of the message-actions hold entirely.
+    var onLongPressReaction: ((ReactionGroup) -> Void)?
     /// Show the author's profile — raised by the avatar and by the name, so the row
     /// asks and the surface presents. Absent on a surface with nowhere to present it,
     /// where the identity then renders as plain text rather than as a dead control.
@@ -163,7 +171,8 @@ struct TimelineRowView: View {
                         // The palette *opening* is the event to arbitrate, not the emoji
                         // chosen from it: the tap that opens it is the same tap the row
                         // would read as "open the thread".
-                        onOpenPalette: { claimTap() }
+                        onOpenPalette: { claimTap() },
+                        onLongPress: onLongPressReaction
                     )
                     .allowsHitTesting(allowsInteraction)
                 }

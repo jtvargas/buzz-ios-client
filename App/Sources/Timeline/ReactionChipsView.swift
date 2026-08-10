@@ -52,12 +52,22 @@ struct ReactionChipsView: View {
     /// enclosing row uses to claim the tap that opened it. Defaults to nothing, for a
     /// surface with no competing gesture to arbitrate against.
     var onOpenPalette: () -> Void = {}
+    /// Show who reacted with this emoji. Absent on a surface that presents no sheet, where
+    /// the chip then keeps its tap and a hold does nothing — the same asymmetry
+    /// ``TimelineRowView/onLongPress`` draws, and for the same reason: an armed hold with
+    /// nowhere to go swallows the tap it beat.
+    var onLongPress: ((ReactionGroup) -> Void)?
 
     var body: some View {
         FlowLayout(spacing: 6) {
             ForEach(groups) { group in
-                ReactionChip(group: group, height: Self.chipHeight) { onTap(group) }
-                    .transition(.scale(scale: 0.6).combined(with: .opacity))
+                ReactionChip(
+                    group: group,
+                    height: Self.chipHeight,
+                    action: { onTap(group) },
+                    onLongPress: onLongPress.map { press in { press(group) } }
+                )
+                .transition(.scale(scale: 0.6).combined(with: .opacity))
             }
             AddReactionButton(height: Self.chipHeight, onReact: onReact, onOpen: onOpenPalette)
         }
@@ -68,10 +78,32 @@ struct ReactionChipsView: View {
 }
 
 /// One reaction chip. Highlighted when the local identity is among the reactors.
+///
+/// # Why the hold is `highPriorityGesture`
+///
+/// A chip sits inside a message, and the message already carries a `LongPressGesture` of
+/// its own that opens the actions sheet (`TimelineRowView.pressGesture`). Both would
+/// recognise the same finger. `highPriorityGesture` is what settles it in the chip's
+/// favour: it is offered the touch before the gestures below it, so when it recognises at
+/// ``TimelineRowView/longPressDuration`` the row's press and this button's own tap both
+/// fail — holding a chip opens the reactor list and *does not* toggle the reaction. The
+/// owner's rule, 2026-08-10: the message-actions hold does not apply to a chip.
+///
+/// It observes the press **going up and nothing else**. No `onPressingChanged`, no
+/// `@GestureState`, no zero-distance drag: a gesture that tracks from touch-down has taken
+/// the touch away from the scrolling list, and this app has twice shipped a conversation
+/// that could not be scrolled that way. See ``PressFeedbackButtonStyle`` and
+/// `TimelineRowView.pressGesture`, which is the same shape for the same reason.
 private struct ReactionChip: View {
+    /// Claims the touch so the enclosing row does not also count it. A tap claims itself
+    /// through ``PressFeedbackBody``, on the button's activation; a hold never activates
+    /// the button, so it has to say so here.
+    @Environment(\.claimRowTap) private var claimRowTap
+
     let group: ReactionGroup
     let height: CGFloat
     let action: () -> Void
+    let onLongPress: (() -> Void)?
 
     var body: some View {
         Button {
@@ -107,9 +139,30 @@ private struct ReactionChip: View {
         // answered with nothing at all. In a capsule, because that is the outline it draws:
         // a rounded-rectangle wash under a pill shows at both of its ends.
         .buttonStyle(.hivePress(.control, in: .capsule))
+        // Masked off rather than wrapped in an `if`, so a surface that offers no sheet and
+        // one that does are the same view with the same identity — a chip rebuilt because
+        // a modifier appeared around it is a chip that loses the press it was in.
+        .highPriorityGesture(
+            LongPressGesture(minimumDuration: TimelineRowView.longPressDuration)
+                .onEnded { _ in
+                    // What the row plays when its own hold recognises, and what tells a
+                    // reader the sheet is coming before it has drawn a pixel.
+                    HiveHaptics.play(.longPress)
+                    claimRowTap?()
+                    onLongPress?()
+                },
+            including: onLongPress == nil ? .subviews : .all
+        )
         .accessibilityLabel(accessibilityLabel)
         .accessibilityAddTraits(group.reactedBySelf ? [.isSelected] : [])
         .accessibilityHint("Double tap to toggle your reaction")
+        // By ear there is no chip to hold, so the list is offered as a rotor action — and
+        // only where there is one, the same way the row offers its actions sheet.
+        .accessibilityActions {
+            if let onLongPress {
+                Button("Who reacted", action: onLongPress)
+            }
+        }
     }
 
     private var accessibilityLabel: String {
