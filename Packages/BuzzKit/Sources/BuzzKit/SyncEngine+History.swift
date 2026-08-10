@@ -120,7 +120,10 @@ public extension SyncEngine {
         let filter = WindowFilter(
             channelID: channel,
             cursor: .after(cursor(for: channel, below: floor)),
-            kinds: [.channelMessage, .systemMessage],
+            // The same set the timeline reads back, huddle rows included: a kind the live
+            // subscription delivers but the history page does not is a row that exists
+            // until the reader scrolls past it and then does not.
+            kinds: [.channelMessage, .systemMessage, .huddleStarted, .huddleEnded],
             limit: config.windowPageLimit
         )
         guard let result = try? await windowClient.fetch(filter) else {

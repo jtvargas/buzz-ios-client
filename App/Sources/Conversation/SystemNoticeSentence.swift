@@ -140,6 +140,16 @@ struct SystemNoticeSentence: Hashable {
             action = [.words("archived this channel")]
         case .channelUnarchived:
             action = [.words("unarchived this channel")]
+        case .huddleStarted:
+            // The Flutter client's wording, matched exactly
+            // (`mobile/lib/features/channels/timeline_message.dart:111`): the same event
+            // read on two clients should read the same, and neither should have to guess
+            // what the other says.
+            action = [.words("started a huddle")]
+        case .huddleEnded:
+            // "the huddle" rather than "a huddle" — by the time one ends there is a
+            // particular one to point at.
+            action = [.words("ended the huddle")]
         }
     }
 }

@@ -68,6 +68,11 @@ extension SyncEngine {
             kinds: [
                 .channelMessage, .richMessage, .messageEdit, .systemMessage,
                 .reaction, .deletion, .groupDeleteEvent, .typing, .threadSummary,
+                // A huddle starting and ending, which the timeline draws as notices.
+                // 48101/48102 are deliberately not requested: nothing renders a
+                // participant arriving, and subscribing to an event no surface reads is
+                // bandwidth and storage spent to no end.
+                .huddleStarted, .huddleEnded,
                 // The two things that can ask a human for a decision. Added for the
                 // Activity tab's Action chip, which listed them in its read while nothing
                 // ever fetched them — so the chip could not fill, rather than merely having
