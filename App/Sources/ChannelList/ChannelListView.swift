@@ -22,7 +22,7 @@ import SwiftUI
 ///
 /// # Why some of this state is not `private`
 ///
-/// The eleven `@State var`s below — the surfaces that can sit on top of the sidebar, plus the
+/// The seven `@State var`s below — the surfaces that can sit on top of the sidebar, plus the
 /// channel list itself — are read and written by `ChannelListView+Notifications.swift`, which
 /// owns every navigation request arriving from *outside* this view tree. That split is not
 /// taste: this file sits against swiftlint's 1000-line **error** ceiling, and a `private`
@@ -70,21 +70,6 @@ struct ChannelListView: View {
     @State var showsCreateChannel = false
     /// Whether the new-direct-message sheet is up.
     @State var showsNewDirectMessage = false
-    /// The Threads screen, when it is pushed. A value rather than a `Bool` so it goes
-    /// through `navigationDestination(item:)` like every other push in the app.
-    @State var showsThreads: ThreadsRoute?
-    /// The Drafts screen, when it is pushed. A value rather than a `Bool`, like every
-    /// other push here.
-    @State var showsDrafts: DraftsRoute?
-    /// The thread the **Threads screen** has open, hoisted out of ``ThreadsView`` to here.
-    ///
-    /// State in the wrong place, but for ``ChannelListTabBar``: this stack has to know about
-    /// every push that hides the tab bar, and a `@State` inside ``ThreadsView`` is a push it
-    /// cannot see. Only the storage moved — that screen still declares the destination.
-    @State var openedThread: ThreadRoute?
-    /// The pushed Later screen. A route rather than a `Bool` so it sits alongside the
-    /// other programmatic pushes this stack owns.
-    @State var showsLater: LaterRoute?
     /// Drives the Later screen and keeps the scheduled alerts in step. Built here rather
     /// than inside the screen so the shortcut card's count is live whether or not anyone
     /// has opened it.
@@ -96,7 +81,7 @@ struct ChannelListView: View {
     /// "is this conversation already on the stack?" is not a question it can answer, and
     /// the answer is what stops a DM opened from inside itself stacking on itself
     /// (see ``ConversationRoute/pushed(onto:)``).
-    @State var path: [ConversationRoute] = []
+    @State var path: [AppRoute] = []
     /// Where the reader last was, for the leftward drag that takes them back to it.
     @State private var resume = ConversationResume()
     /// How far the communities panel is out — 0 closed, 1 over the sidebar. Held here rather
@@ -208,7 +193,7 @@ struct ChannelListView: View {
                 // order, so the panel is above the darkness it casts.
                 .overlay { WorkspacePanelScrim(state: workspacePanel) }
                 .overlay(alignment: .leading) { workspacePanelOverlay }
-                .workspacePanelDrag(workspacePanel, isAvailable: path.isEmpty && openedThread == nil)
+                .workspacePanelDrag(workspacePanel, isAvailable: path.isEmpty)
                 // Drag left anywhere here to reopen the conversation just left — the
                 // system's back swipe, mirrored. Declared inside the stack because the
                 // transition it drives is that stack's own push.
@@ -218,22 +203,12 @@ struct ChannelListView: View {
                 // would otherwise both run — closing the panel *and* opening a conversation
                 // behind it on the same drag.
                 .sidebarForwardSwipe(reopening: workspacePanel.isOpen ? nil : resumable) { route in
-                    path = route.pushed(onto: path)
+                    path = AppRoute.conversation(route).pushed(onto: path)
                 } close: {
                     path = []
                 }
-                .navigationDestination(for: ConversationRoute.self) { route in
-                    ChannelTimelineView(
-                        channel: route.channel,
-                        store: store,
-                        engine: engine,
-                        drafts: environment.drafts,
-                        uploader: { environment.mediaUploader },
-                        selfPubkey: environment.selfPubkeyHex,
-                        knownPeers: route.knownPeers,
-                        focusingComposer: route.focusesComposer,
-                        focusing: route.focus
-                    )
+                .navigationDestination(for: AppRoute.self) { route in
+                    destination(for: route)
                 }
                 .toolbar {
                     // Still one item, holding two — ``HomeToolbarControls`` draws the capsule.
@@ -263,14 +238,16 @@ struct ChannelListView: View {
                     identity: environment.selfPubkeyHex,
                     engine: engine
                 ) { channelID, browsed in
-                    path = ConversationRoute(
+                    path = AppRoute.conversation(ConversationRoute(
                         channel: conversationRow(for: channelID, fallback: browsed)
-                    ).pushed(onto: path)
+                    )).pushed(onto: path)
                 }
                 // The new-channel sheet's standing seam — the browser presents its own;
                 // see ``showsCreateChannel`` for why this stays.
                 .createChannelSheet(isPresented: $showsCreateChannel, engine: engine) { channelID in
-                    path = ConversationRoute(channel: conversationRow(for: channelID)).pushed(onto: path)
+                    path = AppRoute.conversation(
+                        ConversationRoute(channel: conversationRow(for: channelID))
+                    ).pushed(onto: path)
                 }
                 // From the Direct Messages heading's `+`. The people are mapped in the
                 // closure rather than passed as a value, so the whole directory is walked
@@ -285,34 +262,6 @@ struct ChannelListView: View {
                     maxSelection: SyncEngine.maxDirectMessagePeers,
                     open: { router.open(with: $0) }
                 )
-                .navigationDestination(item: $showsDrafts) { _ in
-                    DraftsView(model: draftsModel, open: openDraft)
-                }
-                // Declared here rather than inside the screen that pushes, because two
-                // screens now open threads — the Threads screen and Drafts — and a stack
-                // may hold only one destination per route type.
-                .navigationDestination(item: $openedThread) { route in
-                    ThreadView(
-                        root: route.root,
-                        channel: route.channel,
-                        store: store,
-                        engine: engine,
-                        drafts: environment.drafts,
-                        uploader: { environment.mediaUploader },
-                        selfPubkey: environment.selfPubkeyHex,
-                        landingOn: route.anchor,
-                        focusingComposer: route.focusesComposer
-                    )
-                }
-                .navigationDestination(item: $showsThreads) { _ in
-                    ThreadsView(
-                        store: store,
-                        engine: engine,
-                        selfPubkey: environment.selfPubkeyHex,
-                        openedThread: $openedThread
-                    )
-                }
-                .navigationDestination(item: $showsLater) { _ in laterDestination }
         }
         // Declared here on the stack and by nothing below it — ``ChannelListTabBar`` holds
         // the measurements that put it here rather than on the pushed views.
@@ -323,7 +272,7 @@ struct ChannelListView: View {
         .toolbar(
             workspacePanel.isOpen
                 ? .hidden
-                : ChannelListTabBar.visibility(conversations: path, openedThread: openedThread),
+                : ChannelListTabBar.visibility(path: path),
             for: .tabBar
         )
         // And the navigation bar's own material with it, though the bar itself stays.
@@ -345,17 +294,23 @@ struct ChannelListView: View {
         .environment(\.relativeTimeTicker, ticker)
         .environment(\.threadReadMarks, threadReads)
         .environment(\.directMessageRouter, router)
+        .environment(\.pushRoute, PushRouteAction { route in
+            path = route.pushed(onto: path)
+        })
         // An already-open conversation is left alone by ``ConversationRoute/pushed(onto:)``, so
         // pressing a reference to the channel you are reading stacks nothing.
         .environment(\.openConversation, OpenConversationAction { channelID in
             let route = ConversationRoute(channel: conversationRow(for: channelID))
-            path = route.pushed(onto: path)
+            path = AppRoute.conversation(route).pushed(onto: path)
         })
         // Watched rather than written at the two places that pop, so the system's own back
         // swipe — which runs no app code — fills the slot too. See ``ConversationResume``.
         .onChange(of: path) { previous, current in
             resume.observe(path: current, previously: previous)
-            settleThreads(enteringOrLeaving: previous, current)
+            settleThreads(enteringOrLeaving: previous.conversations, current.conversations)
+            if let route = current.revealedConversation(after: previous) {
+                Task { await engine.setActiveChannel(route.channel.id) }
+            }
         }
         // Two readers of one value: where the reader *is* decides whether a banner repeats
         // something already on screen, and it is also the definition of a place visited.
@@ -400,7 +355,7 @@ struct ChannelListView: View {
                 // lets a never-synced DM show their names, not the untitled placeholder.
                 knownPeers: opened.peers
             )
-            path = route.pushed(onto: path)
+            path = AppRoute.conversation(route).pushed(onto: path)
         }
         .alert(
             "Could not open the conversation",
@@ -664,9 +619,6 @@ private extension ChannelListView {
             LaterView(
                 model: laterModel,
                 channelName: { conversationRow(for: $0).name ?? "" },
-                // Through the one funnel that knows the dismiss and the push cannot share an
-                // update — see ``ChannelListView/openNotification(_:)``. Written out here it
-                // was `showsLater = nil` and `path = …` back to back, which is that crash.
                 openTarget: { target in
                     openNotification(InAppNotificationRoute(
                         location: .channel(target.channelID),
@@ -679,6 +631,47 @@ private extension ChannelListView {
                 .hiveScreenGround()
                 .navigationTitle("Later")
                 .navigationBarTitleDisplayMode(.inline)
+        }
+    }
+
+    @ViewBuilder
+    func destination(for route: AppRoute) -> some View {
+        switch route {
+        case let .conversation(route):
+            ChannelTimelineView(
+                channel: route.channel,
+                store: store,
+                engine: engine,
+                drafts: environment.drafts,
+                uploader: { environment.mediaUploader },
+                selfPubkey: environment.selfPubkeyHex,
+                knownPeers: route.knownPeers,
+                focusingComposer: route.focusesComposer,
+                focusing: route.focus
+            )
+        case let .thread(route):
+            ThreadView(
+                root: route.root,
+                channel: route.channel,
+                store: store,
+                engine: engine,
+                drafts: environment.drafts,
+                uploader: { environment.mediaUploader },
+                selfPubkey: environment.selfPubkeyHex,
+                landingOn: route.anchor,
+                focusingComposer: route.focusesComposer
+            )
+        case .threads:
+            ThreadsView(store: store, engine: engine, selfPubkey: environment.selfPubkeyHex)
+        case .later:
+            laterDestination
+        case .drafts:
+            DraftsView(model: draftsModel, open: openDraft)
+        case let .rescheduling(row):
+            RemindMeView { due in
+                if case .rescheduling? = path.last { path.removeLast() }
+                Task { await laterModel?.snooze(row, to: due) }
+            }
         }
     }
 
@@ -745,9 +738,9 @@ private extension ChannelListView {
 
     func press(_ shortcut: HomeShortcut) {
         switch shortcut {
-        case .threads: showsThreads = ThreadsRoute()
-        case .later: showsLater = LaterRoute()
-        case .drafts: showsDrafts = DraftsRoute()
+        case .threads: path.append(.threads)
+        case .later: path.append(.later)
+        case .drafts: path.append(.drafts)
         }
     }
 
@@ -805,7 +798,7 @@ private extension ChannelListView {
             // channel list already knows, so its roster is in hand.
             Button {
                 let route = ConversationRoute(channel: row.channel)
-                path = route.pushed(onto: path)
+                path = AppRoute.conversation(route).pushed(onto: path)
             } label: {
                 ChannelRowView(row: row, presence: presence)
                     // Inside the button, so the button's frame *is* `resumeMark`'s rectangle
@@ -944,18 +937,18 @@ private extension ChannelListView {
     func openDraft(_ summary: ComposerDraftSummary) {
         switch DraftDestination.of(summary) {
         case let .thread(root, channel):
-            openedThread = ThreadRoute(
+            path.append(.thread(ThreadRoute(
                 root: root,
                 channel: channel,
                 anchor: DraftDestination.threadLanding,
                 focusesComposer: true
-            )
+            )))
         case let .conversation(channel):
             let route = ConversationRoute(
                 channel: conversationRow(for: channel),
                 focusesComposer: true
             )
-            path = route.pushed(onto: path)
+            path = AppRoute.conversation(route).pushed(onto: path)
         }
     }
 

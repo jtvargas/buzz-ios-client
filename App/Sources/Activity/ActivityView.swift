@@ -50,11 +50,7 @@ struct ActivityView: View {
     /// The conversations pushed from here. Typed rather than a `NavigationPath` for the
     /// reason ``ChannelListView`` gives: the path has to be *readable* for
     /// ``ConversationRoute/pushed(onto:)`` to keep a conversation off its own stack.
-    @State private var path: [ConversationRoute] = []
-    /// The thread open on top, if any. Held here rather than inside a child for the same
-    /// reason it is hoisted in the sidebar — the stack has to see every push that takes the
-    /// tab bar down.
-    @State private var openedThread: ThreadRoute?
+    @State private var path: [AppRoute] = []
     /// This device's per-thread read marks. Its own instance rather than the sidebar's:
     /// ``ThreadReadMarks`` persists to `UserDefaults`, so both tabs read and write the same
     /// storage and a thread read in one is read in the other on the next pass.
@@ -87,37 +83,14 @@ struct ActivityView: View {
                 // The same pull the sidebar and the Threads screen offer. This screen
                 // summarises every channel, so a stale one misleads here exactly as much.
                 .refreshable { await engine.refresh() }
-                .navigationDestination(for: ConversationRoute.self) { route in
-                    ChannelTimelineView(
-                        channel: route.channel,
-                        store: store,
-                        engine: engine,
-                        drafts: environment.drafts,
-                        uploader: { environment.mediaUploader },
-                        selfPubkey: selfPubkey,
-                        knownPeers: route.knownPeers,
-                        focusingComposer: route.focusesComposer,
-                        focusing: route.focus
-                    )
-                }
-                .navigationDestination(item: $openedThread) { route in
-                    ThreadView(
-                        root: route.root,
-                        channel: route.channel,
-                        store: store,
-                        engine: engine,
-                        drafts: environment.drafts,
-                        uploader: { environment.mediaUploader },
-                        selfPubkey: selfPubkey,
-                        landingOn: route.anchor,
-                        focusingComposer: route.focusesComposer
-                    )
+                .navigationDestination(for: AppRoute.self) { route in
+                    destination(for: route)
                 }
         }
         // The same rule the sidebar's stack applies, through the same function: a reading
         // surface with a composer gets the full height, a list keeps the bar.
         .toolbar(
-            ChannelListTabBar.visibility(conversations: path, openedThread: openedThread),
+            ChannelListTabBar.visibility(path: path),
             for: .tabBar
         )
         // Injected on the stack rather than inside it, because a value attached below
@@ -129,11 +102,16 @@ struct ActivityView: View {
         .environment(\.relativeTimeTicker, ticker)
         .environment(\.threadReadMarks, threadReads)
         .environment(\.directMessageRouter, router)
+        .environment(\.pushRoute, PushRouteAction { route in
+            path = route.pushed(onto: path)
+        })
         // Pushes onto *this* stack, which is why this one cannot be shared with the sidebar
         // however the others are resolved: pressing a `#channel` pill inside a conversation
         // opened from Activity must open it here, not behind the Home tab.
         .environment(\.openConversation, OpenConversationAction { channelID in
-            path = ConversationRoute(channel: channelRow(for: channelID)).pushed(onto: path)
+            path = AppRoute.conversation(
+                ConversationRoute(channel: channelRow(for: channelID))
+            ).pushed(onto: path)
         })
         // The router hands back an opened conversation once; clearing it is what stops an
         // unrelated body pass re-pushing. Same contract as the sidebar's.
@@ -144,13 +122,17 @@ struct ActivityView: View {
                 channel: channelRow(for: opened.channelID),
                 knownPeers: opened.peers
             )
-            path = route.pushed(onto: path)
+            path = AppRoute.conversation(route).pushed(onto: path)
+        }
+        .onChange(of: path) { previous, current in
+            guard let route = current.revealedConversation(after: previous) else { return }
+            Task { await engine.setActiveChannel(route.channel.id) }
         }
         // This tab is a way *into* a conversation as much as the sidebar is, so a place
         // reached from here is a place visited. The same shared derivation and the same
         // shared list the sidebar writes to — see ``RecentPlaces``.
         .onChange(
-            of: RecentPlaces.location(path: path, openedThread: openedThread),
+            of: RecentPlaces.location(path: path),
             initial: true
         ) { _, location in
             environment.recents.visit(location, in: environment.communities.activeID)
@@ -181,6 +163,38 @@ struct ActivityView: View {
         // The rail and the list together, so the filter chips sit on the same ground the
         // rows do rather than on a strip of their own.
         .hiveScreenGround()
+    }
+
+    @ViewBuilder
+    private func destination(for route: AppRoute) -> some View {
+        switch route {
+        case let .conversation(route):
+            ChannelTimelineView(
+                channel: route.channel,
+                store: store,
+                engine: engine,
+                drafts: environment.drafts,
+                uploader: { environment.mediaUploader },
+                selfPubkey: selfPubkey,
+                knownPeers: route.knownPeers,
+                focusingComposer: route.focusesComposer,
+                focusing: route.focus
+            )
+        case let .thread(route):
+            ThreadView(
+                root: route.root,
+                channel: route.channel,
+                store: store,
+                engine: engine,
+                drafts: environment.drafts,
+                uploader: { environment.mediaUploader },
+                selfPubkey: selfPubkey,
+                landingOn: route.anchor,
+                focusingComposer: route.focusesComposer
+            )
+        case .threads, .later, .drafts, .rescheduling:
+            EmptyView()
+        }
     }
 
     /// Two different empty states, because they mean two different things and the wrong one
@@ -276,16 +290,16 @@ struct ActivityView: View {
     private func open(_ entry: ActivityEntry) {
         guard let channelID = entry.channelID else { return }
         if let rootID = entry.rootID {
-            openedThread = ThreadRoute(
+            path.append(.thread(ThreadRoute(
                 root: rootID,
                 channel: channelID,
                 // The effective count, not the store's — a thread already read on this
                 // device should open at what it is about, not at its end.
                 anchor: unreadCount(for: entry) > 0 ? .latestReply : .opener
-            )
+            )))
         } else {
             let row = channelRow(for: channelID, fallback: entry)
-            path = ConversationRoute(channel: row).pushed(onto: path)
+            path = AppRoute.conversation(ConversationRoute(channel: row)).pushed(onto: path)
         }
     }
 

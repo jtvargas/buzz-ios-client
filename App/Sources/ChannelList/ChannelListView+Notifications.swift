@@ -10,8 +10,7 @@ import SwiftUI
 /// they are `@State` on a single view either way, and nothing outside this pair of files
 /// writes them.
 ///
-/// What they all share is the invariant in ``ChannelListView/openNotification(_:)``: one
-/// navigation change per turn of the run loop.
+/// Every request resolves to the stack's single route path.
 extension ChannelListView {
     /// Opens one navigation request originating outside this view tree.
     ///
@@ -34,79 +33,32 @@ extension ChannelListView {
     /// open leaves it exactly where it is rather than popping and re-pushing it, which would
     /// be a visible flinch for no change of destination.
     ///
-    /// The unwind and the present are two turns of the main actor, for the reason
-    /// ``openNotification(_:)`` gives at length: this is the same jump, asked for from
-    /// somewhere else. The old shape wrote `path = []` and then an item destination in one
-    /// pass, which is that crash spelled out.
     func open(_ destination: AppDestination) {
-        guard hasOpenSurface else { return show(destination) }
-        // Already up, with nothing over it — the idempotence above.
-        guard hasSurface(besides: destination) else { return }
-        var silent = Transaction()
-        silent.disablesAnimations = true
-        withTransaction(silent) { closeOpenSurfaces() }
-        Task { @MainActor in show(destination) }
-    }
-
-    /// The present itself, onto a sidebar with nothing over it.
-    private func show(_ destination: AppDestination) {
-        switch destination {
-        case .threads: showsThreads = ThreadsRoute()
-        case .later: showsLater = LaterRoute()
-        case .drafts: showsDrafts = DraftsRoute()
+        let route: AppRoute = switch destination {
+        case .threads: .threads
+        case .later: .later
+        case .drafts: .drafts
         }
+        guard path != [route] || hasOverlay else { return }
+        closeOpenSurfaces()
+        path = [route]
     }
 
     /// Where this stack is — shared with the Activity tab's, which asks the same question.
     var notificationLocation: InAppNotificationLocation? {
-        RecentPlaces.location(path: path, openedThread: openedThread)
+        RecentPlaces.location(path: path)
     }
 
     /// Jumps to a conversation or a thread, closing whatever was open on the way.
     ///
-    /// # Why closing and opening cannot share an update
-    ///
-    /// `navigationDestination(item:)` does not simply push. It presents by truncating the
-    /// stack back to the depth it was asked *from* — `programmaticallyPresentView(_:fromDepth:)`
-    /// — and if the path is being emptied in the same pass, that depth no longer exists and
-    /// `AnyNavigationPath.HomogeneousBoxBase.removeLast(_:)` trips a Swift precondition. Two
-    /// of the owner's eleven crash reports are exactly that stack. The old shape here wrote
-    /// `path = []` and `openedThread = …` back to back, which is that crash spelled out.
-    ///
-    /// So: unwind, then present on the next turn of the main actor — and only pay for the
-    /// second turn when there is something to unwind, so the common jump from the sidebar
-    /// stays a single transition.
-    ///
-    /// The sheets are closed on the same first pass for the same reason rather than a proven
-    /// one: dismissing a presentation while a push begins is the other crash signature in
-    /// those reports, and nothing here needs the two to be simultaneous.
     func openNotification(_ route: InAppNotificationRoute) {
-        guard hasOpenSurface else { return present(route) }
-
-        // Unanimated, so the reader sees one movement — the arrival — rather than a pop
-        // followed by a push.
-        var silent = Transaction()
-        silent.disablesAnimations = true
-        withTransaction(silent) { closeOpenSurfaces() }
-        Task { @MainActor in present(route) }
+        closeOpenSurfaces()
+        present(route)
     }
 
-    /// Whether anything is on top of the sidebar: a pushed screen, an item destination, a
-    /// sheet, or the workspace panel.
-    private var hasOpenSurface: Bool { hasSurface(besides: nil) }
-
-    /// The same question with one destination discounted — what decides whether a request
-    /// for a screen that is already up still has anything to unwind.
-    ///
-    /// One list rather than two, because a surface added to ``closeOpenSurfaces()`` and
-    /// forgotten here is a surface that survives the unwind and then gets dismissed
-    /// underneath the present, which is the crash again.
-    private func hasSurface(besides destination: AppDestination?) -> Bool {
+    private var hasOverlay: Bool {
         workspacePanel.isOpen || showAccount || showsBrowseChannels || showsCreateChannel
-            || showsNewDirectMessage || !path.isEmpty || openedThread != nil
-            || (destination != .drafts && showsDrafts != nil)
-            || (destination != .threads && showsThreads != nil)
-            || (destination != .later && showsLater != nil)
+            || showsNewDirectMessage
     }
 
     private func closeOpenSurfaces() {
@@ -115,14 +67,9 @@ extension ChannelListView {
         showsBrowseChannels = false
         showsCreateChannel = false
         showsNewDirectMessage = false
-        showsDrafts = nil
-        showsThreads = nil
-        showsLater = nil
-        openedThread = nil
-        path = []
     }
 
-    /// The push itself, onto a stack that is already empty.
+    /// The route replacement itself.
     ///
     /// Both branches aim at the *message* when the route names one, which is the whole reason
     /// a tapped banner feels like an answer rather than a room to search: the surface opens,
@@ -135,16 +82,16 @@ extension ChannelListView {
     private func present(_ route: InAppNotificationRoute) {
         switch route.location {
         case let .channel(channelID):
-            path = [ConversationRoute(
+            path = [.conversation(ConversationRoute(
                 channel: conversationRow(for: channelID, fallback: route.fallbackChannel),
                 focus: route.focus
-            )]
+            ))]
         case let .thread(channelID, rootID):
-            openedThread = ThreadRoute(
+            path = [.thread(ThreadRoute(
                 root: rootID,
                 channel: channelID,
                 anchor: route.focus.map { .reply($0.messageID) } ?? .latestReply
-            )
+            ))]
         }
     }
 }

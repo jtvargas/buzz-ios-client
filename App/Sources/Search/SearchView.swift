@@ -8,8 +8,8 @@ struct SearchView: View {
     @State private var model: SearchModel
     @State private var query = ""
     /// Everything this stack has pushed, conversations and threads alike — see
-    /// ``SearchRoute`` for why a thread is an element here rather than a binding beside it.
-    @State private var path: [SearchRoute] = []
+    /// ``AppRoute`` for why a thread is an element here rather than a binding beside it.
+    @State private var path: [AppRoute] = []
     /// The result whose tap has not yet produced a screen. Drawn as a spinner on that row,
     /// and cleared by the destination's own `onAppear`, so it covers exactly the gap between
     /// the finger and the answer and never outlives it.
@@ -42,7 +42,7 @@ struct SearchView: View {
         NavigationStack(path: $path) {
             content
                 .navigationTitle(HomeTab.search.title)
-                .navigationDestination(for: SearchRoute.self) { route in
+                .navigationDestination(for: AppRoute.self) { route in
                     destination(for: route)
                         // The tap has produced a screen, so the row that answered it can stop
                         // saying it is working on one.
@@ -64,12 +64,15 @@ struct SearchView: View {
         }
         // From the path alone, because the path is now the whole stack. Declared here rather
         // than on the pushed views for ``ChannelListTabBar``'s measured reason.
-        .toolbar(path.isEmpty ? .visible : .hidden, for: .tabBar)
+        .toolbar(ChannelListTabBar.visibility(path: path), for: .tabBar)
         .environment(\.entityNames, entityNames)
         .environment(\.channelNameMap, ChannelNameMap(channels: model.channels))
         .environment(\.relativeTimeTicker, ticker)
         .environment(\.threadReadMarks, threadReads)
         .environment(\.directMessageRouter, router)
+        .environment(\.pushRoute, PushRouteAction { route in
+            path = route.pushed(onto: path)
+        })
         .environment(\.openConversation, OpenConversationAction { channelID in
             open(channelID: channelID)
         })
@@ -80,10 +83,14 @@ struct SearchView: View {
                 channel: channelRow(for: opened.channelID),
                 knownPeers: opened.peers
             )
-            path = SearchRoute.conversation(route).pushed(onto: path)
+            path = AppRoute.conversation(route).pushed(onto: path)
+        }
+        .onChange(of: path) { previous, current in
+            guard let route = current.revealedConversation(after: previous) else { return }
+            Task { await engine.setActiveChannel(route.channel.id) }
         }
         .onChange(
-            of: RecentPlaces.location(path: path.conversations, openedThread: path.openedThread),
+            of: RecentPlaces.location(path: path),
             initial: true
         ) { _, location in
             environment.recents.visit(location, in: environment.communities.activeID)
@@ -210,7 +217,7 @@ struct SearchView: View {
 
     /// The screen a route names.
     @ViewBuilder
-    private func destination(for route: SearchRoute) -> some View {
+    private func destination(for route: AppRoute) -> some View {
         switch route {
         case let .conversation(route):
             ChannelTimelineView(
@@ -235,6 +242,8 @@ struct SearchView: View {
                 selfPubkey: selfPubkey,
                 landingOn: route.anchor
             )
+        case .threads, .later, .drafts, .rescheduling:
+            EmptyView()
         }
     }
 
@@ -256,7 +265,7 @@ struct SearchView: View {
             let route = ThreadRoute(
                 root: root, channel: message.channelID, anchor: .reply(message.id)
             )
-            path = SearchRoute.thread(route).pushed(onto: path)
+            path = AppRoute.thread(route).pushed(onto: path)
             return
         }
         let fallback = ChannelListRow(
@@ -291,7 +300,7 @@ struct SearchView: View {
             channel: channelRow(for: channelID, fallback: fallback),
             focus: focus
         )
-        path = SearchRoute.conversation(route).pushed(onto: path)
+        path = AppRoute.conversation(route).pushed(onto: path)
     }
 
     private func channelRow(for channelID: String, fallback: ChannelListRow? = nil) -> ChannelListRow {

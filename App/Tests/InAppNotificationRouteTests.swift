@@ -73,8 +73,8 @@ struct InAppNotificationRouteTests {
     @Test("the location names a place and never a message")
     func locationIsFreeOfTheMessage() {
         // The invariant behind keeping `focus` off `location`. `location` is also asked "is
-        // the reader already looking at this?" against `RecentPlaces.location(path:
-        // openedThread:)`, which knows a channel and a thread and nothing about which message
+        // the reader already looking at this?" against `RecentPlaces.location(path:)`,
+        // which knows a channel and a thread and nothing about which message
         // is on screen. Two replies in one thread must therefore be one place, or every
         // banner would survive arriving at its own destination.
         let first = InAppNotification(entry: Self.entry(rootID: "root-1", messageID: "message-1"))

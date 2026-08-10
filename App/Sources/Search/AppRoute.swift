@@ -6,7 +6,7 @@ import SwiftUI
 /// # Why a thread is an element of the path rather than a binding beside it
 ///
 /// Because a `NavigationStack(path:)` has to have exactly one driver. Pairing a typed path
-/// with `navigationDestination(item:)` lets SwiftUI capture a presentation depth that a
+/// with an item-driven destination lets SwiftUI capture a presentation depth that a
 /// simultaneous path mutation can invalidate, trapping in `AnyNavigationPath.removeLast`.
 /// Search exposed a second symptom first: its search field belongs to the **tab bar**, which is the thing the
 /// stack hides on a push — so on the way back the field is torn down and re-presented in the

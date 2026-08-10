@@ -120,8 +120,8 @@ struct HomeNavigationTests {
     /// Worth pinning as a unit test even though the *reason* it lives on the stack is a
     /// timing one only a UI probe can measure (``ChannelListTabBar``): the thing most likely
     /// to break later is not the timing, it is someone deciding the Threads screen should
-    /// hide the bar too, or moving `openedThread` back down into ``ThreadsView`` where the
-    /// stack cannot see it. Both show up here as a wrong answer.
+    /// hide the bar too, or moving a thread out of the path where the stack cannot see it.
+    /// Both show up here as a wrong answer.
     @Test("only a conversation or a thread is read without the tab bar")
     func tabBarVisibility() {
         let conversation = ConversationRoute(channel: Self.row)

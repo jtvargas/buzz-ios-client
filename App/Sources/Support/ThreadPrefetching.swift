@@ -9,9 +9,8 @@ import BuzzKit
 /// ``SyncEngine`` already exposes exactly this method, so the conformance is free.
 ///
 /// Both surfaces that use it hold it as an *optional*, unlike `MessageSending` or
-/// `ThreadOpening`. That is deliberate and is the opposite of the reasoning behind
-/// ``ThreadsView``'s non-defaulted `openedThread`: a missing prefetcher costs a screen
-/// nothing but freshness, while the UI-test hosts that drive these screens
+/// `ThreadOpening`. That is deliberate: a missing prefetcher costs a screen nothing but
+/// freshness, while the UI-test hosts that drive these screens
 /// (``ConversationFixtureHost``) must not reach a network at all, and a required
 /// collaborator there would have to be a no-op double that says the same thing at more
 /// length.
