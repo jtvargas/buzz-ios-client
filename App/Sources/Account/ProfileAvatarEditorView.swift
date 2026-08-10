@@ -73,6 +73,17 @@ struct ProfileAvatarEditorView: View {
                 ToolbarItem(placement: .confirmationAction) { doneButton }
             }
         }
+        // The build tab's tiles are worth tens of megabytes and are worth nothing to any
+        // other screen — everywhere else draws a *finished* avatar, never a part. Handing
+        // them back is why that cache is an `NSCache` and not a dictionary, and nothing
+        // called it; ``AvatarKitThumbnails/prewarm(_:)`` redraws them if the reader returns.
+        //
+        // Said here, on the sheet, and deliberately *not* on ``AvatarKitEditorView``: that
+        // view is one arm of the tab switch above, so it leaves the hierarchy every time the
+        // reader looks at the photo or emoji tab. Releasing there would throw away the tiles
+        // of the grid they are still using and redraw them on the way back — the opposite of
+        // what this cache is for.
+        .onDisappear { AvatarKitThumbnails.removeAll() }
     }
 
     // MARK: - Tabs

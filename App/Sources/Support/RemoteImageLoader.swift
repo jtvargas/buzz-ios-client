@@ -120,6 +120,20 @@ actor RemoteImageLoader {
         cache.image(forKey: Self.cacheKey(url: url, pixelSize: pixelSize))
     }
 
+    /// Hands back every decoded bitmap this loader is holding.
+    ///
+    /// `nonisolated` for the same reason the peek above is: the callers are
+    /// ``AppCaches``, on the main actor, at moments — backgrounding, a session ending —
+    /// where suspending on this actor would mean queueing behind an in-flight fetch.
+    ///
+    /// The remembered failures are deliberately left alone, unlike ``setAuthorization(_:)``:
+    /// nothing about the *credentials* changed, so a source that 404ed a moment ago would
+    /// 404 again, and forgetting that would turn one dropped cache into a fresh round of
+    /// doomed requests on the way back.
+    nonisolated func removeAll() {
+        cache.removeAll()
+    }
+
     /// The downsampled image for `url` at `pixelSize`: from cache when present, otherwise
     /// fetched and decoded once even under concurrent callers, and `nil` when there is no
     /// image to be had.

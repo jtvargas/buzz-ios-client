@@ -79,6 +79,18 @@ extension AppEnvironment {
             let drafts = self.drafts
             Task { await drafts?.flush() }
         }
+        // Then the recomputable bitmaps and rendered text — see ``AppCaches``. Outside the
+        // engine guard because the avatar editor fills a cache during onboarding, before
+        // there is an engine to guard on.
+        //
+        // `.background` and not `phase != .active`: `.inactive` is the app switcher, the
+        // Control Center pull-down and an incoming call, and the reader is usually back
+        // within seconds. Dropping tens of megabytes for those would buy nothing — the
+        // process is not suspended, so `NSCache` can still answer a pressure signal itself —
+        // and would cost a re-decode of everything on screen on the way back in.
+        if phase == .background {
+            AppCaches.releaseSuspendable()
+        }
         guard let engine else { return }
         let heartbeat = self.heartbeat
         Task {
