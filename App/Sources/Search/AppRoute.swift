@@ -1,0 +1,106 @@
+import BuzzKit
+import SwiftUI
+
+/// A screen an app-owned navigation stack can push.
+///
+/// # Why a thread is an element of the path rather than a binding beside it
+///
+/// Because a `NavigationStack(path:)` has to have exactly one driver. Pairing a typed path
+/// with an item-driven destination lets SwiftUI capture a presentation depth that a
+/// simultaneous path mutation can invalidate, trapping in `AnyNavigationPath.removeLast`.
+/// Search exposed a second symptom first: its search field belongs to the **tab bar**, which is the thing the
+/// stack hides on a push — so on the way back the field is torn down and re-presented in the
+/// middle of the gesture, and the owner re-renders with it.
+///
+/// A path-driven pop survives that, because the array *is* the answer and re-applying it pops
+/// again. An item-driven pop does not: it has to be written back through a binding, and a
+/// re-render that lands between the write and the transition finishing restores the value —
+/// the reader sees the screen start to leave and spring back, which is what was reported.
+/// Folding the thread into the path leaves nothing for the re-render to disagree with.
+///
+/// It also makes the tab bar's own rule a function of one thing (`path.isEmpty`) instead of
+/// two, which is what that rule always wanted — see ``ChannelListTabBar``.
+enum AppRoute: Hashable {
+    case conversation(ConversationRoute)
+    case thread(ThreadRoute)
+    case threads
+    case later
+    case drafts
+    case rescheduling(ReminderRow)
+}
+
+extension AppRoute {
+    /// `path` with this screen opened, keeping ``ConversationRoute/pushed(onto:)``'s rule
+    /// about not stacking a conversation on itself.
+    ///
+    /// A thread is always appended. Two threads in one channel are two different destinations,
+    /// and a thread is reachable *from* the conversation it lives in — pushing the same thread
+    /// twice needs the reader to go back through it, which is a journey they chose.
+    ///
+    /// # Why "already here" asks about the top *conversation*, not the top route
+    ///
+    /// Because a thread now sits in this path rather than in a binding beside it, and it sits
+    /// *above* the conversation it was opened from. Asking `path.last` would answer "no" for a
+    /// reader who is in channel A reading one of its threads, and the filter below would then
+    /// lift A out from under the thread and re-append it — leaving `[.thread, .conversation]`,
+    /// both screens rebuilt at new depths with their scroll positions lost, and a back stack
+    /// that skips the channel on the way out.
+    ///
+    /// Before threads joined the path that tap did nothing at all, because `path` held only
+    /// conversations and A was its last element. `conversations.last` is that same question
+    /// asked of the same elements, so the answer does not change.
+    func pushed(onto path: [AppRoute]) -> [AppRoute] {
+        guard case let .conversation(route) = self else { return path + [self] }
+        guard path.conversations.last?.channel.id != route.channel.id else { return path }
+        var updated = path.filter {
+            guard case let .conversation(existing) = $0 else { return true }
+            return existing.channel.id != route.channel.id
+        }
+        updated.append(self)
+        return updated
+    }
+}
+
+extension [AppRoute] {
+    /// The conversations on this stack, in order — what ``RecentPlaces`` reads to name where
+    /// the reader is.
+    var conversations: [ConversationRoute] {
+        compactMap {
+            guard case let .conversation(route) = $0 else { return nil }
+            return route
+        }
+    }
+
+    /// The thread on top of this stack, if the top of it is one.
+    ///
+    /// The top rather than any of them, because this answers "where is the reader now": a
+    /// thread further down is a place they have already left.
+    var openedThread: ThreadRoute? {
+        guard case let .thread(route)? = last else { return nil }
+        return route
+    }
+
+    /// The conversation revealed by popping a thread, if this change did exactly that.
+    func revealedConversation(after previous: [AppRoute]) -> ConversationRoute? {
+        guard case .thread? = previous.last,
+              case let .conversation(route)? = last
+        else { return nil }
+        return route
+    }
+}
+
+struct PushRouteAction {
+    private let handler: (AppRoute) -> Void
+
+    init(_ handler: @escaping (AppRoute) -> Void) {
+        self.handler = handler
+    }
+
+    func callAsFunction(_ route: AppRoute) {
+        handler(route)
+    }
+}
+
+extension EnvironmentValues {
+    @Entry var pushRoute: PushRouteAction?
+}

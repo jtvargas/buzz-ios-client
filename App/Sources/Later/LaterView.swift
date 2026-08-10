@@ -16,8 +16,8 @@ struct LaterView: View {
     let openTarget: (ReminderTarget) -> Void
 
     @Environment(\.entityNames) private var names
+    @Environment(\.pushRoute) private var pushRoute
     @State private var tab: LaterModel.Tab = .inProgress
-    @State private var rescheduling: ReminderRow?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -29,12 +29,6 @@ struct LaterView: View {
         .hiveScreenGround()
         .navigationTitle("Later")
         .navigationBarTitleDisplayMode(.inline)
-        .navigationDestination(item: $rescheduling) { row in
-            RemindMeView { due in
-                rescheduling = nil
-                Task { await model.snooze(row, to: due) }
-            }
-        }
     }
 
     private var tabs: some View {
@@ -79,7 +73,7 @@ struct LaterView: View {
                     isPending: tab == .inProgress,
                     open: { if let target = row.target { openTarget(target) } },
                     complete: { Task { await model.complete(row) } },
-                    reschedule: { rescheduling = row }
+                    reschedule: { pushRoute?(.rescheduling(row)) }
                 )
                 .listRowInsets(
                     EdgeInsets(

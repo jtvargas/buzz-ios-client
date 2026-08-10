@@ -168,8 +168,8 @@ struct SidebarForwardSwipeTests {
 
     // MARK: - Fixtures
 
-    private static func route(_ id: String) -> ConversationRoute {
-        ConversationRoute(channel: row(id))
+    private static func route(_ id: String) -> AppRoute {
+        .conversation(ConversationRoute(channel: row(id)))
     }
 
     private static func row(_ id: String) -> ChannelListRow {

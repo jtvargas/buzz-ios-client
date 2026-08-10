@@ -25,7 +25,7 @@ struct InAppNotificationRoute: Hashable {
     ///
     /// Deliberately **not** folded into ``location``. That value answers a second question —
     /// *is the reader already looking at this?* — by comparing against
-    /// ``RecentPlaces/location(path:openedThread:)``, which knows a channel and a thread and
+    /// ``RecentPlaces/location(path:)``, which knows a channel and a thread and
     /// has no idea which message is on screen. A message id inside it would make every
     /// comparison fail and every banner survive its own destination.
     ///

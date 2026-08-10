@@ -120,24 +120,23 @@ struct HomeNavigationTests {
     /// Worth pinning as a unit test even though the *reason* it lives on the stack is a
     /// timing one only a UI probe can measure (``ChannelListTabBar``): the thing most likely
     /// to break later is not the timing, it is someone deciding the Threads screen should
-    /// hide the bar too, or moving `openedThread` back down into ``ThreadsView`` where the
-    /// stack cannot see it. Both show up here as a wrong answer.
+    /// hide the bar too, or moving a thread out of the path where the stack cannot see it.
+    /// Both show up here as a wrong answer.
     @Test("only a conversation or a thread is read without the tab bar")
     func tabBarVisibility() {
         let conversation = ConversationRoute(channel: Self.row)
         let thread = ThreadRoute(root: "root", channel: "channel")
 
-        // Nothing pushed — the sidebar. And, by construction, the Threads screen too: it
-        // keeps the bar precisely by not appearing in either input, so there is no second
-        // assertion to write for it here. That it is genuinely reachable in this state is
-        // the job of ``ChannelListView``'s separate `showsThreads`.
-        #expect(ChannelListTabBar.visibility(conversations: [], openedThread: nil) == .visible)
+        #expect(ChannelListTabBar.visibility(path: []) == .visible)
+        #expect(ChannelListTabBar.visibility(path: [.threads]) == .visible)
+        #expect(ChannelListTabBar.visibility(path: [.later]) == .visible)
+        #expect(ChannelListTabBar.visibility(path: [.drafts]) == .visible)
         // A conversation, and a thread reached from inside one.
-        #expect(ChannelListTabBar.visibility(conversations: [conversation], openedThread: nil) == .hidden)
+        #expect(ChannelListTabBar.visibility(path: [.conversation(conversation)]) == .hidden)
         // A thread reached from the Threads screen, with no conversation under it. This is
-        // the case that only works because the route is held above ``ThreadsView``.
-        #expect(ChannelListTabBar.visibility(conversations: [], openedThread: thread) == .hidden)
-        #expect(ChannelListTabBar.visibility(conversations: [conversation], openedThread: thread) == .hidden)
+        // the case that only works because the thread is in the stack's path.
+        #expect(ChannelListTabBar.visibility(path: [.thread(thread)]) == .hidden)
+        #expect(ChannelListTabBar.visibility(path: [.conversation(conversation), .thread(thread)]) == .hidden)
     }
 
     private static let row = ChannelListRow(
@@ -150,6 +149,52 @@ struct HomeNavigationTests {
         lastMessageSnippet: nil,
         lastMessageAuthor: nil
     )
+
+    private static let otherRow = ChannelListRow(
+        id: "other",
+        name: "random",
+        about: nil,
+        picture: nil,
+        isPrivate: false,
+        lastMessageAt: nil,
+        lastMessageSnippet: nil,
+        lastMessageAuthor: nil
+    )
+
+    // MARK: - What a push does to the stack
+
+    /// ``AppRoute/pushed(onto:)`` is now the single function every push in the app runs
+    /// through — a sidebar row, a `#channel` pill, a profile sheet's Message, a replies
+    /// strip, a shortcut card. It had no test of its own: the suites that covered the rule
+    /// exercised `ConversationRoute.pushed(onto:)`, which no production code calls any more.
+    @Test("a conversation is not stacked on itself, and a thread does not hide that")
+    func pushedOntoPath() {
+        let conversation = AppRoute.conversation(ConversationRoute(channel: Self.row))
+        let other = AppRoute.conversation(ConversationRoute(channel: Self.otherRow))
+        let thread = AppRoute.thread(ThreadRoute(root: "root", channel: "channel"))
+
+        #expect(conversation.pushed(onto: []) == [conversation])
+        #expect(conversation.pushed(onto: [conversation]) == [conversation])
+        #expect(other.pushed(onto: [conversation]) == [conversation, other])
+
+        // The regression this test exists for. A reader in a channel opens one of its
+        // threads, then presses a `#channel` pill naming the channel they are already in.
+        // Asking `path.last` answers "not here" — the thread is on top — and the conversation
+        // gets lifted out from under it and re-appended, so the stack reorders to
+        // `[.thread, .conversation]`: both screens rebuild at new depths and lose their
+        // scroll, and backing out of the channel lands in the thread rather than the sidebar.
+        // Before threads were path elements this tap did nothing, and it does nothing again.
+        #expect(conversation.pushed(onto: [conversation, thread]) == [conversation, thread])
+
+        // Not over-corrected: a conversation *below* the top one still moves to the top
+        // rather than appearing twice. That rule predates threads being in the path.
+        #expect(conversation.pushed(onto: [conversation, other]) == [other, conversation])
+
+        // A thread is always appended — two threads in one channel are two destinations,
+        // and re-pushing one is a journey the reader chose.
+        #expect(thread.pushed(onto: [thread]) == [thread, thread])
+        #expect(AppRoute.threads.pushed(onto: []) == [.threads])
+    }
 
     // MARK: - What the workspace is called
 

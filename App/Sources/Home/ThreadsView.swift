@@ -39,18 +39,8 @@ struct ThreadsView: View {
     /// This device's per-thread read marks. A thread already read here is no longer new,
     /// even though the channel's shared frontier has not moved.
     @Environment(\.threadReadMarks) private var threadReads
+    @Environment(\.pushRoute) private var pushRoute
     @State private var model: ThreadsModel
-    /// The thread this screen pushed, and where it should land when it opens.
-    ///
-    /// Held by ``ChannelListView`` rather than here, because the view that owns the
-    /// `NavigationStack` is the one that declares whether the tab bar is up, and it cannot
-    /// declare that for a push it cannot see (``ChannelListView/hidesTabBar``). Only the
-    /// The destination it opens is declared by that view too, now that the Drafts screen
-    /// opens threads as well: two screens on one stack cannot each declare a destination
-    /// for the same route type, and the stack that owns the push is the honest place for
-    /// the one declaration. This screen still *sets* the route, so what it opens is
-    /// unchanged.
-    @Binding var openedThread: ThreadRoute?
     /// Whose profile is open, if anyone's — set by pressing a mention inside a summary.
     @State private var profilePeer: ProfilePeer?
     /// The workspace roster, so the profile sheet this screen presents shows presence
@@ -69,39 +59,32 @@ struct ThreadsView: View {
     init(
         store: BuzzEventStore,
         engine: SyncEngine,
-        selfPubkey: String?,
-        openedThread: Binding<ThreadRoute?>
+        selfPubkey: String?
     ) {
         self.init(
             store: store,
             refresher: engine,
             prefetcher: engine,
             presence: engine.presenceStore,
-            selfPubkey: selfPubkey,
-            openedThread: openedThread
+            selfPubkey: selfPubkey
         )
     }
 
     /// The same screen with its collaborators named, so a test can drive it without a
     /// relay socket — the seam ``ChannelTimelineView`` and ``ThreadView`` grew in #53.
     ///
-    /// `openedThread` has no default on purpose. `.constant(nil)` would compile everywhere
-    /// and silently swallow every push, which is the failure that is hardest to see: a test
-    /// that taps a row and asserts a thread opened would fail with nothing wrong on screen.
     init(
         store: BuzzEventStore,
         refresher: any ConversationRefreshing,
         prefetcher: (any ThreadPrefetching)? = nil,
         presence: PresenceStore,
-        selfPubkey: String?,
-        openedThread: Binding<ThreadRoute?>
+        selfPubkey: String?
     ) {
         self.store = store
         self.refresher = refresher
         self.prefetcher = prefetcher
         presenceStore = presence
         self.selfPubkey = selfPubkey
-        _openedThread = openedThread
         _model = State(initialValue: ThreadsModel(store: store, selfPubkey: selfPubkey))
         _presence = State(initialValue: PresenceModel(store: presence))
     }
@@ -178,12 +161,12 @@ struct ThreadsView: View {
         at anchor: ThreadLanding,
         focusesComposer: Bool
     ) {
-        openedThread = ThreadRoute(
+        pushRoute?(.thread(ThreadRoute(
             root: activity.rootID,
             channel: activity.channelID,
             anchor: anchor,
             focusesComposer: focusesComposer
-        )
+        )))
     }
 
     /// Whether this thread still holds something for the reader: replies past the channel's
@@ -224,14 +207,4 @@ struct ThreadsView: View {
     /// single row — so the boundary between two conversations would be the least visible gap
     /// on the screen. Eighteen top and bottom makes it 36 between rows against 12 within one.
     private static let rowInsets = EdgeInsets(top: 18, leading: 16, bottom: 18, trailing: 16)
-}
-
-/// The Threads screen as a navigation value.
-///
-/// A type with no payload, and not a `Bool`, so the push goes through
-/// `navigationDestination(item:)` like every other one in the app rather than through the
-/// `isPresented` overload — which cannot say *which* screen it presents and so cannot sit
-/// beside another destination on the same stack.
-struct ThreadsRoute: Hashable, Identifiable {
-    var id: String { "threads" }
 }

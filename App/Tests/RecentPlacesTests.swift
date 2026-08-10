@@ -194,16 +194,17 @@ struct RecentPlacesTests {
             lastMessageSnippet: nil,
             lastMessageAuthor: nil
         )
-        let path = [ConversationRoute(channel: channel)]
+        let conversation = ConversationRoute(channel: channel)
+        let path: [AppRoute] = [.conversation(conversation)]
 
-        #expect(RecentPlaces.location(path: path, openedThread: nil) == .channel("a"))
-        #expect(RecentPlaces.location(path: [], openedThread: nil) == nil)
+        #expect(RecentPlaces.location(path: path) == .channel("a"))
+        #expect(RecentPlaces.location(path: []) == nil)
         #expect(
             RecentPlaces.location(
-                path: path,
-                openedThread: ThreadRoute(root: "root", channel: "a")
+                path: path + [.thread(ThreadRoute(root: "root", channel: "a"))]
             ) == .thread(channelID: "a", rootID: "root")
         )
+        #expect(RecentPlaces.location(path: [.threads]) == nil)
     }
 
     /// The regression the owner reported as "the history randomly disappears".

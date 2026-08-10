@@ -43,6 +43,7 @@ struct ConversationFixtureHost: View {
     /// the press to Safari — the documented behaviour when no reader is installed — so the
     /// sheet under test would never appear.
     @State private var readingDocument: MarkdownDocument?
+    @State private var path: [AppRoute] = []
 
     init(options: ConversationFixture.Options) {
         self.options = options
@@ -70,8 +71,11 @@ struct ConversationFixtureHost: View {
     var body: some View {
         Group {
             if let prepared {
-                NavigationStack {
+                NavigationStack(path: $path) {
                     surface(prepared)
+                        .navigationDestination(for: AppRoute.self) { route in
+                            fixtureDestination(route, prepared: prepared)
+                        }
                 }
                 // Without this the heading resolves through an *empty* directory and every
                 // fixture conversation is titled "Untitled conversation" — which is what
@@ -84,6 +88,7 @@ struct ConversationFixtureHost: View {
                     EntityNames(snapshot: prepared.directory, channels: [channelRow])
                 )
                 .environment(\.openMarkdownDocument, OpenMarkdownDocumentAction { readingDocument = $0 })
+                .environment(\.pushRoute, PushRouteAction { route in path = route.pushed(onto: path) })
                 .sheet(item: $readingDocument) { document in
                     MarkdownDocumentSheet(document: document)
                 }
@@ -143,6 +148,30 @@ struct ConversationFixtureHost: View {
                 uploader: { uploader },
                 selfPubkey: nil
             )
+        }
+    }
+
+    @ViewBuilder
+    private func fixtureDestination(
+        _ route: AppRoute,
+        prepared: ConversationFixture.Prepared
+    ) -> some View {
+        switch route {
+        case let .thread(route):
+            ThreadView(
+                root: route.root,
+                channel: route.channel,
+                store: prepared.store,
+                sender: prepared.sender,
+                opener: opener,
+                presence: presence,
+                uploader: { uploader },
+                selfPubkey: nil,
+                landingOn: route.anchor,
+                focusingComposer: route.focusesComposer
+            )
+        case .conversation, .threads, .later, .drafts, .rescheduling:
+            EmptyView()
         }
     }
 }

@@ -236,8 +236,7 @@ enum UnreadIndicator: Hashable, Sendable {
 /// styled, and the shared clock is not read once per row. What used to be the most
 /// expensive part of a sidebar snapshot is now absent rather than optimised.
 struct SidebarRow: Identifiable {
-    /// The navigation value the row pushes. Deliberately still a ``ChannelListRow``,
-    /// so the pushed timeline's `navigationDestination(for:)` is unchanged.
+    /// The channel payload wrapped in the stack's conversation route when this row is pushed.
     let channel: ChannelListRow
     /// The conversation this row *is*, as the shared resolver sees it.
     let conversation: ConversationIdentity
