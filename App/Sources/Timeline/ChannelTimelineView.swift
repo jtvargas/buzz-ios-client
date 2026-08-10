@@ -16,7 +16,6 @@ struct ChannelTimelineView: View {
     @State private var presence: PresenceModel
     @State private var typing: ChannelTypingModel
     @State private var access: ChannelAccessModel
-    @State private var openedThread: ThreadRoute?
     @State private var showsChannelDetails = false
     /// Whether the roster sheet is open — the `person.3.fill` beside the `⋮`.
     @State private var showsPeople = false
@@ -31,6 +30,7 @@ struct ChannelTimelineView: View {
     /// only the in-flight moment between the tap and the roster commit.
     @State private var isJoining = false
     @Environment(\.entityNames) private var names
+    @Environment(\.pushRoute) private var pushRoute
     /// Optional, and that is what makes this surface mountable outside the app graph.
     ///
     /// The non-optional form traps in `EnvironmentBox.update` when nothing has been put in
@@ -46,10 +46,7 @@ struct ChannelTimelineView: View {
     /// through a `SyncEngine`. Typing and read-state are handed to the model and not kept
     /// here, because nothing below reads them.
     ///
-    /// `sender` and `opener` are carried so a thread pushed from a row is built with the same
-    /// collaborators as this screen; `presenceStore` backs the channel-details sheet.
-    private let sender: any MessageSending
-    private let opener: any ThreadOpening
+    /// `presenceStore` backs the channel-details sheet.
     /// Fills in this channel's threads, once, on arrival. Optional for the reason given on
     /// ``ThreadPrefetching``.
     private let prefetcher: (any ThreadPrefetching)?
@@ -153,8 +150,6 @@ struct ChannelTimelineView: View {
         self.channel = channel
         channelID = channel.id
         self.store = store
-        self.sender = sender
-        self.opener = opener
         self.prefetcher = prefetcher
         presenceStore = presence
         self.uploader = uploader
@@ -304,32 +299,6 @@ struct ChannelTimelineView: View {
                 }
             }
         )
-        .navigationDestination(item: $openedThread) { route in
-            ThreadView(
-                root: route.root,
-                channel: route.channel,
-                store: store,
-                sender: sender,
-                opener: opener,
-                presence: presenceStore,
-                // The model's, not a second copy: a thread pushed from a row keeps its
-                // own draft in the same place this channel keeps its own.
-                drafts: model.drafts,
-                uploader: uploader,
-                selfPubkey: selfPubkey,
-                // The same engine this screen joins through, so a thread opened from a
-                // channel the reader has not joined offers the same way in rather than a
-                // dead bar.
-                joiner: lifecycleEngine,
-                lifecycleEngine: lifecycleEngine,
-                // Carried, because a thread can now be pushed from here *at* one of its
-                // replies — the walk below discovers that a message it was sent to find is
-                // one this page excludes. Every other push from this screen leaves it at
-                // the default.
-                landingOn: route.anchor,
-                focusingComposer: route.focusesComposer
-            )
-        }
         .task { await model.run() }
         // After the first render, never from the prime: the reach ends in a `jumpToken` bump,
         // and a bump made before the scaffold has installed its `onChange` is a change that
@@ -345,9 +314,9 @@ struct ChannelTimelineView: View {
         // already said what they had to say on the surface itself.
         .onChange(of: model.focusThreadRoot) { _, root in
             guard let root, let focus else { return }
-            openedThread = ThreadRoute(
+            pushRoute?(.thread(ThreadRoute(
                 root: root, channel: channelID, anchor: .reply(focus.messageID)
-            )
+            )))
         }
         .task { await presence.run() }
         // Here rather than inside ``TypingIndicatorView``, which is absent from the view
@@ -369,35 +338,6 @@ struct ChannelTimelineView: View {
         // Not cleared when the view goes away: the engine's preference is advisory, and
         // the channel just left is the one most likely to be opened again.
         .task { await lifecycleEngine?.setActiveChannel(channelID) }
-        .onChange(of: openedThread) { _, thread in
-            guard let thread else {
-                // Popping a thread reveals this already-mounted channel without restarting
-                // its `.task`, so record that return explicitly and move the channel back
-                // to MRU front — for the engine, and for the history alike.
-                Task { await lifecycleEngine?.setActiveChannel(channelID) }
-                return visit(.channel(channelID))
-            }
-            visit(.thread(channelID: thread.channel, rootID: thread.root))
-        }
-    }
-
-    /// Records where the reader is, for the home screen's history.
-    ///
-    /// # Why this is said here and not once, up in the stack
-    ///
-    /// Both tabs derive the place they are from `path` plus the thread *they* have open
-    /// (``RecentPlaces/location(path:openedThread:)``), which covers every route those
-    /// screens push. It cannot cover this one: a thread opened from a reply in a channel is
-    /// pushed by **this** view's own `navigationDestination`, from a `@State` no ancestor
-    /// can see, so to the sidebar the reader never left the channel. The owner found exactly
-    /// that — threads reached from the Threads tab were listed and threads reached from a
-    /// message were not.
-    ///
-    /// So the fact is reported by the view that holds it. Every other way into a thread
-    /// still reports itself the way it always did; this adds the one that was silent.
-    private func visit(_ location: InAppNotificationLocation) {
-        guard let appEnvironment else { return }
-        appEnvironment.recents.visit(location, in: appEnvironment.communities.activeID)
     }
 
     /// How this conversation presents itself — a channel, or the person on the other
@@ -640,7 +580,11 @@ private extension ChannelTimelineView {
     func open(thread row: TimelineRow, focusingComposer: Bool = false) {
         let root = row.rootID ?? row.id
         _ = ConversationKeyboardResignation.resignActiveResponder()
-        openedThread = ThreadRoute(root: root, channel: channelID, focusesComposer: focusingComposer)
+        pushRoute?(.thread(ThreadRoute(
+            root: root,
+            channel: channelID,
+            focusesComposer: focusingComposer
+        )))
     }
 
     /// A typer's name, through the injected directory — the same answer the sidebar,
