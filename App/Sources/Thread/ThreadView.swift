@@ -27,6 +27,8 @@ struct ThreadView: View {
     @State private var profilePeer: ProfilePeer?
     /// The reply whose actions sheet is open, if any — set by a long press on a row.
     @State private var messageActions: MessageActionTarget?
+    /// The chip whose reactor list is open, if any — set by a hold on a reaction.
+    @State private var reactionReactors: ReactionReactorsTarget?
     /// Whether the participants sheet is open — the `person.3.fill` in the bar.
     @State private var showsPeople = false
     /// Whether a join started from the bar is on the wire — see the channel's own.
@@ -43,6 +45,10 @@ struct ThreadView: View {
     /// model above is this view's; a sheet is a separate lifetime and reads it from the
     /// same store rather than borrowing a model whose `.task` belongs to this screen.
     private let presenceStore: PresenceStore
+    /// Kept for the same reason ``presenceStore`` is: the reactor sheet reads who reacted
+    /// on its own lifetime, rather than borrowing an observation that belongs to this
+    /// screen.
+    private let store: BuzzEventStore
     /// Joins the channel this thread hangs off, for the bar a non-member sees.
     ///
     /// Optional and defaulted, because three of this view's four call sites reach it
@@ -133,6 +139,7 @@ struct ThreadView: View {
     ) {
         channelID = channel
         presenceStore = presence
+        self.store = store
         self.joiner = joiner
         self.lifecycleEngine = lifecycleEngine
         self.landing = landing
@@ -219,6 +226,13 @@ struct ThreadView: View {
             )
         }
         .profileSheet(peer: $profilePeer, presence: presence)
+        // The channel's reactor list, from the same hold on a chip.
+        .reactionReactorsSheet(
+            target: $reactionReactors,
+            store: store,
+            presenceStore: presenceStore,
+            selfPubkey: model.selfPubkey
+        )
         // The channel's sheet, minus "Reply in thread": this *is* the thread.
         .messageActionsSheet(
             target: $messageActions,
@@ -322,6 +336,10 @@ struct ThreadView: View {
                 // No `onOpenThread`: a reply inside a thread has nowhere further to go,
                 // which is also why no row here draws a reply preview.
                 onLongPress: { messageActions = messageActionTarget(for: row) },
+                onLongPressReaction: { reactionReactors = ReactionReactorsTarget(
+                    messageID: row.id,
+                    emoji: $0.emoji
+                ) },
                 onOpenProfile: { profilePeer = ProfilePeer(pubkey: $0) },
                 conversation: conversation
             )

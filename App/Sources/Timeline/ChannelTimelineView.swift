@@ -24,6 +24,8 @@ struct ChannelTimelineView: View {
     @State private var messageActions: MessageActionTarget?
     /// Whose profile is open, if anyone's — set by a tap on a row's avatar or name.
     @State private var profilePeer: ProfilePeer?
+    /// The chip whose reactor list is open, if any — set by a hold on a reaction.
+    @State private var reactionReactors: ReactionReactorsTarget?
     /// Whether a join started from the bar is on the wire. Local to the surface that
     /// offers it: the *outcome* is read from the store like everything else, and this is
     /// only the in-flight moment between the tap and the roster commit.
@@ -267,6 +269,13 @@ struct ChannelTimelineView: View {
         // The same modifier a thread uses, so the two surfaces cannot present a
         // different profile sheet for the same tap.
         .profileSheet(peer: $profilePeer, presence: presence)
+        // Likewise the reactor list, from the same hold on a chip.
+        .reactionReactorsSheet(
+            target: $reactionReactors,
+            store: store,
+            presenceStore: presenceStore,
+            selfPubkey: selfPubkey
+        )
         // Likewise the same actions sheet, from the same long press. The channel is the
         // surface that offers "Reply in thread", because it is the one with a thread to
         // push — and that reply is a request to *write*, so the composer takes the keyboard
@@ -588,6 +597,10 @@ private extension ChannelTimelineView {
                     threadRootID: nil
                 )
             },
+            onLongPressReaction: { reactionReactors = ReactionReactorsTarget(
+                messageID: row.id,
+                emoji: $0.emoji
+            ) },
             onOpenProfile: { profilePeer = ProfilePeer(pubkey: $0) },
             conversation: conversation
         )

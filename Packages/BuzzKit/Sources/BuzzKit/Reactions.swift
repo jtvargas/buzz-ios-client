@@ -183,7 +183,12 @@ extension BuzzEventStore {
 
     /// One queued own reaction not yet in the log: which message it targets and the
     /// emoji it carries, keyed for the merge by its own (pending) event id.
-    private struct PendingReaction {
+    ///
+    /// Internal rather than file-private so ``fetchReactors(_:targetID:selfPubkey:)`` can
+    /// apply the same optimistic layer to the reactor list that this file applies to the
+    /// tallies — one reading of the outbox, so a chip and the list behind it cannot
+    /// answer differently.
+    struct PendingReaction {
         let eventID: String
         let emoji: String
     }
@@ -193,7 +198,7 @@ extension BuzzEventStore {
     /// names. Only queued sends the log does not yet hold are read — the same
     /// `NOT EXISTS` guard the timeline union uses — so a confirmed reaction is counted
     /// once, by the projection, never twice.
-    private static func optimisticOwnReactions(
+    static func optimisticOwnReactions(
         _ db: Database,
         targetIDs: Set<String>,
         selfPubkey: String
