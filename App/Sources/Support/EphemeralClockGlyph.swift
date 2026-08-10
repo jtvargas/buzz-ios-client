@@ -53,10 +53,10 @@ struct EphemeralClockGlyph: View {
 /// The ring's solid half, and the two hands.
 private struct EphemeralClockFace: Shape {
     func path(in rect: CGRect) -> Path {
-        let m = EphemeralClockMetrics.self
-        let unit = min(rect.width, rect.height) / m.box
-        func point(_ p: CGPoint) -> CGPoint {
-            CGPoint(x: rect.minX + p.x * unit, y: rect.minY + p.y * unit)
+        let metrics = EphemeralClockMetrics.self
+        let unit = min(rect.width, rect.height) / metrics.box
+        func point(_ onBox: CGPoint) -> CGPoint {
+            CGPoint(x: rect.minX + onBox.x * unit, y: rect.minY + onBox.y * unit)
         }
 
         var path = Path()
@@ -64,15 +64,15 @@ private struct EphemeralClockFace: Shape {
         // angle so it is the sweep and not the `clockwise:` flag that decides which half
         // is drawn — that flag is named for a y-up space and this one is y-down.
         path.addArc(
-            center: point(m.center),
-            radius: m.ringRadius * unit,
-            startAngle: m.arcStart,
-            endAngle: m.arcEnd,
+            center: point(metrics.center),
+            radius: metrics.ringRadius * unit,
+            startAngle: metrics.arcStart,
+            endAngle: metrics.arcEnd,
             clockwise: false
         )
-        path.move(to: point(m.hourHandTip))
-        path.addLine(to: point(m.center))
-        path.addLine(to: point(m.minuteHandTip))
+        path.move(to: point(metrics.hourHandTip))
+        path.addLine(to: point(metrics.center))
+        path.addLine(to: point(metrics.minuteHandTip))
         return path
     }
 }
@@ -80,16 +80,16 @@ private struct EphemeralClockFace: Shape {
 /// The nine dots the ring fades into.
 private struct EphemeralClockDots: Shape {
     func path(in rect: CGRect) -> Path {
-        let m = EphemeralClockMetrics.self
-        let unit = min(rect.width, rect.height) / m.box
-        let centre = CGPoint(x: rect.minX + m.center.x * unit, y: rect.minY + m.center.y * unit)
-        let radius = m.stroke / 2 * unit
+        let metrics = EphemeralClockMetrics.self
+        let unit = min(rect.width, rect.height) / metrics.box
+        let centre = CGPoint(x: rect.minX + metrics.center.x * unit, y: rect.minY + metrics.center.y * unit)
+        let radius = metrics.stroke / 2 * unit
 
         var path = Path()
-        for angle in m.dotAngles {
+        for angle in metrics.dotAngles {
             let dot = CGPoint(
-                x: centre.x + cos(angle.radians) * m.ringRadius * unit,
-                y: centre.y + sin(angle.radians) * m.ringRadius * unit
+                x: centre.x + cos(angle.radians) * metrics.ringRadius * unit,
+                y: centre.y + sin(angle.radians) * metrics.ringRadius * unit
             )
             path.addEllipse(in: CGRect(
                 x: dot.x - radius, y: dot.y - radius,

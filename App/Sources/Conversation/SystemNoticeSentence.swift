@@ -84,31 +84,8 @@ struct SystemNoticeSentence: Hashable {
 
         title = subject(notice.subject)
 
-        /// The others, as *", along with A, B and 2 others"* — or nothing at all when
-        /// this arrival was not shared. `lead` is the punctuation that joins it to the
-        /// clause before, which differs between the two arrival sentences.
         func alongWith(lead: String) -> [Run] {
-            guard !alsoJoined.isEmpty else { return [] }
-            let named = alsoJoined.prefix(Self.maxNamedArrivals)
-            let hidden = alsoJoined.count - named.count
-            var runs: [Run] = [.words(lead)]
-            for (index, pubkey) in named.enumerated() {
-                if index > 0 {
-                    // "A and B" for a pair, "A, B, and C" for more — and always a comma
-                    // before a trailing "and N others", which is not one of the names.
-                    let isLast = index == named.count - 1 && hidden == 0
-                    runs.append(.words(isLast ? (named.count == 2 ? " and " : ", and ") : ", "))
-                }
-                runs.append(.name(object(pubkey)))
-            }
-            if hidden > 0 {
-                // A count, not a name: nobody is being pointed at, so it takes body
-                // weight like the rest of the predicate. Singular at one, which both
-                // reference clients skip — they print "1 others" — and which costs
-                // nothing to get right.
-                runs.append(.words(", and \(hidden) \(hidden == 1 ? "other" : "others")"))
-            }
-            return runs
+            Self.alongWith(alsoJoined, lead: lead, object: object)
         }
 
         switch notice {
@@ -119,37 +96,87 @@ struct SystemNoticeSentence: Hashable {
             // and the subject here is whoever was added.
             let verb = isSelf(target) ? "were added by " : "was added by "
             action = [.words(verb), .name(object(actor))] + alongWith(lead: ", along with ")
-        case .memberLeft:
-            action = [.words("left the channel")]
         case let .memberRemoved(_, target):
             action = [
                 .words("removed "),
                 .name(object(target)),
                 .words(" from the channel"),
             ]
+        default:
+            action = Self.unaccompaniedAction(for: notice)
+        }
+    }
+
+    /// Every notice whose predicate names nobody but its own subject — which is all of
+    /// them except an arrival, which can be shared, and a removal, which points at the
+    /// person removed.
+    ///
+    /// Split out because the initialiser is a switch over every notice the app has, so it
+    /// is the thing that grows: three notices ago it was under the complexity ceiling and
+    /// the huddle pair took it over. Cases that need no name resolution have no business
+    /// being in there.
+    private static func unaccompaniedAction(for notice: SystemNotice) -> [Run] {
+        switch notice {
+        case .memberLeft:
+            [.words("left the channel")]
         case let .topicChanged(_, topic):
             // Curly quotes, and the topic is not a name: it is the thing said, not
             // somebody said it, so it takes the body weight the rest of the predicate
             // has rather than the emphasis a person's name gets.
-            action = [.words("changed the topic to \u{201C}\(topic)\u{201D}")]
+            [.words("changed the topic to \u{201C}\(topic)\u{201D}")]
         case let .purposeChanged(_, purpose):
-            action = [.words("changed the purpose to \u{201C}\(purpose)\u{201D}")]
+            [.words("changed the purpose to \u{201C}\(purpose)\u{201D}")]
         case .channelCreated:
-            action = [.words("created this channel")]
+            [.words("created this channel")]
         case .channelArchived:
-            action = [.words("archived this channel")]
+            [.words("archived this channel")]
         case .channelUnarchived:
-            action = [.words("unarchived this channel")]
+            [.words("unarchived this channel")]
         case .huddleStarted:
             // The Flutter client's wording, matched exactly
             // (`mobile/lib/features/channels/timeline_message.dart:111`): the same event
             // read on two clients should read the same, and neither should have to guess
             // what the other says.
-            action = [.words("started a huddle")]
+            [.words("started a huddle")]
         case .huddleEnded:
             // "the huddle" rather than "a huddle" — by the time one ends there is a
             // particular one to point at.
-            action = [.words("ended the huddle")]
+            [.words("ended the huddle")]
+        case .memberJoined, .memberRemoved:
+            // Handled by the initialiser, which has the name resolution these two need.
+            // Listed rather than defaulted so a notice added later fails to compile here
+            // instead of silently rendering as an empty predicate.
+            []
         }
+    }
+
+    /// The others, as *", along with A, B and 2 others"* — or nothing at all when this
+    /// arrival was not shared. `lead` is the punctuation that joins it to the clause
+    /// before, which differs between the two arrival sentences.
+    ///
+    /// Lifted out of the initialiser rather than nested in it: a nested function's
+    /// branches count towards the enclosing one, and the initialiser is a switch over
+    /// every notice the app has, so it is the thing that grows.
+    private static func alongWith(_ alsoJoined: [String], lead: String, object: (String) -> String) -> [Run] {
+        guard !alsoJoined.isEmpty else { return [] }
+        let named = alsoJoined.prefix(maxNamedArrivals)
+        let hidden = alsoJoined.count - named.count
+        var runs: [Run] = [.words(lead)]
+        for (index, pubkey) in named.enumerated() {
+            if index > 0 {
+                // "A and B" for a pair, "A, B, and C" for more — and always a comma
+                // before a trailing "and N others", which is not one of the names.
+                let isLast = index == named.count - 1 && hidden == 0
+                runs.append(.words(isLast ? (named.count == 2 ? " and " : ", and ") : ", "))
+            }
+            runs.append(.name(object(pubkey)))
+        }
+        if hidden > 0 {
+            // A count, not a name: nobody is being pointed at, so it takes body weight
+            // like the rest of the predicate. Singular at one, which both reference
+            // clients skip — they print "1 others" — and which costs nothing to get right.
+            runs.append(.words(", and \(hidden) \(hidden == 1 ? "other" : "others")"))
+        }
+        return runs
     }
 }

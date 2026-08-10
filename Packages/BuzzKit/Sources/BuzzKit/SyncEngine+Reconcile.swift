@@ -337,29 +337,46 @@ extension SyncEngine {
 
     // MARK: - Relay notices
 
-    /// Fetches a channel's relay notices — *somebody joined, was added, left, the topic
-    /// changed* — which no other path in this engine can reach.
+    /// Fetches the things that narrate a channel rather than being said in it — the relay's
+    /// own notices (*somebody joined, was added, left, the topic changed*) and a huddle
+    /// starting or ending — which no other path in this engine can reach.
     ///
     /// # Why they need their own fetch
     ///
     /// A kind-40099 notice is stored by the relay through `insert_event`, **not**
-    /// `insert_event_with_thread_metadata` (`side_effects.rs`, `emit_system_message`).
-    /// It therefore has no `thread_metadata` row — and a channel window page is computed
-    /// *from* that table. No value of `kinds` on a window request can return one, so
-    /// widening ``reconcileStep``'s filter would look like the fix and do nothing.
+    /// `insert_event_with_thread_metadata` (`side_effects.rs`, `emit_system_message`), so
+    /// it has no `thread_metadata` row. Kinds 48100 and 48103 are stored the same way:
+    /// measured on the owner's relay, 0 of 774 notices and 0 of 16 huddle events carry
+    /// one. And ``reconcileStep`` — the pass that closes the gap between the head and the
+    /// watermark, which is the only thing that ever backfills a channel — asks for
+    /// `kind:9` alone. So without this fetch, neither kind is ever *requested* for any
+    /// moment this device was not already watching.
     ///
     /// The only other route is the live subscription, whose `since` reaches back
     /// ``SyncEngineConfig/liveSinceWindow`` — five seconds. So without this, a notice is
     /// visible only to a client subscribed to that channel in the moment it happened, and
     /// invisible for ever afterwards. Reported by the owner 2026-08-01: a member added
     /// days earlier rendered on the Flutter client and was absent here, because this
-    /// device had never held the event at all.
+    /// device had never held the event at all. Reported again 2026-08-10 in the huddle's
+    /// own shape: three huddles held on the relay, none of them on the phone, because the
+    /// build that could read them was installed after they had ended.
+    ///
+    /// An earlier version of this comment said no value of `kinds` on a *window* request
+    /// could return one. Not true of the relay as it stands: `get_channel_window_on`
+    /// left-joins `thread_metadata` and admits `tm.depth IS NULL` (`buzz-db/src/thread.rs`),
+    /// which is why ``loadOlderHistory`` pages both as a reader scrolls back. This fetch is
+    /// still the one that matters — it is the only one with no floor under it.
     ///
     /// # Shape
     ///
     /// An ordinary NIP-01 one-shot — ``fallbackAssemble``'s mechanism, so this is a
     /// known-good path — ingested as `.backfill`, which keeps it off the live watermark.
-    /// No `since`: the point is the notices this device never saw; the limit bounds it.
+    /// No `since`: the point is the events this device never saw; the limit bounds it.
+    ///
+    /// Two filters rather than one carrying three kinds, so each gets its own `limit` at
+    /// the relay. Merged, a channel with a long joining history would spend the whole
+    /// budget on notices and return no huddle at all — and it would do it silently, which
+    /// is the failure this fetch exists to end rather than reproduce.
     ///
     /// Best-effort and deliberately not a gate on sync state: a channel whose notices
     /// could not be fetched is still a channel whose *messages* reconciled, and failing
@@ -372,12 +389,19 @@ extension SyncEngine {
     /// to mean the caller cannot be blocked by it, not merely that its errors are
     /// swallowed.
     func assembleNotices(_ channel: String, generation: Int) async {
-        let filter = Filter(
+        let notices = Filter(
             kinds: [.systemMessage],
             limit: config.noticeBackfillLimit,
             tagQueries: ["h": [channel]]
         )
-        let events = (try? await subscriptions.query([filter])) ?? []
+        // 48101/48102 — a participant arriving and leaving — are deliberately absent, for
+        // the same reason the live subscription does not carry them: nothing renders one.
+        let huddles = Filter(
+            kinds: [.huddleStarted, .huddleEnded],
+            limit: config.noticeBackfillLimit,
+            tagQueries: ["h": [channel]]
+        )
+        let events = (try? await subscriptions.query([notices, huddles])) ?? []
         // Superseded during the query: abandon, writing nothing — the new generation
         // owns this channel now.
         guard isCurrent(generation) else { return }

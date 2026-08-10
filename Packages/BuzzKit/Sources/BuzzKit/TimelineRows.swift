@@ -46,12 +46,18 @@ extension BuzzEventStore {
     ///
     /// # Why the kinds match ``fetchTimeline(_:channel:before:limit:)``
     ///
-    /// The channel page returns messages *and* kind-40099 relay notices, so a caller
-    /// holding a page holds ids of both. Filtering to the message kind here would make a
-    /// notice an id this read silently returns nothing for — a row the timeline calls a
-    /// row and this one does not, which is the second definition of a message the file
-    /// header exists to prevent. A notice is not inert, either: a relay tombstone applies
-    /// to one through the same `deleted` predicate as any other row.
+    /// The channel page returns messages, kind-40099 relay notices *and* the two huddle
+    /// kinds it narrates the same way, so a caller holding a page holds ids of all four.
+    /// Filtering to the message kind here would make a notice an id this read silently
+    /// returns nothing for — a row the timeline calls a row and this one does not, which
+    /// is the second definition of a message the file header exists to prevent. A notice
+    /// is not inert, either: a relay tombstone applies to one through the same `deleted`
+    /// predicate as any other row.
+    ///
+    /// **This list is not independent: it is the page query's kinds, and it has to be
+    /// changed with them.** Anything ``fetchTimeline(_:channel:before:limit:)`` learns to
+    /// return and this does not becomes a row that renders where it lives and vanishes
+    /// wherever it is re-read by id.
     ///
     /// The `IN` costs nothing here, unlike in the page query. That one has an `ORDER BY`
     /// the `event_timeline` index satisfies, and widening its kind predicate would trade
@@ -68,6 +74,8 @@ extension BuzzEventStore {
         var arguments: [String: (any DatabaseValueConvertible)?] = [
             "kind": EventKind.channelMessage.rawValue,
             "noticeKind": EventKind.systemMessage.rawValue,
+            "huddleStarted": EventKind.huddleStarted.rawValue,
+            "huddleEnded": EventKind.huddleEnded.rawValue,
         ]
         var placeholders: [String] = []
         for (index, id) in ids.enumerated() {
@@ -80,7 +88,7 @@ extension BuzzEventStore {
         SELECT \(timelineColumns)
         FROM (
             \(eventBranch(where: """
-                e.kind IN (:kind, :noticeKind)
+                e.kind IN (:kind, :noticeKind, :huddleStarted, :huddleEnded)
                   AND e.id IN (\(placeholders.joined(separator: ", ")))
                 """))
         )

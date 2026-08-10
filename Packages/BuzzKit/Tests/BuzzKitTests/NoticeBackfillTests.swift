@@ -17,17 +17,45 @@ import Testing
 /// else. So a notice was visible only to a client subscribed to that channel in the
 /// moment it happened, and invisible for ever afterwards.
 ///
-/// # Why it cannot ride the window
+/// # Why the window is not enough
 ///
-/// The obvious fix — add `.systemMessage` to the window request's kinds — looks right
-/// and does nothing. The relay stores a notice with `insert_event`, not
-/// `insert_event_with_thread_metadata`, so it has no `thread_metadata` row, and a
-/// channel window page is computed *from* that table. Hence a separate one-shot.
+/// The relay stores a notice with `insert_event`, not
+/// `insert_event_with_thread_metadata`, so it has no `thread_metadata` row. A window page
+/// does return one — `get_channel_window_on` left-joins that table and admits
+/// `tm.depth IS NULL` (`buzz-db/src/thread.rs`) — but only where a window is *asked for*,
+/// and the reconcile pass that closes the gap between the head and the watermark asks for
+/// `kind:9` alone. Widening that filter would deepen scroll-back and still leave the
+/// launch pass blind. Hence a separate one-shot, with no floor under it.
+///
+/// Kinds 48100/48103 — a huddle starting and ending — are stored the same way and were
+/// absent for the same reason, reported 2026-08-10. They ride this fetch as a second
+/// filter.
 @Suite("Relay notices are backfilled", .timeLimit(.minutes(1)))
 struct NoticeBackfillTests {
     /// The notice backfill query: `kinds == [.systemMessage]`, `#h`-scoped.
     private func isNoticeREQ(_ filters: [Filter], channel: String) -> Bool {
         filters.contains { $0.kinds == [.systemMessage] && $0.tagQueries["h"] == [channel] }
+    }
+
+    /// The huddle half of the same REQ. It rides *beside* the notice filter rather than
+    /// merged into it, so each keeps its own `limit` at the relay — a channel with a long
+    /// joining history would otherwise spend the whole budget on notices and return no
+    /// huddle at all, silently.
+    private func huddleFilter(in filters: [Filter], channel: String) -> Filter? {
+        filters.first { $0.kinds == [.huddleStarted, .huddleEnded] && $0.tagQueries["h"] == [channel] }
+    }
+
+    /// A client-signed `48100`, as the desktop client publishes one: `h`-tagged to the
+    /// channel the huddle was started *from*, its body naming the huddle's own channel.
+    /// Signed by the peer rather than the relay — unlike a notice, this kind is gated on
+    /// `ChannelsWrite` and carries its actor in its own `pubkey`.
+    private func huddleStart(_ fixtures: EngineFixtures, in channel: String, at seconds: Int64) throws -> NostrEvent {
+        try fixtures.peer.event(
+            .huddleStarted,
+            "{\"ephemeral_channel_id\":\"9f1c0f3a-0000-4000-8000-00000000abcd\"}",
+            tags: [["h", channel]],
+            at: seconds
+        )
     }
 
     /// A relay-signed `member_joined`, as `emit_system_message` builds one.
@@ -102,6 +130,93 @@ struct NoticeBackfillTests {
             actor: String(repeating: "a", count: 64),
             target: String(repeating: "b", count: 64)
         ))
+
+        await harness.engine.stop()
+    }
+
+    /// The same defect in the huddle's shape, reported by the owner 2026-08-10: three
+    /// huddles held on the relay, none of them on the phone, because the build that could
+    /// read them was installed after they had ended. Kinds 48100/48103 are stored the way
+    /// a notice is — no `thread_metadata` row — and ``SyncEngine/reconcileStep`` asks for
+    /// `kind:9` alone, so nothing ever *requested* them for a moment this device had not
+    /// been awake for.
+    @Test("A huddle that started while this device was away lands in the timeline")
+    func backfillsAHuddleTheLiveWindowCouldNotReach() async throws {
+        let socket = ScriptedRelay()
+        let database = TempDatabase()
+        defer { database.remove() }
+        let harness = try EngineHarness(path: database.path, identity: try PrivateKey(), relays: [socket])
+        let fixtures = try EngineFixtures()
+
+        let build = try WindowResponseBuilder(channel: "room")
+        let head = try build.row("m1", at: 1_700_000_100)
+        await harness.http.enqueue(
+            status: 200,
+            body: try WindowResponseBuilder.body([head, try build.headBounds(hasMore: false)])
+        )
+
+        try await harness.engine.start()
+        try await driveAuth(harness.connection, socket)
+        await answerDiscovery(on: socket, events: [try fixtures.metadata(for: "room", name: "Room")])
+
+        // Hours older than anything the 5-second live filter could have carried.
+        let old = try huddleStart(fixtures, in: "room", at: 1_700_000_000)
+        let requestID = try #require(
+            await awaitNoticeREQ(on: socket, channel: "room"),
+            "the reconcile never asked the relay for this channel's notices"
+        )
+        await socket.enqueue(EngineFrames.event(requestID, old))
+        await socket.enqueue(EngineFrames.eose(requestID))
+
+        await waitUntil { (try? await harness.store.event(id: old.id)) != nil }
+
+        // As with the notice: the store is not the assertion. A huddle event nothing reads
+        // back is the same absence the owner reported, one layer down.
+        let rows = try harness.store.timeline(channel: "room")
+        let landed = try #require(rows.first { $0.id == old.id }, "the huddle is stored but no timeline row carries it")
+        #expect(landed.isNotice)
+        #expect(landed.notice == SystemNotice.huddleStarted(actor: fixtures.peer.pubkey))
+
+        await harness.engine.stop()
+    }
+
+    @Test("The huddle filter rides the notice REQ with its own limit, and no since")
+    func theHuddleFilterIsSeparateAndUnbounded() async throws {
+        let socket = ScriptedRelay()
+        let database = TempDatabase()
+        defer { database.remove() }
+        let harness = try EngineHarness(path: database.path, identity: try PrivateKey(), relays: [socket])
+        let fixtures = try EngineFixtures()
+
+        let build = try WindowResponseBuilder(channel: "room")
+        await harness.http.enqueue(
+            status: 200,
+            body: try WindowResponseBuilder.body([try build.headBounds(hasMore: false)])
+        )
+
+        try await harness.engine.start()
+        try await driveAuth(harness.connection, socket)
+        await answerDiscovery(on: socket, events: [try fixtures.metadata(for: "room", name: "Room")])
+
+        _ = try #require(
+            await awaitNoticeREQ(on: socket, channel: "room"),
+            "the reconcile never asked the relay for this channel's notices"
+        )
+        var found: Filter?
+        for frame in await socket.frames() {
+            if let request = decodeREQ(frame), let filter = huddleFilter(in: request.filters, channel: "room") {
+                found = filter
+                break
+            }
+        }
+        let filter = try #require(found, "the notice REQ carries no huddle filter")
+        #expect(filter.since == nil)
+        #expect(filter.limit == SyncEngineConfig.default.noticeBackfillLimit)
+        // 48101/48102 — a participant arriving and leaving — are deliberately absent: no
+        // surface renders one, and subscribing to an event nothing reads is bandwidth and
+        // storage spent to no end.
+        #expect(filter.kinds?.contains(48101) == false)
+        #expect(filter.kinds?.contains(48102) == false)
 
         await harness.engine.stop()
     }
