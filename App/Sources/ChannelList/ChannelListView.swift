@@ -664,11 +664,14 @@ private extension ChannelListView {
             LaterView(
                 model: laterModel,
                 channelName: { conversationRow(for: $0).name ?? "" },
+                // Through the one funnel that knows the dismiss and the push cannot share an
+                // update — see ``ChannelListView/openNotification(_:)``. Written out here it
+                // was `showsLater = nil` and `path = …` back to back, which is that crash.
                 openTarget: { target in
-                    showsLater = nil
-                    path = ConversationRoute(
-                        channel: conversationRow(for: target.channelID)
-                    ).pushed(onto: path)
+                    openNotification(InAppNotificationRoute(
+                        location: .channel(target.channelID),
+                        fallbackChannel: conversationRow(for: target.channelID)
+                    ))
                 }
             )
         } else {

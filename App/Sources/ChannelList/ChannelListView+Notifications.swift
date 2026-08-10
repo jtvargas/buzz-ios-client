@@ -33,16 +33,27 @@ extension ChannelListView {
     /// Idempotent on the screen being asked for: asking for Threads while Threads is already
     /// open leaves it exactly where it is rather than popping and re-pushing it, which would
     /// be a visible flinch for no change of destination.
+    ///
+    /// The unwind and the present are two turns of the main actor, for the reason
+    /// ``openNotification(_:)`` gives at length: this is the same jump, asked for from
+    /// somewhere else. The old shape wrote `path = []` and then an item destination in one
+    /// pass, which is that crash spelled out.
     func open(_ destination: AppDestination) {
-        openedThread = nil
-        path = []
-        if destination != .threads { showsThreads = nil }
-        if destination != .later { showsLater = nil }
-        if destination != .drafts { showsDrafts = nil }
+        guard hasOpenSurface else { return show(destination) }
+        // Already up, with nothing over it — the idempotence above.
+        guard hasSurface(besides: destination) else { return }
+        var silent = Transaction()
+        silent.disablesAnimations = true
+        withTransaction(silent) { closeOpenSurfaces() }
+        Task { @MainActor in show(destination) }
+    }
+
+    /// The present itself, onto a sidebar with nothing over it.
+    private func show(_ destination: AppDestination) {
         switch destination {
-        case .threads: if showsThreads == nil { showsThreads = ThreadsRoute() }
-        case .later: if showsLater == nil { showsLater = LaterRoute() }
-        case .drafts: if showsDrafts == nil { showsDrafts = DraftsRoute() }
+        case .threads: showsThreads = ThreadsRoute()
+        case .later: showsLater = LaterRoute()
+        case .drafts: showsDrafts = DraftsRoute()
         }
     }
 
@@ -82,10 +93,20 @@ extension ChannelListView {
 
     /// Whether anything is on top of the sidebar: a pushed screen, an item destination, a
     /// sheet, or the workspace panel.
-    private var hasOpenSurface: Bool {
+    private var hasOpenSurface: Bool { hasSurface(besides: nil) }
+
+    /// The same question with one destination discounted — what decides whether a request
+    /// for a screen that is already up still has anything to unwind.
+    ///
+    /// One list rather than two, because a surface added to ``closeOpenSurfaces()`` and
+    /// forgotten here is a surface that survives the unwind and then gets dismissed
+    /// underneath the present, which is the crash again.
+    private func hasSurface(besides destination: AppDestination?) -> Bool {
         workspacePanel.isOpen || showAccount || showsBrowseChannels || showsCreateChannel
             || showsNewDirectMessage || !path.isEmpty || openedThread != nil
-            || showsDrafts != nil || showsThreads != nil || showsLater != nil
+            || (destination != .drafts && showsDrafts != nil)
+            || (destination != .threads && showsThreads != nil)
+            || (destination != .later && showsLater != nil)
     }
 
     private func closeOpenSurfaces() {
