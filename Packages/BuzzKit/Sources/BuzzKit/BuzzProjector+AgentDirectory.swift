@@ -7,8 +7,14 @@ extension BuzzProjector {
     /// independent projection does not make that routing choke point grow without
     /// bound.
     static func projectAdditional(_ event: NostrEvent, into db: Database) throws {
-        guard event.kind == .agentProfile else { return }
-        try projectAgentProfile(event, into: db)
+        switch event.kind {
+        case .agentProfile:
+            try projectAgentProfile(event, into: db)
+        case .huddleStarted, .huddleEnded:
+            try projectHuddle(event, into: db)
+        default:
+            return
+        }
     }
 
     /// Kind 10100: the persisted Buzz agent directory. It is replaceable per

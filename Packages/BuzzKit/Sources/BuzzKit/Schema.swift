@@ -435,6 +435,7 @@ enum Schema {
     /// a rebuilt schema from drifting from the migrated one.
     static func createProjectionTables(_ db: Database) throws {
         try createChannelTables(db)
+        try createHuddleTable(db)
         try createThreadingTables(db)
         try createContentTables(db)
     }
@@ -690,7 +691,7 @@ enum Schema {
     static let projectionTables = [
         "thread_summary", "rich_content", "edit", "deletion", "event_owner",
         "reaction", "thread", "agent_directory", "profile",
-        "channel_admin", "channel_member", "channel",
+        "channel_admin", "channel_member", "huddle", "channel",
     ]
 
     static func dropProjectionTables(_ db: Database) throws {

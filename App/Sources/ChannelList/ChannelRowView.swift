@@ -49,6 +49,7 @@ struct ChannelRowView: View {
                 .lineLimit(1)
                 .truncationMode(.tail)
             Spacer(minLength: 8)
+            ephemeralMark
             SidebarUnreadBadge(indicator: row.indicator)
         }
         .padding(.vertical, 4)
@@ -72,11 +73,35 @@ struct ChannelRowView: View {
         ConversationMark(
             conversation: row.conversation,
             size: Self.glyphSize,
-            glyphTint: row.indicator.isUnread ? .primary : .secondary
+            glyphTint: row.indicator.isUnread ? .primary : .secondary,
+            // A huddle's headphones stand in for the `#`/lock rather than sitting beside
+            // them. The lock they replace says "private", which every huddle is and which
+            // is the least interesting thing about this row; two marks on one glyph's
+            // worth of space would be smaller than either.
+            glyph: row.channel.isHuddle ? .symbol("headphones.circle.fill") : nil
         )
         // On the mark rather than only on the face: a channel has no peer, so
         // ``isOnline`` is false for one and this draws nothing.
         .overlay(alignment: .bottomTrailing) { presenceDot }
+    }
+
+    /// The fading clock, for a channel the relay will clean up.
+    ///
+    /// Glyph only, matching the other clients: they carry the time remaining in a tooltip
+    /// (`badges.dart:67`), which a phone has no equivalent of, and a row that spelled out
+    /// `59m left` beside every huddle would put a second number next to the unread badge
+    /// and make it ambiguous which one is being counted. The words go to VoiceOver, where
+    /// they cost no room.
+    ///
+    /// Driven by the TTL and not by ``ChannelListRow/isHuddle``: every huddle is
+    /// temporary, but so is any channel the relay gave a lifetime to, and the mark is
+    /// about the lifetime.
+    @ViewBuilder
+    private var ephemeralMark: some View {
+        if row.channel.isEphemeral {
+            EphemeralClockGlyph(height: 15)
+                .foregroundStyle(.secondary)
+        }
     }
 
     @ViewBuilder
@@ -102,7 +127,16 @@ struct ChannelRowView: View {
     /// is otherwise carried only by which heading the row sits under.
     private var accessibilityLabel: String {
         var parts = [row.title]
-        if row.conversation.kind == .channel, row.isPrivate { parts.append("private") }
+        // Before "private", and instead of it for a huddle: the glyph says one thing, and
+        // it is the one this reads out.
+        if row.channel.isHuddle {
+            parts.append("huddle")
+        } else if row.conversation.kind == .channel, row.isPrivate {
+            parts.append("private")
+        }
+        // What the clock is drawn for. The only place the remaining time is spoken —
+        // see ``ephemeralMark``.
+        if let lifetime = row.channel.ephemeralLifetimeLabel() { parts.append(lifetime) }
         // The count on a group DM's tile is drawn, so `.combine` cannot reach it — and it
         // is the one thing on the row a list of names does not already say.
         if let people = Self.peopleDescription(row.conversation) { parts.append(people) }

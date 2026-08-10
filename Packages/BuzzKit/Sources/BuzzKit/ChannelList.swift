@@ -71,6 +71,13 @@ public struct ChannelListRow: Sendable, Hashable, Identifiable {
     /// The relay-provided cleanup deadline as Unix seconds. Kept nullable so an
     /// ordinary channel cannot accidentally read as due at the Unix epoch.
     public let ttlDeadline: Int64?
+    /// Whether this channel is the room a huddle runs in.
+    ///
+    /// Not inferable from the channel's own metadata: the relay creates a huddle as an
+    /// ordinary `stream` channel with a TTL and marks it in no other way. What is being
+    /// read here is the kind-48100 published in the *parent* channel, whose body names
+    /// this one — see ``Schema/createHuddleTable(_:)``.
+    public let isHuddle: Bool
     /// Whether this identity has muted the channel on any of its devices.
     ///
     /// Carried beside ``unreadCount`` rather than folded into it, deliberately: a muted
@@ -96,6 +103,7 @@ public struct ChannelListRow: Sendable, Hashable, Identifiable {
         channelType: String? = nil,
         ttlSeconds: Int64? = nil,
         ttlDeadline: Int64? = nil,
+        isHuddle: Bool = false,
         isMuted: Bool = false
     ) {
         self.id = id
@@ -113,6 +121,7 @@ public struct ChannelListRow: Sendable, Hashable, Identifiable {
         self.channelType = channelType
         self.ttlSeconds = ttlSeconds
         self.ttlDeadline = ttlDeadline
+        self.isHuddle = isHuddle
         self.isMuted = isMuted
     }
 
@@ -273,6 +282,10 @@ extension BuzzEventStore {
                c.channel_type  AS channel_type,
                c.ttl_seconds   AS ttl_seconds,
                c.ttl_deadline  AS ttl_deadline,
+               -- A primary-key seek, like every other probe in this SELECT: `huddle` is
+               -- keyed by the huddle's own channel id, which is what `c.id` is here.
+               EXISTS (SELECT 1 FROM huddle hd
+                        WHERE hd.channel_id = c.id) AS is_huddle,
                -- `muted = 1` only: an unmute is stored as a row saying so, not as the
                -- absence of one, so `EXISTS` on the channel id alone would read every
                -- channel ever unmuted as muted for ever.
@@ -393,6 +406,7 @@ extension BuzzEventStore {
             channelType: row["channel_type"],
             ttlSeconds: row["ttl_seconds"],
             ttlDeadline: row["ttl_deadline"],
+            isHuddle: row["is_huddle"] ?? false,
             isMuted: row["is_muted"] ?? false
         )
     }
