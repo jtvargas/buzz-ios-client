@@ -11,7 +11,9 @@ enum HomeTab: String, CaseIterable, Hashable, Identifiable {
     /// Channels, direct messages, and the shortcuts above them.
     case home
     /// Mentions, replies, approvals and agent updates addressed to you, grouped by
-    /// conversation.
+    /// conversation. Titled **Inbox**, the word desktop uses for the same screen. The case
+    /// keeps its own name: the feed underneath speaks in ``BuzzKit/ActivityCategory``, and one
+    /// of that type's four cases *is* `activity`, so renaming here would only blur the two.
     case activity
     /// Messages already stored on this device, plus whatever the relay can still reach.
     case search
@@ -21,7 +23,7 @@ enum HomeTab: String, CaseIterable, Hashable, Identifiable {
     var title: String {
         switch self {
         case .home: "Home"
-        case .activity: "Activity"
+        case .activity: "Inbox"
         case .search: "Search"
         }
     }
