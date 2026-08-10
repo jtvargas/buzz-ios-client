@@ -169,7 +169,11 @@ struct ChannelListView: View {
                     // confirmed is in *nothing* still needs to be told when a later refresh
                     // failed, and it is the reader who cannot tell "empty" from "offline"
                     // who most needs the Retry this carries.
-                    if environment.channelDirectoryStatus == .cachedFallback,
+                    //
+                    // Gated on the environment's *sentence* rather than on the raw verdict,
+                    // because the verdict is momentarily `.cachedFallback` on every return to
+                    // the app — see ``AppEnvironment/showsDirectoryFallbackBanner``.
+                    if environment.showsDirectoryFallbackBanner,
                        model.surface == .conversations {
                         ChannelDirectoryFallbackBanner {
                             Task { await environment.retryConnectionAndDirectory() }
