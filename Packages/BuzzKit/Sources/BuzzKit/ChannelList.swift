@@ -65,6 +65,19 @@ public struct ChannelListRow: Sendable, Hashable, Identifiable {
     /// is what is carried: collapsing it here would mean the projection remembers only the
     /// answer to today's question.
     public let channelType: String?
+    /// The relay-provided inactivity lifetime, in seconds. `nil` means the channel
+    /// metadata did not provide one; it is not the same as zero.
+    public let ttlSeconds: Int64?
+    /// The relay-provided cleanup deadline as Unix seconds. Kept nullable so an
+    /// ordinary channel cannot accidentally read as due at the Unix epoch.
+    public let ttlDeadline: Int64?
+    /// Whether this channel is the room a huddle runs in.
+    ///
+    /// Not inferable from the channel's own metadata: the relay creates a huddle as an
+    /// ordinary `stream` channel with a TTL and marks it in no other way. What is being
+    /// read here is the kind-48100 published in the *parent* channel, whose body names
+    /// this one — see ``Schema/createHuddleTable(_:)``.
+    public let isHuddle: Bool
     /// Whether this identity has muted the channel on any of its devices.
     ///
     /// Carried beside ``unreadCount`` rather than folded into it, deliberately: a muted
@@ -88,6 +101,9 @@ public struct ChannelListRow: Sendable, Hashable, Identifiable {
         unreadCount: Int = 0,
         unreadMentionCount: Int = 0,
         channelType: String? = nil,
+        ttlSeconds: Int64? = nil,
+        ttlDeadline: Int64? = nil,
+        isHuddle: Bool = false,
         isMuted: Bool = false
     ) {
         self.id = id
@@ -103,6 +119,9 @@ public struct ChannelListRow: Sendable, Hashable, Identifiable {
         self.unreadCount = unreadCount
         self.unreadMentionCount = unreadMentionCount
         self.channelType = channelType
+        self.ttlSeconds = ttlSeconds
+        self.ttlDeadline = ttlDeadline
+        self.isHuddle = isHuddle
         self.isMuted = isMuted
     }
 
@@ -114,6 +133,9 @@ public struct ChannelListRow: Sendable, Hashable, Identifiable {
     /// group DM is created through the participant-hash path (kind 41010) and can never
     /// be created as a channel (`channel_type: "dm"` is refused by kind 9007).
     public var isDirectMessage: Bool { channelType == "dm" }
+
+    /// Whether the relay assigned this channel a temporary lifetime.
+    public var isEphemeral: Bool { ttlSeconds != nil || ttlDeadline != nil }
 
     /// Whether the channel carries any unread messages — the bold-name / count-pill gate.
     public var hasUnread: Bool { unreadCount > 0 }
@@ -258,6 +280,12 @@ extension BuzzEventStore {
                c.picture       AS picture,
                c.is_private    AS is_private,
                c.channel_type  AS channel_type,
+               c.ttl_seconds   AS ttl_seconds,
+               c.ttl_deadline  AS ttl_deadline,
+               -- A primary-key seek, like every other probe in this SELECT: `huddle` is
+               -- keyed by the huddle's own channel id, which is what `c.id` is here.
+               EXISTS (SELECT 1 FROM huddle hd
+                        WHERE hd.channel_id = c.id) AS is_huddle,
                -- `muted = 1` only: an unmute is stored as a row saying so, not as the
                -- absence of one, so `EXISTS` on the channel id alone would read every
                -- channel ever unmuted as muted for ever.
@@ -376,6 +404,9 @@ extension BuzzEventStore {
             unreadCount: row["unread_count"] ?? 0,
             unreadMentionCount: row["mention_count"] ?? 0,
             channelType: row["channel_type"],
+            ttlSeconds: row["ttl_seconds"],
+            ttlDeadline: row["ttl_deadline"],
+            isHuddle: row["is_huddle"] ?? false,
             isMuted: row["is_muted"] ?? false
         )
     }

@@ -384,8 +384,21 @@ extension BuzzEventStore {
         // per read, for the same reason `media` is: the alternative is every render pass
         // re-parsing a JSON body whose answer never changes.
         let kind: Int? = row["kind"]
-        let isNotice = kind == EventKind.systemMessage.rawValue
-        let notice = isNotice ? SystemNotice.parse(row["content"] ?? "") : nil
+        // A huddle event narrates the channel exactly as a relay notice does, so it takes
+        // the same row shape and the same renderer — but it is *not* a kind-40099 body
+        // and must never be handed to ``SystemNotice/parse(_:)``, whose JSON it does not
+        // speak. Its actor is the signer, so it is read off the row instead.
+        let huddleKind = kind.map(EventKind.init(rawValue:)).flatMap { candidate in
+            [EventKind.huddleStarted, .huddleEnded].contains(candidate) ? candidate : nil
+        }
+        let isNotice = kind == EventKind.systemMessage.rawValue || huddleKind != nil
+        let notice: SystemNotice? = if let huddleKind {
+            SystemNotice.huddle(kind: huddleKind, actor: row["pubkey"] ?? "")
+        } else if kind == EventKind.systemMessage.rawValue {
+            SystemNotice.parse(row["content"] ?? "")
+        } else {
+            nil
+        }
         // Decoded once and read twice — the attachments and the mention are two questions
         // about the same tag array, and the whole reason this row carries either of them is
         // to keep a render pass from parsing JSON to answer them.

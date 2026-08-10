@@ -1,4 +1,5 @@
 import Foundation
+import NostrCore
 
 /// Something that happened to a channel, as the relay narrated it: a kind-40099
 /// notice, decoded.
@@ -55,6 +56,29 @@ public enum SystemNotice: Sendable, Hashable {
     case channelArchived(actor: String)
     /// The channel was brought back.
     case channelUnarchived(actor: String)
+    /// Somebody started a huddle here.
+    case huddleStarted(actor: String)
+    /// The huddle ended.
+    case huddleEnded(actor: String)
+
+    /// A huddle lifecycle event, narrated.
+    ///
+    /// Separate from ``parse(_:)`` because a huddle event is **not** a kind-40099 notice:
+    /// it rides its own kind, it is client-signed rather than relay-signed, and its body
+    /// names the huddle's own channel rather than the people involved. The actor is the
+    /// event's signer, so it arrives from the row — which also means there is nothing
+    /// here that can fail to decode, and an unreadable body cannot cost the row.
+    ///
+    /// 48101/48102 answer `nil`: a participant arriving and leaving is metadata, and both
+    /// reference clients keep it out of the timeline for that reason.
+    public static func huddle(kind: EventKind, actor: String) -> SystemNotice? {
+        guard let actor = actor.normalizedPubkey else { return nil }
+        switch kind {
+        case .huddleStarted: return .huddleStarted(actor: actor)
+        case .huddleEnded: return .huddleEnded(actor: actor)
+        default: return nil
+        }
+    }
 
     /// Decodes the JSON body of a kind-40099 event, or `nil` when it is not a notice
     /// this can render — an unknown `type`, a malformed body, or a known type missing
@@ -138,6 +162,8 @@ public enum SystemNotice: Sendable, Hashable {
         case let .channelCreated(actor): actor
         case let .channelArchived(actor): actor
         case let .channelUnarchived(actor): actor
+        case let .huddleStarted(actor): actor
+        case let .huddleEnded(actor): actor
         }
     }
 
@@ -153,6 +179,8 @@ public enum SystemNotice: Sendable, Hashable {
         case let .channelCreated(actor): [actor]
         case let .channelArchived(actor): [actor]
         case let .channelUnarchived(actor): [actor]
+        case let .huddleStarted(actor): [actor]
+        case let .huddleEnded(actor): [actor]
         }
     }
 

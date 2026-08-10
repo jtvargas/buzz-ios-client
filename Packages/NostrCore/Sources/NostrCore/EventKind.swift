@@ -114,6 +114,28 @@ public struct EventKind: RawRepresentable, Hashable, Sendable, ExpressibleByInte
     /// Relay-signed: the relay rejects a client-submitted one outright.
     public static let systemMessage: EventKind = 40099
 
+    /// A huddle — an audio session — was started in this channel.
+    ///
+    /// `h`-tagged to the channel the huddle was started *from*, not to the huddle's own
+    /// channel: the row belongs in the conversation people are reading. Its content is a
+    /// JSON object naming where the huddle actually happens
+    /// (`{"ephemeral_channel_id": "<uuid>"}`), which is the only sound link between the
+    /// two — a huddle channel is an ordinary `stream` channel with a TTL and carries no
+    /// type of its own, so matching on its name would be a guess.
+    ///
+    /// Client-signed, unlike ``systemMessage``: the relay gates it on `ChannelsWrite`
+    /// rather than signing it itself. **The actor is therefore the event's own `pubkey`,
+    /// not a field in the body** — which is why ``SystemNotice/huddle(kind:actor:)``
+    /// takes it from the row rather than parsing it out of `content`.
+    public static let huddleStarted: EventKind = 48100
+
+    /// A huddle ended. The same shape and the same `h` scope as ``huddleStarted``.
+    ///
+    /// 48101 and 48102 — a participant joining and leaving — are deliberately absent
+    /// here: both reference clients treat them as lifecycle metadata and keep them out
+    /// of the timeline, and a row per join would bury the conversation under a roster.
+    public static let huddleEnded: EventKind = 48103
+
     /// A channel's canvas: one shared Markdown document per channel, `h`-tagged like a
     /// message, the prose carried plainly in `content`.
     ///

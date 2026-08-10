@@ -350,6 +350,22 @@ extension BuzzEventStore {
 
             UNION ALL
 
+            -- A huddle starting or ending narrates the channel the way a notice does and
+            -- belongs in the same page for the same reason, but rides its own kinds, so
+            -- it cannot share the notice branch's equality. Ordered by the same total
+            -- order as every other branch — the precondition named above, not a
+            -- coincidence.
+            SELECT * FROM (
+                \(eventBranch(where: """
+                    e.h = :channel AND e.kind IN (:huddleStarted, :huddleEnded)
+                      AND \(page("e.created_at", "e.id"))
+                    """))
+                ORDER BY e.created_at DESC, e.id DESC
+                LIMIT :limit
+            )
+
+            UNION ALL
+
             SELECT * FROM (
                 \(outboxBranch(where: """
                     o.channel_id = :channel AND o.parent_id IS NULL
@@ -367,6 +383,8 @@ extension BuzzEventStore {
             "channel": channel,
             "kind": EventKind.channelMessage.rawValue,
             "noticeKind": EventKind.systemMessage.rawValue,
+            "huddleStarted": EventKind.huddleStarted.rawValue,
+            "huddleEnded": EventKind.huddleEnded.rawValue,
             "hasCursor": cursor == nil ? 0 : 1,
             "ts": cursor?.createdAt ?? 0,
             "id": cursor?.id ?? "",

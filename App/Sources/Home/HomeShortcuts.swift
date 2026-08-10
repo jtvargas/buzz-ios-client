@@ -208,10 +208,10 @@ struct HomeShortcutCard: View {
     ///
     /// A card whose symbol has a `.fill` cut already says "there is something here" by
     /// filling, so spending the accent on its edge as well says it twice — the owner called
-    /// the Drafts card too loud for exactly that reason. Threads' `text.append` has no
-    /// filled counterpart, so its edge is the only thing it can say it with, and it keeps
-    /// the accent. Derived from the symbol rather than switched on the case, so a fourth
-    /// destination gets the right treatment without anyone remembering this rule.
+    /// the Drafts card too loud for exactly that reason. Threads draws the owner's own
+    /// artwork, which ships one cut, so its edge is the only thing it can say it with, and
+    /// it keeps the accent. Derived from the symbol rather than switched on the case, so a
+    /// fourth destination gets the right treatment without anyone remembering this rule.
     private var border: Color {
         Self.spendsAccentOnEdge(shortcut, isCalling: isCalling) ? .hiveAccent : Self.restingBorder
     }
@@ -318,8 +318,8 @@ enum HomeShortcut: String, CaseIterable, Hashable, Identifiable {
 
     /// The system symbol this card draws, or `nil` for one that draws the app's own artwork.
     ///
-    /// Threads is the owner's: `text.append` was the nearest thing in the library to what he
-    /// wanted and never the same drawing. Everything below that asked the symbol a question —
+    /// Threads is the owner's: no symbol in the library is that drawing, and `text.append`,
+    /// the nearest, was never it. Everything below that asked the symbol a question —
     /// is there a `.fill` cut, does the glyph carry the "something is waiting" signal on its
     /// own — answers correctly for `nil` without a `case .threads` anywhere, because the
     /// answer to both is no and it always was.
@@ -327,8 +327,10 @@ enum HomeShortcut: String, CaseIterable, Hashable, Identifiable {
         switch self {
         case .threads: nil
         case .later: "bookmark"
-        // What sending looks like, unsent.
-        case .drafts: "paperplane"
+        // A page with a pencil on it: writing that has not been sent, rather than sending
+        // that has not happened. `paperplane` was the second reading and drew the same mark
+        // the composer's send button does.
+        case .drafts: "long.text.page.and.pencil"
         }
     }
 
@@ -350,7 +352,13 @@ enum HomeShortcut: String, CaseIterable, Hashable, Identifiable {
         return .symbol(filledSymbol ?? symbol)
     }
 
-    /// The owner's own threads drawing: a play mark beside a list.
+    /// The owner's own threads drawing: two written lines, and a rule dropping away from
+    /// them into an arrow — a conversation branching off what was said.
+    ///
+    /// Shipped as a **vector PDF** rather than the three PNG cuts it used to be, because
+    /// every surface below draws it at a different height (11pt on an Activity row, 48pt on
+    /// an empty state) and at the largest Dynamic Type sizes a raster runs out of pixels and
+    /// goes soft. A vector is one file that is right at all of them.
     ///
     /// A constant because a name that resolves to nothing draws nothing, and one constant is
     /// what a test can assert exists.
