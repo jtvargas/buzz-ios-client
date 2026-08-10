@@ -177,9 +177,16 @@ private final class PassthroughWindow: UIWindow {
 
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
         guard cardFrame.contains(point) else {
-            InAppNotificationDiagnostics.record(
-                "hitTest outcome=passthrough point=\(point) cardFrame=\(cardFrame)"
-            )
+            // Only recorded while a card is actually up. This override runs before any
+            // `super` call, so `isUserInteractionEnabled = false` does not spare it: with no
+            // banner on screen it is still asked about every touch anywhere in the app.
+            // Logging those would bury the handful of lines this file exists to capture —
+            // and it is the 256 KB cap's truncation that would throw them away.
+            if cardFrame != .zero {
+                InAppNotificationDiagnostics.record(
+                    "hitTest outcome=passthrough point=\(point) cardFrame=\(cardFrame)"
+                )
+            }
             return nil
         }
         InAppNotificationDiagnostics.record(
