@@ -16,7 +16,6 @@ struct SearchView: View {
     @State private var opening: String?
     @State private var history = SearchHistory()
     @State private var ticker = RelativeTimeTicker()
-    @State private var threadReads = ThreadReadMarks()
     @State private var router: DirectMessageRouter
     /// This screen presents no keyboard of its own and the search role's field ships no
     /// Cancel button, so the field's focus is the only handle on the keyboard there is.
@@ -68,7 +67,7 @@ struct SearchView: View {
         .environment(\.entityNames, entityNames)
         .environment(\.channelNameMap, ChannelNameMap(channels: model.channels))
         .environment(\.relativeTimeTicker, ticker)
-        .environment(\.threadReadMarks, threadReads)
+        .environment(\.threadReadMarks, environment.threadReads)
         .environment(\.directMessageRouter, router)
         .environment(\.pushRoute, PushRouteAction { route in
             path = route.pushed(onto: path)
