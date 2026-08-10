@@ -36,17 +36,28 @@ extension AppRoute {
     /// A thread is always appended. Two threads in one channel are two different destinations,
     /// and a thread is reachable *from* the conversation it lives in — pushing the same thread
     /// twice needs the reader to go back through it, which is a journey they chose.
+    ///
+    /// # Why "already here" asks about the top *conversation*, not the top route
+    ///
+    /// Because a thread now sits in this path rather than in a binding beside it, and it sits
+    /// *above* the conversation it was opened from. Asking `path.last` would answer "no" for a
+    /// reader who is in channel A reading one of its threads, and the filter below would then
+    /// lift A out from under the thread and re-append it — leaving `[.thread, .conversation]`,
+    /// both screens rebuilt at new depths with their scroll positions lost, and a back stack
+    /// that skips the channel on the way out.
+    ///
+    /// Before threads joined the path that tap did nothing at all, because `path` held only
+    /// conversations and A was its last element. `conversations.last` is that same question
+    /// asked of the same elements, so the answer does not change.
     func pushed(onto path: [AppRoute]) -> [AppRoute] {
         guard case let .conversation(route) = self else { return path + [self] }
-        guard case let .conversation(top)? = path.last, top.channel.id == route.channel.id else {
-            var updated = path.filter {
-                guard case let .conversation(existing) = $0 else { return true }
-                return existing.channel.id != route.channel.id
-            }
-            updated.append(self)
-            return updated
+        guard path.conversations.last?.channel.id != route.channel.id else { return path }
+        var updated = path.filter {
+            guard case let .conversation(existing) = $0 else { return true }
+            return existing.channel.id != route.channel.id
         }
-        return path
+        updated.append(self)
+        return updated
     }
 }
 
