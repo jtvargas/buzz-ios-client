@@ -258,6 +258,7 @@ struct ThreadReadMarksTests {
     private func unread(_ rootID: String, latestReplyByOthersAt: Int64) -> UnreadThread {
         UnreadThread(
             rootID: rootID,
+            channelID: "channel",
             newReplyCount: 1,
             latestReplyAt: latestReplyByOthersAt,
             latestReplyByOthersAt: latestReplyByOthersAt

@@ -355,6 +355,7 @@ struct ChannelListView: View {
         // swipe — which runs no app code — fills the slot too. See ``ConversationResume``.
         .onChange(of: path) { previous, current in
             resume.observe(path: current, previously: previous)
+            settleThreads(enteringOrLeaving: previous, current)
         }
         // Two readers of one value: where the reader *is* decides whether a banner repeats
         // something already on screen, and it is also the definition of a place visited.
@@ -676,6 +677,43 @@ private extension ChannelListView {
                 .navigationTitle("Later")
                 .navigationBarTitleDisplayMode(.inline)
         }
+    }
+
+    /// Strikes a channel's threads off the Threads count when the reader goes into that
+    /// channel, and again when they come out of it.
+    ///
+    /// # Why entering a channel has to do this explicitly
+    ///
+    /// The store's half of the count judges a reply against its **channel's** read frontier,
+    /// and ``ChannelTimelineModel/markReadIfNeeded()`` can only advance that frontier to the
+    /// newest *top-level* message — a thread reply is never a row in the channel timeline. So
+    /// a channel whose newest activity is replies sits permanently behind its own threads, and
+    /// reading it changes nothing: measured on the owner's device, this channel's frontier was
+    /// already 24 minutes *past* its newest top-level message while replies kept arriving, so
+    /// `markRead`'s grow-only guard made opening it a no-op. No amount of reading the channel
+    /// could ever clear it.
+    ///
+    /// Struck off here rather than by moving the frontier, and that is the load-bearing
+    /// choice: the frontier is NIP-RS, shared with every device the account is signed in to
+    /// and grow-only, so advancing it past replies would mark them read *everywhere*,
+    /// irreversibly. ``ThreadReadMarks`` is the opposite — device-local, private, and only
+    /// ever subtractive (§ *Why this is not read state*).
+    ///
+    /// The cost, which the owner accepted explicitly on 2026-08-10: replies that were never
+    /// opened stop counting. Entering a channel is being taken as "I have dealt with this",
+    /// which is what he asked for in those words.
+    ///
+    /// Both ends of the visit, because they see different states: the way in settles what was
+    /// waiting, the way out settles what landed while the reader was in there. Driven off the
+    /// path rather than from the two places that push and pop, so the system's own back swipe
+    /// — which runs no app code — is covered too, the same reason ``ConversationResume`` is
+    /// observed here.
+    func settleThreads(enteringOrLeaving previous: [ConversationRoute], _ current: [ConversationRoute]) {
+        let visited = Set((previous + current).map(\.channel.id))
+        guard !visited.isEmpty else { return }
+        // `markAllSeen` is grow-only and silent when nothing moves, so a channel with no
+        // unread threads costs one filter and no write.
+        threadReads.markAllSeen(among: model.unreadThreads.filter { visited.contains($0.channelID) })
     }
 
     func count(for shortcut: HomeShortcut) -> Int {
