@@ -19,8 +19,7 @@ import BuzzKit
 /// can no longer show you. It also makes the highlight honest for free: a row is marked
 /// exactly when backing out of it is what put you here.
 ///
-/// Threads never enter it, which needs no code: ``ChannelListView`` keeps them in
-/// `openedThread` and `showsThreads`, and this only ever reads the conversation path.
+/// Threads never enter it: only the conversation elements of the app route path are read.
 ///
 /// # Session-only, deliberately
 ///
@@ -40,8 +39,8 @@ struct ConversationResume: Equatable {
     /// Only *emptying* the path fills the slot. Popping a conversation opened from inside
     /// another (a `#channel` reference, a profile sheet's Message) leaves the reader in the
     /// one underneath, which is on screen, so there is nothing to remember yet.
-    mutating func observe(path: [ConversationRoute], previously: [ConversationRoute]) {
-        guard path.isEmpty, let left = previously.last else { return }
+    mutating func observe(path: [AppRoute], previously: [AppRoute]) {
+        guard path.conversations.isEmpty, let left = previously.conversations.last else { return }
         conversation = left
     }
 

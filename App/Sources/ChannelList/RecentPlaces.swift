@@ -137,19 +137,20 @@ final class RecentPlaces {
         return places.filter { listed.contains($0.channelID) }
     }
 
-    /// Where a navigation stack is: the thread on top, else the conversation under it.
+    /// Where a navigation stack is: the route on top, when it is a reading surface.
     ///
     /// Static, and shared by both tabs' stacks, because the two have to agree about what
     /// counts as being somewhere. They hold the same two pieces of state for the same
     /// reasons, and a second copy of this rule is a second answer waiting to happen.
-    static func location(
-        path: [ConversationRoute],
-        openedThread: ThreadRoute?
-    ) -> InAppNotificationLocation? {
-        if let openedThread {
-            return .thread(channelID: openedThread.channel, rootID: openedThread.root)
+    static func location(path: [AppRoute]) -> InAppNotificationLocation? {
+        switch path.last {
+        case let .thread(route):
+            return .thread(channelID: route.channel, rootID: route.root)
+        case let .conversation(route):
+            return .channel(route.channel.id)
+        case .threads, .later, .drafts, .rescheduling, nil:
+            return nil
         }
-        return path.last.map { .channel($0.channel.id) }
     }
 
     private func load(_ community: Community.ID) -> [RecentPlace] {

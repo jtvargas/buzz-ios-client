@@ -127,17 +127,16 @@ struct HomeNavigationTests {
         let conversation = ConversationRoute(channel: Self.row)
         let thread = ThreadRoute(root: "root", channel: "channel")
 
-        // Nothing pushed — the sidebar. And, by construction, the Threads screen too: it
-        // keeps the bar precisely by not appearing in either input, so there is no second
-        // assertion to write for it here. That it is genuinely reachable in this state is
-        // the job of ``ChannelListView``'s separate `showsThreads`.
-        #expect(ChannelListTabBar.visibility(conversations: [], openedThread: nil) == .visible)
+        #expect(ChannelListTabBar.visibility(path: []) == .visible)
+        #expect(ChannelListTabBar.visibility(path: [.threads]) == .visible)
+        #expect(ChannelListTabBar.visibility(path: [.later]) == .visible)
+        #expect(ChannelListTabBar.visibility(path: [.drafts]) == .visible)
         // A conversation, and a thread reached from inside one.
-        #expect(ChannelListTabBar.visibility(conversations: [conversation], openedThread: nil) == .hidden)
+        #expect(ChannelListTabBar.visibility(path: [.conversation(conversation)]) == .hidden)
         // A thread reached from the Threads screen, with no conversation under it. This is
-        // the case that only works because the route is held above ``ThreadsView``.
-        #expect(ChannelListTabBar.visibility(conversations: [], openedThread: thread) == .hidden)
-        #expect(ChannelListTabBar.visibility(conversations: [conversation], openedThread: thread) == .hidden)
+        // the case that only works because the thread is in the stack's path.
+        #expect(ChannelListTabBar.visibility(path: [.thread(thread)]) == .hidden)
+        #expect(ChannelListTabBar.visibility(path: [.conversation(conversation), .thread(thread)]) == .hidden)
     }
 
     private static let row = ChannelListRow(

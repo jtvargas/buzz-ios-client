@@ -47,11 +47,10 @@ import SwiftUI
 /// gives `tabBars=0` for the old per-view hiding and `tabBars=1` for a detail that hides
 /// nothing, so the query discriminates and that result is not an artefact of asking wrong.
 ///
-/// That is what forces `openedThread` up out of ``ThreadsView`` and into ``ChannelListView``
-/// (which see). Left there, this stack would say `.visible` while a thread was open and win,
-/// and a tab bar under a thread's composer is not cosmetic: it is a second bottom inset, and
-/// every scroll and keyboard decision a conversation surface makes is arithmetic over that
-/// inset.
+/// That is what forces threads into the stack's route path. Left outside it, this stack would
+/// say `.visible` while a thread was open and win, and a tab bar under a thread's composer is
+/// not cosmetic: it is a second bottom inset, and every scroll and keyboard decision a
+/// conversation surface makes is arithmetic over that inset.
 ///
 /// A redundant `.hidden` on the pushed view *is* harmless once the stack drives it
 /// (measured: `…,11551:34.0,11586:83.0`, 35ms). Both are gone anyway — a second declaration
@@ -86,14 +85,14 @@ import SwiftUI
 enum ChannelListTabBar {
     /// The tab bar visibility the channel list's `NavigationStack` declares this pass.
     ///
-    /// - Parameters:
-    ///   - conversations: The pushed conversations — ``ChannelListView``'s navigation path.
-    ///   - openedThread: The thread the Threads screen has open, if any. Held by
-    ///     ``ChannelListView`` precisely so this function can see it.
-    ///
-    /// The Threads screen itself is deliberately absent: it is a list, not a reading surface
-    /// with a composer, so it keeps the bar and pushing it leaves both inputs empty.
-    static func visibility(conversations: [ConversationRoute], openedThread: ThreadRoute?) -> Visibility {
-        conversations.isEmpty && openedThread == nil ? .visible : .hidden
+    /// The Threads, Later, Drafts, and rescheduling screens are lists or tools rather than
+    /// reading surfaces with a composer, so they keep the bar.
+    static func visibility(path: [AppRoute]) -> Visibility {
+        path.contains {
+            switch $0 {
+            case .conversation, .thread: true
+            case .threads, .later, .drafts, .rescheduling: false
+            }
+        } ? .hidden : .visible
     }
 }
