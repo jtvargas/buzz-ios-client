@@ -16,8 +16,15 @@ struct SyncEngineSendPriorityTests {
     /// holds, so a regression in this suite would blow the time limit rather than fail —
     /// and everything here is a race, which is exactly where an unbounded spin turns a
     /// fast red into a sixty-second one.
+    ///
+    /// Eight seconds rather than the two this started at, because the bound has to cover
+    /// scheduling delay rather than the work: what it waits on is a SQLite insert, an
+    /// actor hop and a socket construction — milliseconds — but the suite runs 653 tests
+    /// across 112 suites in parallel, and on a loaded runner a two-second ceiling clipped
+    /// one of these while the state machine had gone exactly where it was asked to. Still
+    /// well inside the suite's own minute even if all three expire.
     private static func waitUntil(
-        within limit: Duration = .seconds(2),
+        within limit: Duration = .seconds(8),
         _ condition: @Sendable () async -> Bool
     ) async {
         let deadline = ContinuousClock.now + limit
