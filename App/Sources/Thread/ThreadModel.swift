@@ -122,6 +122,10 @@ final class ThreadModel {
     let clock: @Sendable () -> ContinuousClock.Instant
     /// When own typing was last published. Not observable: nothing renders it.
     @ObservationIgnored var lastTypingPublish: ContinuousClock.Instant?
+    /// Set for exactly one composer change: the one this model made itself, refilling the
+    /// composer with a sent reply's agents. See ``handleTyping(_:)`` — without it, a send
+    /// announces to the whole thread that the author has started typing again.
+    @ObservationIgnored var isRefillingComposer = false
     /// The local identity's hex pubkey, for own-reaction highlighting and delete.
     let selfPubkey: String?
 

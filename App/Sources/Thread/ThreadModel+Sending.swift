@@ -40,11 +40,9 @@ extension ThreadModel {
         // a self-mention notifies nobody, and seeding one would park the reader's own name in
         // their composer for the rest of the thread.
         let sender = selfPubkey?.lowercased()
-        mentionDraft = isAgent
-            .map { predicate in
-                document.agentSeed { pubkey in pubkey != sender && predicate(pubkey) }
-            }
-            ?? MentionDraft()
+        refillComposer(with: isAgent.map { predicate in
+            document.agentSeed { pubkey in pubkey != sender && predicate(pubkey) }
+        } ?? MentionDraft())
         sendError = nil
         if isChasingOwnSend { jumpToLatest() }
         Task { [weak self] in

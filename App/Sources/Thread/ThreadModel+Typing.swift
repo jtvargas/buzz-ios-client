@@ -16,10 +16,20 @@ extension ThreadModel {
     /// throttled to one publish per ``typingThrottle`` window. Empty input never
     /// publishes — clearing the field is not typing.
     ///
+    /// Nor is the composer refilling itself. A send that keeps its agents mentioned leaves
+    /// `@Name ` behind, and that is text where clearing used to leave none — so the empty
+    /// guard above, which is what has always kept a send from announcing more typing, stops
+    /// covering it. ``ThreadModel/isRefillingComposer`` covers exactly that one change and is
+    /// consumed here, so anything the author types next publishes normally.
+    ///
     /// Fire-and-forget: typing is ephemeral (S-3), so a failure is dropped. The `h` tag
     /// is what makes a channel-scoped ephemeral acceptable to the relay at all (S-5);
     /// the `e` marker is what places it in this thread.
     func handleTyping(_ text: String) {
+        if isRefillingComposer {
+            isRefillingComposer = false
+            return
+        }
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         let instant = clock()
         if let last = lastTypingPublish, instant - last < typingThrottle { return }

@@ -22,6 +22,28 @@ extension ThreadModel {
         drafts?.record(mentionDraft, for: draftKey)
     }
 
+    /// Puts something in the composer that is *not* the author's unsent text: the agents a
+    /// just-sent reply keeps mentioned, or nothing at all when the setting is off.
+    ///
+    /// The second `record` is the point of this method and is not redundant. A refill goes
+    /// through ``ThreadModel/mentionDraft`` so the composer redraws, which means the `didSet`
+    /// files it as a draft — and a mention with no words after it is not one. Left alone,
+    /// every thread the reader had ever replied to would appear on the Drafts screen holding
+    /// `@Name`, and the shortcut card would count each of them as unsent work. Recording the
+    /// clear immediately after replaces that queued write before any of it reaches the store
+    /// (see ``ComposerDrafts/record(_:for:)``), which is also exactly what a send *should*
+    /// leave behind: the words went out, so there is nothing left to finish.
+    ///
+    /// The cost, and it is a real one: the kept mention lives for as long as the composer
+    /// does. Leave the thread and come back and it is gone, because nothing was stored.
+    func refillComposer(with draft: MentionDraft) {
+        // Text where a clear would have left none, which is the case ``handleTyping(_:)``'s
+        // empty guard has always relied on to keep a send from announcing more typing.
+        isRefillingComposer = !draft.text.isEmpty
+        mentionDraft = draft
+        drafts?.record(MentionDraft(), for: draftKey)
+    }
+
     /// Puts this thread's unsent reply back in the composer, from the channel's place in
     /// the pass. See ``ChannelTimelineModel/restoreDraft()``.
     func restoreDraft() {
