@@ -69,9 +69,13 @@ private struct SidebarPlaceholderRow: View {
     let width: CGFloat
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: SidebarSectionHeader.markGap) {
             RoundedRectangle(cornerRadius: AvatarShape.roundedSquare.cornerRadius(for: Self.glyphSize))
                 .frame(width: Self.glyphSize, height: Self.glyphSize)
+                // The column the real row centres its mark in. Without it this row keeps the
+                // old geometry and the list steps sideways the moment the real rows replace
+                // it — the one thing this placeholder exists to prevent.
+                .frame(width: SidebarSection.symbolColumnWidth)
             Capsule()
                 .frame(width: width, height: 12)
             Spacer(minLength: 0)
