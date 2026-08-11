@@ -112,6 +112,22 @@ public struct SyncEngineConfig: Sendable {
     /// becomes an explicit, retryable send failure.
     public var mediaUploadDeadline: Duration
 
+    /// The shortest gap between two send-driven reconnect requests.
+    ///
+    /// A queued send asks the connection to stop waiting out its backoff rather than
+    /// sitting until the next `.ready` arrives on its own schedule — see
+    /// ``SyncEngine/nudgeConnection()``. That request must be rate-limited: a nudge
+    /// arriving while the connection is still backing off resets its attempt counter,
+    /// so an ungated one would let a run of sends retry a dead network on a five-second
+    /// loop for as long as the reader kept typing.
+    ///
+    /// Five seconds, because only the *first* nudge after a disconnect does anything
+    /// useful — by the second one a reconnect is already in flight and the connection
+    /// ignores it — so a longer window costs nothing and bounds the failure case
+    /// tighter. Still six times shorter than ``ReconnectPolicy/cap``, which is the wait
+    /// it exists to cut short.
+    public var connectionNudgeInterval: TimeInterval
+
     public init(
         liveSinceWindow: TimeInterval = 5,
         presenceSweepInterval: Duration = .seconds(1),
@@ -123,7 +139,8 @@ public struct SyncEngineConfig: Sendable {
         threadSweepHorizon: TimeInterval = 14 * 24 * 60 * 60,
         threadSweepRootLimit: Int = 40,
         noticeBackfillLimit: Int = 200,
-        mediaUploadDeadline: Duration = .seconds(270)
+        mediaUploadDeadline: Duration = .seconds(270),
+        connectionNudgeInterval: TimeInterval = 5
     ) {
         self.liveSinceWindow = liveSinceWindow
         self.presenceSweepInterval = presenceSweepInterval
@@ -136,6 +153,7 @@ public struct SyncEngineConfig: Sendable {
         self.threadSweepRootLimit = threadSweepRootLimit
         self.noticeBackfillLimit = noticeBackfillLimit
         self.mediaUploadDeadline = mediaUploadDeadline
+        self.connectionNudgeInterval = connectionNudgeInterval
     }
 
     public static let `default` = SyncEngineConfig()

@@ -260,6 +260,11 @@ public actor SyncEngine {
     var drainInFlight = false
     var drainPending = false
 
+    /// When a send last asked the connection to reopen, so a run of sends cannot
+    /// restart the handshake faster than it can complete. See
+    /// ``SyncEngineConfig/connectionNudgeInterval``.
+    var lastConnectionNudge: Date?
+
     /// Event ids whose media pumps are already running. Mount, drain, and enqueue
     /// may all discover the same held row; only one pump may own it at a time.
     var mediaPumpsInFlight: Set<String> = []
@@ -603,6 +608,21 @@ public actor SyncEngine {
             state = .running
             readyGeneration += 1
             let generation = readyGeneration
+            // The reader's own queued sends go first, ahead of the whole catch-up the
+            // on-ready pass runs below. A publish needs authentication and nothing else
+            // — not the directory, not the subscriptions, not a head window — so making
+            // one wait on any of them is a dependency this path does not actually have.
+            //
+            // It is also the only ordering that survives a directory fetch that does not
+            // answer: the authoritative pass reaches its own drain only *after* that
+            // fetch resolves, so a relay too slow or too broken to serve it today leaves
+            // a queued row sitting until the next reconnect. Draining here is
+            // independent of it entirely.
+            //
+            // Additive rather than a move — ``requestDrain(generation:)`` coalesces, so
+            // the drain at the end of the pass costs nothing and still serves anything
+            // queued *while* the pass was running.
+            Task { [weak self] in await self?.requestDrain(generation: generation) }
             // A fresh socket means a fresh head: every channel is unsynced until
             // reconcile proves otherwise (NIP-CW head-refetch rule).
             channelStates.removeAll()
