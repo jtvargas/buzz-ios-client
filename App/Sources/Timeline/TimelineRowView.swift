@@ -5,7 +5,8 @@ import SwiftUI
 /// name in bold with the time beside it, then the content (markdown with a plain
 /// fallback, or a "message deleted" placeholder), reaction chips, a reply preview with
 /// its participants' faces, and the delivery treatment — `.pending` dimmed (plus a
-/// sending strip for media), `.failed` carrying a failure strip, `.sent` plain.
+/// sending strip, at once for media and after a beat for text), `.failed` carrying a
+/// failure strip, `.sent` plain.
 ///
 /// # What the row deliberately is not
 ///
@@ -64,6 +65,15 @@ struct TimelineRowView: View {
     /// Resolves this row's taps against each other: one opens what was tapped, two open a
     /// sheet. See ``MessageTapArbiter`` for what that costs the single tap.
     @State var taps = MessageTapArbiter()
+    /// Whether this send has been unconfirmed long enough to be worth saying out loud.
+    ///
+    /// A text send on a live socket is acknowledged in about a tenth of a second, so a
+    /// strip drawn the moment a row goes pending would flash under *every* message the
+    /// reader sends — a flicker on every line, announcing nothing they need. The delay is
+    /// what makes the strip mean something: it appears only when the send genuinely is
+    /// waiting, which in practice is a socket being rebuilt after the app returns from the
+    /// background. See ``watchForSlowSend()``.
+    @State private var isSlowSend = false
 
     /// The avatar's point size, and so the width the content column is indented by, at
     /// this reader's text size. Scaled against `.subheadline` — the name beside it — so
@@ -186,7 +196,7 @@ struct TimelineRowView: View {
                         }
                     )
                 }
-                if row.delivery == .pending, !row.media.isEmpty {
+                if showsSendingStrip {
                     SendingStrip(uploaded: row.uploadedMediaCount, total: row.media.count)
                 }
                 if case let .failed(reason) = row.delivery {
@@ -204,10 +214,13 @@ struct TimelineRowView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .opacity(row.delivery == .pending ? 0.5 : 1)
-        // Both animations are scoped to a value on *this* row, never ambient: a
-        // pending→sent handover fades, and nothing here can catch the enclosing list
-        // inserting a row into a bottom-anchored scroll view.
+        .task(id: row.delivery) { await watchForSlowSend() }
+        // Every animation here is scoped to a value on *this* row, never ambient: a
+        // pending→sent handover fades, the sending strip fades in under a send that is
+        // taking its time, and nothing here can catch the enclosing list inserting a row
+        // into a bottom-anchored scroll view.
         .animation(.default, value: row.delivery)
+        .animation(.default, value: isSlowSend)
         .animation(.default, value: isAuthorOnline)
         .contentShape(.rect)
         .gesture(pressGesture)
@@ -265,6 +278,39 @@ struct TimelineRowView: View {
                 Button("Message actions", action: onLongPress)
             }
         }
+    }
+
+    /// How long a send may go unconfirmed before the row says so.
+    ///
+    /// Sized against the two things it has to separate rather than picked for feel: an
+    /// acknowledged send on a live socket lands in roughly a tenth of a second, and the
+    /// case worth announcing — a socket torn down by the background grace window, rebuilt
+    /// and re-authenticated on the way back in — takes a second or more. Anything in
+    /// between is a send that is about to succeed, and saying nothing is the right answer.
+    private static let slowSendThreshold: Duration = .seconds(1)
+
+    /// Whether to draw ``SendingStrip`` under this message.
+    ///
+    /// A message carrying pictures says it immediately: an upload genuinely takes time, and
+    /// the count climbing is the one part of a send a reader can usefully watch. A text-only
+    /// send waits out ``slowSendThreshold`` first — see ``isSlowSend``.
+    private var showsSendingStrip: Bool {
+        row.delivery == .pending && (!row.media.isEmpty || isSlowSend)
+    }
+
+    /// Arms the delay that decides ``isSlowSend``, and is the whole of that state's
+    /// lifecycle: it is driven by `.task(id: row.delivery)`, so a row that leaves `.pending`
+    /// cancels this and re-runs it, clearing the flag on the way past the guard. That is why
+    /// nothing else in the file writes it — the strip cannot outlive the send it describes.
+    private func watchForSlowSend() async {
+        isSlowSend = false
+        guard row.delivery == .pending else { return }
+        try? await Task.sleep(for: Self.slowSendThreshold)
+        // `Task.sleep` throwing on cancellation is swallowed above so the ordinary path
+        // reads straight; the cancellation check is what stops a cancelled wait from
+        // showing a strip for a send that has already landed.
+        guard !Task.isCancelled else { return }
+        isSlowSend = true
     }
 
     /// The attribution and the body as one VoiceOver utterance: `.combine` flattens its

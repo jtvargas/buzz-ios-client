@@ -12,7 +12,7 @@ import Testing
 /// the strip from sitting under the reply it was announcing for the rest of the TTL.
 @Suite("Typing scope and completion", .timeLimit(.minutes(1)))
 struct TypingScopeTests {
-    @Test("a thread hears only its own writers; the channel hears all of them")
+    @Test("each surface hears only its own writers")
     func typingScopesPerThread() async throws {
         let clock = MutableClock()
         let store = PresenceStore(now: { clock.current })
@@ -28,14 +28,15 @@ struct TypingScopeTests {
         // The thread is exact — the channel's own writer is not in it.
         #expect(await store.typingSnapshot(in: "room-1", thread: "root-1") == [alice.pubkey])
         #expect(await store.typingSnapshot(in: "room-1", thread: "root-2").isEmpty)
-        // The channel is the whole channel, threads included: from there a reader cannot
-        // tell which thread the work is in, and would otherwise be told nothing at all.
-        #expect(await store.typingSnapshot(in: "room-1") == [alice.pubkey, bob.pubkey].sorted())
+        // And the channel is exact the other way: Alice is writing a reply that will land
+        // in a thread, so she is not on the channel's strip. Asserted as an equality rather
+        // than "does not contain Alice", which would also pass if the channel went blind.
+        #expect(await store.typingSnapshot(in: "room-1") == [bob.pubkey])
         #expect(await store.typingSnapshot(in: "room-2").isEmpty)
     }
 
-    @Test("one person writing in two threads is one typer on the channel")
-    func channelDeduplicatesAcrossThreads() async throws {
+    @Test("someone writing only in threads is invisible on the channel")
+    func threadOnlyTypingIsInvisibleOnTheChannel() async throws {
         let clock = MutableClock()
         let store = PresenceStore(now: { clock.current })
         let alice = try Fixture()
@@ -45,16 +46,45 @@ struct TypingScopeTests {
             try alice.event(.typing, "", tags: [["h", "room-1"], ["e", "root-2", "", "reply"]]),
         ])
 
-        #expect(await store.typingSnapshot(in: "room-1") == [alice.pubkey])
+        #expect(await store.typingSnapshot(in: "room-1").isEmpty)
+        // Both threads still have her: the channel is filtering, not the store forgetting.
+        #expect(await store.typingSnapshot(in: "room-1", thread: "root-1") == [alice.pubkey])
+        #expect(await store.typingSnapshot(in: "room-1", thread: "root-2") == [alice.pubkey])
     }
 
-    @Test("a thread's typer reaches the channel's observers too, and leaves with them")
-    func channelObserverHearsThreadTyping() async throws {
+    @Test("a thread's typer never reaches the channel's observers")
+    func channelObserverIgnoresThreadTyping() async throws {
+        let clock = MutableClock()
+        let store = PresenceStore(now: { clock.current })
+        let alice = try Fixture()
+        let bob = try Fixture()
+
+        let stream = await store.typing(in: "room-1")
+        var iterator = stream.makeAsyncIterator()
+        _ = await iterator.next() // seed
+
+        // Alice writes in a thread. This must not wake the channel's observer — and
+        // waiting on it to prove that would hang, because an unchanged snapshot yields
+        // nothing at all. So Bob writes at the channel's own level straight after, and the
+        // next value the channel hears is asserted to be Bob alone: if Alice had been
+        // admitted, that value would have been the pair, and if she had woken the observer
+        // separately it would have been Alice.
+        let threadTags = [["h", "room-1"], ["e", "root-1", "", "reply"]]
+        await store.apply([try alice.event(.typing, "", tags: threadTags, at: 100)])
+        await store.apply([try bob.event(.typing, "", tags: [["h", "room-1"]], at: 100)])
+        #expect(await iterator.next() == [bob.pubkey])
+
+        // Her thread still heard her all along.
+        #expect(await store.typingSnapshot(in: "room-1", thread: "root-1") == [alice.pubkey])
+    }
+
+    @Test("a thread's own observer hears its typer, and loses them to the reply")
+    func threadObserverHearsAndLosesItsTyper() async throws {
         let clock = MutableClock()
         let store = PresenceStore(now: { clock.current })
         let alice = try Fixture()
 
-        let stream = await store.typing(in: "room-1")
+        let stream = await store.typing(in: "room-1", thread: "root-1")
         var iterator = stream.makeAsyncIterator()
         _ = await iterator.next() // seed
 
@@ -62,7 +92,7 @@ struct TypingScopeTests {
         await store.apply([try alice.event(.typing, "", tags: tags, at: 100)])
         #expect(await iterator.next() == [alice.pubkey])
 
-        // And the reply landing in that thread takes it off the channel's strip as well.
+        // And the reply landing in that thread takes it off the thread's strip.
         let reply = try alice.event(.channelMessage, "done", tags: tags, at: 101)
         await store.messagesArrived([reply])
         #expect(await iterator.next() == [])
@@ -119,12 +149,13 @@ struct TypingScopeTests {
 
         await store.messagesArrived([try alice.message("channel-level", in: "room-1", at: 101)])
 
-        // Read through the records rather than a snapshot: the channel's audience spans
-        // its threads, so it would still report Alice on the strength of the thread
-        // record alone, and that is exactly the record this must not have touched.
+        // Read through the records as well as the snapshots: the channel snapshot going
+        // empty is what the message is supposed to do, and on its own it would look
+        // identical to the thread record having been cleared too.
         let scopes = await Set(store.typingRecords.keys.map(\.scope))
         #expect(scopes == [PresenceStore.TypingScope(channel: "room-1", thread: "root-1")])
         #expect(await store.typingSnapshot(in: "room-1", thread: "root-1") == [alice.pubkey])
+        #expect(await store.typingSnapshot(in: "room-1").isEmpty)
     }
 
     @Test("a typing indicator published no later than the message it announces is refused")

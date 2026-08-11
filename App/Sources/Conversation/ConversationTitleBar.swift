@@ -289,7 +289,14 @@ struct ConversationTitleBar: ViewModifier {
                 // name: inside a control the hierarchy resolves against the tint. The accent
                 // is therefore asked for by name where it is wanted, and refused everywhere
                 // else — which is the only way a glyph can be *the* accented one.
-                .foregroundStyle(accented ? Color.hiveAccent : Color.secondary)
+                //
+                // The unaccented mark is `Color.primary`, the name's own colour, and not
+                // `.secondary`: this is the heading's icon, not a note about the heading.
+                // Drawn secondary it came out pixel-identical to the subtitle underneath it,
+                // so the pill read as one bold word with two grey things attached rather than
+                // as an icon and a name. The accented mark is still the odd one out — amber
+                // against white reads as clearly as amber against grey did.
+                .foregroundStyle(accented ? Color.hiveAccent : Color.primary)
                 .accessibilityHidden(true)
         case let .avatar(url, seed, initials):
             AvatarView(url: url, seed: seed, monogram: initials, size: Self.avatarSize)
@@ -300,8 +307,11 @@ struct ConversationTitleBar: ViewModifier {
                 .font(.hive(.body, weight: .bold))
                 .monospacedDigit()
                 // Named, for the reason above the name: a hierarchical style inside a
-                // control resolves against the tint and would turn this amber.
-                .foregroundStyle(Color.secondary)
+                // control resolves against the tint and would turn this amber. `.primary`
+                // for the same reason the glyph is: a group's member count sits in the mark
+                // slot, so it is the heading's icon and has to carry the icon's weight —
+                // left secondary it would have been the one grey mark in the app.
+                .foregroundStyle(Color.primary)
                 .accessibilityHidden(true)
         }
     }

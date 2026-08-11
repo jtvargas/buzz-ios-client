@@ -39,7 +39,7 @@ struct PresenceModelTests {
         #expect(model.typers == [other.pubkey])
     }
 
-    @Test("a thread's model hears its own thread; the channel's hears the thread too")
+    @Test("a thread's model hears its own thread; the channel's hears only its own level")
     func typingScopesToItsThread() async throws {
         let store = PresenceStore()
         let me = try Fixture()
@@ -64,13 +64,17 @@ struct PresenceModelTests {
             try inChannel.event(.typing, "", tags: [["h", "room-1"]]),
         ])
 
-        let both = [inThread.pubkey, inChannel.pubkey].sorted()
+        // Both waits are for a positive, which is the only shape this file's unbounded
+        // `waitUntil` can express — so a regression that leaked the thread's writer onto
+        // the channel shows up as this test blowing its time limit rather than as a
+        // one-line diff. The equalities below are what name the intended state.
         await waitUntil { threadModel.typers == [inThread.pubkey] }
-        await waitUntil { channelModel.typers == both }
-        // The thread is exact: the channel's own writer is not in it. The channel is
-        // wide: from there the two are indistinguishable, so it carries both.
+        await waitUntil { channelModel.typers == [inChannel.pubkey] }
+        // Each surface is exact: the channel's own writer is not in the thread, and the
+        // thread's writer — whose reply is going to land in the thread, not here — is not
+        // on the channel.
         #expect(threadModel.typers == [inThread.pubkey])
-        #expect(channelModel.typers == both)
+        #expect(channelModel.typers == [inChannel.pubkey])
     }
 
     /// Every arity, against upstream mobile's own switch
