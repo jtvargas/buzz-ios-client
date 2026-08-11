@@ -38,6 +38,7 @@ struct SettingsView: View {
                 VStack(spacing: 20) {
                     themeCard
                     notificationsCard
+                    agentsCard
                     siriCard
                 }
                 .padding(.horizontal, 20)
@@ -241,6 +242,35 @@ struct SettingsView: View {
     private static let systemDeniedNote =
         "iOS is blocking notifications for Hive, so nothing will arrive until they are allowed "
             + "at the system level too."
+
+    // MARK: - Agents
+
+    private var agentsCard: some View {
+        AccountCard(title: "Agents", subtitle: Self.agentsBlurb) {
+            EmptyView()
+        } content: {
+            AccountFieldRow(label: "IN A THREAD") {
+                Toggle("Keep agents mentioned", isOn: keepAgentsBinding)
+                    .font(.hive(.body))
+            }
+        }
+    }
+
+    /// A plain binding, unlike ``notificationsBinding``: nothing is already armed with this
+    /// one, so throwing the switch has nothing to go back and undo. It takes effect on the
+    /// next reply — a composer already holding a name keeps it, and turning the switch off
+    /// does not reach in and delete one.
+    private var keepAgentsBinding: Binding<Bool> {
+        Binding(
+            get: { environment.settings.keepAgentsMentioned },
+            set: { environment.settings.keepAgentsMentioned = $0 }
+        )
+    }
+
+    private static let agentsBlurb =
+        "After you reply to an agent in a thread, its @name stays in the composer so the next "
+            + "message reaches it without retyping. Delete the name to stop — the mention is "
+            + "still what a reply is addressed with, so nothing is sent behind your back."
 
     // MARK: - Siri
 

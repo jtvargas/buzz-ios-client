@@ -14,7 +14,17 @@ extension ThreadModel {
     /// the pending reply appears through the observation the moment the outbox row
     /// commits. An over-ceiling reply throws before it is queued — the text is
     /// restored and surfaced.
-    func sendReply() {
+    ///
+    /// `isAgent` is the "Keep agents mentioned" setting in the only form this model needs it:
+    /// `nil` clears the composer exactly as it always has, and a predicate leaves the agents
+    /// this reply addressed sitting in it, ready for the next one. It arrives from the view
+    /// rather than being read here because both halves of the answer — the setting and
+    /// ``EntityNames`` — live in the environment, which a model cannot reach.
+    ///
+    /// The seed is assigned through ``ThreadModel/mentionDraft`` like anything typed, so the
+    /// same `didSet` persists it: leave the thread mid-conversation and the agents are still
+    /// addressed on the way back in.
+    func sendReply(keepingAgents isAgent: ((String) -> Bool)? = nil) {
         let document = mentionDraft
         let text = document.text.trimmingCharacters(in: .whitespacesAndNewlines)
         // The same rules the channel's send states: a picture alone is a reply,
@@ -26,7 +36,15 @@ extension ThreadModel {
         let selfPubkey = self.selfPubkey
         guard let media = attachments.takeForSend() else { return }
         guard !text.isEmpty || !media.isEmpty else { return }
-        mentionDraft = MentionDraft()
+        // The author's own key is filtered out for the reason it is filtered out of the tags:
+        // a self-mention notifies nobody, and seeding one would park the reader's own name in
+        // their composer for the rest of the thread.
+        let sender = selfPubkey?.lowercased()
+        mentionDraft = isAgent
+            .map { predicate in
+                document.agentSeed { pubkey in pubkey != sender && predicate(pubkey) }
+            }
+            ?? MentionDraft()
         sendError = nil
         if isChasingOwnSend { jumpToLatest() }
         Task { [weak self] in
