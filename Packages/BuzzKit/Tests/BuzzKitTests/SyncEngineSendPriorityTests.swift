@@ -17,14 +17,11 @@ struct SyncEngineSendPriorityTests {
     /// and everything here is a race, which is exactly where an unbounded spin turns a
     /// fast red into a sixty-second one.
     ///
-    /// Eight seconds rather than the two this started at, because the bound has to cover
-    /// scheduling delay rather than the work: what it waits on is a SQLite insert, an
-    /// actor hop and a socket construction — milliseconds — but the suite runs 653 tests
-    /// across 112 suites in parallel, and on a loaded runner a two-second ceiling clipped
-    /// one of these while the state machine had gone exactly where it was asked to. Still
-    /// well inside the suite's own minute even if all three expire.
+    /// Five seconds is far more than any wait here needs — a SQLite insert, an actor hop,
+    /// a socket construction — and the point of the ceiling is only that a broken
+    /// predicate reports rather than hangs.
     private static func waitUntil(
-        within limit: Duration = .seconds(8),
+        within limit: Duration = .seconds(5),
         _ condition: @Sendable () async -> Bool
     ) async {
         let deadline = ContinuousClock.now + limit
@@ -36,6 +33,30 @@ struct SyncEngineSendPriorityTests {
 
     private static func publishedIDs(on relay: ScriptedRelay) async -> [String] {
         await relay.frames().compactMap { publishedEventID($0) }
+    }
+
+    /// Waits for the engine to see the socket go live, then drops it and waits for the
+    /// engine to see *that*.
+    ///
+    /// Both halves are load-bearing, and the first one is the whole reason this exists.
+    /// The engine tracks the connection through an `AsyncStream`, so its state trails the
+    /// socket's: `!= .running` is **already true** while the socket is still connecting and
+    /// authenticating. A test that only waits for `!= .running` therefore returns on its
+    /// first poll, before the connection has ever been up — and the send that follows lands
+    /// on an engine that is about to become `.running`, takes the drain path instead of the
+    /// nudge, and the assertion fails for a reason that has nothing to do with the code
+    /// under test. That cost a red CI run and about forty minutes; waiting for the positive
+    /// first is what makes the negative mean something.
+    private static func dropSocketAfterGoingLive(
+        _ harness: EngineHarness,
+        _ relay: ScriptedRelay
+    ) async {
+        await waitUntil { await harness.engine.state == .running }
+        #expect(await harness.engine.state == .running)
+
+        await relay.enqueueFailure(.connectionClosed)
+        await waitUntil { await harness.engine.state != .running }
+        #expect(await harness.engine.state != .running)
     }
 
     // MARK: - Drain ahead of the catch-up
@@ -87,15 +108,15 @@ struct SyncEngineSendPriorityTests {
         try await harness.engine.start()
         try await driveAuth(harness.connection, first)
 
-        await first.enqueueFailure(.connectionClosed)
-        await Self.waitUntil { await harness.engine.state != .running }
-        #expect(await harness.engine.state != .running)
+        await Self.dropSocketAfterGoingLive(harness, first)
         #expect(await harness.transports.vendedCount == 1)
 
         _ = try await harness.engine.enqueue(content: "hello", in: "room-1", tags: [["h", "room-1"]])
 
         await Self.waitUntil { await harness.transports.vendedCount == 2 }
-        #expect(await harness.transports.vendedCount == 2)
+        let vended = await harness.transports.vendedCount
+        let connectionState = await harness.connection.state
+        #expect(vended == 2, "vended=\(vended) connection=\(String(describing: connectionState))")
 
         await harness.engine.stop()
     }
@@ -130,8 +151,7 @@ struct SyncEngineSendPriorityTests {
         try await harness.engine.start()
         try await driveAuth(harness.connection, first)
 
-        await first.enqueueFailure(.connectionClosed)
-        await Self.waitUntil { await harness.engine.state != .running }
+        await Self.dropSocketAfterGoingLive(harness, first)
 
         _ = try await harness.engine.enqueue(content: "one", in: "room-1", tags: [["h", "room-1"]])
         await Self.waitUntil { await harness.transports.vendedCount == 2 }
