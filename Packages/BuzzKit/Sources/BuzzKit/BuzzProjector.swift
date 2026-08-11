@@ -287,19 +287,33 @@ struct BuzzProjector: EventProjecting {
     // MARK: - Profiles
 
     /// Kind 0: profile metadata, replaceable per pubkey.
+    ///
+    /// The NIP-OA `auth` tag rides on this event and is verified here rather than at
+    /// display time, because it is the one fact on a profile that grants standing: it is
+    /// what makes a pubkey render as an agent. Verifying at the projection boundary means
+    /// every reader inherits the check instead of each surface repeating it, and it
+    /// matches both official clients, which verify the tag against the *profile event's
+    /// author* so a forged or stale marker cannot turn a person into an agent
+    /// (`desktop/src-tauri/src/nostr_convert.rs`, `mobile/lib/shared/crypto/nip_oa.dart`).
+    ///
+    /// Deliberately not the kind-10100 agent directory: that event's job is
+    /// `channel_add_policy`, any user may publish one for their own key, and it carries no
+    /// attestation to check — so its existence is a claim, not a credential.
     private static func projectProfile(_ event: NostrEvent, into db: Database) throws {
         let meta = try? JSONDecoder().decode(ProfileMetadata.self, from: Data(event.content.utf8))
 
         try db.execute(
             sql: """
-            INSERT INTO profile (pubkey, display_name, picture, about, nip05, lud16, source_event_id, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO profile (pubkey, display_name, picture, about, nip05, lud16,
+                                 oa_owner_pubkey, source_event_id, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(pubkey) DO UPDATE SET
                 display_name = excluded.display_name,
                 picture = excluded.picture,
                 about = excluded.about,
                 nip05 = excluded.nip05,
                 lud16 = excluded.lud16,
+                oa_owner_pubkey = excluded.oa_owner_pubkey,
                 source_event_id = excluded.source_event_id,
                 created_at = excluded.created_at
             WHERE excluded.created_at > profile.created_at
@@ -315,6 +329,7 @@ struct BuzzProjector: EventProjecting {
                 meta?.about?.nilIfEmpty,
                 meta?.nip05?.nilIfEmpty,
                 meta?.lud16?.nilIfEmpty,
+                NIPOA.verifiedOwnerPubkey(of: event)?.lowercased(),
                 event.id,
                 event.createdAt,
             ]

@@ -109,11 +109,16 @@ enum ActivityFeedRead {
 
     /// Whether the event's author is an agent rather than a person.
     ///
-    /// The same two facts ``DirectorySnapshot`` builds `isAgent` from
-    /// (`Directory.swift:158`): a row in `agent_directory`, or the `bot` role on any
-    /// channel membership. Asked in SQL rather than resolved in the view because it decides
+    /// The same two facts ``DirectorySnapshot`` builds `isAgent` from: a verified NIP-OA
+    /// owner attestation on the author's kind-0, or the `bot` role on any channel
+    /// membership. Asked in SQL rather than resolved in the view because it decides
     /// which *chip* a row appears under, and a filter that depends on a value the view has
     /// not loaded yet would flicker rows in and out as the roster arrives.
+    ///
+    /// It used to ask `agent_directory` instead of the attestation. That table is populated
+    /// by kind-10100, which any user may publish for their own key, so the Agents chip was
+    /// filterable by an impostor; both arms below are now facts a user cannot assert about
+    /// themselves.
     ///
     /// # Why this exists at all
     ///
@@ -125,7 +130,8 @@ enum ActivityFeedRead {
     /// those kind-9 messages; this matches that. The kind list stays as well, so a real job
     /// event still classifies correctly if one ever arrives.
     private static let authorIsAgent = """
-    (EXISTS (SELECT 1 FROM agent_directory ad WHERE ad.pubkey = e.pubkey)
+    (EXISTS (SELECT 1 FROM profile p
+              WHERE p.pubkey = e.pubkey AND p.oa_owner_pubkey IS NOT NULL)
      OR EXISTS (SELECT 1 FROM channel_member cm
                  WHERE cm.pubkey = e.pubkey AND LOWER(cm.role) = 'bot'))
     """

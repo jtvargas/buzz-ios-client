@@ -17,6 +17,8 @@ struct DirectoryTests {
         let peer = try Fixture()
         let bot = try Fixture()
         let directoryAgent = try Fixture()
+        let owner = try Fixture()
+        let attestedAgent = try Fixture()
 
         _ = try await store.ingest(batch: [
             try relay.event(.groupMetadata, #"{"name":"room"}"#, tags: [["d", "room-1"]], at: 1_000),
@@ -44,6 +46,15 @@ struct DirectoryTests {
                 #"{"display_name":"Bumble","respond_to":"anyone","channel_ids":["room-1"]}"#,
                 at: 1_004
             ),
+            // An owner-attested agent: the kind-0 carries a NIP-OA `auth` tag the owner
+            // signed over this pubkey, which is the only agent claim a key cannot make
+            // about itself.
+            try attestedAgent.event(
+                .metadata,
+                #"{"display_name":"Sentry"}"#,
+                tags: [try owner.authTag(authorizing: attestedAgent.pubkey)],
+                at: 1_005
+            ),
         ], phase: .backfill)
 
         let snapshot = try store.directorySnapshot()
@@ -66,11 +77,17 @@ struct DirectoryTests {
         #expect(meEntity != nil)
         #expect(meEntity?.profileName == nil)
 
-        // Agent identity comes from either authority: a roster `bot` role...
+        // Agent identity comes from either authority a user cannot assert about itself:
+        // a roster `bot` role...
         #expect(snapshot.entity(bot.pubkey)?.isAgent == true)
-        // ...or the relay's agent directory, which also carries its own name.
+        // ...or a verified NIP-OA owner attestation on the kind-0.
+        #expect(snapshot.entity(attestedAgent.pubkey)?.isAgent == true)
+
+        // The kind-10100 directory is *not* one of those authorities. Any key may publish
+        // one for itself, so it supplies a name and nothing more — publishing it must not
+        // buy the agent glyph. This is the impersonation vector, pinned closed.
         let agentEntity = snapshot.entity(directoryAgent.pubkey)
-        #expect(agentEntity?.isAgent == true)
+        #expect(agentEntity?.isAgent == false)
         #expect(agentEntity?.agentName == "Bumble")
         #expect(agentEntity?.profileName == nil)
     }

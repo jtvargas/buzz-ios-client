@@ -54,26 +54,50 @@ struct ActivityFeedAgentTests {
         #expect(!fromPerson.matches(.agentActivity))
     }
 
-    @Test("the relay's agent directory is the other authority for agent-ness")
-    func agentDirectoryAlsoMarksAnAuthor() async throws {
+    @Test("a verified owner attestation is the other authority for agent-ness")
+    func ownerAttestationAlsoMarksAnAuthor() async throws {
         let database = TempDatabase()
         defer { database.remove() }
         let me = try Fixture().pubkey
         let store = try await ActivityFixtures.openStore(database, identity: me, channels: ["room-1"])
         let relay = try Fixture()
+        let owner = try Fixture()
         let agent = try Fixture()
 
-        // No `bot` role anywhere — this one is an agent purely by being in the directory,
+        // No `bot` role anywhere — this one is an agent purely by its owner's signature,
         // the same either/or `DirectorySnapshot` applies.
         _ = try await store.ingest(batch: [
             try ActivityFixtures.meta(relay, "room-1", name: "Room", at: 500),
-            try ActivityFixtures.agentProfile(agent, name: "Bumble", at: 600),
+            try ActivityFixtures.attestedProfile(agent, owner: owner, name: "Bumble", at: 600),
             try ActivityFixtures.message(agent, "research done", in: "room-1", mentions: [me], at: 1000),
         ], phase: .backfill)
 
         let row = try #require(try store.activityFeed(selfPubkey: me, limit: 50).first)
         #expect(row.matches(.agentActivity))
         #expect(row.categories == [.mention, .agentActivity])
+    }
+
+    @Test("publishing your own agent profile does not put you on the Agents chip")
+    func selfPublishedDirectoryEntryIsNotAnAgent() async throws {
+        let database = TempDatabase()
+        defer { database.remove() }
+        let me = try Fixture().pubkey
+        let store = try await ActivityFixtures.openStore(database, identity: me, channels: ["room-1"])
+        let relay = try Fixture()
+        let impostor = try Fixture()
+
+        // Kind 10100 is self-published under a scope any profile-publishing user holds, so
+        // on its own it must buy nothing. Without this, an impostor filters onto the chip
+        // your agents' output appears under.
+        _ = try await store.ingest(batch: [
+            try ActivityFixtures.meta(relay, "room-1", name: "Room", at: 500),
+            try ActivityFixtures.agentProfile(impostor, name: "Jarvis", at: 600),
+            try ActivityFixtures.message(impostor, "trust me", in: "room-1", mentions: [me], at: 1000),
+        ], phase: .backfill)
+
+        let row = try #require(try store.activityFeed(selfPubkey: me, limit: 50).first)
+        #expect(!row.matches(.agentActivity))
+        #expect(row.categories == [.mention])
     }
 
     @Test("an agent in a thread you are in is Agent activity without naming you")

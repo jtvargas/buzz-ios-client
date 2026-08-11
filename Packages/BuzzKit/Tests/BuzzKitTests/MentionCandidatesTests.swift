@@ -15,6 +15,8 @@ struct MentionCandidatesTests {
         let shared = try Fixture()
         let allowed = try Fixture()
         let hidden = try Fixture()
+        let owner = try Fixture()
+        let impostor = try Fixture()
 
         _ = try await store.ingest(batch: [
             try relay.event(
@@ -35,6 +37,14 @@ struct MentionCandidatesTests {
                 #"{"display_name":"Shared Agent","respond_to":"anyone","channel_ids":["room-1"]}"#,
                 at: 1_002
             ),
+            // The directory says who an agent will answer; the owner's attestation says it
+            // is an agent at all. This list offers non-members, so both are required.
+            try shared.event(
+                .metadata,
+                #"{"display_name":"Shared Agent"}"#,
+                tags: [try owner.authTag(authorizing: shared.pubkey)],
+                at: 1_002
+            ),
             try allowed.event(
                 .agentProfile,
                 """
@@ -43,10 +53,23 @@ struct MentionCandidatesTests {
                 """,
                 at: 1_003
             ),
+            try allowed.event(
+                .metadata,
+                #"{"display_name":"Allowed Agent"}"#,
+                tags: [try owner.authTag(authorizing: allowed.pubkey)],
+                at: 1_003
+            ),
             try hidden.event(
                 .agentProfile,
                 #"{"display_name":"Hidden Agent","respond_to":"owner-only","channel_ids":["room-1"]}"#,
                 at: 1_004
+            ),
+            // Eligible by policy, but nobody vouched for it: a key that publishes its own
+            // kind-10100 must not reach the composer as an agent.
+            try impostor.event(
+                .agentProfile,
+                #"{"display_name":"Jarvis","respond_to":"anyone","channel_ids":["room-1"]}"#,
+                at: 1_005
             ),
         ], phase: .backfill)
 
@@ -56,6 +79,7 @@ struct MentionCandidatesTests {
         #expect(!candidates[0].isAgent)
         #expect(candidates.dropFirst().allSatisfy { $0.isAgent })
         #expect(!candidates.contains { $0.pubkey == hidden.pubkey })
+        #expect(!candidates.contains { $0.pubkey == impostor.pubkey })
     }
 
     @Test("newest agent profile wins and rebuild reproduces it")
