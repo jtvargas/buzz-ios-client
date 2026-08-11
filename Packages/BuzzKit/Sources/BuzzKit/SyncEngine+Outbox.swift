@@ -31,11 +31,47 @@ extension SyncEngine {
     }
 
     /// Resumes HTTP media uploads immediately, then drains relay-bound rows when
-    /// the engine is running. The next `.ready` drains those rows otherwise.
+    /// the engine is running. Otherwise the row waits for the next `.ready` — and this
+    /// asks for that `.ready` now rather than whenever the connection's own schedule
+    /// reaches it. See ``nudgeConnection()``.
     public func drainOutbox() async {
         await resumeMediaUploads()
-        guard state == .running else { return }
+        guard state == .running else {
+            await nudgeConnection()
+            return
+        }
         await requestDrain(generation: readyGeneration)
+    }
+
+    /// Asks the connection to reopen now, because somebody just tried to send.
+    ///
+    /// Somebody pressing send is the strongest statement of intent this engine
+    /// receives, and it was the only one that never reached the socket: a row enqueued
+    /// while the connection was backing off simply waited for the next `.ready`, which
+    /// the connection's own schedule puts up to ``ReconnectPolicy/cap`` — thirty
+    /// seconds — away. ``RelayConnection/reconnectNow()`` cancels that sleep, and is
+    /// already what pull-to-refresh calls; this gives the send path the same lever.
+    ///
+    /// Two deliberate limits.
+    ///
+    /// **Foreground only.** A backgrounded app released its socket on purpose
+    /// (``RelayConnectionConfig/backgroundGrace``); reviving it for a queued row would
+    /// spend battery to beat a deadline nobody is watching. The next foreground
+    /// reconnects anyway.
+    ///
+    /// **Rate-limited.** A nudge arriving while the connection is still backing off
+    /// resets its attempt counter, so an ungated one would let a run of sends retry a
+    /// dead network on a tight loop for as long as somebody kept typing. See
+    /// ``SyncEngineConfig/connectionNudgeInterval``.
+    func nudgeConnection() async {
+        guard isForeground, !isStopped else { return }
+        let moment = now()
+        if let last = lastConnectionNudge,
+           moment.timeIntervalSince(last) < config.connectionNudgeInterval {
+            return
+        }
+        lastConnectionNudge = moment
+        await connection.reconnectNow()
     }
 
     /// Returns a failed send to the queue and drains, so an explicit human retry is
@@ -135,10 +171,21 @@ extension SyncEngine {
             // already recorded by the store; the timing (redrain, re-auth) is the
             // engine's, and a fresh `.ready` drives it.
 
-        case .connectionLost, .notConnected, .stopped, .timedOut, .duplicatePublish:
-            // Outcome unknown or transient: the row stays `sending` and the next
-            // drain resends it. `duplicatePublish` means another in-flight publish
-            // already owns this id.
+        case .connectionLost, .timedOut:
+            // Outcome unknown: the row stays `sending` and the next drain resends it.
+            // A publish that got no answer is also the earliest evidence available that
+            // the socket is dead — earlier than the idle watchdog, which tolerates
+            // `pingInterval + pingDeadline` of silence before it suspects anything — so
+            // it drives the reconnect rather than waiting for one. This is the half of
+            // the send-side nudge that covers a socket which still *looks* alive: a
+            // reader cannot tell, so the failed send tells us instead.
+            await nudgeConnection()
+
+        case .notConnected, .stopped, .duplicatePublish:
+            // Outcome unknown or transient, and none of them want the socket revived:
+            // `notConnected` is the deliberate background release, `stopped` a sign-out,
+            // and `duplicatePublish` means another in-flight publish already owns this
+            // id. The row stays `sending` and the next drain resends it.
             break
 
         case .authenticationFailed, .authenticationRejected, .subscriptionClosed:
