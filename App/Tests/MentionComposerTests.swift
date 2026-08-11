@@ -304,4 +304,182 @@ extension MentionComposerTests {
             ["p", String(repeating: "a", count: 64)],
         ])
     }
+
+    // MARK: - Keeping a thread's agents mentioned
+
+    /// Builds `"@Agent @Ada Lovelace #general hello"` — one agent, one person, one channel
+    /// reference and some prose — as the composer itself would build it, so the tokens under
+    /// test are real inserted tokens rather than hand-written ones.
+    private func mixedDraft(agent: String, person: String) throws -> MentionDraft {
+        var draft = MentionDraft(text: "@ag")
+        draft.insert(
+            .user(MentionCandidateProfile(
+                pubkey: agent,
+                displayName: "Agent",
+                isAgent: true,
+                isChannelMember: true
+            )),
+            replacing: try #require(draft.trailingMention()).range
+        )
+        for addition in ["@ad", "#gen"] {
+            draft.replaceCharacters(
+                in: NSRange(location: (draft.text as NSString).length, length: 0),
+                with: addition
+            )
+            let range = try #require(draft.trailingMention()).range
+            draft.insert(addition == "@ad" ? candidate(pubkey: person) : channel(), replacing: range)
+        }
+        draft.replaceCharacters(
+            in: NSRange(location: (draft.text as NSString).length, length: 0),
+            with: "hello"
+        )
+        return draft
+    }
+
+    @Test("the seed keeps agents, drops people, channels, and prose")
+    func agentSeedKeepsOnlyAgents() throws {
+        let agent = String(repeating: "b", count: 64)
+        let person = String(repeating: "a", count: 64)
+        let draft = try mixedDraft(agent: agent, person: person)
+        // The draft this is derived from really does address all three.
+        #expect(draft.mentionedPubkeys(sender: nil) == [agent, person])
+
+        let seed = draft.agentSeed { $0 == agent }
+
+        #expect(seed.text == "@Agent ")
+        #expect(seed.mentionedPubkeys(sender: nil) == [agent])
+        // The identity stays out of the text, exactly as an inserted token keeps it out.
+        #expect(!seed.text.contains(agent))
+
+        // The range has to describe *this* text and not the text it came from: these ranges
+        // reach UIKit's text system, and `ComposerDraftTokens.decode` drops a token that runs
+        // past the string it is restored against — so a stale range loses the mention
+        // silently on the next launch.
+        let token = try #require(seed.tokens.first)
+        #expect((seed.text as NSString).substring(with: token.range) == "@Agent")
+        #expect(NSMaxRange(token.range) <= (seed.text as NSString).length)
+        // The trailing space is outside the token, as it is on insertion, so the caret lands
+        // after it and the next word is not swallowed into the mention.
+        #expect(seed.text.hasSuffix(" "))
+        #expect(!seed.text.hasSuffix("  "))
+        // A seeded draft is one nobody has edited: the caret belongs at the end.
+        #expect(seed.preferredCursor == nil)
+        // Nothing is kept when the predicate names nobody — an all-human reply clears.
+        #expect(draft.agentSeed { _ in false } == MentionDraft())
+    }
+
+    @Test("a pubkey named twice seeds once, in the order it was first named")
+    func agentSeedDedupes() throws {
+        let first = String(repeating: "b", count: 64)
+        let second = String(repeating: "c", count: 64)
+        var draft = MentionDraft()
+        for (pubkey, name) in [(first, "One"), (second, "Two"), (first, "One")] {
+            draft.replaceCharacters(
+                in: NSRange(location: (draft.text as NSString).length, length: 0),
+                with: "@x"
+            )
+            draft.insert(
+                .user(MentionCandidateProfile(
+                    pubkey: pubkey,
+                    displayName: name,
+                    isAgent: true,
+                    isChannelMember: true
+                )),
+                replacing: try #require(draft.trailingMention()).range
+            )
+        }
+
+        let seed = draft.agentSeed { _ in true }
+        #expect(seed.text == "@One @Two ")
+        #expect(seed.mentionedPubkeys(sender: nil) == [first, second])
+        // Every range still describes the seed's own text after the second token shifted.
+        for token in seed.tokens {
+            #expect(
+                (seed.text as NSString).substring(with: token.range)
+                    == "@\(token.displayName)"
+            )
+        }
+    }
+
+    @Test("a reply keeps its agents in the composer, and clears it when the setting is off")
+    func replyKeepsAgentsMentioned() throws {
+        let temp = TempStore()
+        defer { temp.remove() }
+        let store = try temp.open()
+        let sender = try RecordingSender()
+        let agent = String(repeating: "b", count: 64)
+        let person = String(repeating: "a", count: 64)
+
+        func makeModel(selfPubkey: String?) -> ThreadModel {
+            ThreadModel(
+                root: "root-1",
+                channel: "room-1",
+                store: store,
+                sender: sender,
+                opener: StubThreadOpener(store: store, events: []),
+                selfPubkey: selfPubkey
+            )
+        }
+
+        // On: the agent stays, the person does not. Asserted synchronously — the composer is
+        // re-seeded on the way into `sendReply`, before the enqueue is even started, so there
+        // is nothing here to wait for and a poll would only be able to pass by accident.
+        let kept = makeModel(selfPubkey: nil)
+        kept.mentionDraft = try mixedDraft(agent: agent, person: person)
+        kept.sendReply(keepingAgents: { $0 == agent })
+        #expect(kept.mentionDraft.text == "@Agent ")
+        #expect(kept.mentionDraft.mentionedPubkeys(sender: nil) == [agent])
+
+        // Off — the default, and every existing caller — clears as it always has.
+        let cleared = makeModel(selfPubkey: nil)
+        cleared.mentionDraft = try mixedDraft(agent: agent, person: person)
+        cleared.sendReply()
+        #expect(cleared.mentionDraft == MentionDraft())
+
+        // The author's own key is never seeded back, even when the author is an agent:
+        // a self-mention notifies nobody and would park their own name in their composer.
+        let mine = makeModel(selfPubkey: agent.uppercased())
+        mine.mentionDraft = try mixedDraft(agent: agent, person: person)
+        mine.sendReply(keepingAgents: { _ in true })
+        #expect(mine.mentionDraft.mentionedPubkeys(sender: nil) == [person])
+    }
+
+    /// The refill goes through `mentionDraft`, whose `didSet` files whatever it holds as a
+    /// draft. A mention with no words after it is not one — and left alone, every thread the
+    /// reader had ever replied to would sit on the Drafts screen holding `@Name`, with the
+    /// shortcut card counting each as unsent work.
+    @Test("a composer refilled by a send is not filed as a draft")
+    func refillIsNotADraft() async throws {
+        let temp = TempStore()
+        defer { temp.remove() }
+        let store = try temp.open()
+        let persistence = GatedDraftPersistence()
+        let drafts = ComposerDrafts(persistence: persistence)
+        let agent = String(repeating: "b", count: 64)
+        let model = ThreadModel(
+            root: "root-1",
+            channel: "room-1",
+            store: store,
+            sender: try RecordingSender(),
+            opener: StubThreadOpener(store: store, events: []),
+            drafts: drafts,
+            selfPubkey: nil
+        )
+
+        // Typing really does file one, so the assertion after the send is about the refill
+        // and not about a persistence layer that was never reached.
+        model.mentionDraft = try mixedDraft(agent: agent, person: String(repeating: "a", count: 64))
+        await drafts.flush()
+        #expect(persistence.saves.count == 1)
+        #expect(persistence.stored[model.draftKey] != nil)
+
+        model.sendReply(keepingAgents: { _ in true })
+        #expect(model.mentionDraft.text == "@Agent ")
+        await drafts.flush()
+
+        // In the composer, and nowhere on disk — the send earned a clear and got one.
+        #expect(persistence.saves.count == 1)
+        #expect(persistence.stored[model.draftKey] == nil)
+        #expect(persistence.deletes.last == model.draftKey)
+    }
 }

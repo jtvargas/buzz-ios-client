@@ -483,6 +483,19 @@ private extension ThreadView {
 /// scoped to this thread rather than to the channel around it.
 private struct ThreadComposerView: View {
     @Bindable var model: ThreadModel
+    /// Both halves of "Keep agents mentioned": whether it is on, and who counts as an agent.
+    /// Read here rather than in the model because this is where the environment is — see
+    /// ``ThreadModel/sendReply(keepingAgents:)``. Optional for the same reason
+    /// ``ThreadView`` takes it optionally: the UI-test fixture host installs no environment,
+    /// and the composer still has to draw.
+    @Environment(AppEnvironment.self) private var appEnvironment: AppEnvironment?
+    @Environment(\.entityNames) private var names
+
+    /// `nil` when the setting is off, which is what tells the send to clear the composer.
+    private var keptAgents: ((String) -> Bool)? {
+        guard appEnvironment?.settings.keepAgentsMentioned == true else { return nil }
+        return names.isAgent
+    }
 
     var body: some View {
         MessageComposerView(
@@ -492,7 +505,7 @@ private struct ThreadComposerView: View {
             placeholder: "Reply",
             sendAccessibilityLabel: "Send reply",
             onTextChange: model.handleTyping,
-            onSend: model.sendReply
+            onSend: { model.sendReply(keepingAgents: keptAgents) }
         )
         .alert(
             "Reply not sent",

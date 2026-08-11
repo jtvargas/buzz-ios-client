@@ -64,6 +64,34 @@ struct AppSettingsTests {
         // renamed symbol — nothing in the compiler notices.
         #expect(AppSettings.Key.notificationsEnabled == "settings.notifications.enabled")
         #expect(AppSettings.Key.themeID == "settings.theme.id")
+        #expect(AppSettings.Key.keepAgentsMentioned == "settings.composer.keepAgentsMentioned")
+    }
+
+    // MARK: - Keeping a thread's agents mentioned
+
+    @Test("keeping agents mentioned is off until somebody asks for it")
+    func keepAgentsDefaultsToOff() {
+        let (defaults, suite) = makeSuite()
+        defer { forget(suite) }
+
+        // The opposite direction from `notificationsEnabled`, and it matters as much: this one
+        // puts a mention the author did not type into their composer, so an upgrade must not
+        // switch it on for them.
+        #expect(defaults.object(forKey: AppSettings.Key.keepAgentsMentioned) == nil)
+        #expect(AppSettings(defaults: defaults).keepAgentsMentioned == false)
+    }
+
+    @Test("keeping agents mentioned survives a relaunch, in both positions")
+    func keepAgentsRoundTrips() {
+        let (defaults, suite) = makeSuite()
+        defer { forget(suite) }
+
+        let settings = AppSettings(defaults: defaults)
+        settings.keepAgentsMentioned = true
+        #expect(AppSettings(defaults: defaults).keepAgentsMentioned)
+
+        settings.keepAgentsMentioned = false
+        #expect(AppSettings(defaults: defaults).keepAgentsMentioned == false)
     }
 
     // MARK: - Theme

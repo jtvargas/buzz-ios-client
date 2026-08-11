@@ -60,6 +60,19 @@ final class AppSettings {
         }
     }
 
+    /// Whether a thread reply leaves the agents it addressed in the composer, ready for the
+    /// next one.
+    ///
+    /// It changes nothing about what is sent: the follow-up still carries a real `@mention`
+    /// and a real `p` tag, because that tag is what the relay filters an agent's subscription
+    /// on. All this decides is whether the reader has to retype the name every turn.
+    ///
+    /// **Off by default.** A mention the author did not type is a message going somewhere they
+    /// did not choose, so this is opt-in rather than something an upgrade switches on for them.
+    var keepAgentsMentioned: Bool {
+        didSet { defaults.set(keepAgentsMentioned, forKey: Key.keepAgentsMentioned) }
+    }
+
     /// The chosen theme itself. Resolved rather than stored so ``themeID`` stays the single
     /// source of truth and the two cannot drift.
     ///
@@ -77,6 +90,7 @@ final class AppSettings {
     enum Key {
         static let notificationsEnabled = "settings.notifications.enabled"
         static let themeID = "settings.theme.id"
+        static let keepAgentsMentioned = "settings.composer.keepAgentsMentioned"
     }
 
     private let defaults: UserDefaults
@@ -87,6 +101,7 @@ final class AppSettings {
         self.defaults = defaults
         notificationsEnabled = Self.flag(Key.notificationsEnabled, default: true, in: defaults)
         themeID = defaults.string(forKey: Key.themeID) ?? HiveTheme.hive.id
+        keepAgentsMentioned = Self.flag(Key.keepAgentsMentioned, default: false, in: defaults)
         // `didSet` does not fire for a write inside `init`, so the launch value has to be
         // mirrored by hand — without this, an app relaunched on a chosen theme draws its ground
         // correctly (that comes through the environment) and every accent in the amber.

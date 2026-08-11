@@ -296,4 +296,41 @@ struct MentionDraft: Hashable, Sendable {
         }
         return result
     }
+
+    /// A fresh draft carrying this one's agent mentions and nothing else — what the composer
+    /// refills with after a send when "Keep agents mentioned" is on.
+    ///
+    /// Built from ``tokens`` rather than by re-parsing ``text``, so the identity behind each
+    /// `@Name` is the one the author actually picked. The label is re-emitted from the token's
+    /// own `displayName`, which means a name that has since changed on the relay is reproduced
+    /// as it was typed: the token carries the pubkey, so the tag is right either way, and
+    /// rewriting the visible text under the author is the worse of the two.
+    ///
+    /// Agents only. Keeping a *person* mentioned would turn one deliberate ping into one per
+    /// reply for the rest of the thread, which is a notification they did not agree to.
+    ///
+    /// Order and duplicates follow ``mentionedPubkeys(sender:)``: first appearance wins, and a
+    /// pubkey named twice seeds once.
+    func agentSeed(where isAgent: (String) -> Bool) -> MentionDraft {
+        var text = ""
+        var seeded: [ComposerMentionToken] = []
+        var seen = Set<String>()
+        for token in tokens {
+            guard token.kind == .user,
+                  let pubkey = token.pubkey?.lowercased(),
+                  isAgent(pubkey),
+                  seen.insert(pubkey).inserted
+            else { continue }
+            let label = "\(MentionKind.user.trigger)\(token.displayName)"
+            let location = (text as NSString).length
+            text += label + " "
+            seeded.append(ComposerMentionToken(
+                kind: .user,
+                entityID: token.entityID,
+                displayName: token.displayName,
+                range: NSRange(location: location, length: (label as NSString).length)
+            ))
+        }
+        return MentionDraft(text: text, tokens: seeded)
+    }
 }
