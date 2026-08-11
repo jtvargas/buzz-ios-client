@@ -81,6 +81,27 @@ struct RebuildAgreementTests {
             try author.event(.deletion, "", tags: [["e", reply.id]], at: 1100),
             try stranger.event(.deletion, "", tags: [["e", plain.id]], at: 1110),
             try relay.event(.groupDeleteEvent, "", tags: [["e", broadcast.id]], at: 1120),
+        ] + (try huddleLifecycle(author: author))
+    }
+
+    /// A huddle, deliberately ended-before-started.
+    ///
+    /// Both kinds write the same row and `started_at` settles on `MIN`, so the huddle
+    /// projection is the one whose order-independence is a property of the SQL rather than
+    /// of a guard. The live ingest sees these backwards while the rebuild replays them
+    /// oldest-first, and both must land `started_at = 1300`.
+    ///
+    /// Split out of ``mixedHistory`` only to keep that function under the lint ceiling.
+    private static func huddleLifecycle(author: Fixture) throws -> [NostrEvent] {
+        [
+            try author.event(
+                .huddleEnded, #"{"ephemeral_channel_id":"huddle-1"}"#,
+                tags: [["h", "room-1"]], at: 1310
+            ),
+            try author.event(
+                .huddleStarted, #"{"ephemeral_channel_id":"huddle-1"}"#,
+                tags: [["h", "room-1"]], at: 1300
+            ),
         ]
     }
 

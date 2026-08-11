@@ -25,7 +25,7 @@ struct OutboxMediaTests {
             media: [media]
         )
 
-        let rows = try await harness.store.reader.read { db in
+        let rows = try await harness.store.reader.read { db -> [Row] in
             try Row.fetchAll(db, sql: "SELECT * FROM outbox_media WHERE event_id = ?", arguments: [entry.id])
         }
         #expect(rows.count == 1)

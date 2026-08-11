@@ -207,10 +207,13 @@ struct MediaUploadTests {
     @Test("an image descriptor is predicted from the exact local bytes")
     func predictsImageDescriptor() throws {
         let picture = try #require(ImageFixture.png(width: 40, height: 24))
-        let descriptor = try #require(BlobDescriptor.predicted(
-            data: picture,
-            baseURL: #require(URL(string: "https://tenant.example:8443/socket?old=1"))
-        ))
+        // Hoisted rather than written inline as `baseURL: #require(…)`. `#require` around a
+        // *function call* expands to `__checkFunctionCall`, which carries each argument into
+        // the expansion verbatim — so a `#require` nested in an argument is re-expanded
+        // inside the outer one and the compiler stops with "recursive expansion of macro".
+        // One `#require` per statement is the rule this file has to keep.
+        let baseURL = try #require(URL(string: "https://tenant.example:8443/socket?old=1"))
+        let descriptor = try #require(BlobDescriptor.predicted(data: picture, baseURL: baseURL))
         let digest = SHA256.hash(data: picture).map { String(format: "%02x", $0) }.joined()
 
         #expect(descriptor.url == "https://tenant.example:8443/media/\(digest).png")
@@ -331,10 +334,9 @@ struct MediaPredictionRoutingTests {
     @Test("a picture still predicts a URL the relay will agree with")
     func picturesStillPredict() throws {
         let png = try #require(ImageFixture.png(width: 8, height: 8))
-        let descriptor = try #require(BlobDescriptor.predicted(
-            data: png,
-            baseURL: #require(URL(string: "https://tenant.example/"))
-        ))
+        // See ``predictsImageDescriptor`` — one `#require` per statement.
+        let baseURL = try #require(URL(string: "https://tenant.example/"))
+        let descriptor = try #require(BlobDescriptor.predicted(data: png, baseURL: baseURL))
         // `<hash>.<ext>` is the only shape the relay accepts in an imeta url
         // (`handlers/imeta.rs:399-414`); a bare hash is refused.
         let digest = SHA256.hash(data: png).map { String(format: "%02x", $0) }.joined()
