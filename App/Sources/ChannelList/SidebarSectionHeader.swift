@@ -94,12 +94,21 @@ struct SidebarSectionHeader: View {
         .textCase(nil)
     }
 
+    /// The gap between the heading's glyph column and its title.
+    ///
+    /// Named rather than a literal because ``ChannelRowView`` sets its own mark against the
+    /// same number: with ``SidebarSection/symbolColumnWidth``, this is the whole of what
+    /// decides where a title sits, and a heading and the rows under it that disagree about
+    /// it are a heading and rows whose text does not line up. That is the state this was
+    /// lifted out of.
+    static let markGap: CGFloat = 8
+
     /// The heading itself, and the larger of the two expand/collapse targets.
     private var title: some View {
         Button {
             toggle()
         } label: {
-            HStack(spacing: 8) {
+            HStack(spacing: Self.markGap) {
                 mark
                     .foregroundStyle(.primary)
                     .frame(width: SidebarSection.symbolColumnWidth)

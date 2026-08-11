@@ -30,9 +30,20 @@ struct ChannelRowView: View {
     /// The live presence roster. Read inside *this* body on purpose: see above.
     let presence: PresenceModel
 
+    // The heading's column and the heading's gap, not numbers of this row's own. Both rows
+    // start 16pt in, so the only thing that decided whether a name lined up with the heading
+    // above it was what sat between: a 30pt mark and a 10pt gap put every title 4pt left of
+    // "Agents", and every avatar's centre 3pt left of the glyph's. Measured off the owner's
+    // screenshot at 57.7pt against 60.3pt.
+    //
+    // The rows move rather than the heading because 36 is measured rather than chosen —
+    // `bubble.left.and.text.bubble.right` renders 34.67pt wide and ``SidebarSection`` has a
+    // test that fails a column narrower than its widest glyph. The mark itself stays
+    // ``glyphSize``; it is centred in the wider column exactly as the heading's is.
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: SidebarSectionHeader.markGap) {
             leading
+                .frame(width: SidebarSection.symbolColumnWidth)
             Text(row.title)
                 // The Slack cue, and now the only one for ordinary unread: an unread name
                 // is heavier and at full strength, a read one is quiet. There is no
