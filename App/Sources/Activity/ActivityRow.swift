@@ -33,6 +33,10 @@ struct ActivityRow: View {
     /// Whether anything here is unseen — the bolded name, and the pill.
     private var isUnread: Bool { unreadCount > 0 }
 
+    /// Installed by ``ActivityView`` for the conversations this tab pushes, and read here so a
+    /// `#channel` in a preview is tinted rather than printed with its `#`.
+    @Environment(\.channelNameMap) private var channelNameMap
+
     /// The gutter, matched to every message row in the app so a face here sits on the same
     /// vertical line as a face in a conversation. `@ScaledMetric` for the reason
     /// ``ThreadActivityRow`` gives: the gutter has to grow with the name beside it, not only
@@ -157,7 +161,7 @@ struct ActivityRow: View {
             Text(event.authorName)
                 .font(.hive(.subheadline, weight: isUnread ? .semibold : .medium))
                 .lineLimit(1)
-            Text(event.content)
+            Text(preview(of: event))
                 .font(.hive(.subheadline))
                 .foregroundStyle(.secondary)
                 // Two lines, tail-truncated. A preview is an identifier, not the message —
@@ -166,6 +170,32 @@ struct ActivityRow: View {
                 .truncationMode(.tail)
                 .multilineTextAlignment(.leading)
         }
+    }
+
+    /// What the author said, rendered rather than printed.
+    ///
+    /// The same flattening the channel-list snippet uses (``RichMessage/flattenedInline()``),
+    /// through the same memo, so scrolling re-parses nothing and a preview emphasises, quotes
+    /// and tints exactly the way the message itself will when it is opened. Before this, a row
+    /// printed the raw source and `**Merged and done.**` reached the screen with its asterisks.
+    ///
+    /// The resolver carries no mentions, and that is a property of the data rather than an
+    /// omission: an activity event is a row from the feed read, which carries the text and not
+    /// the `p` tags. `@Name` therefore renders as clean text instead of a tinted pill, which is
+    /// the right trade for a two-line preview — resolving it would mean a per-row tag read.
+    /// Channel references still resolve, because ``ActivityView`` puts the map in the
+    /// environment for the conversations it pushes.
+    private func preview(of event: ActivityEvent) -> AttributedString {
+        let resolver = MessageMentionResolver(
+            mentions: [],
+            channels: channelNameMap,
+            selfPubkey: nil
+        )
+        let source = ActivityPreviewText.balanced(event.content)
+        return RichTextStyle.styled(
+            RichMessageCache.message(for: source, resolver: resolver).flattenedInline(),
+            base: .subheadline
+        )
     }
 
     /// `#channel`, or the person for a direct message.
@@ -177,6 +207,43 @@ struct ActivityRow: View {
     private var title: String {
         if entry.isDirectMessage { return entry.latest.authorName }
         return entry.channelName.isEmpty ? "Unknown channel" : "#\(entry.channelName)"
+    }
+}
+
+// MARK: - Repairing the cut
+
+/// Closes an inline delimiter the feed read cut in half.
+///
+/// `ActivityFeedRead` clips every event to 200 characters in SQL
+/// (``BuzzEventStore/ActivityFeedRead/previewLength``), and the cut lands wherever it lands. A
+/// message trimmed mid-`**bold**` arrives as `… **Merged and` — which CommonMark is right to
+/// render literally, and which is the exact thing this screen was reported for. Closing the run
+/// is better than deleting it: the words before the cut are the preview, and they should read
+/// emphasised rather than lose their opener.
+///
+/// Two delimiters, because they are the two that actually reach here from agent messages, and
+/// deliberately nothing cleverer:
+///
+/// - A run of three backticks anywhere means a fence, and a half-fence is not something one
+///   character can repair, so the backtick rule stands down entirely rather than guess.
+/// - `***` counts as one `**` and leaves its stray `*`, which renders as a literal asterisk —
+///   rarer than the case this fixes, and inventing a second closer for it would be guessing at
+///   which emphasis the author meant.
+enum ActivityPreviewText {
+    static func balanced(_ text: String) -> String {
+        var text = text
+        if !text.contains("```"), !occurrences(of: "`", in: text).isMultiple(of: 2) {
+            text += "`"
+        }
+        if !occurrences(of: "**", in: text).isMultiple(of: 2) {
+            text += "**"
+        }
+        return text
+    }
+
+    /// Non-overlapping occurrences — the count `components(separatedBy:)` implies.
+    private static func occurrences(of needle: String, in text: String) -> Int {
+        text.components(separatedBy: needle).count - 1
     }
 }
 
