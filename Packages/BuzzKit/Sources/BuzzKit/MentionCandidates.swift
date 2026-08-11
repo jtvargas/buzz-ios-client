@@ -73,10 +73,9 @@ extension BuzzEventStore {
                p.display_name,
                p.picture,
                p.nip05,
-               ad.pubkey IS NOT NULL AS in_agent_directory
+               p.oa_owner_pubkey IS NOT NULL AS is_attested_agent
         FROM channel_member cm
         LEFT JOIN profile p ON p.pubkey = cm.pubkey
-        LEFT JOIN agent_directory ad ON ad.pubkey = cm.pubkey
         WHERE cm.channel_id = ?
         ORDER BY CASE WHEN p.display_name IS NULL OR p.display_name = '' THEN 1 ELSE 0 END,
                  p.display_name COLLATE NOCASE,
@@ -87,13 +86,13 @@ extension BuzzEventStore {
             let pubkey: String = row["pubkey"]
             let displayName: String? = row["display_name"]
             let role: String? = row["role"]
-            let inDirectory: Bool = row["in_agent_directory"]
+            let isAttested: Bool = row["is_attested_agent"]
             return MentionCandidateProfile(
                 pubkey: pubkey,
                 displayName: resolvedName(displayName, pubkey: pubkey),
                 picture: row["picture"],
                 secondaryLabel: row["nip05"],
-                isAgent: role?.lowercased() == "bot" || inDirectory,
+                isAgent: role?.lowercased() == "bot" || isAttested,
                 isChannelMember: true
             )
         }
@@ -106,6 +105,12 @@ extension BuzzEventStore {
         candidates: inout [MentionCandidateProfile]
     ) throws {
         let sharedChannels = Set(try String.fetchAll(db, sql: "SELECT id FROM channel"))
+        // `agent_directory` decides *eligibility* here — `respond_to` and `channel_ids` are
+        // the kind-10100's real payload and are the agent's own business to declare. What it
+        // must not decide is *agent-ness*: this list offers non-members, so without the
+        // attestation join any user could publish a 10100 saying `respond_to: "anyone"` over
+        // a channel we share and appear in the composer as an agent. The join is inner by
+        // intent — no verified owner attestation, no entry.
         let directoryRows = try Row.fetchAll(db, sql: """
         SELECT ad.pubkey,
                ad.display_name AS directory_name,
@@ -116,7 +121,7 @@ extension BuzzEventStore {
                p.picture,
                p.nip05
         FROM agent_directory ad
-        LEFT JOIN profile p ON p.pubkey = ad.pubkey
+        JOIN profile p ON p.pubkey = ad.pubkey AND p.oa_owner_pubkey IS NOT NULL
         ORDER BY COALESCE(NULLIF(p.display_name, ''), ad.display_name) COLLATE NOCASE,
                  ad.pubkey
         """)

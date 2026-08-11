@@ -75,7 +75,11 @@ enum Schema {
     /// Version 11 adds `channel.ttl_seconds` and `channel.ttl_deadline`. Both values
     /// already live on kind-39000 tags in the log, so rebuilding the disposable channel
     /// projection recovers them without a resync.
-    static let projectionVersion = 11
+    ///
+    /// Version 12 adds `profile.oa_owner_pubkey`, the verified NIP-OA owner attestation
+    /// that decides agent identity. The `auth` tag it is derived from is already on every
+    /// kind-0 in the log, so the rebuild recovers it without a resync.
+    static let projectionVersion = 12
 
     /// The `meta` key under which the applied projection version is recorded.
     static let projectionVersionKey = "projection_version"
@@ -526,6 +530,7 @@ enum Schema {
             about           TEXT,
             nip05           TEXT,
             lud16           TEXT,
+            oa_owner_pubkey TEXT,
             source_event_id TEXT NOT NULL,
             created_at      INTEGER NOT NULL
         )

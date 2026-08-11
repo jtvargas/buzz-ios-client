@@ -155,8 +155,21 @@ extension BuzzEventStore {
 
         let profiles = try profileRows(db, identity: identity)
 
+        // The pubkeys whose kind-0 carries a NIP-OA owner attestation this device verified
+        // at projection time (``BuzzProjector.projectProfile``). This — not the kind-10100
+        // directory — is what says "agent", because it is the only one of the two an
+        // impostor cannot mint for themselves: the owner's key has to sign it, and
+        // self-attestation is refused. `agent_directory` still supplies a *name* below,
+        // which is self-asserted in exactly the way a kind-0 `display_name` already is.
+        var attestedAgents: Set<String> = []
+        for (pubkey, row) in profiles where (row["oa_owner_pubkey"] as String?) != nil {
+            attestedAgents.insert(pubkey)
+        }
+
         var entities: [String: DirectoryEntity] = [:]
-        var scope = Set(rosters.values.joined()).union(agentNames.keys)
+        var scope = Set(rosters.values.joined())
+            .union(agentNames.keys)
+            .union(attestedAgents)
         // Present even with no profile behind them, exactly as a roster member with no
         // kind-0 is: an entity with nothing in it renders as the monogram either way, and
         // one rule for "in scope" is easier to keep true than two.
@@ -169,7 +182,7 @@ extension BuzzEventStore {
                 agentName: agentNames[pubkey] ?? nil,
                 picture: nonempty(profile?["picture"]),
                 nip05: nonempty(profile?["nip05"]),
-                isAgent: botRoles.contains(pubkey) || agentNames.keys.contains(pubkey)
+                isAgent: botRoles.contains(pubkey) || attestedAgents.contains(pubkey)
             )
         }
         return DirectorySnapshot(entities: entities, memberPubkeysByChannel: rosters)
@@ -178,19 +191,23 @@ extension BuzzEventStore {
     /// The kind-0 rows worth having, keyed by lowercased pubkey.
     ///
     /// Two statements, and the second is the whole point. The first is scoped to
-    /// `channel_member ∪ agent_directory` so a relay-wide `profile` projection is not
-    /// pulled into memory for identities no surface can show; the second fetches
+    /// `channel_member ∪ agent_directory ∪ attested` so a relay-wide `profile` projection
+    /// is not pulled into memory for identities no surface can show; the second fetches
     /// `identity`'s own row by primary key, because the reader is a surface — the
     /// account button — that the scope rule cannot see.
+    ///
+    /// The attested arm is what keeps an agent visible when it holds a verified owner
+    /// attestation but has not landed in a roster this device has yet.
     private static func profileRows(_ db: Database, identity: String?) throws -> [String: Row] {
         var profiles: [String: Row] = [:]
         let scoped = try Row.fetchAll(db, sql: """
-        SELECT pubkey, display_name, picture, nip05
+        SELECT pubkey, display_name, picture, nip05, oa_owner_pubkey
         FROM profile
         WHERE pubkey IN (
             SELECT pubkey FROM channel_member
             UNION SELECT pubkey FROM agent_directory
         )
+           OR oa_owner_pubkey IS NOT NULL
         """)
         for row in scoped {
             profiles[(row["pubkey"] as String).lowercased()] = row
@@ -198,7 +215,10 @@ extension BuzzEventStore {
         if let identity, profiles[identity] == nil {
             profiles[identity] = try Row.fetchOne(
                 db,
-                sql: "SELECT pubkey, display_name, picture, nip05 FROM profile WHERE pubkey = ?",
+                sql: """
+                SELECT pubkey, display_name, picture, nip05, oa_owner_pubkey
+                FROM profile WHERE pubkey = ?
+                """,
                 arguments: [identity]
             )
         }

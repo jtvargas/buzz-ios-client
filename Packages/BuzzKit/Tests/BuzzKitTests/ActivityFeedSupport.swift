@@ -39,12 +39,29 @@ enum ActivityFixtures {
         return try author.event(.channelMessage, text, tags: tags, at: seconds)
     }
 
-    /// Registers `agent` in the relay's agent directory — one of the two authorities that
-    /// make an author an agent (`Directory.swift:158`).
+    /// Registers `agent` in the relay's agent directory. Note this alone does *not* make an
+    /// author an agent — kind 10100 is self-published, so it carries a name and an add
+    /// policy and no standing. Use ``attestedProfile(_:owner:name:at:)`` for that.
     static func agentProfile(_ agent: Fixture, name: String, at seconds: Int64) throws -> NostrEvent {
         try agent.event(
             .agentProfile,
             #"{"display_name":"\#(name)","respond_to":"anyone","channel_ids":[]}"#,
+            at: seconds
+        )
+    }
+
+    /// A kind-0 for `agent` carrying `owner`'s NIP-OA attestation — one of the two
+    /// authorities that make an author an agent, and the one a key cannot mint for itself.
+    static func attestedProfile(
+        _ agent: Fixture,
+        owner: Fixture,
+        name: String,
+        at seconds: Int64
+    ) throws -> NostrEvent {
+        try agent.event(
+            .metadata,
+            #"{"display_name":"\#(name)"}"#,
+            tags: [try owner.authTag(authorizing: agent.pubkey)],
             at: seconds
         )
     }
