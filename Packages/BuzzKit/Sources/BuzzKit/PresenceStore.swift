@@ -26,12 +26,12 @@ import NostrCore
 /// (`useChannelTyping`'s `threadHeadId`), taken from the root marker rather than the
 /// parent so a reply *inside* a thread still scopes to that thread.
 ///
-/// Reading is asymmetric, and deliberately so — see ``TypingAudience``. A thread asks
-/// for its own scope and gets only the people writing in it. A channel asks for the
-/// whole channel and gets everyone writing anywhere in it, threads included: an agent
-/// replying in a thread under a message is the workspace's most common shape by far, and
-/// a channel that fell silent for it would be answering "is anyone working on this" with
-/// "no". Precise where a reader can act on the precision; complete where they cannot.
+/// Reading partitions — see ``TypingAudience``. A thread asks for its own scope and gets
+/// only the people writing in it; a channel asks for its own level and gets only the
+/// people writing there. An indicator is shown on exactly one surface: the one the
+/// message it announces is going to land on. An agent replying in a thread is therefore
+/// silent on the channel screen, which is the point — the channel used to promise a
+/// message that was never coming to it.
 ///
 /// # Why a message clears typing
 ///
@@ -296,10 +296,21 @@ public actor PresenceStore {
     /// Who is asking. A scope is where an indicator *is*; an audience is what a surface
     /// wants to hear about, and the two are not the same question.
     ///
-    /// A thread asks for its own scope exactly. A channel asks for all of itself —
-    /// including its threads — because a reader on the channel screen cannot see which
-    /// thread the work is in and is better served by "somebody is writing" than by
-    /// silence. See the note on ``PresenceStore``.
+    /// **Each indicator belongs to exactly one surface.** A thread asks for its own scope;
+    /// a channel asks for its own level and *not* for its threads. See the note on
+    /// ``PresenceStore``.
+    ///
+    /// The channel deliberately used to hear its threads too, on the argument that a reader
+    /// there cannot see which thread the work is in and is better served by "somebody is
+    /// writing" than by silence. That argument loses to a plainer one: the channel strip was
+    /// promising a message that is not coming *there*. A reader watched "…is typing" at the
+    /// bottom of the channel, waited, and nothing arrived — the reply landed inside a thread
+    /// they may not have open. A signal that resolves somewhere the reader is not looking is
+    /// worse than no signal.
+    ///
+    /// It also settles an inconsistency: this client already *published* on the partitioned
+    /// rule (the channel composer sends no `e` marker, the thread composer sends one) and
+    /// only listened on the wider one. Both official clients partition on the same markers.
     enum TypingAudience: Hashable {
         case channel(String)
         case thread(TypingScope)
@@ -307,7 +318,7 @@ public actor PresenceStore {
         /// Whether an indicator recorded in `scope` should reach this audience.
         func admits(_ scope: TypingScope) -> Bool {
             switch self {
-            case let .channel(channel): scope.channel == channel
+            case let .channel(channel): scope.channel == channel && scope.thread == nil
             case let .thread(mine): scope == mine
             }
         }

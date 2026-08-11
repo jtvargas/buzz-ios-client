@@ -35,9 +35,9 @@ public extension PresenceStore {
     /// ordered and distinct, so two equal typer sets compare equal.
     ///
     /// `thread` names a thread root to listen to, and that feed carries only the people
-    /// writing in that thread. Omitted, the feed is the whole channel — everyone writing
-    /// anywhere in it, its threads included. The asymmetry is the point: see the note on
-    /// ``PresenceStore/TypingAudience``.
+    /// writing in that thread. Omitted, the feed is the channel's own level — and *not*
+    /// its threads, so an agent replying inside one is silent here. The partition is the
+    /// point: see the note on ``PresenceStore/TypingAudience``.
     func typing(in channel: String, thread: String? = nil) -> AsyncStream<[String]> {
         let audience = Self.audience(channel: channel, thread: thread)
         let (stream, continuation) = AsyncStream.makeStream(of: [String].self)
@@ -125,8 +125,11 @@ extension PresenceStore {
 
     /// The live typers one audience hears, lapsed records excluded, ordered by pubkey.
     ///
-    /// Distinct: a channel's audience spans its threads, and one person can be writing in
-    /// two of them at once — which is one person typing, not two.
+    /// `Set` is defensive, not load-bearing. Every audience now admits exactly one scope,
+    /// and records are keyed `(scope, pubkey)`, so one person cannot appear twice. It was
+    /// load-bearing while a channel spanned its threads — one person writing in two of
+    /// them was two records and one typer — and it is kept because the cost is nothing and
+    /// the invariant it protects is not local to this function.
     func typingSnapshotNow(_ audience: TypingAudience) -> [String] {
         let cutoff = now()
         let pubkeys = typingRecords

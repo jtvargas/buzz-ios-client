@@ -4,11 +4,10 @@ import Observation
 /// Who is typing in one conversation, live from ``PresenceStore``.
 ///
 /// Typing is scoped (S-5): to a channel, or to one thread inside it. A thread's model
-/// names its root and hears that thread alone — which is new, and is what a thread
-/// showing nobody while an agent wrote in it used to cost. A channel's model carries no
-/// `thread` and hears the whole channel, threads included: on the channel screen a
-/// reader cannot tell which thread the work is in, and silence would be a worse answer
-/// than "somebody is writing". See ``BuzzKit/PresenceStore/TypingAudience``.
+/// names its root and hears that thread alone. A channel's model carries no `thread` and
+/// hears the channel's own level alone — an agent replying inside a thread is silent
+/// here, because the message it is announcing is not going to arrive here.
+/// See ``BuzzKit/PresenceStore/TypingAudience``.
 ///
 /// The device's own typing is excluded — the relay fans an ephemeral back to its author,
 /// and a composer must never render "you are typing" to yourself.
