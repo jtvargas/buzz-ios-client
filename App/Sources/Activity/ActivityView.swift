@@ -275,27 +275,38 @@ struct ActivityView: View {
 
     /// Open what a row is about.
     ///
-    /// A threaded row opens its thread; anything else opens the channel it happened in. The
-    /// anchor is the one place unread state changes where you land: a thread with something
-    /// new in it opens at the newest reply, because you came to catch up, and one you have
-    /// already read opens at its opener, because you came to remember what it was about.
+    /// A threaded row opens its thread; anything else opens the channel it happened in — and
+    /// both land on **the event the row is about**, not on the room around it.
     ///
-    /// Landing on a *particular* older message is deliberately not attempted — the app
-    /// cannot navigate to an arbitrary message yet (that is the parked deep-link work), and
-    /// approximating it by scrolling to a guess is worse than opening at a known position.
+    /// This used to open at a position rather than at a message, and said so: landing on a
+    /// particular message was "deliberately not attempted" because the app could not navigate
+    /// to an arbitrary one. That has not been true since search shipped. The in-app banner
+    /// builds the same landing from this same ``ActivityEntry`` type
+    /// (``InAppNotification/route``), so a tap here and a tap on the banner for the same
+    /// arrival were reaching two different places — this screen was the one caller left behind.
+    ///
+    /// Both fields ``ConversationFocus`` needs are already on the event, and the timestamp is
+    /// the half that makes the history walk terminate — see that type. The highlight comes with
+    /// it: the surface pages back until the message is loaded, scrolls to it, and washes it
+    /// once.
     private func open(_ entry: ActivityEntry) {
         guard let channelID = entry.channelID else { return }
         if let rootID = entry.rootID {
             path.append(.thread(ThreadRoute(
                 root: rootID,
                 channel: channelID,
-                // The effective count, not the store's — a thread already read on this
-                // device should open at what it is about, not at its end.
-                anchor: unreadCount(for: entry) > 0 ? .latestReply : .opener
+                // The opener when the row *is* the opener — `.reply` would ask the thread to
+                // seek a message that is its own head. Otherwise the reply this row is about,
+                // which supersedes the old unread-count choice between the end and the top:
+                // both were guesses at where you wanted to be, and this is the answer.
+                anchor: entry.latest.id == rootID ? .opener : .reply(entry.latest.id)
             )))
         } else {
             let row = channelRow(for: channelID, fallback: entry)
-            path = AppRoute.conversation(ConversationRoute(channel: row)).pushed(onto: path)
+            path = AppRoute.conversation(ConversationRoute(
+                channel: row,
+                focus: ConversationFocus(messageID: entry.latest.id, sentAt: entry.latest.createdAt)
+            )).pushed(onto: path)
         }
     }
 
