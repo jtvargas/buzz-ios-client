@@ -1,4 +1,5 @@
 @testable import BuzzKit
+import Foundation
 import GRDB
 import NostrCore
 import Testing
@@ -329,7 +330,7 @@ extension MessageSearchTests {
             )
             batch.append(message)
             batch.append(
-                author.event(
+                try author.event(
                     .deletion,
                     tags: [["e", message.id]],
                     at: 2_000 + Int64(index)

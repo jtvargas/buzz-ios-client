@@ -25,6 +25,10 @@ struct ChannelSubscriptionTests {
     private static let contentKinds: [EventKind] = [
         .channelMessage, .richMessage, .messageEdit, .systemMessage,
         .reaction, .deletion, .groupDeleteEvent, .typing, .threadSummary,
+        // A huddle starting and ending, which the timeline draws as notices. 48101/48102
+        // are absent here because they are absent from the filter: nothing renders a
+        // participant arriving. Position matters — this is compared with `==`.
+        .huddleStarted, .huddleEnded,
         // The two decision-asking kinds, added for the Activity tab's Action chip. Both are
         // `#h`-scoped in the relay's own feed query (`crates/buzz-db/src/feed.rs:191`), so
         // they belong on this filter rather than the global one — the scoping invariant in
