@@ -39,10 +39,13 @@ struct ReadStateEngineTests {
         )
         #expect(try harness.store.channelList(selfPubkey: harness.selfPubkey).first?.unreadCount == 1)
 
-        // markRead awaits its drain, which awaits the relay OK — run it in a Task so the
-        // test can observe the publish and answer the OK, exactly as the ephemeral and
-        // outbox suites drive a durable send.
-        let mark = Task { await harness.engine.markRead(channel: "room-1", upTo: 3000) }
+        // `markRead` only records the advance now; the publish follows its coalescing
+        // window. Driving `flushReadMarks()` rather than sleeping through the window is the
+        // seam that exists for this — a test that waited two seconds would be testing the
+        // clock. The flush awaits its drain, which awaits the relay OK, so it runs in a Task
+        // the same way the ephemeral and outbox suites drive a durable send.
+        await harness.engine.markRead(channel: "room-1", upTo: 3000)
+        let mark = Task { await harness.engine.flushReadMarks() }
 
         // The published event is a well-formed, channel-less NIP-RS blob queued through
         // the outbox (a durable send), never an ephemeral.
@@ -78,18 +81,87 @@ struct ReadStateEngineTests {
         await answerDiscovery(on: socket)
         await waitUntil { await harness.engine.state == .running }
 
-        // The first mark publishes and drains: run it in a Task and answer the OK.
-        let mark = Task { await harness.engine.markRead(channel: "room-1", upTo: 3000) }
+        // The first mark publishes and drains: flush it in a Task and answer the OK.
+        await harness.engine.markRead(channel: "room-1", upTo: 3000)
+        let mark = Task { await harness.engine.flushReadMarks() }
         let published = await awaitPublishedReadState(on: socket)
         await socket.enqueue(EngineFrames.ok(published.id, true))
         await mark.value
         #expect(try await harness.store.effectiveReadFrontier(context: "room-1") == 3000)
 
-        // A second mark at or below the frontier returns before it ever builds a blob or
-        // touches the outbox — no new send, no drain to answer.
+        // A second mark at or below the frontier. It is recorded — the cheap guard on the way
+        // in only compares against the window, not the store — and then dropped at the flush,
+        // which is where grow-only actually lives. Flushed rather than left to its timer, so
+        // the assertion is about the guard and not about how long the test waited.
         await harness.engine.markRead(channel: "room-1", upTo: 2000)
+        await harness.engine.flushReadMarks()
         #expect(try await harness.store.outboxCount() == 0)
         #expect(try await harness.store.effectiveReadFrontier(context: "room-1") == 3000)
+
+        await harness.engine.stop()
+    }
+
+    /// The point of the coalescing window: mark-on-view fires once per arriving message, and
+    /// each of those used to be an encrypt, a signature, an outbox row and a relay round trip
+    /// in the same serial queue as the reader's own sends.
+    @Test("a burst of advances in one channel publishes once, at the newest")
+    func burstPublishesOnce() async throws {
+        let socket = ScriptedRelay()
+        let database = TempDatabase()
+        defer { database.remove() }
+        let harness = try EngineHarness(path: database.path, identity: try PrivateKey(), relays: [socket])
+
+        try await harness.engine.start()
+        try await driveAuth(harness.connection, socket)
+        await answerDiscovery(on: socket)
+        await waitUntil { await harness.engine.state == .running }
+
+        for stamp: Int64 in [1000, 2000, 3000, 4000] {
+            await harness.engine.markRead(channel: "room-1", upTo: stamp)
+        }
+        // Nothing has gone out yet — the whole point. Read directly rather than polled: a poll
+        // for absence returns on its first pass and proves nothing.
+        #expect(try await harness.store.outboxCount() == 0)
+
+        let mark = Task { await harness.engine.flushReadMarks() }
+        let published = await awaitPublishedReadState(on: socket)
+        await socket.enqueue(EngineFrames.ok(published.id, true))
+        await mark.value
+
+        // One publish for four advances, carrying the furthest of them.
+        let readStateFrames = await socket.frames().compactMap(publishedEvent).filter { $0.kind == .readState }
+        #expect(readStateFrames.count == 1)
+        #expect(try await harness.store.effectiveReadFrontier(context: "room-1") == 4000)
+
+        await harness.engine.stop()
+    }
+
+    /// The bonus the old shape could not give: it took one channel per call, so two channels
+    /// were always two blobs however close together they were read.
+    @Test("advances in several channels collapse into one blob")
+    func severalChannelsCollapse() async throws {
+        let socket = ScriptedRelay()
+        let database = TempDatabase()
+        defer { database.remove() }
+        let harness = try EngineHarness(path: database.path, identity: try PrivateKey(), relays: [socket])
+
+        try await harness.engine.start()
+        try await driveAuth(harness.connection, socket)
+        await answerDiscovery(on: socket)
+        await waitUntil { await harness.engine.state == .running }
+
+        await harness.engine.markRead(channel: "room-1", upTo: 3000)
+        await harness.engine.markRead(channel: "room-2", upTo: 5000)
+
+        let mark = Task { await harness.engine.flushReadMarks() }
+        let published = await awaitPublishedReadState(on: socket)
+        await socket.enqueue(EngineFrames.ok(published.id, true))
+        await mark.value
+
+        let readStateFrames = await socket.frames().compactMap(publishedEvent).filter { $0.kind == .readState }
+        #expect(readStateFrames.count == 1)
+        #expect(try await harness.store.effectiveReadFrontier(context: "room-1") == 3000)
+        #expect(try await harness.store.effectiveReadFrontier(context: "room-2") == 5000)
 
         await harness.engine.stop()
     }
