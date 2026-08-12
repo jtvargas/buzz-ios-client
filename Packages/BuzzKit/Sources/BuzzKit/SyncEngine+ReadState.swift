@@ -10,30 +10,101 @@ import NostrCore
 /// building one (``markRead(channel:upTo:)``) and reading one
 /// (``applyIncomingReadState(_:)``) go through the signer's to-self crypto. The store
 /// keeps only decrypted rows.
+/// Read advances waiting on their coalescing window.
+///
+/// One value rather than two stored properties because ``SyncEngine``'s actor body sits a
+/// few lines under swiftlint's `type_body_length` error ceiling — see
+/// `Packages/BuzzKit/Sources/BuzzKit/Schema.swift` for the same squeeze one file over.
+struct CoalescedReadMarks {
+    /// Channel → the newest `created_at` seen since the last publish. Merged by `max`, so
+    /// the window keeps the furthest each channel reached and never walks one backwards.
+    var pending: [String: Int64] = [:]
+    /// The trailing-edge timer. Re-armed by each advance, so a burst publishes once.
+    var timer: Task<Void, Never>?
+}
+
 public extension SyncEngine {
-    /// Marks `channel` read up to `upTo` — a message `created_at` in unix seconds —
-    /// and publishes the updated blob through the durable outbox.
+    /// Records that `channel` has been read up to `upTo` — a message `created_at` in unix
+    /// seconds — and publishes the updated blob through the durable outbox, once the
+    /// advances stop arriving.
     ///
-    /// Grow-only: a no-op when this device's own frontier for the channel already
-    /// covers `upTo`, so re-opening a channel with nothing new never republishes an
-    /// identical blob. The new blob carries every context this device has marked (read
-    /// back from its own slot) with `channel` advanced, so the slot stays a complete,
-    /// monotonic record. It is stamped strictly newer than the slot's last blob
-    /// (NIP-RS clock skew) so the addressable replace never ties on `created_at`.
+    /// # Why this is not immediate
     ///
-    /// Applied locally the instant it is queued so the badge clears before the relay
-    /// round-trip; the relay's echo re-applies the identical `(created_at, id)` with no
-    /// effect. Best-effort throughout: read state is a convenience layer, so a signer
-    /// or store hiccup drops the mark rather than surfacing an error to the caller.
+    /// It used to be, and one advance cost two store reads, a whole-map rebuild, a NIP-44
+    /// encrypt, a signature, two writes and a relay round trip. Its caller is mark-on-view,
+    /// which fires **once per message arriving in the channel being watched** — so reading a
+    /// busy channel paid all of that per message, and every blob went through the same serial
+    /// outbox as the reader's own sends, where it could sit in front of one. The cost scales
+    /// as activity × channel count, because the blob is not this channel's number but every
+    /// channel's, rebuilt and re-encrypted each time.
+    ///
+    /// A trailing window collapses a burst into one publish, and a window that covers several
+    /// channels collapses those into one blob too — which the old shape could not do at all,
+    /// since it took one channel per call.
+    ///
+    /// # Why the delay is not visible
+    ///
+    /// Only two surfaces read this state: the sidebar's unread count (`ChannelList.swift`) and
+    /// the Activity feed (`BuzzEventStore+ActivityFeed.swift`). Neither is on screen while a
+    /// channel is open — Hive draws no tab-bar badge and no app-icon badge — and
+    /// ``flushReadMarks()`` runs before either can be: on leaving the conversation, on leaving
+    /// the foreground, and on ``stop()``.
+    ///
+    /// Grow-only throughout: the window keeps the furthest point per channel, and the flush
+    /// still drops anything the stored slot already covers, so re-opening a channel with
+    /// nothing new publishes nothing.
     func markRead(channel: String, upTo: Int64) async {
+        guard upTo > (readMarks.pending[channel] ?? 0) else { return }
+        readMarks.pending[channel] = upTo
+        readMarks.timer?.cancel()
+        readMarks.timer = Task { [weak self] in
+            try? await Task.sleep(for: SyncEngineConfig.readStateCoalescingWindow)
+            guard !Task.isCancelled else { return }
+            await self?.flushReadMarks()
+        }
+    }
+
+    /// Publishes whatever the window accumulated, now. A no-op when it is empty, so every
+    /// caller can be unconditional.
+    ///
+    /// Called wherever a surface that renders read state is about to become visible, and on
+    /// the way out of the foreground — the last moment the process is guaranteed to be here.
+    func flushReadMarks() async {
+        readMarks.timer?.cancel()
+        readMarks.timer = nil
+        let marks = readMarks.pending
+        readMarks.pending = [:]
+        guard !marks.isEmpty else { return }
+        await publishReadMarks(marks)
+    }
+
+    /// Builds and queues one blob covering every channel in `marks`.
+    ///
+    /// The blob carries every context this device has marked (read back from its own slot)
+    /// with these advanced, so the slot stays a complete, monotonic record. It is stamped
+    /// strictly newer than the slot's last blob (NIP-RS clock skew) so the addressable replace
+    /// never ties on `created_at`.
+    ///
+    /// Applied locally the instant it is queued, so the sidebar and the feed are correct
+    /// before the relay round-trip; the relay's echo re-applies the identical
+    /// `(created_at, id)` with no effect. Best-effort throughout: read state is a convenience
+    /// layer, so a signer or store hiccup drops the marks rather than surfacing an error.
+    private func publishReadMarks(_ marks: [String: Int64]) async {
         guard let selfPubkeyHex else { return }
         guard let identity = try? await store.readStateIdentity() else { return }
 
         let slot = try? await store.ownReadStateSlot(author: selfPubkeyHex, slot: identity.slotID)
         var contexts = slot?.contexts ?? [:]
-        let current = contexts[channel] ?? 0
-        guard upTo > current else { return }
-        contexts[channel] = upTo
+        // Per channel, and against the *stored* value rather than the window's: a mark can
+        // arrive for a frontier another device already published past, and the register is
+        // grow-only. Publishing nothing when none of them advanced is the case that keeps
+        // re-opening a read channel free.
+        var advanced = false
+        for (channel, upTo) in marks where upTo > (contexts[channel] ?? 0) {
+            contexts[channel] = upTo
+            advanced = true
+        }
+        guard advanced else { return }
 
         let blob = ReadStateBlob(clientID: identity.clientID, contexts: contexts)
         guard let plaintext = try? blob.encodedJSON(),
@@ -59,6 +130,17 @@ public extension SyncEngine {
             with: signer,
             createdAt: createdAt
         ) else { return }
+
+        // This blob carries every context the older queued ones did, so any of them still
+        // waiting is a turn taken in front of the reader's own message for a value the relay
+        // would overwrite with this one anyway. Nothing to drop while the socket is healthy —
+        // each drains before the next is built — so this is the offline and backoff case,
+        // which is precisely when a queue ahead of a send is felt.
+        try? await store.supersedeQueuedAddressable(
+            kind: .readState,
+            dTag: ReadState.dTagPrefix + identity.slotID,
+            keeping: entry.event.id
+        )
 
         try? await store.applyReadState(
             author: selfPubkeyHex,

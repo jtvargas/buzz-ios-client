@@ -253,4 +253,94 @@ struct OutboxTests {
         #expect(try await store.pendingSends().map(\.id) == [m1.id])
         #expect(try await store.failedSends().map(\.id) == [m2.id])
     }
+
+    // MARK: - Superseding a queued addressable event
+
+    /// An addressable event (NIP-33: kind + author + `d`) has one live version, so two of them
+    /// queued for the same address means the older is a turn taken in front of whatever the
+    /// reader typed, for a value the relay overwrites a moment later. This queue drains one at
+    /// a time, each awaiting its own `OK`, which is what makes that a cost and not a curiosity.
+    @Test("a newer addressable send drops the queued older one for the same d tag")
+    func supersedeDropsOlderQueued() async throws {
+        let harness = try OutboxHarness()
+        defer { harness.remove() }
+        let store = harness.store
+
+        let older = try await store.enqueue(
+            kind: .readState,
+            content: "older",
+            in: "",
+            tags: [["d", "read-state:slot-a"], ["t", "read-state"]],
+            with: harness.signer
+        )
+        harness.clock.advance(by: 10)
+        let newer = try await store.enqueue(
+            kind: .readState,
+            content: "newer",
+            in: "",
+            tags: [["d", "read-state:slot-a"], ["t", "read-state"]],
+            with: harness.signer
+        )
+        #expect(try await store.outboxCount() == 2)
+
+        let dropped = try await store.supersedeQueuedAddressable(
+            kind: .readState,
+            dTag: "read-state:slot-a",
+            keeping: newer.id
+        )
+
+        #expect(dropped == 1)
+        #expect(try await store.pendingSends().map(\.id) == [newer.id])
+        #expect(try await store.entry(id: older.id) == nil)
+    }
+
+    /// Three things it must not touch, each for a different reason.
+    @Test("supersede leaves another address, another kind, and a row already in flight")
+    func supersedeIsNarrow() async throws {
+        let harness = try OutboxHarness()
+        defer { harness.remove() }
+        let store = harness.store
+
+        // A different slot is a different address; nothing about it is replaced.
+        let otherSlot = try await store.enqueue(
+            kind: .readState,
+            content: "other slot",
+            in: "",
+            tags: [["d", "read-state:slot-b"], ["t", "read-state"]],
+            with: harness.signer
+        )
+        // An ordinary message shares an address with nothing and is never replaceable.
+        let message = try await store.enqueue(content: "hello", in: "room-1", with: harness.signer)
+        // Same address, but already handed to the relay: its `OK` is still expected and the
+        // relay dedupes by id, so the drain owns that row's fate rather than this.
+        let inFlight = try await store.enqueue(
+            kind: .readState,
+            content: "in flight",
+            in: "",
+            tags: [["d", "read-state:slot-a"], ["t", "read-state"]],
+            with: harness.signer
+        )
+        try await store.markSending(inFlight.id)
+
+        harness.clock.advance(by: 10)
+        let newer = try await store.enqueue(
+            kind: .readState,
+            content: "newer",
+            in: "",
+            tags: [["d", "read-state:slot-a"], ["t", "read-state"]],
+            with: harness.signer
+        )
+
+        let dropped = try await store.supersedeQueuedAddressable(
+            kind: .readState,
+            dTag: "read-state:slot-a",
+            keeping: newer.id
+        )
+
+        #expect(dropped == 0)
+        #expect(try await store.outboxCount() == 4)
+        for id in [otherSlot.id, message.id, inFlight.id, newer.id] {
+            #expect(try await store.entry(id: id) != nil)
+        }
+    }
 }

@@ -9,8 +9,16 @@ import BuzzKit
 /// NIP-RS read-state blob through the durable outbox), so the conformance is free.
 protocol ReadStateMarking: Sendable {
     /// Marks `channel` read up to `upTo` (a message `created_at`, unix seconds).
-    /// Grow-only and best-effort on the engine side.
+    /// Grow-only and best-effort on the engine side, and **coalesced** — the publish
+    /// follows a short window rather than this call.
     func markRead(channel: String, upTo: Int64) async
+
+    /// Publishes whatever that window is holding, now.
+    ///
+    /// Called where a surface that renders read state is about to be looked at — leaving a
+    /// conversation — and on the way out of the foreground. A no-op when nothing is pending,
+    /// so a caller needs no condition of its own.
+    func flushReadMarks() async
 }
 
 extension SyncEngine: ReadStateMarking {}
