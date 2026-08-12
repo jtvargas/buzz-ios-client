@@ -62,6 +62,61 @@ public extension BuzzEventStore {
         return OutboxEntry(event: event, channelID: channel, state: state, attempts: 0, lastError: nil)
     }
 
+    /// Drops still-queued events that `keeping` already replaces on the relay, and answers
+    /// how many went.
+    ///
+    /// An addressable event (NIP-33: kind + author + `d`) has exactly one live version — the
+    /// newest by `created_at`. So when two of them are sitting in this queue for the same
+    /// address, sending the older one is sending something the relay will overwrite a moment
+    /// later with the very next row. That is not merely wasteful: **this queue drains one at a
+    /// time, each waiting for its own `OK`, so every obsolete row is a turn taken in front of
+    /// whatever the reader actually typed.**
+    ///
+    /// It earns nothing while the socket is healthy — each row drains before the next is
+    /// queued, so there is never a second one to drop. It earns its keep offline or in
+    /// backoff, which is exactly when a queue in front of a send is felt (see
+    /// ``SyncEngine/drainOutbox()`` and the reconnect ordering it feeds).
+    ///
+    /// **`pending` only, deliberately.** A `sending` row is mid-flight and its `OK` is still
+    /// expected; a `failed` one is waiting for a person to retry it; an `awaitingReauth` one
+    /// is an intent parked across a handshake. Those are three different reasons not to
+    /// second-guess the drain, and none of them is the case this exists for.
+    ///
+    /// The `d` tag is compared by decoding each candidate's stored tags rather than by
+    /// matching the JSON text: the candidate set is one kind's worth of queued rows, so the
+    /// decode is nothing, and a `LIKE` over encoded JSON is the kind of match that works until
+    /// a tag value contains a quote.
+    @discardableResult
+    func supersedeQueuedAddressable(
+        kind: EventKind,
+        dTag: String,
+        keeping eventID: String
+    ) async throws -> Int {
+        try await writer.write { db in
+            let rows = try Row.fetchAll(
+                db,
+                sql: """
+                SELECT event_id, tags FROM outbox
+                WHERE kind = ? AND state = ? AND event_id <> ?
+                """,
+                arguments: [kind.rawValue, OutboxState.pending.rawValue, eventID]
+            )
+            let superseded: [String] = rows.compactMap { row in
+                let tagsJSON: String = row["tags"]
+                guard let data = tagsJSON.data(using: .utf8),
+                      let tags = try? JSONDecoder().decode([[String]].self, from: data),
+                      tags.contains(where: { $0.count > 1 && $0[0] == "d" && $0[1] == dTag })
+                else { return nil }
+                return row["event_id"]
+            }
+            for id in superseded {
+                try db.execute(sql: "DELETE FROM outbox_media WHERE event_id = ?", arguments: [id])
+                try db.execute(sql: "DELETE FROM outbox WHERE event_id = ?", arguments: [id])
+            }
+            return superseded.count
+        }
+    }
+
     // MARK: - Transitions
 
     /// Marks a queued send as handed to the relay, counting the attempt.

@@ -131,6 +131,17 @@ public extension SyncEngine {
             createdAt: createdAt
         ) else { return }
 
+        // This blob carries every context the older queued ones did, so any of them still
+        // waiting is a turn taken in front of the reader's own message for a value the relay
+        // would overwrite with this one anyway. Nothing to drop while the socket is healthy —
+        // each drains before the next is built — so this is the offline and backoff case,
+        // which is precisely when a queue ahead of a send is felt.
+        try? await store.supersedeQueuedAddressable(
+            kind: .readState,
+            dTag: ReadState.dTagPrefix + identity.slotID,
+            keeping: entry.event.id
+        )
+
         try? await store.applyReadState(
             author: selfPubkeyHex,
             slot: identity.slotID,
