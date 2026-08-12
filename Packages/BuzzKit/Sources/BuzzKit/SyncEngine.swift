@@ -217,6 +217,9 @@ public actor SyncEngine {
     /// the generation it began under and abandons itself once superseded.
     var readyGeneration = 0
 
+    /// Read advances inside their coalescing window — see `SyncEngine+ReadState.swift`.
+    var readMarks = CoalescedReadMarks()
+
     /// When the current socket's thread sweep began, and which generation that was.
     ///
     /// The brake on ``settleThreadSweep(generation:)``: a root already swept at or after
@@ -548,6 +551,10 @@ public actor SyncEngine {
     /// Tears the engine down: stops observing, drops subscriptions, and stops the
     /// connection. A later ``start()`` opens a fresh one against the same store.
     public func stop() async {
+        // Before anything is torn down: a coalescing window open at teardown holds advances
+        // the reader has already made, and the queue this writes to is durable, so landing
+        // them costs a write and saves them from the stop.
+        await flushReadMarks()
         isStopped = true
         stateObserverTask?.cancel(); stateObserverTask = nil
         onReadyTask?.cancel(); onReadyTask = nil

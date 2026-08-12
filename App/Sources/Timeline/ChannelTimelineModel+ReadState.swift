@@ -34,4 +34,17 @@ extension ChannelTimelineModel {
         let channel = self.channel
         Task { await readStateMarking.markRead(channel: channel, upTo: newest) }
     }
+
+    /// Lands whatever the engine's coalescing window is holding, on the way out of this
+    /// conversation.
+    ///
+    /// The marks above publish a couple of seconds after they stop arriving, which is
+    /// invisible from *inside* a channel: nothing on this screen renders read state. The two
+    /// surfaces that do — the sidebar's unread count and the Activity feed — are exactly what
+    /// leaving reveals, so the flush belongs on the way out. A no-op when the window is
+    /// already empty, which it usually is.
+    func flushReadMarks() {
+        guard let readStateMarking else { return }
+        Task { await readStateMarking.flushReadMarks() }
+    }
 }

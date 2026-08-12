@@ -307,7 +307,13 @@ struct ChannelTimelineView: View {
         // Started rather than awaited: the reader can cancel it and run it again, so no one
         // attempt is the answer. What it *finds* comes back through `focusThreadRoot` below.
         .task { if let focus { model.startFocus(focus) } }
-        .onDisappear { model.cancelFocus() }
+        .onDisappear {
+            model.cancelFocus()
+            // The sidebar and the Activity feed are what this screen going away reveals, and
+            // they are the only two things that render read state — so this is where the
+            // engine's coalescing window has to land. See ``ChannelTimelineModel/flushReadMarks()``.
+            model.flushReadMarks()
+        }
         // A message that turns out to be a thread reply is only discoverable once the reach
         // has been past its place in history and stored it — see
         // ``ChannelTimelineModel/FocusOutcome/inThread(root:)``. The other endings have

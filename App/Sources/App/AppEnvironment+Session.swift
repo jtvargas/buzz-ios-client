@@ -77,7 +77,13 @@ extension AppEnvironment {
         // nothing outstanding — the write-through has normally already landed.
         if phase != .active {
             let drafts = self.drafts
+            let engine = self.engine
             Task { await drafts?.flush() }
+            // Beside the unsent text, on the same last-moment guarantee: read advances sit in
+            // a coalescing window that a suspended process never reopens. Kept out of the
+            // engine switch below because that one distinguishes `.background`, and
+            // `.inactive` is where a swipe-to-quit begins.
+            Task { await engine?.flushReadMarks() }
         }
         // Then the recomputable bitmaps and rendered text — see ``AppCaches``. Outside the
         // engine guard because the avatar editor fills a cache during onboarding, before

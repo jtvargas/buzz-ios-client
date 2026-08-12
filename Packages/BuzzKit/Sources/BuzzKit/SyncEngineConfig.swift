@@ -128,6 +128,20 @@ public struct SyncEngineConfig: Sendable {
     /// it exists to cut short.
     public var connectionNudgeInterval: TimeInterval
 
+    /// How long ``SyncEngine/markRead(channel:upTo:)`` waits for further advances before
+    /// publishing the read-state blob.
+    ///
+    /// `static` rather than an instance knob, unlike everything above it, because nothing
+    /// needs to vary it: a test that wants the publish calls ``SyncEngine/flushReadMarks()``
+    /// directly, which is a better seam than sleeping through a window.
+    ///
+    /// Two seconds. The length is nearly free — every surface that renders read state is
+    /// flushed before it can be seen — so this is sized to cover a burst of arrivals rather
+    /// than to be short. The whole cost of being wrong is that a hard kill inside the window
+    /// loses those advances, and the register is grow-only, so the worst case is a message
+    /// reading unread again until the next glance re-marks it.
+    public static let readStateCoalescingWindow: Duration = .seconds(2)
+
     public init(
         liveSinceWindow: TimeInterval = 5,
         presenceSweepInterval: Duration = .seconds(1),
