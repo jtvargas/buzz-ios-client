@@ -53,26 +53,33 @@ enum DatabaseSignal {
 
     /// The tracked region, shared by both entry points so they cannot drift.
     ///
-    /// # Why the region is declared constant
+    /// # Why this stays `tracking` and not `trackingConstantRegion`
     ///
-    /// It is one: the same six tables are read unconditionally on every pass, so no
-    /// commit can move the observation onto a table it was not already watching. Saying
-    /// so out loud is not a formality. GRDB cannot fetch a *non*-constant region
-    /// concurrently — a change landing in the region the next fetch is about to adopt
-    /// would go unnoticed, because nothing knew that region was coming — and it resolves
-    /// that the only way it safely can: by fetching **on the write connection**, inline
-    /// in `databaseDidCommit`
+    /// The region *is* constant — the same six tables, read unconditionally — and
+    /// declaring it so is tempting, because a non-constant region cannot be fetched
+    /// concurrently and GRDB resolves that by fetching **on the write connection**,
+    /// inline in `databaseDidCommit`
     /// (`GRDB/ValueObservation/Observers/ValueConcurrentObserver.swift`, the
-    /// `nonConstantRegionRecordedFromSelection` branch). Every awake surface holds its
-    /// own observation, so each of their fetches ran there in turn and the next write —
-    /// an arriving message, an outbox row moving, a read mark — queued behind all of
-    /// them. The store is a `DatabasePool` (``BuzzEventStore``) precisely so that reads
-    /// do not do that to writes.
+    /// `nonConstantRegionRecordedFromSelection` branch). Moving those fetches onto
+    /// readers looks like the obvious win, and it was shipped to a phone and taken
+    /// straight back off.
     ///
-    /// Declaring it constant also buys GRDB's own coalescing, which only this path
-    /// reaches: `setNeedsFetching`'s `idle → fetching → fetchingAndNeedsFetch` states
-    /// collapse a burst of commits into one fetch per observer, rather than serving
-    /// every commit its own.
+    /// What it misses is where the scarcity actually is. ``BuzzEventStore`` builds its
+    /// pool from a bare `Configuration()`, whose `maximumReaderCount` is **5**
+    /// (`GRDB/Core/Configuration.swift`). Every awake surface holds its own observation
+    /// of this region, so a commit wants six-to-ten reader slots out of five — and it
+    /// wants them from the same pool already serving every timeline and sidebar read.
+    /// Under a burst they queue, and the queue is visible: a sent message sits on
+    /// "Sending" and lands late, a read channel stays bold and clears late. Nothing is
+    /// lost; the screen is simply behind. The writer connection, by contrast, is one
+    /// dedicated connection that nothing else contends for, and a fetch that finishes
+    /// inside the commit has the value in hand the moment the commit does.
+    ///
+    /// So the trade is real but it points the other way at this pool size: fetching on
+    /// the writer costs write throughput, which nobody watches, and buys UI latency,
+    /// which is the only thing anybody notices in a chat app. Revisit only together
+    /// with a single multicast observation — one fetch for all consumers rather than
+    /// one each — which removes the contention instead of relocating it.
     ///
     /// # Why a `COUNT` per table is the whole job
     ///
@@ -94,7 +101,7 @@ enum DatabaseSignal {
     /// thrown away at both ends.
     private static var tracked: ValueObservation<ValueReducers.Fetch<Int>> {
         ValueObservation
-            .trackingConstantRegion { db in
+            .tracking { db in
                 var token = 0
                 for table in trackedTables {
                     token &+= try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM \(table)") ?? 0
@@ -141,12 +148,9 @@ enum DatabaseSignal {
     /// of this is currently interested in. That is the honest region to track for a list of
     /// drafts, and the surfaces that read it (a pushed screen, and a count that
     /// ``draftCount(in:)`` de-duplicates) are the only ones awake for it.
-    ///
-    /// Constant-region for the reason ``tracked`` is: one table, read unconditionally,
-    /// and a non-constant region would fetch on the write connection.
     static func composerDrafts(in reader: any DatabaseReader) -> AsyncValueObservation<Int> {
         ValueObservation
-            .trackingConstantRegion { db in
+            .tracking { db in
                 var token = 0
                 let rows = try Row.fetchAll(
                     db,
@@ -171,12 +175,9 @@ enum DatabaseSignal {
     /// `removeDuplicates` is what makes this safe to run behind the sidebar for the life of
     /// the session: the underlying table is written on every keystroke, and without it the
     /// shortcut card would be invalidated at typing speed to be told the same number.
-    ///
-    /// Constant-region for the reason ``tracked`` is; here the value *is* read, and a
-    /// count is unaffected by where it is fetched.
     static func draftCount(in reader: any DatabaseReader) -> AsyncValueObservation<Int> {
         ValueObservation
-            .trackingConstantRegion { db in
+            .tracking { db in
                 try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM composer_draft") ?? 0
             }
             .removeDuplicates()
