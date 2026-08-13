@@ -41,8 +41,24 @@ struct ChannelListView: View {
     /// row it was pressed on is gone by then.
     @State private var hider: HideDirectMessageModel
     /// The reader's starred conversations, on this device. Owned here because this view
-    /// both groups by it and offers the action that changes it.
-    @State private var starred = StarredConversations()
+    /// both groups by it and offers the action that changes it. Not `private` for the
+    /// reason several neighbours are not: ``rebuildSidebar()`` reads it from the extension
+    /// next door.
+    @State var starred = StarredConversations()
+    /// The resolved sections and rows, held rather than re-derived per `body`.
+    ///
+    /// Building it is a loop over every conversation — a roster read and an identity
+    /// resolution each, then a dedupe, a grouping and a sort per section — and it used to sit
+    /// inside the `ForEach`, so it ran on every body evaluation. A navigation transition
+    /// evaluates a body repeatedly, which put that loop frame by frame *inside* the pop
+    /// animation, scaled by the size of the community. It was reported as a stutter swiping
+    /// back in a large community, absent in a small one, and visible only in Low Power Mode —
+    /// which does not add the work, it removes the headroom that was hiding it.
+    ///
+    /// Rebuilt by ``rebuildSidebar()`` on the three things that can change it, so a frame
+    /// redrawn for any other reason — the relative-time ticker, a presence heartbeat, a sheet,
+    /// the transition itself — reuses this.
+    @State var sidebar = SidebarContent.empty
     /// Every composer holding unsent text. Owned here because this view draws the count and
     /// the pushed screen draws the list.
     @State private var draftsModel: DraftsModel
@@ -285,6 +301,17 @@ struct ChannelListView: View {
         // and resolves a `#`-token through one map — rebuilt only when the channel set changes.
         // The last two are actions, and are here because their press happens in a pushed view
         // while the navigation it asks for belongs to this stack.
+        // The three inputs of ``sidebar``, and nothing else. `directory.revision` stands in
+        // for the snapshot because comparing the snapshot itself would walk every identity
+        // and every roster to answer what an integer answers — see
+        // ``EntityDirectoryModel/revision``.
+        // `entityNames` rather than the `names` above: an action closure carries whatever it
+        // captured from the body that installed it, and the whole point of this is to run
+        // when an input has just changed. Reading it here reads it at the moment of the
+        // change. It is three stored references, so re-forming it costs nothing.
+        .onChange(of: model.visibleChannels, initial: true) { rebuildSidebar(names: entityNames) }
+        .onChange(of: directory.revision) { rebuildSidebar(names: entityNames) }
+        .onChange(of: starred.ids) { rebuildSidebar(names: entityNames) }
         .environment(\.channelNameMap, channelNames)
         .environment(\.entityNames, names)
         .environment(\.relativeTimeTicker, ticker)
@@ -491,7 +518,7 @@ private extension ChannelListView {
         } else {
             List {
                 shortcuts
-                ForEach(sidebarContent(names: names).sections) { section in
+                ForEach(sidebar.sections) { section in
                     sectionCell(section, resumable: resumable)
                 }
             }
@@ -946,15 +973,6 @@ private extension ChannelListView {
             )
             path = AppRoute.conversation(route).pushed(onto: path)
         }
-    }
-
-    /// The sections and rows for this pass, resolved once for the whole list.
-    ///
-    /// Deliberately does **not** read the presence roster: presence is consulted inside each
-    /// row instead, so a heartbeat invalidates the small views that draw a dot rather than
-    /// re-deriving every section (§9).
-    func sidebarContent(names: EntityNames) -> SidebarContent {
-        SidebarContent.build(channels: model.visibleChannels, names: names, starred: starred.ids)
     }
 
     /// The persisted expansion flag for a section.

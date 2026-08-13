@@ -18,6 +18,17 @@ final class EntityDirectoryModel {
     /// until the first read lands.
     private(set) var snapshot: DirectorySnapshot = .empty
 
+    /// Bumped once per *accepted* snapshot, so a view can hang a derivation off this
+    /// rather than off ``snapshot`` itself.
+    ///
+    /// The distinction is the whole point. A `DirectorySnapshot` is two dictionaries
+    /// covering every identity and every roster in the community, so `onChange(of:)`
+    /// against it pays a whole-directory comparison to learn what one integer compare
+    /// answers here. The guard in ``apply(_:)`` is what makes the counter trustworthy:
+    /// the snapshot is assigned only when it genuinely differs, so a bump means new
+    /// identities and a steady value means there is nothing to redo.
+    private(set) var revision = 0
+
     private let store: BuzzEventStore
     /// The reader, who is in the snapshot whether or not a roster names them — which is
     /// what lets the toolbar draw their own face on a first join (§ ``BuzzKit/DirectorySnapshot``).
@@ -51,5 +62,6 @@ final class EntityDirectoryModel {
         // the guard is what keeps the directory from being a global re-render pump.
         guard snapshot != self.snapshot else { return }
         self.snapshot = snapshot
+        revision &+= 1
     }
 }
