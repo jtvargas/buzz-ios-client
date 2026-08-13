@@ -7,22 +7,9 @@ import GRDB
 ///
 /// # Why these tables are sufficient
 ///
-/// BuzzKit's storage model makes every mutation that can change a rendered row
-/// commit a write to one of these tables inside the *same* transaction:
-///
-/// - A message, deletion, edit, reaction, profile (kind 0), or channel-metadata
-///   (kind 39000) event is itself a row in the append-only `event` log, projected
-///   in the same write (see `BuzzEventStore.write`).
-/// - An optimistic send, and every delivery-state change (`pending → sending →
-///   failed`, or the confirm that deletes the row), is an `outbox` write.
-/// - A read-state change — this device marking a channel read, or another device's
-///   blob arriving — is a `read_state` write, which moves a channel's unread count.
-/// - The relay's reply tally for a message (kind 39005) is itself a logged event, so
-///   a badge moving because the relay said so is already covered by `event`. The
-///   *other* half of that tally is not: `thread_fetch` records this device holding a
-///   thread in full, and one such write has no event behind it at all.
-///
-/// So tracking the full-table regions of `event`, `outbox`, and `read_state` re-fires
+/// BuzzKit's storage model makes every mutation that can change a rendered row commit
+/// a write to one of these tables inside the *same* transaction — ``trackedTables``
+/// names each one and what reaches it. So tracking their full-table regions re-fires
 /// the observation on every change either read would reflect, while the *value* is
 /// fetched through BuzzKit's public read API (`channelList()` / `timeline(...)`).
 ///
@@ -32,10 +19,10 @@ import GRDB
 /// until that lands, this keeps the coupling to a single, documented place. The
 /// `channel` doc-comment in `ChannelList.swift` enumerates the same region.
 enum DatabaseSignal {
-    /// A live async sequence that emits once immediately, then after every
-    /// committed transaction that touches `event` or `outbox`. The emitted value
-    /// is an opaque token; callers re-read through BuzzKit's public API in
-    /// response, they do not consume it.
+    /// A live async sequence that emits once immediately, then after every committed
+    /// transaction that touches any of ``trackedTables``. The emitted value is an opaque
+    /// token; callers re-read through BuzzKit's public API in response, they do not
+    /// consume it.
     static func changes(in reader: any DatabaseReader) -> AsyncValueObservation<Int> {
         tracked.values(in: reader)
     }
@@ -65,92 +52,83 @@ enum DatabaseSignal {
     }
 
     /// The tracked region, shared by both entry points so they cannot drift.
+    ///
+    /// # Why the region is declared constant
+    ///
+    /// It is one: the same six tables are read unconditionally on every pass, so no
+    /// commit can move the observation onto a table it was not already watching. Saying
+    /// so out loud is not a formality. GRDB cannot fetch a *non*-constant region
+    /// concurrently — a change landing in the region the next fetch is about to adopt
+    /// would go unnoticed, because nothing knew that region was coming — and it resolves
+    /// that the only way it safely can: by fetching **on the write connection**, inline
+    /// in `databaseDidCommit`
+    /// (`GRDB/ValueObservation/Observers/ValueConcurrentObserver.swift`, the
+    /// `nonConstantRegionRecordedFromSelection` branch). Every awake surface holds its
+    /// own observation, so each of their fetches ran there in turn and the next write —
+    /// an arriving message, an outbox row moving, a read mark — queued behind all of
+    /// them. The store is a `DatabasePool` (``BuzzEventStore``) precisely so that reads
+    /// do not do that to writes.
+    ///
+    /// Declaring it constant also buys GRDB's own coalescing, which only this path
+    /// reaches: `setNeedsFetching`'s `idle → fetching → fetchingAndNeedsFetch` states
+    /// collapse a burst of commits into one fetch per observer, rather than serving
+    /// every commit its own.
+    ///
+    /// # Why a `COUNT` per table is the whole job
+    ///
+    /// **Nobody reads the emitted value.** Every consumer is `for try await _ in`, and
+    /// this observation carries no `removeDuplicates()`, so GRDB re-fires on the
+    /// *region* and not on the value. All the fetch owes us is to name the region.
+    ///
+    /// And a count names *more* of the region than a column list does, not less: the
+    /// authorizer reports `COUNT(*)` with an **empty** column name, which GRDB unions as
+    /// the whole table, where a named column unions only that column
+    /// (`GRDB/Core/StatementAuthorizer.swift`, its `SQLITE_READ` case). So the in-place
+    /// updates this used to spell out column by column — an outbox row going `pending →
+    /// sending`, a picture going `staged → uploaded`, a `read_at` frontier advancing, a
+    /// second `thread_fetch` of the same root — all still re-fire, and now so does a
+    /// write to any *other* column of those tables. Wider, never narrower.
+    ///
+    /// What went with the columns was the hand-folded token: ~2,500 rows off a real
+    /// device store, materialised into `Row`s and hashed, to build an `Int` that was
+    /// thrown away at both ends.
     private static var tracked: ValueObservation<ValueReducers.Fetch<Int>> {
         ValueObservation
-            .tracking { db in
-                // `event` is append-only: every message, edit, deletion, reaction,
-                // profile, or channel change is a *new* row, so row existence
-                // (COUNT) captures all of them.
-                let events = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM event") ?? 0
-
-                // `outbox` rows also change *in place* — `pending → sending →
-                // failed`, and a retry back to `pending`. A COUNT would miss those
-                // (no row added or removed), so the mutable columns are read
-                // explicitly: that both puts them in the tracked region (GRDB
-                // re-fires on any write to them) and folds them into the token, so
-                // the value itself changes on a state transition.
-                var token = events
-                let rows = try Row.fetchAll(db, sql: "SELECT event_id, state, last_error FROM outbox")
-                for row in rows {
-                    let eventID: String = row["event_id"] ?? ""
-                    let state: String = row["state"] ?? ""
-                    let lastError: String = row["last_error"] ?? ""
-                    token = token &+ eventID.hashValue &+ state.hashValue &+ lastError.hashValue
-                }
-
-                // `outbox_media` changes in place exactly as `outbox` does — `staged →
-                // uploading → uploaded`, and a retry back again — and it is what the
-                // pending row's "Sending… (2/5)" counts. Without these columns in the
-                // region the count is fetched once and then frozen: pictures land, the
-                // outbox row does not move until the *last* one does, and the reader
-                // watches a number that is already wrong. A frozen count is worse than
-                // no count, so this is load-bearing rather than tidy.
-                let media = try Row.fetchAll(db, sql: "SELECT event_id, sha256, state FROM outbox_media")
-                for row in media {
-                    let eventID: String = row["event_id"] ?? ""
-                    let sha: String = row["sha256"] ?? ""
-                    let state: String = row["state"] ?? ""
-                    token = token &+ eventID.hashValue &+ sha.hashValue &+ state.hashValue
-                }
-
-                // `read_state` collapses replaceable per slot, so a mark advances a
-                // `read_at` in place rather than adding a row — a COUNT would miss it.
-                // Fold each `(context, read_at)` into the token so the channel list's
-                // unread counts re-read the instant a frontier moves, from this device
-                // or another. Tracking the read means GRDB re-fires on any write to it.
-                let frontiers = try Row.fetchAll(db, sql: "SELECT context_id, read_at FROM read_state")
-                for row in frontiers {
-                    let context: String = row["context_id"] ?? ""
-                    let readAt: Int64 = row["read_at"] ?? 0
-                    token = token &+ context.hashValue &+ Int(truncatingIfNeeded: readAt)
-                }
-
-                // A thread fetch is this device recording that it now holds a thread in
-                // full, which changes that message's reply tally (see
-                // `BuzzEventStore.recordThreadFetch`) — and it is the one such change
-                // that can happen with **no event row behind it**: opening a thread
-                // whose replies were all withdrawn ingests nothing, so `COUNT(*) FROM
-                // event` does not move and the badge would keep advertising replies
-                // that are not there until some unrelated event happened along. Both
-                // columns, because a second fetch of the same root updates the row in
-                // place rather than adding one.
-                let fetches = try Row.fetchAll(db, sql: "SELECT root_id, summary_event_id FROM thread_fetch")
-                for row in fetches {
-                    let root: String = row["root_id"] ?? ""
-                    let summary: String = row["summary_event_id"] ?? ""
-                    token = token &+ root.hashValue &+ summary.hashValue
-                }
-
-                // Directory snapshots and accepted lifecycle commands update
-                // channel access without necessarily inserting a relay event.
-                let accessRows = try Row.fetchAll(
-                    db,
-                    sql: "SELECT identity_pubkey, channel_id, state, updated_at FROM channel_access"
-                )
-                for row in accessRows {
-                    let identity: String = row["identity_pubkey"] ?? ""
-                    let channel: String = row["channel_id"] ?? ""
-                    let state: String = row["state"] ?? ""
-                    let updatedAt: Int64 = row["updated_at"] ?? 0
-                    token = token
-                        &+ identity.hashValue
-                        &+ channel.hashValue
-                        &+ state.hashValue
-                        &+ Int(truncatingIfNeeded: updatedAt)
+            .trackingConstantRegion { db in
+                var token = 0
+                for table in trackedTables {
+                    token &+= try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM \(table)") ?? 0
                 }
                 return token
             }
     }
+
+    /// The tables ``tracked`` watches, named once so the region and the reasoning above
+    /// it cannot drift apart.
+    ///
+    /// - `event` — append-only, so a message, edit, deletion, reaction, profile (kind 0)
+    ///   or channel-metadata (kind 39000) event is a *new* row here, projected in the
+    ///   same write (see `BuzzEventStore.write`).
+    /// - `outbox` / `outbox_media` — an optimistic send and every delivery-state change,
+    ///   down to the per-picture progress the pending row's "Sending… (2/5)" counts.
+    /// - `read_state` — this device marking a channel read, or another device's blob
+    ///   arriving; either moves an unread count.
+    /// - `thread_fetch` — this device recording that it now holds a thread in full,
+    ///   which changes that message's reply tally (see
+    ///   `BuzzEventStore.recordThreadFetch`). It is the one such change that can happen
+    ///   with **no event row behind it**: opening a thread whose replies were all
+    ///   withdrawn ingests nothing, so the badge would go on advertising replies that
+    ///   are not there until some unrelated event happened along.
+    /// - `channel_access` — directory snapshots and accepted lifecycle commands update
+    ///   it without necessarily inserting a relay event.
+    private static let trackedTables = [
+        "event",
+        "outbox",
+        "outbox_media",
+        "read_state",
+        "thread_fetch",
+        "channel_access",
+    ]
 
     /// A change signal over `composer_draft` alone.
     ///
@@ -163,9 +141,12 @@ enum DatabaseSignal {
     /// of this is currently interested in. That is the honest region to track for a list of
     /// drafts, and the surfaces that read it (a pushed screen, and a count that
     /// ``draftCount(in:)`` de-duplicates) are the only ones awake for it.
+    ///
+    /// Constant-region for the reason ``tracked`` is: one table, read unconditionally,
+    /// and a non-constant region would fetch on the write connection.
     static func composerDrafts(in reader: any DatabaseReader) -> AsyncValueObservation<Int> {
         ValueObservation
-            .tracking { db in
+            .trackingConstantRegion { db in
                 var token = 0
                 let rows = try Row.fetchAll(
                     db,
@@ -190,9 +171,12 @@ enum DatabaseSignal {
     /// `removeDuplicates` is what makes this safe to run behind the sidebar for the life of
     /// the session: the underlying table is written on every keystroke, and without it the
     /// shortcut card would be invalidated at typing speed to be told the same number.
+    ///
+    /// Constant-region for the reason ``tracked`` is; here the value *is* read, and a
+    /// count is unaffected by where it is fetched.
     static func draftCount(in reader: any DatabaseReader) -> AsyncValueObservation<Int> {
         ValueObservation
-            .tracking { db in
+            .trackingConstantRegion { db in
                 try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM composer_draft") ?? 0
             }
             .removeDuplicates()
