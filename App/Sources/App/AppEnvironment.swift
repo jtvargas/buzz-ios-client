@@ -176,6 +176,13 @@ final class AppEnvironment {
     /// ``AppSettings``.
     let settings = AppSettings()
 
+    /// When to ask for an App Store review, and the counters that decide it.
+    ///
+    /// Here for ``settings``' reason — it holds across every community on this phone —
+    /// and it is ``ReviewPrompt/shared`` rather than a fresh instance because two of the
+    /// four recording sites cannot reach this object. See that type for why.
+    let reviewPrompt = ReviewPrompt.shared
+
     /// A screen Siri, Spotlight or the Shortcuts app has asked for, waiting to be opened.
     ///
     /// Here for the same reason ``reminderAlerts`` is, and one more: an ``AppIntent`` is not
@@ -326,6 +333,11 @@ final class AppEnvironment {
         // behind whatever comes first here. Ordering against the build is the index's own
         // guarantee (``ConversationEntityIndex``), not this call's.
         conversationEntityIndex.reconcileLaunch()
+        // The launch's own open. `onChange(of: scenePhase)` in ``HiveApp`` reports every
+        // *change*, and whether a cold launch delivers one is SwiftUI's business rather
+        // than something to rely on; this runs once per process and the recording
+        // de-duplicates, so the count is right either way.
+        reviewPrompt.recordAppOpen()
         guard let active = communities.active, Self.hasStoredKey(account: active.keychainAccount) else {
             phase = .needsIdentity
             return

@@ -140,6 +140,9 @@ extension SyncEngine {
             try await store.markSending(entry.event.id)
             try await connection.publish(entry.event)
             try await store.confirmSent(entry.event)
+            // After the confirm and not before it: a subscriber is told the send landed,
+            // which is only true once the row has moved into the log.
+            publishSentConfirmation(entry.event)
         } catch let error as RelayConnectionError {
             await handlePublishFailure(error, entry: entry)
         } catch {

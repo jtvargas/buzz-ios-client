@@ -83,6 +83,10 @@ extension ChannelTimelineModel {
     func react(_ emoji: String, on targetID: String) {
         let channel = self.channel
         let sender = self.sender
+        // Here and not at the view's `onReact`, because `toggleReaction` cannot tell an
+        // add from a withdrawal until it has looked at the group — this method is the one
+        // place both paths agree a reaction is being *added*.
+        ReviewPrompt.shared.record(.reactionsAdded)
         Task {
             try? await sender.enqueue(
                 kind: .reaction,

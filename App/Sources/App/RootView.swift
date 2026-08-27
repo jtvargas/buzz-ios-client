@@ -1,4 +1,5 @@
 import BuzzKit
+import StoreKit
 import SwiftUI
 
 /// The top of the view tree: the identity gate until a key is present, then the tab bar.
@@ -16,6 +17,9 @@ struct RootView: View {
     /// happens inside a message row, which is recycled by a lazy list and cannot own a sheet —
     /// see ``OpenMarkdownDocumentAction``.
     @State private var readingDocument: MarkdownDocument?
+    /// The system's review request. The app's one and only presentation of it — see
+    /// ``presentReviewIfReady()``.
+    @Environment(\.requestReview) private var requestReview
 
     var body: some View {
         @Bindable var environment = environment
@@ -66,6 +70,56 @@ struct RootView: View {
             .sheet(item: $readingDocument) { document in
                 MarkdownDocumentSheet(document: document)
             }
+            // The App Store review request. Here rather than at any of the four moments
+            // that earn it, because those moments are spread across three screens and two
+            // models, and a sheet raised from inside one of them lands on top of whatever
+            // animation that action is still running. ``ReviewPrompt`` decides *whether*;
+            // this decides *when*, and it is the only caller.
+            .task(id: reviewReadiness) { await presentReviewIfReady() }
+    }
+
+    /// Everything the review request is waiting on, in one `Equatable` value.
+    ///
+    /// It is the `.task(id:)` key and not a set of `guard`s for one reason: an armed
+    /// request that arrives while a sheet is up would otherwise be stranded — nothing
+    /// arms it a second time, so nothing would re-run the presentation. Keying the task
+    /// on the conditions means closing that sheet, or coming back to the foreground, is
+    /// what re-tries it.
+    private struct ReviewReadiness: Equatable {
+        let isArmed: Bool
+        let isRunning: Bool
+        let isForeground: Bool
+        /// A sheet this view presents is up. The three it owns; a presentation made
+        /// deeper in the tree is not visible from here, which is the residual reason for
+        /// the delay below rather than for a wider check.
+        let isCovered: Bool
+
+        var canPresent: Bool { isArmed && isRunning && isForeground && !isCovered }
+    }
+
+    private var reviewReadiness: ReviewReadiness {
+        ReviewReadiness(
+            isArmed: environment.reviewPrompt.shouldRequest,
+            isRunning: environment.phase == .running,
+            isForeground: scenePhase == .active,
+            isCovered: environment.communitySheet != nil
+                || environment.showsSettings
+                || readingDocument != nil
+        )
+    }
+
+    /// Asks for a review, once, if everything is ready and stays ready.
+    ///
+    /// The delay is the point: the trigger fires inside a send, a reaction or a push, and
+    /// a system alert raised in the same turn lands on top of the animation that action is
+    /// still running. The conditions are re-read afterwards because a second is long
+    /// enough for the reader to have opened something.
+    private func presentReviewIfReady() async {
+        guard reviewReadiness.canPresent else { return }
+        try? await Task.sleep(for: .seconds(1.2))
+        guard !Task.isCancelled, reviewReadiness.canPresent else { return }
+        requestReview()
+        environment.reviewPrompt.didRequest()
     }
 
     @ViewBuilder
@@ -92,6 +146,12 @@ struct RootView: View {
                     // per-community state here is the object graph rather than a set of
                     // singletons.
                     .id(environment.communities.activeID)
+                    // The picture-batch trigger's only source: the engine's relay
+                    // acknowledgements. Keyed on the community rather than left to the
+                    // remount above, so the stream follows the engine it belongs to.
+                    .task(id: environment.communities.activeID) {
+                        await environment.reviewPrompt.watchSentEvents(on: engine)
+                    }
             } else {
                 // `.running` with no graph, or with one belonging to the community being
                 // left. Both are the same thing to look at — a community coming up — so this
