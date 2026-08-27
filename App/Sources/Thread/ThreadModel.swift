@@ -49,6 +49,32 @@ final class ThreadModel {
     /// observation as `rows` so `@`-tokens resolve from each message's own `p` tags.
     private(set) var mentionRefs: [String: MentionRefList] = [:]
     private(set) var hasLoaded = false
+    /// Whether this thread cannot currently be shown as loaded — the last read of the
+    /// local store failed, or the last one-shot relay fetch did.
+    ///
+    /// Its whole job is that a failure must never render as an answer. Without it, a
+    /// failed fetch painted the opener with zero replies and said nothing — the common
+    /// case, because the reader tapped a message they could already see, so the store
+    /// held the opener and the surface was not empty — and a failed store read painted
+    /// "Thread unavailable" with no way to try again. It is the channel timeline's own
+    /// ``ChannelTimelineModel/olderFailed``, applied to a thread.
+    ///
+    /// Derived from the two halves below rather than stored, because they are cleared by
+    /// different things and a single flag got that wrong in both directions: a fetch that
+    /// succeeded cleared a store that still could not be read, leaving an empty surface
+    /// with no retry on it, and a store read that succeeded did not clear its own earlier
+    /// failure, leaving a retry on a thread that was fine.
+    var loadFailed: Bool { readFailed || fetchFailed }
+
+    /// Whether the last read of this thread from the local store failed. Cleared by the
+    /// next read that succeeds — that is the same operation working, so nothing else has
+    /// to happen for it to be answered.
+    private var readFailed = false
+
+    /// Whether the last one-shot relay fetch failed. Cleared by a fetch that succeeds and
+    /// by a reply arriving from live fan-out (see ``apply(_:)``) — not by a store read,
+    /// which says nothing about whether the replies this thread is missing ever landed.
+    private var fetchFailed = false
 
     /// The reply composer's text and mention tokens — see `ThreadModel+Drafts.swift`.
     var mentionDraft = MentionDraft() { didSet { recordDraft(replacing: oldValue) } }
@@ -186,7 +212,22 @@ final class ThreadModel {
         guard !hasPrimed else { return }
         hasPrimed = true
         restoreDraft()
-        let ids = apply(fetchThread())
+        readAll()
+    }
+
+    /// Reads the thread and its per-row reactions and mentions from the local store, in
+    /// the one order that keeps them consistent: the rows first, then the overlays keyed
+    /// by the ids those rows carry.
+    ///
+    /// A read that *failed* is not a thread with no replies, so it writes nothing:
+    /// whatever is already on screen stays, ``hasLoaded`` stays false, and the retry the
+    /// view offers is the way forward.
+    private func readAll() {
+        guard let thread = fetchThread() else {
+            markReadFailed()
+            return
+        }
+        let ids = apply(thread)
         applyReactions(fetchReactions(for: ids))
         applyMentions(fetchMentions(for: ids))
     }
@@ -214,16 +255,43 @@ final class ThreadModel {
     }
 
     /// The one-shot thread fetch, run concurrently with the observation so it never
-    /// delays the first render. A failure is dropped: the live observation still
-    /// carries whatever the store already holds and whatever fan-out later delivers.
+    /// delays the first render. A failure is recorded rather than dropped: the live
+    /// observation still carries whatever the store already holds, but a reader looking at
+    /// a thread whose replies never arrived has to be told, or the surface answers a
+    /// question it never got an answer to. See ``loadFailed``.
     private func openOnce() async {
-        _ = try? await opener.openThread(root: root)
+        do {
+            _ = try await opener.openThread(root: root)
+            if fetchFailed { fetchFailed = false }
+        } catch {
+            // The view leaving the screen cancels this. That is not a failure to report,
+            // and this model is being discarded either way.
+            guard !Task.isCancelled else { return }
+            if !fetchFailed { fetchFailed = true }
+        }
+    }
+
+    /// Re-reads the store and re-runs the one-shot fetch, from the retry the view offers
+    /// after a failure. Only those two — the live observation is still running underneath
+    /// and needs nothing restarted.
+    func retryLoad() async {
+        readAll()
+        await openOnce()
+    }
+
+    /// Records that a read of the local store failed. Guarded like every other write here:
+    /// a repeated failure must not invalidate the surface again.
+    private func markReadFailed() {
+        if !readFailed { readFailed = true }
     }
 
     private nonisolated func observe() async {
         do {
             for try await _ in DatabaseSignal.changes(in: store.reader) {
-                let thread = fetchThread()
+                guard let thread = fetchThread() else {
+                    await markReadFailed()
+                    continue
+                }
                 let ids = await apply(thread)
                 let groups = fetchReactions(for: ids)
                 await applyReactions(groups)
@@ -235,14 +303,25 @@ final class ThreadModel {
         }
     }
 
-    /// Reads the whole thread off the main actor. `store` and `root` are immutable,
-    /// so this is safe from the `nonisolated` observation loop.
-    private nonisolated func fetchThread() -> [TimelineRow] {
-        (try? store.thread(root: root, selfPubkey: selfPubkey)) ?? []
+    /// Reads the whole thread off the main actor, or `nil` if the read itself failed.
+    /// `store` and `root` are immutable, so this is safe from the `nonisolated`
+    /// observation loop.
+    ///
+    /// Optional rather than `?? []`, because those two are not the same answer — folding
+    /// them together is what let a failed read render as a thread with no replies.
+    private nonisolated func fetchThread() -> [TimelineRow]? {
+        try? store.thread(root: root, selfPubkey: selfPubkey)
     }
 
     @discardableResult
     private func apply(_ thread: [TimelineRow]) -> [String] {
+        // Reaching here at all is a read that succeeded, which answers its own earlier
+        // failure — the same operation working is the whole of that question.
+        if readFailed { readFailed = false }
+        // A reply that has landed since a failed fetch answers *that* question, so the
+        // fetch failure clears itself too. Growth rather than any change, because an edit
+        // or a withdrawal says nothing about whether the missing replies arrived.
+        if fetchFailed, thread.count > loaded.count { fetchFailed = false }
         loaded = thread
         rebuild()
         // Guarded like the rest — see ``ChannelTimelineModel/mergeHead(_:)``.
