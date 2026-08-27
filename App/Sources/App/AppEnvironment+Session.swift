@@ -97,6 +97,17 @@ extension AppEnvironment {
         if phase == .background {
             AppCaches.releaseSuspendable()
         }
+        // An "open" is a launch or a return from the background, which is why this reads
+        // `.background` and `.active` and ignores `.inactive` entirely: the app switcher,
+        // a Control Centre pull-down and a permission alert all produce
+        // active → inactive → active, and none of them is somebody opening Hive.
+        // ``ReviewPrompt/recordAppOpen()`` is idempotent across consecutive `.active`
+        // calls, so the launch counted in ``bootstrap()`` is not counted twice here.
+        if phase == .active {
+            reviewPrompt.recordAppOpen()
+        } else if phase == .background {
+            reviewPrompt.noteLeftForeground()
+        }
         guard let engine else { return }
         let heartbeat = self.heartbeat
         Task {

@@ -931,6 +931,9 @@ private extension ChannelListView {
     /// channel underneath is not where the text is, and stacking it would put a screen the
     /// reader did not ask for between them and the way back.
     func openDraft(_ summary: ComposerDraftSummary) {
+        // Both destinations, one count: the trigger is "came back to a conversation
+        // through Drafts", and a thread draft is that as much as a channel draft is.
+        environment.reviewPrompt.record(.draftReopened)
         switch DraftDestination.of(summary) {
         case let .thread(root, channel):
             path.append(.thread(ThreadRoute(

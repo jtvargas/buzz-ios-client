@@ -418,6 +418,8 @@ extension ThreadModel {
     func react(_ emoji: String, on targetID: String) {
         let channel = self.channel
         let sender = self.sender
+        // The thread's half of the same count — see ``ChannelTimelineModel/react(_:on:)``.
+        ReviewPrompt.shared.record(.reactionsAdded)
         Task {
             try? await sender.enqueue(
                 kind: .reaction,

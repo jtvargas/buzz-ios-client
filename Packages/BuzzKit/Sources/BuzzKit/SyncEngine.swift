@@ -200,12 +200,17 @@ public actor SyncEngine {
         }
     }
 
-    private var stateObservers: [Int: AsyncStream<State>.Continuation] = [:]
-    private var nextObserverID = 0
+    // Not `private`, because the subscription surface over them lives in
+    // `SyncEngine+Observation.swift` — this actor's body is at swiftlint's 350-line
+    // ceiling, and the observation section was the coherent piece to lift out.
+    var stateObservers: [Int: AsyncStream<State>.Continuation] = [:]
+    var nextObserverID = 0
     var directoryStatusObservers: [Int: AsyncStream<ChannelDirectoryStatus>.Continuation] = [:]
-    private var nextDirectoryStatusObserverID = 0
-    private var liveMessageObservers: [Int: AsyncStream<[String]>.Continuation] = [:]
-    private var nextLiveMessageObserverID = 0
+    var nextDirectoryStatusObserverID = 0
+    var liveMessageObservers: [Int: AsyncStream<[String]>.Continuation] = [:]
+    var nextLiveMessageObserverID = 0
+    var sentConfirmationObservers: [Int: AsyncStream<NostrEvent>.Continuation] = [:]
+    var nextSentConfirmationObserverID = 0
 
     // MARK: - Sync state
 
@@ -393,56 +398,7 @@ public actor SyncEngine {
         self.sleepFor = sleepFor
     }
 
-    // MARK: - Observation
-
-    /// A live feed of engine state, seeded with the current value so a new observer
-    /// never misses the state it subscribed in.
-    public func states() -> AsyncStream<State> {
-        let (stream, continuation) = AsyncStream.makeStream(of: State.self)
-        let id = nextObserverID
-        nextObserverID += 1
-        stateObservers[id] = continuation
-        continuation.yield(state)
-        continuation.onTermination = { [weak self] _ in
-            Task { await self?.removeStateObserver(id) }
-        }
-        return stream
-    }
-
-    /// A live feed of directory authority, seeded with the current value so the
-    /// app can choose its launch or recovery surface without a transient default.
-    public func channelDirectoryStatuses() -> AsyncStream<ChannelDirectoryStatus> {
-        let (stream, continuation) = AsyncStream.makeStream(of: ChannelDirectoryStatus.self)
-        let id = nextDirectoryStatusObserverID
-        nextDirectoryStatusObserverID += 1
-        directoryStatusObservers[id] = continuation
-        continuation.yield(directoryContext?.status ?? .authoritative)
-        continuation.onTermination = { [weak self] _ in
-            Task { await self?.removeDirectoryStatusObserver(id) }
-        }
-        return stream
-    }
-
-    /// IDs inserted from the standing subscription after its stored-event boundary.
-    /// Backfill and reconciliation never enter this stream, which makes it the app's
-    /// authoritative seam for foreground-only new-message presentation.
-    public func liveMessageInsertions() -> AsyncStream<[String]> {
-        let (stream, continuation) = AsyncStream.makeStream(of: [String].self)
-        let id = nextLiveMessageObserverID
-        nextLiveMessageObserverID += 1
-        liveMessageObservers[id] = continuation
-        continuation.onTermination = { [weak self] _ in
-            Task { await self?.removeLiveMessageObserver(id) }
-        }
-        return stream
-    }
-
-    func publishLiveMessageInsertions(_ eventIDs: [String]) {
-        guard !eventIDs.isEmpty else { return }
-        for continuation in liveMessageObservers.values {
-            continuation.yield(eventIDs)
-        }
-    }
+    // MARK: - Reads
 
     /// The current sync state of a channel — ``ChannelSync/unsynced`` for any
     /// channel the engine has not reconciled on this socket.
@@ -457,18 +413,6 @@ public actor SyncEngine {
     /// in-memory ephemeral state, not the connection). `nonisolated` because it hands
     /// back an immutable, `Sendable` collaborator; no actor hop is needed to read it.
     public nonisolated var presenceStore: PresenceStore { presence }
-
-    private func removeStateObserver(_ id: Int) {
-        stateObservers.removeValue(forKey: id)
-    }
-
-    private func removeDirectoryStatusObserver(_ id: Int) {
-        directoryStatusObservers.removeValue(forKey: id)
-    }
-
-    private func removeLiveMessageObserver(_ id: Int) {
-        liveMessageObservers.removeValue(forKey: id)
-    }
 
     // MARK: - Lifecycle
 
