@@ -21,7 +21,7 @@ extension AppEnvironment {
     ) -> SyncEngine {
         let connection = RelayConnection(url: websocketURL, signer: signer)
         let subscriptions = SubscriptionManager(connection: connection, signer: signer)
-        let httpTransport = URLSessionHTTPTransport()
+        let httpTransport = URLSessionHTTPTransport(session: URLSession(configuration: Self.queryConfiguration))
         return SyncEngine(
             connection: connection,
             subscriptions: subscriptions,
@@ -44,6 +44,31 @@ extension AppEnvironment {
             mediaBaseURL: RelayEndpoint.httpBaseURL(for: websocketURL),
             mediaStagingStore: mediaStagingStore
         )
+    }
+
+    /// The session the two signed query clients ride: the history windows and the channel
+    /// directory.
+    ///
+    /// It exists to replace `URLSession.shared`, whose `timeoutIntervalForResource` is
+    /// **seven days**. `timeoutIntervalForRequest` alone does not cover this: it is a stall
+    /// detector, reset by activity, so a response that trickles a byte at a time never
+    /// trips it and the fetch waiting on it is effectively unbounded. That is the same
+    /// defect ``makeMediaUploader(signer:websocketURL:)`` documents and fixes for uploads;
+    /// this is the other half of it.
+    ///
+    /// The numbers are much tighter than the uploader's, because these bodies are not
+    /// photographs — a history window is a page of JSON messages, and a directory snapshot
+    /// is a list of channels. A minute is already far outside what either takes on a bad
+    /// mobile connection, and both callers retry: the timeline offers its own retry on a
+    /// failed page, and the directory is re-fetched on the next reconcile.
+    ///
+    /// Computed rather than stored: `URLSessionConfiguration` is a mutable class, and one
+    /// shared instance handed to every community's graph is a footgun for no gain.
+    static var queryConfiguration: URLSessionConfiguration {
+        let configuration = URLSessionConfiguration.default
+        configuration.timeoutIntervalForRequest = 30
+        configuration.timeoutIntervalForResource = 60
+        return configuration
     }
 
     /// The blob-store client for the same relay, or `nil` if that URL has no HTTP

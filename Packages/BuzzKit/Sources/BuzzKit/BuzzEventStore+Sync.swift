@@ -76,10 +76,23 @@ public extension BuzzEventStore {
     ///   bounded, not unbounded: the relay's ingest gate rejects any event whose
     ///   `created_at` is more than ±15 minutes from server time
     ///   (`buzz-relay .../ingest.rs`), so the largest possible early advance is that
-    ///   window. Closing it fully would require stamping the watermark from a
-    ///   relay-attested time rather than the event's own; recorded here rather than
-    ///   fixed because the ±15-minute bound keeps it within the live overlap the
-    ///   reconcile already re-fetches.
+    ///   window.
+    ///
+    ///   This note used to close by saying the ±15-minute bound "keeps it within the live
+    ///   overlap the reconcile already re-fetches". That is wrong, and it is the reason
+    ///   this was recorded rather than fixed: the live replay overlap is
+    ///   ``SubscriptionManagerConfig/replayOverlapSeconds``, five seconds, which does not
+    ///   cover a fifteen-minute window. Nothing re-fetches the difference.
+    ///
+    ///   Still recorded rather than fixed, but for the honest reason. The obvious clamp —
+    ///   `min(cursor.createdAt, now)` — is what
+    ///   ``NostrCore/SubscriptionManager`` does to its replay cursor, and it is safe there
+    ///   because that cursor is a bare timestamp. This one is a composite
+    ///   `(created_at, id)` keyset position, so clamping the timestamp while keeping the
+    ///   id would leave a cursor that names no row the walk can resume from. The correct
+    ///   fix is to withhold the advance from a future-stamped message rather than to
+    ///   truncate it, which is a change to ``maxMessageCursor(in:forChannel:)`` and its
+    ///   own piece of work.
     @discardableResult
     func ingest(
         batch: [NostrEvent],

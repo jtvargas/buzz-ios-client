@@ -58,6 +58,13 @@ public actor SubscriptionManager {
     /// ``ReconnectPolicy`` takes one: a test pins the delay instead of fighting a generator.
     let jitter: @Sendable () -> Double
 
+    /// Reads local wall-clock time, for the one thing here that needs it: clamping the
+    /// replay cursor so a peer's `created_at` cannot push it into the future. Injected on
+    /// the same principle as the sleeps above — a test pins the clock rather than racing
+    /// it — and it is a wall clock rather than a monotonic one because the value it is
+    /// compared against is a Unix timestamp off the wire.
+    let now: @Sendable () -> Date
+
     /// The session's rate-limit window. Shared with the connection's other request paths so a
     /// refusal on one subscription pauses every request behind it, not just its own retry.
     let rateLimitGate: RelayRateLimitGate
@@ -151,7 +158,8 @@ public actor SubscriptionManager {
         rateLimitGate: RelayRateLimitGate = RelayRateLimitGate(),
         liveFlushSleep: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) },
         pacingSleep: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) },
-        jitter: @escaping @Sendable () -> Double = { Double.random(in: 0 ... 1) }
+        jitter: @escaping @Sendable () -> Double = { Double.random(in: 0 ... 1) },
+        now: @escaping @Sendable () -> Date = { Date() }
     ) {
         self.connection = connection
         self.signer = signer
@@ -160,6 +168,7 @@ public actor SubscriptionManager {
         self.liveFlushSleep = liveFlushSleep
         self.pacingSleep = pacingSleep
         self.jitter = jitter
+        self.now = now
     }
 
     // MARK: - Lifecycle
