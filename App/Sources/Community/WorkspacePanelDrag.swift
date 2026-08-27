@@ -101,6 +101,14 @@ final class WorkspacePanelDragView: UIView, UIGestureRecognizerDelegate {
     /// Where the panel was when the current drag began. A drag is a *change* from wherever
     /// the panel already is, which is what lets one begin on a panel that is already open.
     private var startProgress: CGFloat = 0
+    /// Whether the panel was out when the current drag began, judged by the same fraction
+    /// that decides where a release lands (``WorkspacePanelGeometry/commitFraction``).
+    ///
+    /// Held so the release can tell an *opening* from a drag that merely wandered and sprang
+    /// back — which is the whole of what the haptic answers. Recorded rather than derived from
+    /// ``startProgress`` at the end, because the panel may be mid-animation when a hand catches
+    /// it and `progress > 0` would call that already open.
+    private var startedOpen = false
 
     override func didMoveToWindow() {
         super.didMoveToWindow()
@@ -141,6 +149,7 @@ final class WorkspacePanelDragView: UIView, UIGestureRecognizerDelegate {
         switch pan.state {
         case .began:
             startProgress = state.progress
+            startedOpen = startProgress >= WorkspacePanelGeometry.commitFraction
             // The drag has won the hand; nothing under it should still be scrolling. See
             // ``suspendScrolling(under:)``.
             suspendScrolling(under: host)
@@ -208,11 +217,30 @@ final class WorkspacePanelDragView: UIView, UIGestureRecognizerDelegate {
 
     /// Runs the remaining distance out under its own steam. A cancelled drag settles too —
     /// leaving the panel wherever the finger was lost would strand it half open.
+    ///
+    /// # The haptic
+    ///
+    /// It is played here and nowhere else in the drag, which is the owner's ask (2026-08-27) and
+    /// the shape X's drawer has: nothing at all while the finger is down, one tick at the moment
+    /// it lifts. A haptic that tracked the drag would be saying the same thing many times over
+    /// during one gesture, which is the noise ``HiveHaptic`` exists to refuse.
+    ///
+    /// Two conditions, and both are load-bearing. `released` keeps it off `.cancelled` and
+    /// `.failed` — a drag lost to an incoming call did not open anything, and the panel settling
+    /// by itself is not a thing the reader did. `open != startedOpen` keeps it off a drag that
+    /// wandered below the commit fraction and sprang back, which is the "at least a threshold"
+    /// half of the ask: the feedback answers a *change of state*, not a gesture that happened.
+    /// A flick shorter than the fraction still counts, because it still opens the panel.
+    ///
+    /// Before the animation rather than after it, for ``SidebarSectionHeader``'s reason: the
+    /// tick belongs at the lift, and the panel takes up to
+    /// ``WorkspacePanelGeometry/maximumSettle`` to arrive.
     private func settle(_ state: WorkspacePanelState, velocity: CGFloat, released: Bool) {
         let open = released
             ? WorkspacePanelGeometry.settles(open: state.progress, velocity: velocity)
             : state.progress >= WorkspacePanelGeometry.commitFraction
         let target: CGFloat = open ? 1 : 0
+        if released, open != startedOpen { HiveHaptics.play(.disclosureToggled) }
         let duration = WorkspacePanelGeometry.settleDuration(
             from: state.progress,
             to: target,
