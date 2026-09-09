@@ -176,12 +176,19 @@ final class ChannelListModel {
     /// batched requests over a tailnet — is never called unreachable.
     static let defaultAnswerDeadline: Duration = .seconds(8)
 
+    /// The same summary cadence as Inbox. A single pending signal represents every
+    /// commit during the pause because each read fetches the current store snapshot.
+    /// Waiting after the read keeps the initial load immediate and lets sustained
+    /// traffic update regularly instead of postponing the read until traffic stops.
+    nonisolated static let coalescingWindow = Duration.milliseconds(250)
+
     /// Consumes the observation until cancelled. Attach with SwiftUI's `.task`,
     /// which cancels it when the view goes away. `nonisolated` so the re-read runs
     /// off the main actor; only the property assignment hops back on.
     nonisolated func run() async {
         do {
-            for try await _ in DatabaseSignal.changes(in: store.reader) {
+            for try await _ in DatabaseSignal.coalescedChanges(in: store.reader) {
+                try Task.checkCancellation()
                 // One read. The second — a `mentions(for:)` batch over every row's newest
                 // message id — went with the preview line it fed: the sidebar's mention
                 // badge is now a column on this same query, counted over every unread
@@ -192,7 +199,11 @@ final class ChannelListModel {
                 // worth of openers and replies per commit to draw one digit is work the
                 // Threads screen does when it is actually open.
                 let threads = (try? store.unreadThreads(selfPubkey: selfPubkey)) ?? []
+                try Task.checkCancellation()
                 await apply(rows, unreadThreads: threads)
+                // The newest pending token survives this cancellable pause. Intermediate
+                // tokens can be discarded: these are full summaries, not individual events.
+                try await Task.sleep(for: Self.coalescingWindow)
             }
         } catch {
             // The stream ends on cancellation or store teardown; the last snapshot
