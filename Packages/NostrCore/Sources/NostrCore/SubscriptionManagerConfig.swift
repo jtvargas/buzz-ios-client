@@ -31,9 +31,8 @@ public struct SubscriptionManagerConfig: Sendable {
     ///
     /// A Buzz relay budgets requests — 50 `REQ` per 5 seconds at the time of writing — and a
     /// client holding one subscription per joined channel can exceed that in a single reconnect
-    /// once it is in enough channels. Sending the replay in batches keeps a large workspace under
-    /// the budget instead of being refused for the last of them. Eight is upstream's value
-    /// (`block/buzz#3053`).
+    /// once it is in enough channels. Eight per second leaves room for interactive
+    /// requests; relay refusals additionally pause work through the shared budget gate.
     public var replayBatchSize: Int
 
     /// The pause between reconnect replay batches.
@@ -59,7 +58,7 @@ public struct SubscriptionManagerConfig: Sendable {
         liveFlushInterval: Duration = .milliseconds(50),
         replayOverlap: Duration = .seconds(5),
         replayBatchSize: Int = 8,
-        replayInterBatchDelay: Duration = .milliseconds(50),
+        replayInterBatchDelay: Duration = .seconds(1),
         closedRetryPolicy: ReconnectPolicy = .default,
         maxClosedRetries: Int = 5
     ) {

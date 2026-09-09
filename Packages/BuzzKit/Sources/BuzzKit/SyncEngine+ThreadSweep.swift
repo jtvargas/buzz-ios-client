@@ -96,8 +96,9 @@ extension SyncEngine {
                     tagQueries: ["e": [$0.rootID]]
                 )
             }
-            guard let events = try? await subscriptions.query(filters),
-                  (try? await store.ingest(batch: events, phase: .backfill)) != nil
+            guard let events = try? await queryForRecovery(filters),
+                  isCurrent(generation),
+                  await (try? store.ingest(batch: events, phase: .backfill)) != nil
             else {
                 // A dropped socket or a failed write. Nothing is recorded for this batch, so
                 // these roots stay top of the ordering and the next pass starts here.

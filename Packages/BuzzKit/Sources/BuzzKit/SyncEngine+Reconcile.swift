@@ -79,7 +79,7 @@ extension SyncEngine {
         // harnesses. Production always injects the authoritative HTTP client.
         let discovered = await discover(generation: generation)
         guard isCurrent(generation) else { return }
-        let known = (try? await store.knownChannels()) ?? []
+        let known = await (try? store.knownChannels()) ?? []
         guard isCurrent(generation) else { return }
         var channels = discovered.union(known)
         if let activeChannel { channels.insert(activeChannel) }
@@ -92,10 +92,7 @@ extension SyncEngine {
 
         Task { [weak self] in await self?.requestPresenceSnapshot(generation: generation) }
 
-        for channel in recentChannelOrder(among: channels) {
-            guard isCurrent(generation) else { return }
-            await reconcile(channel, generation: generation)
-        }
+        await reconcileChannels(channels, generation: generation)
 
         guard isCurrent(generation) else { return }
         await requestDrain(generation: generation)
@@ -104,7 +101,7 @@ extension SyncEngine {
     /// Whether `generation` is still the current ready epoch and the engine is
     /// running — the guard every on-ready step consults before committing state.
     func isCurrent(_ generation: Int) -> Bool {
-        !isStopped && state == .running && generation == readyGeneration
+        !Task.isCancelled && !isStopped && state == .running && generation == readyGeneration
     }
 
     // MARK: - Discovery
@@ -113,7 +110,7 @@ extension SyncEngine {
     /// projections update), and returns the discovered channel ids.
     @discardableResult
     func discover(generation: Int) async -> Set<String> {
-        let events = (try? await subscriptions.query([Self.discoveryFilter])) ?? []
+        let events = await (try? subscriptions.query([Self.discoveryFilter])) ?? []
         guard isCurrent(generation) else { return [] }
         _ = try? await store.ingest(batch: events, phase: .backfill)
         return channelIDs(inMetadata: events)
@@ -126,7 +123,7 @@ extension SyncEngine {
             kinds: [.groupMetadata, .groupAdmins, .groupMembers],
             tagQueries: ["d": [channel]]
         )
-        let events = (try? await subscriptions.query([filter])) ?? []
+        let events = await (try? queryForRecovery([filter])) ?? []
         guard isCurrent(generation) else { return }
         _ = try? await store.ingest(batch: events, phase: .backfill)
         await reconcile(channel, generation: generation)
@@ -155,10 +152,11 @@ extension SyncEngine {
     /// synthesize, or a superseded generation all simply leave the roster to fill from
     /// live heartbeats, exactly as before.
     func requestPresenceSnapshot(generation: Int) async {
-        let authors = (try? await store.allMemberPubkeys()) ?? []
-        guard !authors.isEmpty else { return }
+        guard isCurrent(generation) else { return }
+        let authors = await (try? store.allMemberPubkeys()) ?? []
+        guard isCurrent(generation), !authors.isEmpty else { return }
         let filter = Filter(authors: Array(authors), kinds: [.presence])
-        let events = (try? await subscriptions.query([filter])) ?? []
+        let events = await (try? queryForRecovery([filter])) ?? []
         guard isCurrent(generation) else { return }
         guard let result = try? await store.ingest(batch: events, phase: .backfill),
               !result.ephemeral.isEmpty
@@ -183,17 +181,9 @@ extension SyncEngine {
     /// socket abandons the reconcile, and abandoning writes nothing — the new
     /// generation already reset channel state and owns it, so a late write from here
     /// could only clobber it.
-    func reconcile(_ channel: String, generation: Int) async {
+    func performChannelReconciliation(_ channel: String, generation: Int) async {
         guard isCurrent(generation) else { return }
         setChannelState(channel, .reconciling)
-
-        // Notices come from neither path below, so they are fetched for both — but
-        // *detached*, never awaited. Sequencing them ahead of the window would put a
-        // relay round-trip for furniture in front of the messages, so a slow or
-        // unanswered notice query would stall the whole channel's reconcile behind it.
-        // The existing engine suite caught exactly that. Same shape as the presence
-        // snapshot above, and for the same reason.
-        Task { [weak self] in await self?.assembleNotices(channel, generation: generation) }
 
         if windowDegraded {
             await fallbackAssemble(channel, generation: generation)
@@ -242,12 +232,14 @@ extension SyncEngine {
         let filter = WindowFilter(
             channelID: channel, cursor: cursor, kinds: [.channelMessage], limit: config.windowPageLimit
         )
-        guard let result = try? await windowClient.fetch(filter) else {
+        guard let result = try? await fetchRecoveryWindow(
+            filter, channel: channel, phase: cursor == .head ? .head : .gap
+        ) else {
             // The request could not be *formed* (signer/encoder). If this generation
             // is still current, leave the channel unsynced so a later `.ready`
             // retries; if a reconnect superseded it during the fetch, abandon without
             // a write — a stale task must never touch state the new socket now owns.
-            if isCurrent(generation) { setChannelState(channel, .unsynced) }
+            markUnsyncedIfCurrent(channel, generation: generation)
             return .stop
         }
         // Superseded during the fetch: abandon, writing nothing (see below).
@@ -256,11 +248,20 @@ extension SyncEngine {
         switch result {
         case let .page(page):
             let decision = pageDecision(page, watermark: watermark, headNewest: &headNewest)
-            _ = try? await store.commitWindowPage(page, channel: channel, advanceWatermarkTo: decision.advanceTo)
+            guard await (try? store.commitWindowPage(
+                page, channel: channel, advanceWatermarkTo: decision.advanceTo
+            )) != nil else {
+                markUnsyncedIfCurrent(channel, generation: generation)
+                return .stop
+            }
             // Superseded during the commit: abandon, writing nothing. The page itself
             // is already durably committed by its own transaction; only the channel
             // *state* is abandoned, and the new generation owns that now.
             guard isCurrent(generation) else { return .stop }
+            if cursor == .head {
+                recovery.lastHeads[channel] = now()
+                Task { [weak self] in await self?.assembleNotices(channel, generation: generation) }
+            }
             guard let next = decision.next else {
                 setChannelState(channel, .synced)
                 return .stop
@@ -278,6 +279,10 @@ extension SyncEngine {
             await fallbackAssemble(channel, generation: generation)
             return .stop
         }
+    }
+
+    private func markUnsyncedIfCurrent(_ channel: String, generation: Int) {
+        if isCurrent(generation) { setChannelState(channel, .unsynced) }
     }
 
     /// The pure cursor math for one page: whether to advance the watermark (only on
@@ -311,28 +316,38 @@ extension SyncEngine {
 
     // MARK: - Degradation fallback
 
-    /// Assembles a channel's history from the standard WebSocket filter when the
-    /// window path has degraded: the clean NIP-01 projection of the window request
-    /// (kinds + `#h` + limit), run one-shot and ingested. Threads reassemble
-    /// client-side through the normal projector.
-    ///
-    /// This is a single limit-bounded page with no `since`, so it recovers the head
-    /// of the channel but proves nothing about the gap below it. The channel is
-    /// therefore marked ``ChannelSync/fallbackSynced``, **not** ``ChannelSync/synced``:
-    /// it renders as caught up, but it is excluded from ``syncedChannels()`` so a
-    /// live flush never advances the watermark over an unclosed gap (rule 2's
-    /// contiguity contract). The watermark stays where it was until a later `.ready`
-    /// reconciles this channel through the window path and closes the gap honestly.
+    // Assembles a channel's history from the standard WebSocket filter when the
+    // window path has degraded: the clean NIP-01 projection of the window request
+    // (kinds + `#h` + limit), run one-shot and ingested. Threads reassemble
+    // client-side through the normal projector.
+    //
+    // This is a single limit-bounded page with no `since`, so it recovers the head
+    // of the channel but proves nothing about the gap below it. The channel is
+    // therefore marked ``ChannelSync/fallbackSynced``, **not** ``ChannelSync/synced``:
+    // it renders as caught up, but it is excluded from ``syncedChannels()`` so a
+    // live flush never advances the watermark over an unclosed gap (rule 2's
+    // contiguity contract). The watermark stays where it was until a later `.ready`
+    // reconciles this channel through the window path and closes the gap honestly.
 
     func fallbackAssemble(_ channel: String, generation: Int) async {
         let filter = WindowFilter(channelID: channel, kinds: [.channelMessage], limit: config.windowPageLimit)
             .baseFilter
-        let events = (try? await subscriptions.query([filter])) ?? []
+        guard let events = try? await queryForRecovery([filter], destination: .channel(channel), phase: .head)
+        else {
+            markUnsyncedIfCurrent(channel, generation: generation)
+            return
+        }
         // Superseded during the query: abandon, writing nothing — the new generation
         // owns this channel's state now.
         guard isCurrent(generation) else { return }
-        _ = try? await store.ingest(batch: events, phase: .backfill)
+        guard await (try? store.ingest(batch: events, phase: .backfill)) != nil else {
+            markUnsyncedIfCurrent(channel, generation: generation)
+            return
+        }
+        guard isCurrent(generation) else { return }
+        recovery.lastHeads[channel] = now()
         setChannelState(channel, .fallbackSynced)
+        Task { [weak self] in await self?.assembleNotices(channel, generation: generation) }
     }
 
     // MARK: - Relay notices
@@ -389,6 +404,7 @@ extension SyncEngine {
     /// to mean the caller cannot be blocked by it, not merely that its errors are
     /// swallowed.
     func assembleNotices(_ channel: String, generation: Int) async {
+        guard isCurrent(generation) else { return }
         let notices = Filter(
             kinds: [.systemMessage],
             limit: config.noticeBackfillLimit,
@@ -401,35 +417,10 @@ extension SyncEngine {
             limit: config.noticeBackfillLimit,
             tagQueries: ["h": [channel]]
         )
-        let events = (try? await subscriptions.query([notices, huddles])) ?? []
+        let events = await (try? queryForRecovery([notices, huddles])) ?? []
         // Superseded during the query: abandon, writing nothing — the new generation
         // owns this channel now.
         guard isCurrent(generation) else { return }
         _ = try? await store.ingest(batch: events, phase: .backfill)
-    }
-    // MARK: - Thread open
-
-    /// Fetches a thread's replies one-shot by root id and ingests them, so opening a
-    /// thread pulls its contents on demand.
-    ///
-    /// `kind:9` alone is the complete ask: it is the only kind ``BuzzProjector`` turns
-    /// into a `thread` row, so nothing else the relay could return would change this
-    /// device's count of the thread.
-    ///
-    /// The fetch is then recorded (``BuzzEventStore/recordThreadFetch(root:)``), which
-    /// is what promotes this device's own count over the relay's cached tally for this
-    /// root. Recorded only on a complete answer, and only when the ingest succeeded:
-    /// claiming to hold a thread that was clipped at the relay's limit, or that failed
-    /// to write, would suppress the relay's larger and more correct count in favour of
-    /// a local one that is genuinely short.
-    public func openThread(root: String) async throws -> [NostrEvent] {
-        let limit = config.threadFetchLimit
-        let filter = Filter(kinds: [.channelMessage], limit: limit, tagQueries: ["e": [root]])
-        let events = try await subscriptions.query([filter])
-        guard (try? await store.ingest(batch: events, phase: .backfill)) != nil else { return events }
-        if events.count < limit {
-            try? await store.recordThreadFetch(root: root)
-        }
-        return events
     }
 }

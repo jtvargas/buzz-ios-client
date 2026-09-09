@@ -22,8 +22,18 @@ extension SubscriptionManager {
         }
 
         readyEpoch += 1
+        replayTask?.cancel()
+        replayTask = nil
+        scheduleReplay()
+    }
+
+    /// Bulk registrations share replay's pacing without holding the directory
+    /// caller behind the relay's budget. A visible on-demand registration can arm
+    /// immediately while this queue keeps the remaining channels in MRU order.
+    func scheduleReplay() {
+        guard connectionIsReady, replayTask == nil else { return }
         let epoch = readyEpoch
-        await replay(armOrder(), epoch: epoch)
+        replayTask = Task { [weak self] in await self?.replay(epoch: epoch) }
     }
 
     /// Re-`REQ`s a reconnect's subscriptions in bounded batches, pausing between them.
@@ -33,29 +43,32 @@ extension SubscriptionManager {
     /// own replay. Batching keeps the burst under it. The gate is consulted before every batch
     /// rather than once at the top, because a refusal *during* the replay must slow the batches
     /// still to come — that is the whole difference between pacing and merely starting slowly.
-    private func replay(_ ids: [SubscriptionID], epoch: Int) async {
-        var index = 0
-        while index < ids.count {
-            await rateLimitGate.wait()
+    private func replay(epoch: Int) async {
+        defer { if readyEpoch == epoch { replayTask = nil } }
+        while connectionIsReady, readyEpoch == epoch, !Task.isCancelled {
+            do { try await waitForQueryAllowance() } catch { return }
             // Re-checked after every suspension: a new socket supersedes this replay entirely,
             // and its own `.ready` will re-arm from the top.
-            guard readyEpoch == epoch else { return }
+            guard readyEpoch == epoch, connectionIsReady, !Task.isCancelled else { return }
 
-            let end = min(index + config.replayBatchSize, ids.count)
-            for id in ids[index ..< end] {
+            // Read the order again between batches: navigation can promote a
+            // subscription that was at the back when this replay began.
+            let pending = armOrder().filter { subscriptions[$0]?.armedEpoch != epoch }
+            guard !pending.isEmpty else { return }
+            for id in pending.prefix(max(1, config.replayBatchSize)) {
+                guard readyEpoch == epoch, connectionIsReady, !Task.isCancelled else { return }
                 await armSubscription(id, epoch: epoch, resetCloseRetry: true)
             }
-            index = end
-
-            if index < ids.count {
-                try? await pacingSleep(config.replayInterBatchDelay)
-                guard readyEpoch == epoch else { return }
-            }
+            // Even if registration is still adding this batch's tail, retain
+            // the pause before inspecting the next batch.
+            do { try await pacingSleep(config.replayInterBatchDelay) } catch { return }
         }
     }
 
     /// Clears every refusal the dead connection produced.
     private func resetForDisconnect() async {
+        replayTask?.cancel()
+        replayTask = nil
         for subscription in subscriptions.values {
             resetClosedRetry(subscription)
         }
@@ -96,24 +109,15 @@ extension SubscriptionManager {
     /// choosing the filter by cursor state. A send that fails for lack of a live
     /// socket is expected churn, not an error: the subscription stays registered
     /// and the next `ready` re-arms it.
-    /// # Why this does *not* wait on the rate-limit gate
-    ///
-    /// It is the obvious place to put it — one choke point every `REQ` passes through — and it is
-    /// wrong here. ``register(filters:sink:)`` awaits this method, and the engine registers
-    /// channels in a serial loop, so a gate holding a 300-second window would suspend
-    /// registration for the length of it, once per channel. Subscribing to a channel would look
-    /// like a hang.
-    ///
-    /// The gate belongs on the paths that are already background work and already batched: the
-    /// reconnect replay, and a refused subscription's retry. A newly registered subscription
-    /// sends its `REQ` immediately, and if the relay refuses it for budget, ``handleClosed``
-    /// now schedules the retry *behind* the gate — which is the outcome waiting here would have
-    /// bought, without stalling the caller to get it.
+    /// Bulk registration and replay wait on the gate in their owned background
+    /// task. Visible on-demand registration can send immediately; a budget refusal
+    /// then schedules its retry through that same gate without blocking navigation.
     func sendRequest(for subscription: Subscription, epoch: Int) async {
         // Cheap insurance for the callers that *do* suspend before reaching here — a retry that
         // waited out a long window may find its subscription unsubscribed, or a new socket whose
         // own replay has already re-`REQ`ed it.
-        guard subscriptions[subscription.id] === subscription, readyEpoch == epoch else { return }
+        guard subscriptions[subscription.id] === subscription, readyEpoch == epoch,
+              connectionIsReady, !Task.isCancelled else { return }
 
         subscription.phase = .backfill
         subscription.backfillBuffer.removeAll(keepingCapacity: true)

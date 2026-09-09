@@ -156,7 +156,9 @@ public actor SyncEngine {
     /// Sleeps the presence-sweep cadence. Injected on ``RelayConnection``'s
     /// principle so a test drives the sweep by hand rather than by the wall clock.
     let sleepFor: @Sendable (Duration) async throws -> Void
-    var directoryClient: (any ChannelDirectoryFetching)? { directoryContext?.client }
+    var directoryClient: (any ChannelDirectoryFetching)? {
+        directoryContext?.client
+    }
 
     /// Whether the relay has refused this identity outright: it is closed and this key is
     /// not a member of it.
@@ -166,24 +168,30 @@ public actor SyncEngine {
     /// where somebody is watching a form they just filled in and "connecting…" for ever is
     /// the wrong answer to give them; a *running* workspace ignores it and keeps its last
     /// good sidebar, which is what ``ChannelDirectoryStatus/cachedFallback`` is for.
-    public var directoryRefusedMembership: Bool { directoryContext?.refusedMembership ?? false }
+    public var directoryRefusedMembership: Bool {
+        directoryContext?.refusedMembership ?? false
+    }
 
     var directoryRefreshGeneration: Int {
         get { directoryContext?.refreshGeneration ?? 0 }
         set { directoryContext?.refreshGeneration = newValue }
     }
+
     var directoryRefreshInFlight: Bool {
         get { directoryContext?.refreshInFlight ?? false }
         set { directoryContext?.refreshInFlight = newValue }
     }
+
     var directoryRefreshPending: Bool {
         get { directoryContext?.refreshPending ?? false }
         set { directoryContext?.refreshPending = newValue }
     }
+
     var isForeground: Bool {
         get { directoryContext?.isForeground ?? true }
         set { directoryContext?.isForeground = newValue }
     }
+
     var directoryBackstopGeneration: Int {
         get { directoryContext?.backstopGeneration ?? 0 }
         set { directoryContext?.backstopGeneration = newValue }
@@ -313,10 +321,9 @@ public actor SyncEngine {
     /// is most likely to return.
     var recentConversationDestinations: [RecentConversationDestination] = []
 
-    /// The ready generation whose direct recent-thread queries have already run. Directory
-    /// refreshes may repeat within one socket; warming the same six roots every minute would
-    /// turn a launch priority into permanent background traffic.
-    var recentRecoveryGeneration: Int?
+    let recoveryScheduler = RecoveryRequestScheduler()
+    let recovery = RecoveryContext()
+    let threadLoading = ThreadLoadContext()
 
     // MARK: - Tasks
 
@@ -412,7 +419,9 @@ public actor SyncEngine {
     /// typing without reaching the socket (the BuzzKit boundary rule holds — this is
     /// in-memory ephemeral state, not the connection). `nonisolated` because it hands
     /// back an immutable, `Sendable` collaborator; no actor hop is needed to read it.
-    public nonisolated var presenceStore: PresenceStore { presence }
+    public nonisolated var presenceStore: PresenceStore {
+        presence
+    }
 
     // MARK: - Lifecycle
 
@@ -427,9 +436,9 @@ public actor SyncEngine {
 
         let pubkey = try await signer.publicKey().hex
         selfPubkeyHex = pubkey
-        recentConversationDestinations =
-            (try? await store.recentConversationDestinations(identity: pubkey)) ?? []
-        recentRecoveryGeneration = nil
+        await recentConversationDestinations =
+            (try? store.recentConversationDestinations(identity: pubkey)) ?? []
+        await updateRecoveryPriorities()
         // Access becomes authoritative only when this engine has a directory
         // client capable of immediately revalidating the one-time offline seed.
         // Package harnesses that intentionally exercise the legacy discovery
@@ -500,6 +509,8 @@ public actor SyncEngine {
         // them costs a write and saves them from the stop.
         await flushReadMarks()
         isStopped = true
+        cancelRecovery()
+        stopThreadLoading()
         stateObserverTask?.cancel(); stateObserverTask = nil
         onReadyTask?.cancel(); onReadyTask = nil
         readyWorkInFlight = false
@@ -525,7 +536,6 @@ public actor SyncEngine {
         // is on screen then.
         activeChannel = nil
         recentConversationDestinations.removeAll()
-        recentRecoveryGeneration = nil
         state = .stopped
     }
 
@@ -544,6 +554,10 @@ public actor SyncEngine {
         isForeground = true
         startDirectoryBackstop()
         await connection.foreground()
+        if await connection.state == .ready {
+            updateThreadConnection(.ready)
+            if let activeChannel { refreshVisibleChannel(activeChannel) }
+        }
         requestDirectoryRefresh()
     }
 
@@ -554,10 +568,15 @@ public actor SyncEngine {
     private func handleConnectionState(_ connectionState: ConnectionState) async {
         guard !isStopped else { return }
 
+        updateThreadConnection(connectionState)
+
         switch connectionState {
         case .ready:
             state = .running
             readyGeneration += 1
+            cancelRecovery()
+            windowDegraded = false
+            await updateRecoveryPriorities()
             let generation = readyGeneration
             // The reader's own queued sends go first, ahead of the whole catch-up the
             // on-ready pass runs below. A publish needs authentication and nothing else
@@ -577,6 +596,7 @@ public actor SyncEngine {
             // A fresh socket means a fresh head: every channel is unsynced until
             // reconcile proves otherwise (NIP-CW head-refetch rule).
             channelStates.removeAll()
+            startRecentWarmup(generation: generation)
             onReadyTask?.cancel()
             readyWorkInFlight = true
             if directoryContext == nil {
@@ -589,11 +609,13 @@ public actor SyncEngine {
 
         case .suspended:
             state = .suspended
+            cancelRecovery()
             channelStates.removeAll()
             onReadyTask?.cancel(); onReadyTask = nil
             readyWorkInFlight = false
 
         case let .stopped(termination):
+            cancelRecovery()
             // A terminal auth rejection stops the connection on its own; mirror it.
             if case .authRejected = termination {
                 onReadyTask?.cancel(); onReadyTask = nil; readyWorkInFlight = false
@@ -602,6 +624,7 @@ public actor SyncEngine {
 
         case .idle, .connecting, .authenticating, .backingOff:
             state = .starting
+            cancelRecovery()
         }
     }
 

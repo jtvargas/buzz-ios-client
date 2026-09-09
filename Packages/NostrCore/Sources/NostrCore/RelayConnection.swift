@@ -149,6 +149,7 @@ public actor RelayConnection {
         /// Guards the single re-auth retry so a genuinely forbidden query cannot
         /// loop.
         var retriedAfterAuth = false
+        var sendTask: Task<Void, Never>?
     }
 
     // MARK: - Init

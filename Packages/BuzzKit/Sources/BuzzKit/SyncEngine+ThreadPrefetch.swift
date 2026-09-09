@@ -9,7 +9,9 @@ public extension SyncEngine {
     /// `max_filters: 10` in its NIP-11 document). Exceeding it does not degrade, it fails
     /// the whole request, so the batching below is a correctness constraint rather than a
     /// tuning choice.
-    static var maxFiltersPerRequest: Int { 10 }
+    static var maxFiltersPerRequest: Int {
+        10
+    }
 
     /// Fetches the newest replies for the threads this device is behind on, so a screen
     /// that summarises threads has content before any thread has been opened.
@@ -109,8 +111,9 @@ extension SyncEngine {
             let filters = batch.map {
                 Filter(kinds: [.channelMessage], limit: replyLimit, tagQueries: ["e": [$0.rootID]])
             }
-            guard let events = try? await subscriptions.query(filters),
-                  (try? await store.ingest(batch: events, phase: .backfill)) != nil
+            guard let events = try? await queryForRecovery(filters),
+                  !Task.isCancelled,
+                  await (try? store.ingest(batch: events, phase: .backfill)) != nil
             else {
                 // A dropped socket or a failed write: stop, having recorded nothing for
                 // this batch. The next visit to the screen asks again from the same place.

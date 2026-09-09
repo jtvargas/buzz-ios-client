@@ -6,7 +6,7 @@ extension SyncEngine {
     /// `.ready` that overlaps launch, foreground, membership, CLOSED, backstop, or
     /// pull refresh can never start a competing fetch.
     func onReadyAuthoritative(generation: Int) async {
-        defer { if generation == readyGeneration { readyWorkInFlight = false } }
+        guard isCurrent(generation) else { return }
         _ = await requestDirectoryRefreshAndWait()
     }
 
@@ -63,7 +63,7 @@ extension SyncEngine {
             guard let self else {
                 return ChannelDirectoryRefreshResult(channels: [], joined: [], status: .cachedFallback)
             }
-            return await self.fetchAuthoritativeDirectory()
+            return await fetchAuthoritativeDirectory()
         }
         directoryContext.attemptTask = attempt
         directoryContext.refreshTask = Task { [weak self] in
@@ -85,11 +85,9 @@ extension SyncEngine {
         // subscriptions and head windows are not. Reconcile only against the
         // socket generation current after the fetch, and abandon immediately if
         // a reconnect supersedes it.
-        await reconcileAuthoritativeChannels(result)
-        guard generation == directoryRefreshGeneration else { return }
-
         directoryContext.attemptTask = nil
         directoryContext.refreshTask = nil
+        scheduleAuthoritativeRecovery(result)
         if directoryRefreshPending, !isStopped {
             directoryRefreshPending = false
             _ = directoryAttemptTask()
@@ -112,8 +110,8 @@ extension SyncEngine {
             return ChannelDirectoryRefreshResult(channels: [], joined: [], status: .cachedFallback)
         }
 
-        let previous = (try? await store.previouslyActiveChannelIDs(identity: identity)) ?? []
-        let previousVisible = (try? await store.activeChannelIDs(identity: identity)) ?? []
+        let previous = await (try? store.previouslyActiveChannelIDs(identity: identity)) ?? []
+        let previousVisible = await (try? store.activeChannelIDs(identity: identity)) ?? []
         func joinedChannels() -> Set<String> {
             (try? store.joinedChannelIDs(identity: identity)) ?? []
         }
@@ -136,14 +134,14 @@ extension SyncEngine {
                 generation: durableGeneration
             )
             guard committed else {
-                let visible = (try? await store.activeChannelIDs(identity: identity)) ?? previousVisible
+                let visible = await (try? store.activeChannelIDs(identity: identity)) ?? previousVisible
                 setDirectoryStatus(.cachedFallback)
                 return ChannelDirectoryRefreshResult(
                     channels: visible, joined: joinedChannels(), status: .cachedFallback
                 )
             }
 
-            let visible = (try? await store.activeChannelIDs(identity: identity)) ?? previousVisible
+            let visible = await (try? store.activeChannelIDs(identity: identity)) ?? previousVisible
             directoryContext?.refusedMembership = false
             setDirectoryStatus(.authoritative)
             return ChannelDirectoryRefreshResult(
@@ -162,7 +160,7 @@ extension SyncEngine {
         }
     }
 
-    private func reconcileAuthoritativeChannels(_ result: ChannelDirectoryRefreshResult) async {
+    func reconcileAuthoritativeChannels(_ result: ChannelDirectoryRefreshResult) async {
         guard state == .running, !isStopped else { return }
         let generation = readyGeneration
         guard isCurrent(generation) else { return }
@@ -180,17 +178,18 @@ extension SyncEngine {
                 .filter { result.channels.contains($0) }
         )
         let headChannels = live.union(visibleRecent)
-        await recoverRecentThreads(allowedChannels: headChannels, generation: generation)
-        guard isCurrent(generation) else { return }
+        for channel in Set(recovery.channels.keys).subtracting(headChannels) {
+            cancelChannelRecovery(channel)
+        }
+        recovery.recentAllowed = headChannels
+        async let recentThreads: Void = recoverRecentThreads(allowedChannels: headChannels, generation: generation)
 
         Task { [weak self] in
             await self?.requestPresenceSnapshot(generation: generation)
         }
 
-        for channel in recentChannelOrder(among: headChannels) {
-            guard isCurrent(generation) else { return }
-            await reconcile(channel, generation: generation)
-        }
+        await reconcileChannels(headChannels, generation: generation)
+        await recentThreads
 
         guard isCurrent(generation) else { return }
         await requestDrain(generation: generation)

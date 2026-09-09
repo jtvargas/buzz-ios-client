@@ -97,9 +97,11 @@ extension SyncEngine {
     /// Called on every authoritative pass with ``liveChannels(joined:)``, the same set
     /// the head reconcile iterates.
     func ensureChannelSubscriptions(_ desired: Set<String>) async {
-        let missing = desired.subtracting(Set(channelContentSubscriptions.keys))
-        for channel in recentChannelOrder(among: missing) {
-            _ = try? await subscribeChannelContent(channel)
+        let generation = readyGeneration
+        var missing = desired.subtracting(Set(channelContentSubscriptions.keys))
+        while isCurrent(generation), let channel = recentChannelOrder(among: missing).first {
+            missing.remove(channel)
+            _ = try? await subscribeChannelContent(channel, deferArming: channel != activeChannel)
         }
     }
 
@@ -118,14 +120,9 @@ extension SyncEngine {
     ///
     /// # Why the active channel is in here
     ///
-    /// Nothing else would give it live traffic. Opening a conversation registers no
-    /// subscription and issues no window request of its own: ``setActiveChannel(_:)`` was
-    /// priority-only, and `ChannelTimelineModel` is purely the read side. So a channel the
-    /// reader can still reach from the sidebar but is not a member of — every open channel
-    /// they have not joined, until a browse surface takes over the sidebar — would render
-    /// its cached history and then never move again. Including it here, and subscribing on
-    /// demand in ``setActiveChannel(_:)``, means the resting cost is membership while
-    /// nothing visible can freeze.
+    /// Opening a conversation subscribes and refreshes its head on demand. Keeping
+    /// the active channel here lets directory reconciliation retain that subscription
+    /// even when the reader has not joined the open channel.
     func liveChannels(joined: Set<String>) -> Set<String> {
         guard let activeChannel else { return joined }
         return joined.union([activeChannel])
@@ -154,13 +151,13 @@ extension SyncEngine {
     /// ``openChannelTyping(_:)`` shim funnel through here, so the reentrancy re-check
     /// below covers every caller.
     @discardableResult
-    func subscribeChannelContent(_ channel: String) async throws -> SubscriptionID {
+    func subscribeChannelContent(_ channel: String, deferArming: Bool = false) async throws -> SubscriptionID {
         if let existing = channelContentSubscriptions[channel] { return existing }
         // A single `#h` filter per REQ — never multiplexed with a global filter, or
         // the relay would demote the whole REQ to global and it would receive no
         // channel traffic at all.
         let id = try await subscriptions.register(
-            filters: [contentFilter(forChannel: channel)], sink: self
+            filters: [contentFilter(forChannel: channel)], sink: self, deferArming: deferArming
         )
         // A concurrent caller may have registered this same channel while we awaited
         // the REQ above (actor reentrancy across the await). Keep the winner already in
@@ -180,40 +177,10 @@ extension SyncEngine {
 
     // MARK: - Re-arm priority
 
-    /// Reports which channel the reader has on screen, so reconnect and cold-start recovery
-    /// restore the six most recently used channels or threads before the ordinary pass.
-    ///
-    /// A reconnect re-`REQ`s every standing subscription and the engine keeps one per
-    /// joined channel, so without a stated preference the open conversation took its
-    /// turn in an arbitrary order — on a busy account, potentially last. This names it,
-    /// and the ``SubscriptionManager`` arms it first.
-    ///
-    /// Ordering only: membership, filters and delivery are all untouched, and there is no
-    /// obligation to clear it when the conversation closes. Leaving the last-read channel
-    /// prioritised is the better resting state anyway: it is where the reader most likely
-    /// returns.
-    ///
-    /// # Why it also subscribes
-    ///
-    /// Because nothing else does. The resting subscription set is real membership
-    /// (``liveChannels(joined:)``), and a reader can still open a channel they are not a
-    /// member of — every open channel on the relay is reachable until a browse surface
-    /// takes the sidebar over. Naming one used to be a no-op against an absent
-    /// subscription, and the screen has no relay path of its own: `ChannelTimelineModel`
-    /// consumes ``DatabaseSignal`` and re-reads the store, and `prefetchThreads(in:)`
-    /// fetches replies to threads already held. So such a channel drew its cached history
-    /// and then froze — no live messages, no fresh head.
-    ///
-    /// This registers the standing subscription if one is missing and kicks the head
-    /// reconcile that fills the gap, which is the entire relay side of opening a channel.
-    /// The reconcile is **detached rather than awaited**, for the same reason
-    /// ``assembleNotices(_:generation:)`` is: a screen presenting must not wait on a
-    /// window round trip. It is generation-guarded, so a reconnect mid-flight abandons it
-    /// and the fresh `.ready` reconciles the channel itself — the active channel is in the
-    /// desired set of every pass.
-    ///
-    /// Idempotent and cheap on the common path: a channel already subscribed — every
-    /// channel the reader is a member of — takes the priority call and nothing else.
+    /// Promotes the visible conversation for replay and catch-up, registers its
+    /// live subscription if needed, and requests a fresh head on navigation.
+    /// Recent successful heads are shared for five seconds to coalesce rapid returns.
+    /// The head job is owned by the engine and never delays screen presentation.
     public func setActiveChannel(_ channel: String?) async {
         await setActiveDestination(channel.map(RecentConversationDestination.channel))
     }
@@ -233,22 +200,18 @@ extension SyncEngine {
                 destination,
                 in: recentConversationDestinations
             )
-            if let identity = selfPubkeyHex {
-                try? await store.saveRecentConversationDestinations(
-                    recentConversationDestinations,
-                    identity: identity
-                )
-            }
         }
 
-        if let channel = destination?.channelID,
-           channelContentSubscriptions[channel] == nil
-        {
+        await updateRecoveryPriorities()
+        if let channel = destination?.channelID { refreshVisibleChannel(channel) }
+
+        if let channel = destination?.channelID, channelContentSubscriptions[channel] == nil {
             _ = try? await subscribeChannelContent(channel)
-            let generation = readyGeneration
-            Task { [weak self] in await self?.reconcile(channel, generation: generation) }
         }
         await updateSubscriptionPriorities()
+        if destination != nil, let identity = selfPubkeyHex {
+            try? await store.saveRecentConversationDestinations(recentConversationDestinations, identity: identity)
+        }
     }
 
     /// Channel ids in mixed-destination MRU order, de-duplicated by channel, followed by
@@ -271,6 +234,7 @@ extension SyncEngine {
     /// Drops the standing content subscription for `channel` with a `CLOSE`. A no-op
     /// when none is open.
     func unsubscribeChannelContent(_ channel: String) async {
+        cancelChannelRecovery(channel)
         guard let id = channelContentSubscriptions.removeValue(forKey: channel) else { return }
         await subscriptions.unsubscribe(id)
     }
