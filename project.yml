@@ -41,6 +41,9 @@ targets:
     platform: iOS
     sources:
       - App/Sources
+      # The App Group handoff, compiled into both binaries so the shape the app writes
+      # and the shape the widget reads cannot drift apart into two definitions.
+      - Shared
       # The Icon Composer icon is declared separately below, so this entry must not
       # also walk into it.
       - path: App/Resources
@@ -66,6 +69,10 @@ targets:
       # every one of which collides with SwiftUI in a file that imports both.
       - package: SwiftMarkdown
         product: Markdown
+      # Embeds the Threads widget. A dependency on an app-extension target is what
+      # copies it into `PlugIns/`; without this line the extension builds and ships
+      # nowhere, and the widget never appears in the gallery.
+      - target: ThreadsWidgetExtension
     info:
       path: App/Info.plist
       properties:
@@ -200,6 +207,54 @@ targets:
         ASSETCATALOG_COMPILER_APPICON_NAME: hive-buzz-app
         # The global accent — a honey amber that tints buttons, reaction chips and the
         # unread pill — lives in App/Resources/Assets.xcassets.
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        # The App Group and the shared Keychain group the widget reads. See the file
+        # itself for why the app's own Keychain group is listed before the shared one.
+        CODE_SIGN_ENTITLEMENTS: App/Hive.entitlements
+  # The Threads count on the Home Screen.
+  #
+  # It links NostrCore and nothing else: the extension signs a NIP-98 header and POSTs one
+  # `/query`, and every read-state rule it needs was already reduced to a per-thread
+  # timestamp by the app (§ `ThreadsWidgetSnapshot`). Linking BuzzKit would pull GRDB and a
+  # second SQLite writer into a process that must not have one.
+  ThreadsWidgetExtension:
+    type: app-extension
+    platform: iOS
+    sources:
+      - Widget
+      - Shared
+      # The app's catalogue, for two names: `ThreadsGlyph` — the owner's own artwork, which
+      # has no SF Symbol equivalent — and `AccentColor`. Shared rather than duplicated so
+      # the widget's amber cannot drift from the app's.
+      - path: App/Resources/Assets.xcassets
+        buildPhase: resources
+    dependencies:
+      - package: NostrCore
+    info:
+      path: Widget/Info.plist
+      properties:
+        CFBundleDisplayName: Threads
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+        # An extension has its own Info.plist and inherits NOTHING from the app's. The
+        # relay may be a plaintext `ws://`/`http://` LAN or Tailscale address (see the app
+        # target's copy of this key); without it here the app reaches the relay and the
+        # widget silently fails every fetch.
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+        # Same reason as the app: Hive has no light design, and a widget follows the system
+        # appearance unless told otherwise.
+        UIUserInterfaceStyle: Dark
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.jtvargas.hive.ThreadsWidget
+        CODE_SIGN_ENTITLEMENTS: Widget/ThreadsWidget.entitlements
+        SWIFT_STRICT_CONCURRENCY: complete
+        # Must match the app's exactly — App Store Connect rejects an upload whose
+        # extension versions differ from its host's.
+        CURRENT_PROJECT_VERSION: 1
+        MARKETING_VERSION: 0.1.0
+        TARGETED_DEVICE_FAMILY: "1"
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
   HiveTests:
     type: bundle.unit-test
