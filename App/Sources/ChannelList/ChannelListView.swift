@@ -30,6 +30,8 @@ import SwiftUI
 /// still `private` is local to this file, and nothing beyond those two files writes any of it.
 struct ChannelListView: View {
     @Environment(AppEnvironment.self) private var environment
+    @Environment(InAppNotificationModel.self) private var notifications: InAppNotificationModel?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     @State var model: ChannelListModel
     @State private var presence: PresenceModel
@@ -86,7 +88,6 @@ struct ChannelListView: View {
     @State var workspacePanel = WorkspacePanelState()
 
     @Binding private var notificationRoute: InAppNotificationRoute?
-    @Binding private var visibleNotificationLocation: InAppNotificationLocation?
 
     // Expansion persists across launches, one `UserDefaults` flag per section. The keys
     // come from ``SidebarSection/expansionStorageKey`` so the view and the tests that
@@ -108,13 +109,11 @@ struct ChannelListView: View {
         engine: SyncEngine,
         drafts: ComposerDrafts? = nil,
         selfPubkey: String?,
-        notificationRoute: Binding<InAppNotificationRoute?> = .constant(nil),
-        visibleNotificationLocation: Binding<InAppNotificationLocation?> = .constant(nil)
+        notificationRoute: Binding<InAppNotificationRoute?> = .constant(nil)
     ) {
         self.store = store
         self.engine = engine
         _notificationRoute = notificationRoute
-        _visibleNotificationLocation = visibleNotificationLocation
         _draftsModel = State(initialValue: DraftsModel(store: store, drafts: drafts))
         _model = State(initialValue: ChannelListModel(store: store, selfPubkey: selfPubkey))
         _presence = State(initialValue: PresenceModel(store: engine.presenceStore))
@@ -311,8 +310,10 @@ struct ChannelListView: View {
         // Two readers of one value: where the reader *is* decides whether a banner repeats
         // something already on screen, and it is also the definition of a place visited.
         // Here rather than at the call sites that push, so no route can be left uninstrumented.
+        // Report directly to the community's notification model. A binding through RootView
+        // would invalidate the tab hierarchy on every push and pop just to update suppression.
         .onChange(of: notificationLocation, initial: true) { _, location in
-            visibleNotificationLocation = location
+            notifications?.setVisibleLocation(location)
             environment.recents.visit(location, in: environment.communities.activeID)
         }
         .onChange(of: notificationRoute, initial: true) { _, route in
@@ -320,7 +321,7 @@ struct ChannelListView: View {
             notificationRoute = nil
             openNotification(route)
         }
-        .onDisappear { visibleNotificationLocation = nil }
+        .onDisappear { notifications?.setVisibleLocation(nil) }
         // A tapped reminder alert is not read here any more. It arrives as a destination on
         // ``AppNavigator``, through the very same observer — see ``ReminderAlerts``. It used
         // to pop to the sidebar and stop there, which the owner asked for in #121 and then
@@ -450,9 +451,9 @@ private extension ChannelListView {
     }
 
     /// One flat list: the shortcut cards, then a heading row and its conversations for each
-    /// grouping. `List` keeps the rows lazy and recycled; `SidebarRow.id` (the channel's
-    /// group id) keeps their identity stable as unread counts stream in, so a re-read
-    /// updates rows instead of rebuilding them.
+    /// grouping. One `LazyVStack` owns the individual rows; `SidebarRow.id` (the channel's
+    /// group id) keeps their identity stable as unread counts stream in. Collapsed sections
+    /// keep their heading, but no hidden row views.
     ///
     /// Flat, and not a `Section` per heading, because a plain list **pins** section headers
     /// — see ``SidebarSectionHeader``.
@@ -489,13 +490,15 @@ private extension ChannelListView {
         if model.visibleChannels.isEmpty {
             emptyState
         } else {
-            List {
-                shortcuts
-                ForEach(sidebarContent(names: names).sections) { section in
-                    sectionCell(section, resumable: resumable)
+            ScrollView {
+                LazyVStack(spacing: 0) {
+                    shortcuts
+                    ForEach(sidebarContent(names: names).sections) { section in
+                        sectionContent(section, resumable: resumable)
+                    }
                 }
             }
-            .listStyle(.plain)
+            .scrollBounceBehavior(.always, axes: .vertical)
             .refreshable { await engine.refresh() }
         }
     }
@@ -568,14 +571,11 @@ private extension ChannelListView {
         ))
     }
 
-    /// The Threads and Later cards, in one row above the conversations — one list row
-    /// holding both, because they are a set of destinations rather than two rows.
+    /// The shortcut cards, in one row above the conversations.
     var shortcuts: some View {
         HomeShortcutCards(count: count(for:), isCalling: isCalling(_:), press: press(_:),
                           markAllThreadsRead: { environment.threadReads.markAllSeen(among: model.unreadThreads) })
-            .listRowInsets(Self.cardsInsets)
-            .listRowSeparator(.hidden)
-            .listRowBackground(Color.clear)
+            .padding(Self.cardsInsets)
     }
 
     /// The communities panel, sized against the real screen.
@@ -740,151 +740,51 @@ private extension ChannelListView {
         }
     }
 
-    /// A heading and the rows it introduces, in **one** list cell.
-    ///
-    /// One cell and not one per row: a `List` will not size a cell to nothing, so a section of
-    /// rows that each kept their own cell could not close. ``SidebarAccordion`` holds the
-    /// measurements and the rest of the reasoning.
+    /// Flat children of the scrolling lazy stack. Wrapping a section in a `VStack` would
+    /// make all its rows one eager child again. The conditional removes collapsed rows;
+    /// their opacity transition keeps disappearing views alive until the animation ends.
+    /// Rows retain their natural height: animating from zero could make the lazy stack
+    /// realize the entire section to fill its viewport during expansion.
     @ViewBuilder
-    func sectionCell(_ section: SidebarSectionContent, resumable: String?) -> some View {
+    func sectionContent(_ section: SidebarSectionContent, resumable: String?) -> some View {
         let isExpanded = expansion(for: section.section).wrappedValue
-        VStack(spacing: 0) {
-            SidebarSectionHeader(
-                section: section.section,
-                count: section.count,
-                isExpanded: expansion(for: section.section),
-                // Channels and Direct Messages are the two things this app makes. A
-                // `+` on Starred would be a second way to spell a star, and an agent
-                // is not something made on the phone at all.
-                create: create(for: section.section)
-            )
-            .padding(.horizontal, Self.headerInsetH)
-            SidebarAccordion(isExpanded: isExpanded) {
-                VStack(spacing: 0) {
-                    if section.rows.isEmpty {
-                        emptySectionLine(section.section)
-                    } else {
-                        rows(of: section, resumable: resumable)
-                    }
-                }
+        SidebarSectionHeader(
+            section: section.section,
+            count: section.count,
+            isExpanded: expansion(for: section.section),
+            create: create(for: section.section)
+        )
+        .padding(.horizontal, Self.headerInsetH)
+        if isExpanded {
+            if section.rows.isEmpty {
+                emptySectionLine(section.section)
+                    .transition(.opacity)
+            } else {
+                rows(of: section, resumable: resumable)
             }
         }
-        // No spacing of its own: the heading and the rows hold theirs, and an inset here is one
-        // the collapsed section could not give back.
-        .listRowInsets(EdgeInsets())
-        // No list rule: each heading draws its own, and ruled rows read as a form.
-        .listRowSeparator(.hidden)
-        // Clear and not nothing: a row given no background falls back to `systemBackground`.
-        .listRowBackground(Color.clear)
     }
 
-    /// The conversations of one section.
-    ///
-    /// A `Button` and not a `NavigationLink`, which is the only way the trailing `>` goes: a
-    /// link inside a `List` draws a disclosure indicator no modifier can decline. The push is
-    /// the link's own — same route, same explicit path — and the press feedback it gave for
-    /// free is ``PressFeedbackButtonStyle``, in its `row` emphasis: a full-width row that
-    /// shrank would pull away from both screen edges and read as a card lifting off the list.
-    /// The wash is the *button's* own press state and nothing else — UIKit cancels it when the
-    /// forward swipe begins (``SidebarForwardSwipeView``), where a gesture reading press-down
-    /// directly would leave every row it crossed dimmed behind the drag.
+    /// One view per channel gives the lazy stack a stable identity and a small update boundary.
     func rows(of section: SidebarSectionContent, resumable: String?) -> some View {
         ForEach(section.rows) { row in
-            // No peer hint from here: a conversation reached from the sidebar is one the
-            // channel list already knows, so its roster is in hand.
-            Button {
-                let route = ConversationRoute(channel: row.channel)
-                path = AppRoute.conversation(route).pushed(onto: path)
-            } label: {
-                ChannelRowView(row: row, presence: presence)
-                    // Inside the button, so the button's frame *is* `resumeMark`'s rectangle
-                    // and the wash drawn behind it lands exactly there. The row's spacing used
-                    // to be entirely `listRowInsets`, outside the button, which left the wash
-                    // 8pt narrower on each side than the mark beside it — and a `Shape` that
-                    // reached back out could not escape the cell's own inset container.
-                    // See ``SidebarRowMetrics``.
-                    .padding(.horizontal, SidebarRowMetrics.labelPaddingH)
-                    .padding(.vertical, SidebarRowMetrics.labelPaddingV)
-            }
-            .buttonStyle(.hivePress(.row, in: .rect(cornerRadius: SidebarRowMetrics.radius, style: .continuous)))
-            // Behind the button and no longer behind the cell, which the section now owns: the
-            // same rectangle, and the wash and the mark are two `background`s on one view
-            // rather than two drawings agreeing by arithmetic.
-            .background { resumeMark(isResumable: row.id == resumable) }
-            // Spoken, because the highlight is the only thing that says so and a colour
-            // says nothing to VoiceOver. A hint rather than part of the label: it describes
-            // a second way to get here, not what this row is.
-            .accessibilityHint(row.id == resumable ? Self.resumeHint : "")
-            // What the cell used to inset the row by — outside both drawings, so each keeps
-            // the rectangle `SidebarRowMetrics` places it in.
-            .padding(SidebarRowMetrics.rowInsets)
-            // Starring is a long press only. It had a leading swipe as well, and that swipe
-            // is gone deliberately: a `List` row's swipe actions claim horizontal panning
-            // for the row, which is the one axis this sidebar needs for navigating between
-            // conversations. Losing it costs the fast path for someone who knew the flick
-            // was there; keeping it would cost every reader the gesture that gets them back
-            // to what they were reading.
-            .contextMenu {
-                starAction(row)
-                // Only a one-to-one conversation. It was never reachable by swipe even when
-                // this row had one: putting a conversation-removing action under a flick, on
-                // a row that is about to vanish, is how one gets pressed by accident.
-                if row.conversation.isDirect { hideAction(row) }
-            }
-        }
-    }
-
-    /// The mark on the row a leftward drag would reopen — where you just were.
-    ///
-    /// A wash of the theme's row highlight behind the whole row rather than a bar, a dot or a
-    /// badge: it has to be legible at a glance without competing with the two things this list
-    /// already says with weight and colour — unread, and mentioned. A tinted row reads as *place*,
-    /// which is what it means, and nothing else in the sidebar is trying to say that.
-    ///
-    /// Rounded to match the glyph beside it, and inset from the row by nothing at all: it is
-    /// the `background` of the row's `Button`, whose frame ``SidebarRowMetrics`` already places
-    /// where this rectangle belongs. It was the cell's `listRowBackground` and subtracted
-    /// ``SidebarRowMetrics/insetH``/``SidebarRowMetrics/insetV`` itself to get there; the row
-    /// has no cell of its own now that the section is one, so that spacing is real padding
-    /// outside both drawings instead.
-    @ViewBuilder
-    func resumeMark(isResumable: Bool) -> some View {
-        if isResumable {
-            RoundedRectangle(cornerRadius: SidebarRowMetrics.radius, style: .continuous)
-                .fill(PressFeedback.fillColor.opacity(SidebarRowMetrics.opacity))
-        }
-    }
-
-    /// Star or unstar one conversation — the long press's only item, and the one place the
-    /// wording of it is decided.
-    func starAction(_ row: SidebarRow) -> some View {
-        Button {
-            withAnimation(.snappy(duration: 0.22)) { starred.toggle(row.id) }
-        } label: {
-            Label(
-                row.isStarred ? "Unstar" : "Star",
-                systemImage: row.isStarred ? "star.slash" : "star"
+            SidebarConversationButton(
+                row: row,
+                presence: presence,
+                hider: hider,
+                isResumable: row.id == resumable,
+                open: {
+                    let route = ConversationRoute(channel: row.channel)
+                    path = AppRoute.conversation(route).pushed(onto: path)
+                },
+                toggleStar: {
+                    withAnimation(reduceMotion ? nil : .snappy(duration: 0.22)) {
+                        starred.toggle(row.id)
+                    }
+                }
             )
+            .transition(.opacity)
         }
-        .tint(.yellow)
-    }
-
-    /// Takes one direct message off this sidebar — the relay's kind-41012 command, read
-    /// back by every other client of this identity, Desktop included, from the same
-    /// NIP-DV snapshot Hive reads.
-    ///
-    /// Not `role: .destructive`, and the wording is deliberate. Nothing is deleted and
-    /// nobody is left: the messages stay, the other person keeps the conversation, and
-    /// messaging them again brings it straight back — the relay's open command is what
-    /// clears the hide. A red *Delete*-shaped item would promise a permanence this action
-    /// does not have.
-    func hideAction(_ row: SidebarRow) -> some View {
-        Button {
-            hider.hide(row.id)
-        } label: {
-            Label("Hide", systemImage: "eye.slash")
-        }
-        .disabled(hider.isHiding(row.id))
     }
 
     /// The relay did not answer, and the grace period is over.

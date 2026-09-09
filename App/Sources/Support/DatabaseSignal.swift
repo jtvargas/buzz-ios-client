@@ -45,8 +45,8 @@ enum DatabaseSignal {
     /// (``ChannelTimelineModel+Live``), and an optimistic send is an `outbox` write inside
     /// the tracked region — so coalescing globally would put a delay between pressing send
     /// and seeing your own message, which is the one latency in a chat app anybody notices.
-    /// Surfaces that summarise (``ActivityModel``) can afford it; surfaces you are typing
-    /// into cannot.
+    /// Surfaces that summarise (``ActivityModel`` and ``ChannelListModel``) can afford it;
+    /// surfaces you are typing into cannot.
     static func coalescedChanges(in reader: any DatabaseReader) -> AsyncValueObservation<Int> {
         tracked.values(in: reader, bufferingPolicy: .bufferingNewest(1))
     }

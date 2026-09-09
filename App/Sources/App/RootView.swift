@@ -12,7 +12,6 @@ struct RootView: View {
     /// background is the same session, and an app relaunched should open where the work is.
     @State private var tab: HomeTab = .home
     @State private var pendingNotificationRoute: InAppNotificationRoute?
-    @State private var visibleHomeLocation: InAppNotificationLocation?
     /// The markdown file being read, or `nil`. Held at the root because the press that opens it
     /// happens inside a message row, which is recycled by a lazy list and cannot own a sheet —
     /// see ``OpenMarkdownDocumentAction``.
@@ -189,7 +188,7 @@ struct RootView: View {
             engine: engine,
             selfPubkey: environment.selfPubkeyHex,
             isForeground: scenePhase == .active,
-            visibleLocation: tab == .home ? visibleHomeLocation : nil
+            isHomeSelected: tab == .home
         ) { route in
             tab = .home
             pendingNotificationRoute = route
@@ -201,8 +200,7 @@ struct RootView: View {
                         engine: engine,
                         drafts: environment.drafts,
                         selfPubkey: environment.selfPubkeyHex,
-                        notificationRoute: $pendingNotificationRoute,
-                        visibleNotificationLocation: $visibleHomeLocation
+                        notificationRoute: $pendingNotificationRoute
                     )
                 } label: {
                     label(for: .home)
