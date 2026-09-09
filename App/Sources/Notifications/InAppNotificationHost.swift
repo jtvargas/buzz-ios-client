@@ -20,7 +20,7 @@ struct InAppNotificationHost<Content: View>: View {
     @State private var model: InAppNotificationModel
 
     let isForeground: Bool
-    let visibleLocation: InAppNotificationLocation?
+    let isHomeSelected: Bool
     @ViewBuilder let content: () -> Content
 
     init(
@@ -28,7 +28,7 @@ struct InAppNotificationHost<Content: View>: View {
         engine: SyncEngine,
         selfPubkey: String?,
         isForeground: Bool,
-        visibleLocation: InAppNotificationLocation?,
+        isHomeSelected: Bool,
         onOpen: @escaping (InAppNotificationRoute) -> Void,
         @ViewBuilder content: @escaping () -> Content
     ) {
@@ -41,23 +41,27 @@ struct InAppNotificationHost<Content: View>: View {
             engine: engine,
             selfPubkey: selfPubkey,
             isForeground: isForeground,
-            visibleLocation: visibleLocation,
+            visibleLocation: nil,
+            isHomeSelected: isHomeSelected,
             onOpen: onOpen
         ))
         self.isForeground = isForeground
-        self.visibleLocation = visibleLocation
+        self.isHomeSelected = isHomeSelected
         self.content = content
     }
 
     var body: some View {
         content()
+            // Home reports its location through this stable reference. No view above its
+            // navigation stack reads that location, so location changes do not rebuild the tabs.
+            .environment(model)
             .background(InAppNotificationScenePresenter(controller: model.window))
             .task { await model.run() }
             .onChange(of: isForeground, initial: true) { _, active in
                 model.setForeground(active)
             }
-            .onChange(of: visibleLocation, initial: true) { _, location in
-                model.setVisibleLocation(location)
+            .onChange(of: isHomeSelected, initial: true) { _, selected in
+                model.setHomeSelected(selected)
             }
     }
 }

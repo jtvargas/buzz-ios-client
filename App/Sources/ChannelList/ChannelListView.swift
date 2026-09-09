@@ -30,6 +30,7 @@ import SwiftUI
 /// still `private` is local to this file, and nothing beyond those two files writes any of it.
 struct ChannelListView: View {
     @Environment(AppEnvironment.self) private var environment
+    @Environment(InAppNotificationModel.self) private var notifications: InAppNotificationModel?
 
     @State var model: ChannelListModel
     @State private var presence: PresenceModel
@@ -86,7 +87,6 @@ struct ChannelListView: View {
     @State var workspacePanel = WorkspacePanelState()
 
     @Binding private var notificationRoute: InAppNotificationRoute?
-    @Binding private var visibleNotificationLocation: InAppNotificationLocation?
 
     // Expansion persists across launches, one `UserDefaults` flag per section. The keys
     // come from ``SidebarSection/expansionStorageKey`` so the view and the tests that
@@ -108,13 +108,11 @@ struct ChannelListView: View {
         engine: SyncEngine,
         drafts: ComposerDrafts? = nil,
         selfPubkey: String?,
-        notificationRoute: Binding<InAppNotificationRoute?> = .constant(nil),
-        visibleNotificationLocation: Binding<InAppNotificationLocation?> = .constant(nil)
+        notificationRoute: Binding<InAppNotificationRoute?> = .constant(nil)
     ) {
         self.store = store
         self.engine = engine
         _notificationRoute = notificationRoute
-        _visibleNotificationLocation = visibleNotificationLocation
         _draftsModel = State(initialValue: DraftsModel(store: store, drafts: drafts))
         _model = State(initialValue: ChannelListModel(store: store, selfPubkey: selfPubkey))
         _presence = State(initialValue: PresenceModel(store: engine.presenceStore))
@@ -311,8 +309,10 @@ struct ChannelListView: View {
         // Two readers of one value: where the reader *is* decides whether a banner repeats
         // something already on screen, and it is also the definition of a place visited.
         // Here rather than at the call sites that push, so no route can be left uninstrumented.
+        // Report directly to the community's notification model. A binding through RootView
+        // would invalidate the tab hierarchy on every push and pop just to update suppression.
         .onChange(of: notificationLocation, initial: true) { _, location in
-            visibleNotificationLocation = location
+            notifications?.setVisibleLocation(location)
             environment.recents.visit(location, in: environment.communities.activeID)
         }
         .onChange(of: notificationRoute, initial: true) { _, route in
@@ -320,7 +320,7 @@ struct ChannelListView: View {
             notificationRoute = nil
             openNotification(route)
         }
-        .onDisappear { visibleNotificationLocation = nil }
+        .onDisappear { notifications?.setVisibleLocation(nil) }
         // A tapped reminder alert is not read here any more. It arrives as a destination on
         // ``AppNavigator``, through the very same observer — see ``ReminderAlerts``. It used
         // to pop to the sidebar and stop there, which the owner asked for in #121 and then

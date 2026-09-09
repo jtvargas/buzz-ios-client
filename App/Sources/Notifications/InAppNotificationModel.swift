@@ -26,6 +26,9 @@ final class InAppNotificationModel {
     private let selfPubkey: String?
     private let onOpen: (InAppNotificationRoute) -> Void
     private var isForeground: Bool
+    private var isHomeSelected: Bool
+    /// Home's location is retained independently of tab selection. Only a selected Home
+    /// stack suppresses banners, matching the scope previously enforced by RootView.
     private var visibleLocation: InAppNotificationLocation?
     /// The clock that retires the card on screen, cancelled whenever that card changes.
     private var retirement: Task<Void, Never>?
@@ -41,6 +44,7 @@ final class InAppNotificationModel {
         selfPubkey: String?,
         isForeground: Bool,
         visibleLocation: InAppNotificationLocation?,
+        isHomeSelected: Bool = true,
         window: InAppNotificationWindowController = InAppNotificationWindowController(),
         onOpen: @escaping (InAppNotificationRoute) -> Void = { _ in }
     ) {
@@ -48,6 +52,7 @@ final class InAppNotificationModel {
         self.engine = engine
         self.selfPubkey = selfPubkey
         self.isForeground = isForeground
+        self.isHomeSelected = isHomeSelected
         self.visibleLocation = visibleLocation
         self.window = window
         self.onOpen = onOpen
@@ -73,8 +78,23 @@ final class InAppNotificationModel {
     }
 
     func setVisibleLocation(_ location: InAppNotificationLocation?) {
+        guard location != visibleLocation else { return }
         visibleLocation = location
-        if current?.location.isVisible(in: location) == true { dismissCurrent() }
+        dismissIfVisible()
+    }
+
+    func setHomeSelected(_ selected: Bool) {
+        guard selected != isHomeSelected else { return }
+        isHomeSelected = selected
+        dismissIfVisible()
+    }
+
+    private var activeLocation: InAppNotificationLocation? {
+        isHomeSelected ? visibleLocation : nil
+    }
+
+    private func dismissIfVisible() {
+        if current?.location.isVisible(in: activeLocation) == true { dismissCurrent() }
     }
 
     func dismissCurrent() {
@@ -91,7 +111,7 @@ final class InAppNotificationModel {
         for entry in feed where insertedEventIDs.contains(entry.latest.id) {
             consideredEntry = true
             let notification = InAppNotification(entry: entry)
-            let isVisible = notification.location.isVisible(in: visibleLocation)
+            let isVisible = notification.location.isVisible(in: activeLocation)
             let verdict = "id=\(notification.id) unreadCount=\(entry.unreadCount) " +
                 "qualifies=\(notification.qualifies) isVisible=\(isVisible)"
 

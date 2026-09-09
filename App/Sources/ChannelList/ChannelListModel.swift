@@ -61,6 +61,9 @@ final class ChannelListModel {
     /// The one armed deadline, held so an answer can cancel it.
     private var deadline: Task<Void, Never>?
 
+    /// Keeps construction free of database work. SwiftUI may construct a replacement
+    /// view and evaluate its `State(initialValue:)` even while retaining the existing
+    /// model. The initial emission in `run()` loads cached rows off the main actor.
     init(
         store: BuzzEventStore,
         selfPubkey: String? = nil,
@@ -69,9 +72,6 @@ final class ChannelListModel {
         self.store = store
         self.selfPubkey = selfPubkey
         self.answerDeadline = answerDeadline
-        channels = (try? store.channelList(selfPubkey: selfPubkey)) ?? []
-        unreadThreads = (try? store.unreadThreads(selfPubkey: selfPubkey)) ?? []
-        hasLoaded = true
     }
 
     /// The conversations the sidebar may list.
@@ -120,10 +120,8 @@ final class ChannelListModel {
             // store's own change observation are independent, so flipping first can draw
             // the pre-snapshot rows for a frame — precisely the flash this exists to end.
             let value = snapshot ?? readSnapshot()
-            channels = value.channels
-            unreadThreads = value.unreadThreads
-            hasLoaded = true
-            surface = .conversations
+            apply(value.channels, unreadThreads: value.unreadThreads)
+            if surface != .conversations { surface = .conversations }
         case .checking, .cachedFallback:
             // A good answer keeps its list: a re-check does not blank it, and a *refresh*
             // that fails says so in a banner over it. And once the sidebar has said it
@@ -203,17 +201,10 @@ final class ChannelListModel {
     }
 
     private func apply(_ rows: [ChannelListRow], unreadThreads threads: [UnreadThread]) {
-        // The same guard ``EntityDirectoryModel/apply(_:)`` carries, and for the same
-        // reason: the observation re-fires on *every* committed transaction, so a
-        // reaction, a typing-unrelated read-state blob, or a message in a channel whose
-        // row did not change would otherwise assign an equal list — and an equal
-        // assignment still invalidates every view reading it. This view is the sidebar
-        // and the root of the environment the whole app resolves names through, so that
-        // is a global re-render pump. Covers every assigned property, `hasLoaded`
-        // included, so the very first (empty) snapshot still lands.
-        guard rows != channels || threads != unreadThreads || !hasLoaded else { return }
-        channels = rows
-        unreadThreads = threads
-        hasLoaded = true
+        // Each value has different readers. A changed thread count must not republish
+        // unchanged channels into the name resolver and every pushed conversation.
+        if rows != channels { channels = rows }
+        if threads != unreadThreads { unreadThreads = threads }
+        if !hasLoaded { hasLoaded = true }
     }
 }
