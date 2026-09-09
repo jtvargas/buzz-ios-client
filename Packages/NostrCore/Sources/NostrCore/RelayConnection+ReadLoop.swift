@@ -100,6 +100,7 @@ extension RelayConnection {
         let queries = oneShotQueries
         oneShotQueries.removeAll()
         for query in queries.values {
+            query.sendTask?.cancel()
             query.continuation.resume(throwing: error)
         }
     }

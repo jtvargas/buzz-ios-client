@@ -49,35 +49,49 @@ final class ThreadModel {
     /// observation as `rows` so `@`-tokens resolve from each message's own `p` tags.
     private(set) var mentionRefs: [String: MentionRefList] = [:]
     private(set) var hasLoaded = false
-    /// Whether this thread cannot currently be shown as loaded — the last read of the
-    /// local store failed, or the last one-shot relay fetch did.
-    ///
-    /// Its whole job is that a failure must never render as an answer. Without it, a
-    /// failed fetch painted the opener with zero replies and said nothing — the common
-    /// case, because the reader tapped a message they could already see, so the store
-    /// held the opener and the surface was not empty — and a failed store read painted
-    /// "Thread unavailable" with no way to try again. It is the channel timeline's own
-    /// ``ChannelTimelineModel/olderFailed``, applied to a thread.
-    ///
-    /// Derived from the two halves below rather than stored, because they are cleared by
-    /// different things and a single flag got that wrong in both directions: a fetch that
-    /// succeeded cleared a store that still could not be read, leaving an empty surface
-    /// with no retry on it, and a store read that succeeded did not clear its own earlier
-    /// failure, leaving a retry on a thread that was fine.
-    var loadFailed: Bool { readFailed || fetchFailed }
+    /// Database reads and relay requests have independent outcomes. Successful
+    /// reconnect recovery reaches this model even when it inserts no new replies.
+    var loadFailed: Bool {
+        readFailed || remoteLoadState.failure != nil
+    }
 
     /// Whether the last read of this thread from the local store failed. Cleared by the
     /// next read that succeeds — that is the same operation working, so nothing else has
     /// to happen for it to be answered.
     private var readFailed = false
 
-    /// Whether the last one-shot relay fetch failed. Cleared by a fetch that succeeds and
-    /// by a reply arriving from live fan-out (see ``apply(_:)``) — not by a store read,
-    /// which says nothing about whether the replies this thread is missing ever landed.
-    private var fetchFailed = false
+    private(set) var remoteLoadState: ThreadLoadState = .loading
+    private(set) var isRetrying = false
+    @ObservationIgnored private var observesEngineLoads = false
+    @ObservationIgnored private var retryTask: Task<Void, Never>?
+
+    var showsLoadStatus: Bool {
+        loadFailed || isRetrying
+    }
+
+    var loadStatusRevision: Int {
+        guard showsLoadStatus, !rows.isEmpty else { return 0 }
+        var hasher = Hasher()
+        hasher.combine(loadFailureMessage)
+        hasher.combine(isRetrying)
+        return hasher.finalize()
+    }
+
+    var loadFailureMessage: String {
+        if readFailed { return "Couldn't read this thread on this iPhone." }
+        switch remoteLoadState.failure {
+        case .accessDenied: return "Replies aren't available with your current access."
+        case .storage: return "Couldn't save the replies on this iPhone."
+        case .timeout: return "The replies took too long to load."
+        default: return "Couldn't load replies."
+        }
+    }
 
     /// The reply composer's text and mention tokens — see `ThreadModel+Drafts.swift`.
-    var mentionDraft = MentionDraft() { didSet { recordDraft(replacing: oldValue) } }
+    var mentionDraft = MentionDraft() {
+        didSet { recordDraft(replacing: oldValue) }
+    }
+
     /// Where that draft is kept between visits. `nil` in tests, which then keep nothing.
     let drafts: ComposerDrafts?
     let mentionAutocomplete: MentionAutocompleteModel
@@ -249,9 +263,25 @@ final class ThreadModel {
     /// delivered; the observation re-reads on the commit that ingest raises, so no
     /// reply is missed between the fetch and the subscription.
     func run() async {
+        defer {
+            retryTask?.cancel()
+            retryTask = nil
+        }
+        let states = await opener.threadLoadStates(root: root)
+        observesEngineLoads = states != nil
         async let opened: Void = openOnce()
+        async let remote: Void = observeRemoteLoads(states)
         await observe()
         _ = await opened
+        _ = await remote
+    }
+
+    private func observeRemoteLoads(_ states: AsyncStream<ThreadLoadState>?) async {
+        guard let states else { return }
+        for await state in states {
+            guard !Task.isCancelled else { return }
+            if state != .idle { remoteLoadState = state }
+        }
     }
 
     /// The one-shot thread fetch, run concurrently with the observation so it never
@@ -260,14 +290,15 @@ final class ThreadModel {
     /// a thread whose replies never arrived has to be told, or the surface answers a
     /// question it never got an answer to. See ``loadFailed``.
     private func openOnce() async {
+        if !observesEngineLoads { remoteLoadState = .loading }
         do {
             _ = try await opener.openThread(root: root)
-            if fetchFailed { fetchFailed = false }
+            if !observesEngineLoads, !Task.isCancelled { remoteLoadState = .loaded }
         } catch {
             // The view leaving the screen cancels this. That is not a failure to report,
             // and this model is being discarded either way.
             guard !Task.isCancelled else { return }
-            if !fetchFailed { fetchFailed = true }
+            if !observesEngineLoads { remoteLoadState = .failed(.connection) }
         }
     }
 
@@ -275,8 +306,21 @@ final class ThreadModel {
     /// after a failure. Only those two — the live observation is still running underneath
     /// and needs nothing restarted.
     func retryLoad() async {
+        guard !isRetrying else { return }
         readAll()
+        guard !remoteLoadState.isLoading else { return }
+        isRetrying = true
+        defer { isRetrying = false }
         await openOnce()
+    }
+
+    func requestRetryLoad() {
+        guard retryTask == nil else { return }
+        retryTask = Task { [weak self] in
+            guard let self else { return }
+            defer { retryTask = nil }
+            await retryLoad()
+        }
     }
 
     /// Records that a read of the local store failed. Guarded like every other write here:
@@ -286,20 +330,26 @@ final class ThreadModel {
     }
 
     private nonisolated func observe() async {
-        do {
-            for try await _ in DatabaseSignal.changes(in: store.reader) {
-                guard let thread = fetchThread() else {
-                    await markReadFailed()
-                    continue
+        while !Task.isCancelled {
+            do {
+                for try await _ in DatabaseSignal.changes(in: store.reader) {
+                    guard !Task.isCancelled else { return }
+                    guard let thread = fetchThread() else {
+                        await markReadFailed()
+                        continue
+                    }
+                    let ids = await apply(thread)
+                    let groups = fetchReactions(for: ids)
+                    await applyReactions(groups)
+                    let mentions = fetchMentions(for: ids)
+                    await applyMentions(mentions)
                 }
-                let ids = await apply(thread)
-                let groups = fetchReactions(for: ids)
-                await applyReactions(groups)
-                let mentions = fetchMentions(for: ids)
-                await applyMentions(mentions)
+                return
+            } catch {
+                guard !Task.isCancelled else { return }
+                await markReadFailed()
+                do { try await Task.sleep(for: .seconds(1)) } catch { return }
             }
-        } catch {
-            // Ends on cancellation or teardown; last snapshot stays on screen.
         }
     }
 
@@ -318,10 +368,8 @@ final class ThreadModel {
         // Reaching here at all is a read that succeeded, which answers its own earlier
         // failure — the same operation working is the whole of that question.
         if readFailed { readFailed = false }
-        // A reply that has landed since a failed fetch answers *that* question, so the
-        // fetch failure clears itself too. Growth rather than any change, because an edit
-        // or a withdrawal says nothing about whether the missing replies arrived.
-        if fetchFailed, thread.count > loaded.count { fetchFailed = false }
+        // Row growth is not proof that a missing-history request completed. Only
+        // the shared request outcome clears a relay failure.
         loaded = thread
         rebuild()
         // Guarded like the rest — see ``ChannelTimelineModel/mergeHead(_:)``.
@@ -371,14 +419,15 @@ final class ThreadModel {
         else { return grouped }
         return Array(grouped.dropFirst())
     }
-
 }
 
 // MARK: - Reactions & row actions
 
 extension ThreadModel {
     /// The reaction groups to render under a row, empty when it has none.
-    func reactions(for id: String) -> [ReactionGroup] { reactionGroups[id] ?? [] }
+    func reactions(for id: String) -> [ReactionGroup] {
+        reactionGroups[id] ?? []
+    }
 
     /// Whether a row is the local identity's own send — the gate on delete.
     func isOwn(_ row: TimelineRow) -> Bool {
@@ -416,8 +465,8 @@ extension ThreadModel {
 
     /// Sends a reaction on a message in the thread through the durable send path.
     func react(_ emoji: String, on targetID: String) {
-        let channel = self.channel
-        let sender = self.sender
+        let channel = channel
+        let sender = sender
         // The thread's half of the same count — see ``ChannelTimelineModel/react(_:on:)``.
         ReviewPrompt.shared.record(.reactionsAdded)
         Task {
@@ -438,8 +487,8 @@ extension ThreadModel {
             react(group.emoji, on: targetID)
             return
         }
-        let channel = self.channel
-        let sender = self.sender
+        let channel = channel
+        let sender = sender
         Task {
             try? await sender.enqueue(
                 kind: .deletion,
@@ -453,13 +502,13 @@ extension ThreadModel {
 
     /// Returns a failed reply to the queue and redrains — the "tap to retry" action.
     func retry(_ eventID: String) {
-        let sender = self.sender
+        let sender = sender
         Task { try? await sender.retry(eventID) }
     }
 
     /// Drops an own pending or failed reply.
     func delete(_ eventID: String) {
-        let sender = self.sender
+        let sender = sender
         Task { try? await sender.discard(eventID) }
     }
 
@@ -471,18 +520,19 @@ extension ThreadModel {
 
     /// Deletes a published reply for everybody.
     func removeFromChannel(_ eventID: String) {
-        let channel = self.channel
-        let sender = self.sender
+        let channel = channel
+        let sender = sender
         Task { await MessageMutation.remove(eventID, in: channel, via: sender) }
     }
 
     /// Rewrites a published reply.
     func editMessage(_ eventID: String, to text: String) {
-        let channel = self.channel
-        let sender = self.sender
+        let channel = channel
+        let sender = sender
         Task { await MessageMutation.edit(eventID, to: text, in: channel, via: sender) }
     }
 }
+
 /// The same five the channel's model already had — see the note on
 /// ``ChannelTimelineModel``'s conformance. It is what lets one actions sheet serve both
 /// surfaces.

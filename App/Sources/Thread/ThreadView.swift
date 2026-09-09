@@ -189,7 +189,7 @@ struct ThreadView: View {
             contentRevision: model.contentRevision,
             rowRevision: model.rowRevision,
             newestID: model.items.newestMessageID,
-            composerRevision: model.attachments.barRevision,
+            composerRevision: model.attachments.barRevision &+ model.loadStatusRevision,
             onLeavingScreen: releaseComposer
         ) {
             list
@@ -270,7 +270,9 @@ struct ThreadView: View {
         // note on that type. The surface that owns the model runs it, as above.
         .task { await typing.run() }
         .task { await access.run() }
-        // Mark-on-view, the same discipline the channel's read state follows — and the
+
+        // MARK: - on-view, the same discipline the channel's read state follows — and the
+
         // *rendered* newest row for the same reason: a reply held behind a frozen tail has
         // not been seen, so it must still count as new. Being here rather than in the model
         // is deliberate: this marker never leaves the device, so it is view state, not
@@ -387,24 +389,6 @@ struct ThreadView: View {
             // cannot see and did not ask about. The channel's own strip is the wide one:
             // it covers its threads, because from there they are not distinguishable.
             TypingIndicatorView(model: typing, nameFor: names.name(for:))
-            // A thread whose replies were never fetched must not read as a thread that
-            // has none. The strip below covers a dead socket; this one covers a fetch
-            // that failed over a live one, which is invisible without it — the opener is
-            // already on screen, so nothing about the surface looks wrong.
-            //
-            // Only when there is something on screen: with an empty thread the retry is
-            // the empty state's own button, and two retries for one failure is a
-            // question about which of them worked.
-            if model.loadFailed, !model.rows.isEmpty {
-                Button {
-                    Task { await model.retryLoad() }
-                } label: {
-                    Label("Couldn't load replies. Tap to retry.", systemImage: "arrow.clockwise")
-                        .font(.hive(.caption, weight: .medium))
-                        .foregroundStyle(.secondary)
-                }
-                .buttonStyle(.plain)
-            }
             // The same strip the channel carries, for the same reason: a thread read
             // over a dead socket looks exactly like a thread nobody has replied to.
             ConnectionStatusIndicatorView()
@@ -423,11 +407,15 @@ struct ThreadView: View {
             ContentUnavailableView {
                 Label("Couldn't load this thread", systemImage: "arrow.clockwise")
             } description: {
-                Text("Check your connection and try again.")
+                Text(model.loadFailureMessage)
             } actions: {
-                Button("Retry") { Task { await model.retryLoad() } }
+                Button("Retry") { model.requestRetryLoad() }
+                    .disabled(model.isRetrying)
             }
-        } else if model.hasLoaded, model.rows.isEmpty {
+        } else if model.rows.isEmpty, model.remoteLoadState.isLoading {
+            ProgressView(model
+                .remoteLoadState == .waitingForConnection ? "Waiting for connection…" : "Loading replies…")
+        } else if model.hasLoaded, model.rows.isEmpty, model.remoteLoadState == .loaded {
             ContentUnavailableView(
                 "Thread unavailable",
                 systemImage: "text.bubble",
@@ -479,8 +467,20 @@ private extension ThreadView {
     ///
     /// See ``ChannelTimelineView/bar`` for why `.readOnly` keeps today's composer, and why
     /// this replaces rather than stacks.
-    @ViewBuilder
     var bar: some View {
+        VStack(spacing: 8) {
+            if model.showsLoadStatus, !model.rows.isEmpty {
+                ThreadLoadBanner(message: model.loadFailureMessage, isRetrying: model.isRetrying) {
+                    model.requestRetryLoad()
+                }
+                .padding(.horizontal, 12)
+            }
+            composerBar
+        }
+    }
+
+    @ViewBuilder
+    private var composerBar: some View {
         switch access.participation {
         case .allowed, .readOnly:
             ThreadComposerView(model: model)

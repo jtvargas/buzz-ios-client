@@ -110,41 +110,58 @@ extension RelayConnection {
     /// A `CLOSED auth-required` is retried exactly once after re-authenticating;
     /// a `restricted:` (or any other terminal) close is surfaced without retry.
     public func query(_ filters: [Filter], timeout: Duration? = nil) async throws -> [NostrEvent] {
+        try Task.checkCancellation()
         try await waitForAuthentication()
+        try Task.checkCancellation()
 
         let subscriptionID = makeSubscriptionID()
         let deadline = timeout ?? config.queryTimeout
         let timeoutTask = Task { [weak self] in
             guard let self else { return }
-            try? await sleep(deadline)
+            do { try await sleep(deadline) } catch { return }
             await timeOutQuery(subscriptionID)
         }
         defer { timeoutTask.cancel() }
 
-        return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<[NostrEvent], Error>) in
-            oneShotQueries[subscriptionID] = PendingQuery(filters: filters, continuation: continuation)
-            Task { [weak self] in
-                guard let self else { return }
-                do {
-                    try await send(.req(subscriptionID: subscriptionID, filters: filters))
-                } catch {
-                    // The reference defect fixed: a send failure resumes the
-                    // caller immediately rather than leaking the continuation
-                    // until a watchdog.
-                    await failQuery(subscriptionID, with: .connectionLost)
+        return try await withTaskCancellationHandler {
+            try Task.checkCancellation()
+            return try await withCheckedThrowingContinuation { continuation in
+                oneShotQueries[subscriptionID] = PendingQuery(filters: filters, continuation: continuation)
+                let sendTask = Task { [weak self] in
+                    guard let self, await isQueryPending(subscriptionID) else { return }
+                    do {
+                        try Task.checkCancellation()
+                        try await send(.req(subscriptionID: subscriptionID, filters: filters))
+                    } catch {
+                        guard !Task.isCancelled else { return }
+                        await failQuery(subscriptionID, with: .connectionLost)
+                    }
                 }
+                oneShotQueries[subscriptionID]?.sendTask = sendTask
             }
+        } onCancel: {
+            Task { await self.cancelQuery(subscriptionID) }
         }
+    }
+
+    private func cancelQuery(_ subscriptionID: String) async {
+        guard let query = oneShotQueries.removeValue(forKey: subscriptionID) else { return }
+        query.sendTask?.cancel()
+        query.continuation.resume(throwing: CancellationError())
+        try? await send(.close(subscriptionID: subscriptionID))
     }
 
     private func timeOutQuery(_ subscriptionID: String) async {
         guard let query = oneShotQueries.removeValue(forKey: subscriptionID) else { return }
+        query.sendTask?.cancel()
         query.continuation.resume(throwing: RelayConnectionError.timedOut)
         try? await send(.close(subscriptionID: subscriptionID))
     }
 
     private func failQuery(_ subscriptionID: String, with error: RelayConnectionError) {
-        oneShotQueries.removeValue(forKey: subscriptionID)?.continuation.resume(throwing: error)
+        guard let query = oneShotQueries.removeValue(forKey: subscriptionID) else { return }
+        query.sendTask?.cancel()
+        query.continuation.resume(throwing: error)
     }
 
     private func isQueryPending(_ subscriptionID: String) -> Bool {
@@ -169,6 +186,7 @@ extension RelayConnection {
 
     func routeEndOfStoredEvents(_ subscriptionID: String) async {
         if let query = oneShotQueries.removeValue(forKey: subscriptionID) {
+            query.sendTask?.cancel()
             query.continuation.resume(returning: query.collected)
             try? await send(.close(subscriptionID: subscriptionID))
             return
@@ -187,10 +205,12 @@ extension RelayConnection {
             // hammered.
             if reason.disposition == .reauthThenRetry, !query.retriedAfterAuth {
                 query.retriedAfterAuth = true
-                oneShotQueries[subscriptionID] = query
+                query.collected.removeAll()
+                query.sendTask?.cancel()
+                let filters = query.filters
                 authenticatedAs = nil
                 state = .authenticating
-                Task { [weak self] in
+                query.sendTask = Task { [weak self] in
                     guard let self else { return }
                     do {
                         try await waitForAuthentication()
@@ -199,14 +219,18 @@ extension RelayConnection {
                         // then would open a zombie relay-side subscription no
                         // one ever CLOSEs.
                         guard await isQueryPending(subscriptionID) else { return }
-                        try await send(.req(subscriptionID: subscriptionID, filters: query.filters))
+                        try Task.checkCancellation()
+                        try await send(.req(subscriptionID: subscriptionID, filters: filters))
                     } catch {
+                        guard !Task.isCancelled else { return }
                         await failQuery(subscriptionID, with: .subscriptionClosed(reason))
                     }
                 }
+                oneShotQueries[subscriptionID] = query
                 return
             }
             oneShotQueries.removeValue(forKey: subscriptionID)
+            query.sendTask?.cancel()
             query.continuation.resume(throwing: RelayConnectionError.subscriptionClosed(reason))
             return
         }

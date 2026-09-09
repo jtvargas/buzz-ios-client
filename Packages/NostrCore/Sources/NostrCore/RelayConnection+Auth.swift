@@ -67,6 +67,7 @@ extension RelayConnection {
     /// Suspends until the relay has accepted our identity. Every publish and
     /// query passes through here.
     func waitForAuthentication() async throws {
+        try Task.checkCancellation()
         if state == .ready, authenticatedAs != nil { return }
         if authTerminated { throw authFailure ?? .authenticationRejected("") }
         if isStopping { throw RelayConnectionError.stopped }
@@ -83,14 +84,23 @@ extension RelayConnection {
         // not.
         let watchdog = Task { [weak self] in
             guard let self else { return }
-            try? await sleep(config.authTimeout)
+            do { try await sleep(config.authTimeout) } catch { return }
             await timeOutAuthWaiter(id)
         }
         defer { watchdog.cancel() }
 
-        try await withCheckedThrowingContinuation { continuation in
-            authWaiters[id] = continuation
+        try await withTaskCancellationHandler {
+            try Task.checkCancellation()
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                authWaiters[id] = continuation
+            }
+        } onCancel: {
+            Task { await self.cancelAuthWaiter(id) }
         }
+    }
+
+    private func cancelAuthWaiter(_ id: Int) {
+        authWaiters.removeValue(forKey: id)?.resume(throwing: CancellationError())
     }
 
     private func timeOutAuthWaiter(_ id: Int) {

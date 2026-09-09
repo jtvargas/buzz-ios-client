@@ -9,8 +9,8 @@ import NostrCore
 /// ``SyncEngine/reconcile(_:generation:)`` pages a channel from its head down to the
 /// watermark to close the offline gap, on a schedule the reader has no say in. It is
 /// the wrong instrument for "show me what is above this row": it starts at the head,
-/// it is driven by the socket rather than the scroll, and it runs every known channel
-/// serially, so the channel on screen waits its turn in channel-id order.
+/// it is driven by the socket rather than the scroll. Explicit scrollback earns
+/// admission ahead of background catch-up and asks for the reader's position.
 ///
 /// This path is the other half — a single page, for one channel, at a position the
 /// reader has scrolled to, awaited by the surface that asked. Buzz Desktop's
@@ -116,6 +116,7 @@ public extension SyncEngine {
     func loadOlderHistory(channel: String, before floor: WindowCursor) async throws -> OlderHistoryPage {
         guard !isStopped, state == .running else { throw OlderHistoryError.notRunning }
         guard !windowDegraded else { throw OlderHistoryError.unavailable }
+        let generation = readyGeneration
 
         let filter = WindowFilter(
             channelID: channel,
@@ -126,11 +127,12 @@ public extension SyncEngine {
             kinds: [.channelMessage, .systemMessage, .huddleStarted, .huddleEnded],
             limit: config.windowPageLimit
         )
-        guard let result = try? await windowClient.fetch(filter) else {
+        guard let result = try? await fetchRecoveryWindow(filter, channel: channel, phase: .visibleHistory) else {
             // The request could not be formed (signer/encoder), which is the same
             // class of thing as the socket being down: retriable, not exhaustion.
             throw OlderHistoryError.notRunning
         }
+        try Task.checkCancellation()
 
         switch result {
         case let .page(page):
@@ -140,13 +142,12 @@ public extension SyncEngine {
             // socket, and unlike ``SyncEngine/reconcile(_:generation:)`` there is no
             // watermark here to re-anchor from — and echoing its `hasMore` would let a
             // failed write latch as "this channel begins here" over rows that exist.
-            // Reconcile's identically-shaped `try?` is safe for the opposite reason: its
-            // watermark advances inside the same transaction.
             guard let outcome = try? await store.commitWindowPage(
                 page, channel: channel, advanceWatermarkTo: nil
             ) else {
                 throw OlderHistoryError.notIngested
             }
+            guard isCurrent(generation) else { throw OlderHistoryError.notRunning }
             if let next = page.bounds.nextCursor { historyCursors[channel] = next }
             return OlderHistoryPage(hasMore: page.bounds.hasMore, ingested: outcome.inserted.count)
 

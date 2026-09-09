@@ -123,6 +123,7 @@ public actor SubscriptionManager {
     private var started = false
     private var inboundTask: Task<Void, Never>?
     private var stateTask: Task<Void, Never>?
+    var replayTask: Task<Void, Never>?
 
     /// Whether the connection is, as last observed, `ready`. Registration consults
     /// it to decide whether to arm now or leave the readiness observer to do it.
@@ -208,6 +209,7 @@ public actor SubscriptionManager {
     public func shutdown() {
         inboundTask?.cancel(); inboundTask = nil
         stateTask?.cancel(); stateTask = nil
+        replayTask?.cancel(); replayTask = nil
         for subscription in subscriptions.values {
             subscription.liveFlushTask?.cancel()
             // A pending re-`REQ` outliving the manager would fire against a connection nobody
@@ -253,7 +255,9 @@ public actor SubscriptionManager {
     /// of a live socket is *not* an error — the subscription registers and arms on
     /// the next `ready`.
     @discardableResult
-    public func register(filters: [Filter], sink: any EventSink) async throws -> SubscriptionID {
+    public func register(
+        filters: [Filter], sink: any EventSink, deferArming: Bool = false
+    ) async throws -> SubscriptionID {
         try await validate(filters)
 
         let id = mintSubscriptionID()
@@ -262,7 +266,11 @@ public actor SubscriptionManager {
 
         await start()
         if connectionIsReady {
-            await armSubscription(id, epoch: readyEpoch, resetCloseRetry: true)
+            if deferArming {
+                scheduleReplay()
+            } else {
+                await armSubscription(id, epoch: readyEpoch, resetCloseRetry: true)
+            }
         }
         return id
     }
@@ -279,15 +287,42 @@ public actor SubscriptionManager {
         try? await connection.send(.close(subscriptionID: id.rawValue))
     }
 
-    /// Runs a one-shot query, forwarding straight to
-    /// ``RelayConnection/query(_:timeout:)``.
-    ///
-    /// A one-shot is `REQ` → collect → `EOSE` → resolve → `CLOSE`: it is never
-    /// replayed after a reconnect, so the connection already owns it end to end.
-    /// This passthrough exists only so callers can treat the manager as the single
-    /// subscription surface; it adds no bookkeeping of its own.
+    /// Runs one REQ through EOSE/CLOSE, sharing the relay's rate-limit gate with
+    /// subscription replay. Recovery across sockets belongs to the caller.
     public func query(_ filters: [Filter], timeout: Duration? = nil) async throws -> [NostrEvent] {
-        try await connection.query(filters, timeout: timeout)
+        try await waitForQueryAllowance()
+        return try await performQuery(filters, timeout: timeout)
+    }
+
+    /// A scheduler that already owns a request slot must yield it when the gate
+    /// closed while it was queued. `nil` means retry after waiting outside that slot.
+    public func queryIfAllowed(_ filters: [Filter]) async throws -> [NostrEvent]? {
+        try Task.checkCancellation()
+        guard await rateLimitGate.remaining <= .zero else { return nil }
+        return try await performQuery(filters, timeout: nil)
+    }
+
+    private func performQuery(_ filters: [Filter], timeout: Duration?) async throws -> [NostrEvent] {
+        do {
+            return try await connection.query(filters, timeout: timeout)
+        } catch let error as RelayConnectionError {
+            if case let .subscriptionClosed(reason) = error, case .rateLimited = reason {
+                await rateLimitGate.activate(retryInSeconds: reason.retryAfterSeconds)
+            }
+            throw error
+        }
+    }
+
+    /// Shared with replay and refused-subscription recovery. Cancellable so a
+    /// screen or session that goes away does not remain parked behind the gate.
+    public func waitForQueryAllowance() async throws {
+        try Task.checkCancellation()
+        while true {
+            let remaining = await rateLimitGate.remaining
+            guard remaining > .zero else { return }
+            try await pacingSleep(min(remaining, .seconds(1)))
+            try Task.checkCancellation()
+        }
     }
 
     // MARK: - Id minting

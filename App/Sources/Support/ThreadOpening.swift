@@ -11,6 +11,15 @@ import NostrCore
 protocol ThreadOpening: Sendable {
     @discardableResult
     func openThread(root: String) async throws -> [NostrEvent]
+
+    func threadLoadStates(root: String) async -> AsyncStream<ThreadLoadState>?
 }
 
 extension SyncEngine: ThreadOpening {}
+
+extension ThreadOpening {
+    /// Simple preview/fixture collaborators report their own completion in the model.
+    func threadLoadStates(root _: String) async -> AsyncStream<ThreadLoadState>? {
+        nil
+    }
+}
