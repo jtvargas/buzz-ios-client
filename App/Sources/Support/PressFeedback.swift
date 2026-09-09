@@ -67,7 +67,7 @@ enum PressFeedback {
     /// draws, riding ``press`` and ``release`` — no second animation was added for it.
     ///
     /// It was 0.14, and that number was not a taste call either: it was
-    /// ``ChannelListView/resumeMark(isResumable:)``, the mark on the conversation you were last
+    /// ``SidebarConversationButton``, the mark on the conversation you were last
     /// in, to the number. **Being exactly that mark is why it had to come off a row.** The
     /// stronger fill is the app's *place* mark, and a list that flashes the place mark under every
     /// finger is a list saying *this one* about whatever you happened to touch.
@@ -207,7 +207,7 @@ enum PressFeedback {
     /// a card or a button the wash *is* the control's surface, so a full-size wash around a
     /// shrunken label would be a lit rectangle the control had come away from. That reasoning
     /// held for a row too, right up until a row's wash had to line up with something that is not
-    /// being pressed: ``ChannelListView/resumeMark(isResumable:)`` is a fixed rectangle, and a
+    /// being pressed: ``SidebarConversationButton`` is a fixed rectangle, and a
     /// press wash that shrinks 2.5% under the finger lands about 5pt inside it on each side.
     ///
     /// The owner photographed exactly that and said the two had to match in *style, spacing and
@@ -322,7 +322,7 @@ struct PressFeedbackButtonStyle: PrimitiveButtonStyle {
 ///   control's own surface and has to shrink with it. Scaling first and washing after would
 ///   leave a full-size rectangle around a label that had pulled away from it;
 /// - on a **row**, the scale is applied *inside*, so the label shrinks within a wash that stays
-///   put. A row's wash has to line up with ``ChannelListView/resumeMark(isResumable:)``, which
+///   put. A row's wash has to line up with ``SidebarConversationButton``, which
 ///   is not being pressed and does not move, and a wash that shrank 2.5% would sit about 5pt
 ///   inside that mark on each side. See ``PressFeedback/washFollowsScale(for:)``.
 struct PressTreatment: ViewModifier {

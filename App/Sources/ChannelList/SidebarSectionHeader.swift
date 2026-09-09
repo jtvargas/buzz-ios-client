@@ -46,6 +46,8 @@ import SwiftUI
 /// that says how much is hidden. The accessibility label carries it either way, because a
 /// screen reader has no rows in view to count.
 struct SidebarSectionHeader: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     let section: SidebarSection
     /// How many conversations the section holds.
     let count: Int
@@ -168,7 +170,7 @@ struct SidebarSectionHeader: View {
                 .font(.hiveSymbol(.footnote, weight: .bold))
                 .foregroundStyle(.secondary)
                 .rotationEffect(.degrees(isExpanded ? 180 : 0))
-                .animation(.snappy(duration: 0.22), value: isExpanded)
+                .animation(reduceMotion ? nil : .snappy(duration: 0.22), value: isExpanded)
                 .frame(width: 14, height: 44)
                 .contentShape(.rect)
         }
@@ -184,7 +186,7 @@ struct SidebarSectionHeader: View {
         // and it is the only feedback either of them gives, since neither draws a press. The
         // tick lands at the tap; the section it names takes 0.22s to finish arriving.
         HiveHaptics.play(.disclosureToggled)
-        withAnimation(.snappy(duration: 0.22)) { isExpanded.toggle() }
+        withAnimation(reduceMotion ? nil : .snappy(duration: 0.22)) { isExpanded.toggle() }
     }
 
     /// The glyph the chevron is drawn from, at rest — closed. Open, it is this turned a

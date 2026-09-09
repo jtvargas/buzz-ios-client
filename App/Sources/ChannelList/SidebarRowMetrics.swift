@@ -1,37 +1,13 @@
 import SwiftUI
 
-/// The one rounded rectangle the sidebar draws under a row, and the numbers that place it.
+/// Shared spacing for the sidebar's press wash, last-opened mark, and row content.
 ///
-/// They live here rather than as literals in ``ChannelListView`` because **two different things
-/// draw this rectangle from two different coordinate spaces**, and the owner has now caught them
-/// disagreeing twice — once on their insets and once on their size under a finger. The same
-/// reasoning as ``MessageRowMetrics``: values that have to agree across files are values that
-/// get changed in one of them.
+/// Both fills are backgrounds of the same button in ``SidebarConversationButton``.
+/// `rowInsets` sits outside that button; `labelPaddingH` and `labelPaddingV` sit inside.
+/// Keeping this split makes the press wash, resume mark, and hit area the same rectangle,
+/// while the text stays aligned with the section heading.
 ///
-/// # The two drawers, and the two attempts at making them agree
-///
-/// ``ChannelListView/resumeMark(isResumable:)`` is a `listRowBackground`: it is handed the
-/// **whole row cell** and insets itself by ``insetH`` and ``insetV``. The press wash is a
-/// `background` behind the row's `Button`, so it can only ever be the size of that button.
-///
-/// The first attempt gave the button a `Shape` that returned a path *larger* than the rect it
-/// was handed, reaching back out to the mark. A render test proved the path really is drawn
-/// unclipped by `.background` — and the owner reported the rows still not matching. The
-/// remaining explanation is the one that fix could not reach: a `List` row's content is laid out
-/// inside a container inset by `listRowInsets`, and that container clips. A path can escape its
-/// own background. It cannot escape the cell.
-///
-/// **So the spacing moved instead of the drawing.** ``rowInsets`` is now the *mark's* inset, and
-/// ``labelPaddingH``/``labelPaddingV`` carry the content the rest of the way in. The button's
-/// frame is therefore the mark's rectangle exactly, by construction — there is nothing left to
-/// escape, and the wash, the mark and the row's hit area are one rectangle. It is also the same
-/// shape as ``ActivityRowMetrics``, which had the same fix for a different reason.
-///
-/// # A plain `enum`, deliberately
-///
-/// Not static members on ``ChannelListView``: a `View` is `@MainActor`, and a main-actor
-/// constant cannot be read as the default value of a nonisolated test's stored property. The
-/// numbers are geometry, not view state; a namespace with no isolation is what they actually are.
+/// A plain enum keeps these geometry constants independent of the view's actor isolation.
 enum SidebarRowMetrics {
     /// The mark's inset from the whole cell, per axis, and its corner.
     ///
@@ -55,7 +31,7 @@ enum SidebarRowMetrics {
     static let contentInsetH: CGFloat = 16
     static let contentInsetV: CGFloat = 2
 
-    /// The cell's inset: up to the highlight, and no further. This is what makes the button's
+    /// The outer inset: up to the highlight, and no further. This is what makes the button's
     /// frame the mark's rectangle.
     static let rowInsets = EdgeInsets(top: insetV, leading: insetH, bottom: insetV, trailing: insetH)
 

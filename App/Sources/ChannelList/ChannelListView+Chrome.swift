@@ -45,8 +45,7 @@ extension ChannelListView {
         "Hive lists the conversations the relay confirms you’re in, so there’s nothing to show "
             + "until it answers. Your messages are still saved."
 
-    /// How far a heading sits in from the screen's edges. Padding rather than `listRowInsets`,
-    /// since the heading shares its cell with the rows — the same 16pt either way.
+    /// How far a heading sits in from the screen's edges, matching the row content below it.
     static let headerInsetH: CGFloat = 16
 
     /// The cards sit slightly clear of the first heading's rule below them.
