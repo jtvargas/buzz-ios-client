@@ -32,6 +32,9 @@ extension SyncEngine {
     /// A stopped engine (signed out) does nothing at all.
     public func refresh() async {
         guard !isStopped else { return }
+        // The short cooldown coalesces navigation; an explicit pull must still
+        // ask for a fresh head, even immediately after the last successful load.
+        recovery.lastHeads.removeAll()
         if directoryContext != nil {
             if state != .running {
                 await connection.reconnectNow()
