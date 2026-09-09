@@ -156,7 +156,8 @@ extension SyncEngine {
         let authors = await (try? store.allMemberPubkeys()) ?? []
         guard isCurrent(generation), !authors.isEmpty else { return }
         let filter = Filter(authors: Array(authors), kinds: [.presence])
-        let events = await (try? queryForRecovery([filter])) ?? []
+        // Presence must not hold a content-recovery permit while waiting for EOSE.
+        let events = await (try? subscriptions.query([filter])) ?? []
         guard isCurrent(generation) else { return }
         guard let result = try? await store.ingest(batch: events, phase: .backfill),
               !result.ephemeral.isEmpty
@@ -184,6 +185,9 @@ extension SyncEngine {
     func performChannelReconciliation(_ channel: String, generation: Int) async {
         guard isCurrent(generation) else { return }
         setChannelState(channel, .reconciling)
+        // Notices remain independent of both the content request budget and its
+        // outcome, so even a failed message window cannot prevent their recovery.
+        Task { [weak self] in await self?.assembleNotices(channel, generation: generation) }
 
         if windowDegraded {
             await fallbackAssemble(channel, generation: generation)
@@ -260,7 +264,6 @@ extension SyncEngine {
             guard isCurrent(generation) else { return .stop }
             if cursor == .head {
                 recovery.lastHeads[channel] = now()
-                Task { [weak self] in await self?.assembleNotices(channel, generation: generation) }
             }
             guard let next = decision.next else {
                 setChannelState(channel, .synced)
@@ -347,7 +350,6 @@ extension SyncEngine {
         guard isCurrent(generation) else { return }
         recovery.lastHeads[channel] = now()
         setChannelState(channel, .fallbackSynced)
-        Task { [weak self] in await self?.assembleNotices(channel, generation: generation) }
     }
 
     // MARK: - Relay notices
@@ -417,7 +419,9 @@ extension SyncEngine {
             limit: config.noticeBackfillLimit,
             tagQueries: ["h": [channel]]
         )
-        let events = await (try? queryForRecovery([notices, huddles])) ?? []
+        // These best-effort reads share the relay rate-limit gate, but cannot
+        // consume the admission slot required to load channel or thread messages.
+        let events = await (try? subscriptions.query([notices, huddles])) ?? []
         // Superseded during the query: abandon, writing nothing — the new generation
         // owns this channel now.
         guard isCurrent(generation) else { return }
