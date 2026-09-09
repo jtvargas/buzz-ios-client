@@ -31,6 +31,12 @@ struct SettingsView: View {
     @State private var systemAuthorization: Bool?
     /// A view-owned copy exists solely so status insertion/removal is animated at the card.
     @State private var siriIndexingState: IndexingState = .idle
+    #if DEBUG
+    /// Bumped by the review-state reset so the counters beside it are re-read. They are a
+    /// snapshot of `UserDefaults` rather than observable state, which is fine for a screen
+    /// opened after the fact and wrong only for the one write made from the screen itself.
+    @State private var reviewRevision = 0
+    #endif
 
     var body: some View {
         NavigationStack {
@@ -40,6 +46,9 @@ struct SettingsView: View {
                     notificationsCard
                     agentsCard
                     siriCard
+                    #if DEBUG
+                    reviewCard
+                    #endif
                 }
                 .padding(.horizontal, 20)
                 .padding(.top, 8)
@@ -301,6 +310,45 @@ struct SettingsView: View {
             set: { environment.setSiriIndexingEnabled($0) }
         )
     }
+
+    // MARK: - Review prompt (debug)
+
+    #if DEBUG
+    /// What each review trigger has counted, and a way back to zero.
+    ///
+    /// ``ReviewPrompt`` allows one ask per app version, so without this the four triggers
+    /// can be walked exactly once on a build whose version has not moved. Compiled out of
+    /// release entirely — this is a test affordance, not a setting.
+    private var reviewCard: some View {
+        AccountCard(title: "Review prompt", subtitle: Self.reviewBlurb) {
+            EmptyView()
+        } content: {
+            AccountFieldRow(label: "COUNTERS") {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(environment.reviewPrompt.debugCounts(), id: \.0) { trigger, count in
+                        Text("\(trigger.rawValue) \(count)/\(trigger.rule.count)")
+                            .font(.hive(.caption))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .id(reviewRevision)
+            }
+            Divider()
+            AccountFieldRow(label: "STATE") {
+                Button("Reset review state") {
+                    environment.reviewPrompt.resetForTesting()
+                    reviewRevision += 1
+                }
+                .font(.hive(.body))
+            }
+        }
+    }
+
+    private static let reviewBlurb =
+        "Debug only. The App Store review request is armed by four triggers and asked for at "
+            + "most once per app version, so resetting is the only way to walk them again on "
+            + "the same build."
+    #endif
 
     @ViewBuilder
     private var siriStatusRow: some View {

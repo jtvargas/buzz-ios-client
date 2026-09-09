@@ -38,7 +38,11 @@ struct MentionSuggestionsView: View {
     private var panel: some View {
         ScrollView {
             LazyVStack(spacing: 0) {
-                ForEach(autocomplete.suggestions) { suggestion in
+                // Reversed, so the strongest match is the row nearest the composer.
+                // The panel opens *upward* from the bar, which makes the bottom edge the
+                // one closest to the caret and to the thumb — ranking best-first would
+                // put the best answer at the far end of the reader's reach.
+                ForEach(autocomplete.suggestions.reversed()) { suggestion in
                     Button {
                         select(suggestion)
                     } label: {
@@ -54,6 +58,11 @@ struct MentionSuggestionsView: View {
             }
         }
         .scrollIndicators(.hidden)
+        // Rests at the bottom and stays pinned there as the result count changes under
+        // each keystroke. Without it the reversal is only a flip: past about four results
+        // the panel would open showing the *weakest* matches and hide the strongest ones
+        // above the fold.
+        .defaultScrollAnchor(.bottom)
         // The panel scrolls its own results and must never dismiss the keyboard —
         // that mode is inherited from the enclosing list otherwise.
         .scrollDismissesKeyboard(.never)

@@ -158,11 +158,28 @@ extension SubscriptionManager {
 
     // MARK: - High-water mark and flushing
 
+    /// Advances a subscription's replay cursor to the newest `created_at` it has been
+    /// delivered — never past local now.
+    ///
+    /// The clamp is the whole point. `created_at` is author-controlled, and the relay's
+    /// ingest gate accepts anything within ±15 minutes of server time, so one peer with a
+    /// fast clock could move this cursor up to a quarter of an hour ahead of true time.
+    /// Every re-arm then asks for `since = lastSeen − overlap` (5s), so every event
+    /// *genuinely* created inside that window is below the floor and is never replayed.
+    ///
+    /// Channel messages survive that: ``SyncEngine``'s reconcile pages the head window
+    /// down to a durable per-channel watermark on every reconnect. Reactions, deletions
+    /// and the other overlay kinds do not — that reconcile asks for `kinds: [9]` only, so
+    /// this cursor is the only thing standing between them and being dropped silently.
+    ///
+    /// Clamping loses nothing: a future-stamped event is still delivered and still
+    /// ingested. The only thing refused is its claim about where the replay resumes.
     private func advanceHighWaterMark(_ subscription: Subscription, with event: NostrEvent) {
+        let arrived = min(event.createdAt, Int64(now().timeIntervalSince1970))
         if let lastSeen = subscription.lastSeen {
-            subscription.lastSeen = max(lastSeen, event.createdAt)
+            subscription.lastSeen = max(lastSeen, arrived)
         } else {
-            subscription.lastSeen = event.createdAt
+            subscription.lastSeen = arrived
         }
     }
 

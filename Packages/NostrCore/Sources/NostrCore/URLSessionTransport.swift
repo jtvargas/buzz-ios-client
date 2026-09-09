@@ -60,6 +60,11 @@ public actor URLSessionTransport: RelayTransport {
         self.openTimeout = openTimeout
     }
 
+    /// The largest inbound websocket message this transport will accept, 8 MiB against
+    /// `URLSession`'s 1 MiB default. Sized so a roster snapshot cannot kill the socket —
+    /// see ``connect(url:)``.
+    static let maximumMessageSize = 8 * 1_024 * 1_024
+
     // MARK: - RelayTransport
 
     public func connect(url: URL) async throws {
@@ -68,6 +73,17 @@ public actor URLSessionTransport: RelayTransport {
         close()
 
         let task = session.webSocketTask(with: url)
+        // `URLSessionWebSocketTask` defaults to a 1 MiB ceiling, and a frame over it is
+        // not truncated — the read fails and takes the socket with it, which this
+        // connection then treats as a disconnect and reconnects into the same frame.
+        //
+        // One kind of frame can genuinely grow past 1 MiB: a channel roster snapshot,
+        // which carries a `p` tag per member at roughly 85 bytes each. That is a live
+        // ceiling at around 11-12k members. The largest channel we know of is a couple of
+        // thousand, so this is headroom rather than a fix for something reported — but the
+        // failure it prevents is a dead socket rather than a short list, and the cost of
+        // the headroom is only that a frame this large would be buffered if one arrived.
+        task.maximumMessageSize = Self.maximumMessageSize
         self.task = task
         task.resume()
         // Every socket gets its own generation, so a read armed on an abandoned

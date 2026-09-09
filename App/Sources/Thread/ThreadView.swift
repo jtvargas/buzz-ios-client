@@ -387,15 +387,47 @@ struct ThreadView: View {
             // cannot see and did not ask about. The channel's own strip is the wide one:
             // it covers its threads, because from there they are not distinguishable.
             TypingIndicatorView(model: typing, nameFor: names.name(for:))
+            // A thread whose replies were never fetched must not read as a thread that
+            // has none. The strip below covers a dead socket; this one covers a fetch
+            // that failed over a live one, which is invisible without it — the opener is
+            // already on screen, so nothing about the surface looks wrong.
+            //
+            // Only when there is something on screen: with an empty thread the retry is
+            // the empty state's own button, and two retries for one failure is a
+            // question about which of them worked.
+            if model.loadFailed, !model.rows.isEmpty {
+                Button {
+                    Task { await model.retryLoad() }
+                } label: {
+                    Label("Couldn't load replies. Tap to retry.", systemImage: "arrow.clockwise")
+                        .font(.hive(.caption, weight: .medium))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
             // The same strip the channel carries, for the same reason: a thread read
             // over a dead socket looks exactly like a thread nobody has replied to.
             ConnectionStatusIndicatorView()
         }
     }
 
+    /// What fills the surface when there are no rows: a failure that can be retried, or —
+    /// on a read that genuinely returned nothing — the thread being unavailable.
+    ///
+    /// The failure is tested first. Both used to render as "Thread unavailable" with no
+    /// action, which is the wrong sentence for the far more common of the two and offered
+    /// no way out of either.
     @ViewBuilder
     private var emptyState: some View {
-        if model.hasLoaded, model.rows.isEmpty {
+        if model.rows.isEmpty, model.loadFailed {
+            ContentUnavailableView {
+                Label("Couldn't load this thread", systemImage: "arrow.clockwise")
+            } description: {
+                Text("Check your connection and try again.")
+            } actions: {
+                Button("Retry") { Task { await model.retryLoad() } }
+            }
+        } else if model.hasLoaded, model.rows.isEmpty {
             ContentUnavailableView(
                 "Thread unavailable",
                 systemImage: "text.bubble",
