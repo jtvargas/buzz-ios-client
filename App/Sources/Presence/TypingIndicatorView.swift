@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// The "X is typing…" pill that floats just above the composer.
+/// The typing and agent-working pills that float just above the composer.
 ///
 /// # Why it floats rather than sits in the bar
 ///
@@ -19,9 +19,8 @@ import SwiftUI
 /// jump pill makes, at the same metrics, so the two cannot read as different kinds of
 /// object when they stack.
 ///
-/// Driven by ``ChannelTypingModel``; absent entirely when no one is typing. Names are
-/// resolved by `nameFor` — the surface supplies known author names and falls back to a
-/// short key.
+/// Driven by ``ChannelTypingModel``; absent entirely when no one is active. The shared
+/// directory supplies names and distinguishes human typing from agent work.
 ///
 /// # Why the model's lifecycle is not here
 ///
@@ -44,15 +43,16 @@ struct TypingIndicatorView: View {
     /// *first* instance it is handed and silently ignores later ones, which for a view
     /// that does not own its object is a stale reference waiting to happen.
     let model: ChannelTypingModel
-    let nameFor: (String) -> String
+    @Environment(\.entityNames) private var names
 
     var body: some View {
         Group {
-            if let text = model.indicator(nameFor: nameFor) {
+            if let text = model.indicator(nameFor: names.name(for:), isAgent: names.isAgent, activity: .typing) {
                 ConversationAccessoryCapsule(label: text) {
                     TypingDots()
                 }
             }
+            AgentWorkingIndicatorView(model: model)
         }
         .animation(.default, value: model.typers)
     }
@@ -68,6 +68,8 @@ struct TypingIndicatorView: View {
 struct ConversationAccessoryCapsule<Leading: View>: View {
     /// The words, which are also what VoiceOver speaks for the whole capsule.
     let label: String
+    var showsDisclosure = false
+    var expandsToFillWidth = true
     /// What sits before them — the cycling dots, in both of this type's uses.
     @ViewBuilder var leading: Leading
 
@@ -78,6 +80,12 @@ struct ConversationAccessoryCapsule<Leading: View>: View {
                 .font(.hive(.caption2, weight: .semibold))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
+            if showsDisclosure {
+                Image(systemName: "chevron.down")
+                    .font(.hiveSymbol(.caption2, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
+            }
         }
         .padding(.horizontal, 10)
         // A floor, not a height: at an accessibility text size the label keeps its
@@ -89,7 +97,7 @@ struct ConversationAccessoryCapsule<Leading: View>: View {
         // argument that it annotates text starting there; in practice it lands on top
         // of the newest message's own first words, which are the ones being read. At
         // this edge it covers the ragged right instead.
-        .frame(maxWidth: .infinity, alignment: .trailing)
+        .frame(maxWidth: expandsToFillWidth ? .infinity : nil, alignment: .trailing)
         .transition(.opacity)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(label)
