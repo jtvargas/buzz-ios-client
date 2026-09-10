@@ -42,7 +42,7 @@ community switch can arm a new listener while the preference remains enabled.
   the session restores the existing background connection policy. The monitoring
   tick resumes a connection if an already-started background suspension finishes late.
 - Each foreground request can acquire a single named `UIApplication` background
-  assertion for a brief handoff. The app and card label this Brief background
+  assertion for a brief handoff. Settings labels this Brief background
   window, separately from a continued-processing grant. It lasts until iOS calls
   its expiration handler, foreground return, a continued-processing grant, or
   session cleanup. There is no twenty-second client cutoff and no deadline based
@@ -85,7 +85,19 @@ community switch can arm a new listener while the preference remains enabled.
 - A separate WidgetKit extension renders only the supplied ActivityKit state. It
   owns no socket, credentials, database, APNs token, or app-group storage. The shared
   Codable contract contains at most three distinct agents; bounded content leaves
-  room under ActivityKit's 4 KB payload budget. Accessibility sizes show one row.
+  room under ActivityKit's 4 KB payload budget.
+- The card uses native adaptive background/text colors, an Agents header with the
+  working count and relative update time, and a 40-point initials avatar beside
+  each agent's working label and conversation. At standard text sizes, two agents
+  can appear; larger rosters use one named row and a “more agents” link. Larger text
+  and the expanded Dynamic Island show one named row, with the header opening the
+  full roster. The normal-size Lock Screen layout targets 160 points without a
+  separate diagnostic footer. Background-runtime details remain in Settings.
+  A system indeterminate activity indicator appears only for current work or
+  reconnecting; Reduce Motion and Always-On use a static ellipsis. WidgetKit owns
+  animation rendering. No timer, invented completion percentage, or countdown is
+  added to the extension. Paused/ended cards replace working rows with a short,
+  explicit status and show no working indicator.
 - The card counts each agent once. Its full in-app roster lists all received scopes.
   Rows open the existing channel/thread route; the header and overflow open the
   roster. Community identifiers prevent an old card from opening the same channel
@@ -139,6 +151,11 @@ Build and install the signed app and extension; the owner performs runtime revie
 4. Let agents stop. Their heartbeat presence should expire; no success is inferred.
 5. Tap an agent, the header, and the overflow. Check exact conversation routing,
    including when Settings was open before locking the phone.
+   Review one agent, two agents, and larger rosters; long names; light/dark
+   appearance; larger text; Reduce Motion; Always-On; and the expanded Island.
+   The header should show Agents and the update age, with a clean avatar/name/
+   conversation row and no background-runtime footer. A stale card must stop
+   presenting working rows or a working indicator.
 6. Disconnect/reconnect the network. Expect Reconnecting or Paused until current
    activity is received; check that the roster recovers after subscriptions rearm.
 7. Try Stop, rapid off/on, system-task cancellation, community switching, and signout.
