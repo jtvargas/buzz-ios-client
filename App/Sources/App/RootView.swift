@@ -47,8 +47,11 @@ struct RootView: View {
             // Above the remount boundary for the same reason, and one more: it is opened from
             // the workspace panel, which closes itself as it opens this — see
             // ``AppEnvironment/showsSettings``.
-            .sheet(isPresented: $environment.showsSettings) {
+            .sheet(isPresented: $environment.showsSettings, onDismiss: environment.didDismissSettingsForMonitoring) {
                 SettingsView()
+            }
+            .sheet(isPresented: $environment.showsAgentMonitor) {
+                NavigationStack { AgentMonitoringRosterView() }
             }
             .alert(
                 environment.notice?.title ?? "",
@@ -103,6 +106,7 @@ struct RootView: View {
             isForeground: scenePhase == .active,
             isCovered: environment.communitySheet != nil
                 || environment.showsSettings
+                || environment.showsAgentMonitor
                 || readingDocument != nil
         )
     }

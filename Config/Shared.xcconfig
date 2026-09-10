@@ -9,7 +9,8 @@ IPHONEOS_DEPLOYMENT_TARGET = 26.0
 // build machine has no `Local.xcconfig`: it clones the repo and nothing else, so
 // with these left blank it built `com.example.hive` for no team, which cannot be
 // signed for distribution and so cannot reach TestFlight.
-PRODUCT_BUNDLE_IDENTIFIER = com.jtvargas.hive
+HIVE_BUNDLE_IDENTIFIER = com.jtvargas.hive
+PRODUCT_BUNDLE_IDENTIFIER = $(HIVE_BUNDLE_IDENTIFIER)
 DEVELOPMENT_TEAM = J7K9Z79S5F
 CODE_SIGN_STYLE = Automatic
 

@@ -109,14 +109,21 @@ extension AppEnvironment {
             reviewPrompt.noteLeftForeground()
         }
         guard let engine else { return }
+        guard phase == .active || phase == .background else { return }
+        sceneLifecycleGeneration += 1
+        let generation = sceneLifecycleGeneration
         let heartbeat = self.heartbeat
         Task {
+            guard self.engine === engine, sceneLifecycleGeneration == generation else { return }
             switch phase {
             case .active:
                 await forwardScenePhase(phase, to: engine)
+                guard self.engine === engine, sceneLifecycleGeneration == generation else { return }
                 heartbeat?.startForeground()
+                startExperimentalMonitoringIfEnabled()
             case .background:
                 await heartbeat?.stopBackground()
+                guard self.engine === engine, sceneLifecycleGeneration == generation else { return }
                 await forwardScenePhase(phase, to: engine)
             case .inactive:
                 await forwardScenePhase(phase, to: engine)
