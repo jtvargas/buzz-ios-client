@@ -14,7 +14,7 @@ extension ChannelTimelineModel {
     /// cleared and the pending row appears through the observation the moment the
     /// outbox row commits, long before the relay's OK. An over-ceiling message
     /// throws before it is queued — the text is restored and surfaced.
-    func send(willSend: (([String]) -> Void)? = nil) {
+    func send() {
         let document = mentionDraft
         let text = document.text.trimmingCharacters(in: .whitespacesAndNewlines)
         // A picture with no words is a message. Local preparation must finish first.
@@ -32,7 +32,6 @@ extension ChannelTimelineModel {
         let selfPubkey = self.selfPubkey
         guard let media = attachments.takeForSend() else { return }
         guard !text.isEmpty || !media.isEmpty else { return }
-        willSend?(mentionPubkeys)
         mentionDraft = MentionDraft()
         sendError = nil
         if isChasingOwnSend { jumpToLatest() }

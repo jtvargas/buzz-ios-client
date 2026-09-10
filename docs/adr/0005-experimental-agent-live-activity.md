@@ -11,22 +11,25 @@ keeping an object or WebSocket allocated does not provide background execution.
 
 ## Decision
 
-Settings → Live agent activity → **Experimental** opts into a finite, 30-minute
-monitoring session. Start/Stop controls allow another session without changing the
-preference. A subsequent foreground app launch or community switch can start a new
-session while the preference remains enabled. A stopped or interrupted session is
-not automatically restarted on each foreground transition within the same session.
+Settings → Live agent activity → **Experimental** arms a foreground listener only.
+Enabling, launching Hive, returning to the foreground, and sending a message do not
+create a Live Activity or request background runtime. A fresh kind-20002 heartbeat
+from a known agent, received while Hive is open, starts a finite, 30-minute session.
+The first card already contains the confirmed working roster. The trigger uses the
+same activity records and agent classification as the in-app working indicator;
+there is no inference of work from an outgoing message, online presence, or history.
+
+Stop ends the session; **Enable next activity** in Settings rearms the listener
+without creating a card. Stopped, dismissed, failed, or expired sessions do not
+restart on each heartbeat or foreground transition. A subsequent app launch or
+community switch can arm a new listener while the preference remains enabled.
 
 - Foreground monitoring starts independently of iOS 26 `BGContinuedProcessingTask`.
-  The app requests background runtime with an immediate-fail strategy after a
-  one-second foreground settling delay when the session starts from Settings.
-  Sending to a verified agent DM or mentioning an agent submits immediately from
-  the composer action, before card setup or asynchronous enqueue. This also starts
-  a new session if the previous one ended and Experimental remains enabled. Empty
-  or attaching drafts do not trigger it. The sender must belong to the mounted
-  engine; ordinary human messages and received heartbeats never trigger requests.
-  A direct send replaces a pending Settings attempt; rapid sends share a direct
-  attempt for five seconds. A missing callback gets one retry after
+  After confirming actual agent work, the app requests background runtime with an
+  immediate-fail strategy before asynchronous card setup. The trigger listener then
+  detaches: subsequent heartbeats update the existing session without submitting
+  more runtime requests. Settings offers an explicit retry; rapid retries coalesce
+  for five seconds. A missing callback gets one retry after
   two seconds, with a fresh identifier and a five-second callback deadline for each
   attempt. Exhausting those attempts leaves foreground monitoring running. Settings
   offers an explicit retry. The system progress describes elapsed time in the
@@ -48,7 +51,13 @@ not automatically restarted on each foreground transition within the same sessio
   publishes Paused; in-flight reads cannot overwrite that state. Foreground
   monitoring resumes on return within the same monitoring window. A callback from
   a cancelled or replaced request is completed without adopting it.
-- BuzzKit exposes a fresh in-memory activity snapshot. The monitor filters verified
+- BuzzKit exposes a fresh in-memory activity snapshot plus a bounded, unseeded
+  notification stream for newly accepted typing heartbeats. Idle opt-in has no
+  polling loop, card, background assertion, or additional relay subscription.
+  Receipt times exclude signals from before opt-in or the latest foreground return.
+  Freshness and foreground state are checked again after asynchronous reads;
+  toggle-off and community teardown cancel any trigger in flight.
+  The monitor filters verified
   agent identities, excludes self, and preserves channel/thread scopes. It uses the
   same subscriptions as Hive: joined channels plus any active conversation, within
   the mounted community. Reconnect subscription rearming can leave temporary gaps;
@@ -76,8 +85,8 @@ not automatically restarted on each foreground transition within the same sessio
 
 ## Rationale
 
-An explicit monitoring window provides a concrete user task and truthful duration
-for evaluating continued-processing runtime. Reusing the mounted engine avoids a
+A relay-confirmed working indicator starts a bounded monitoring window instead of
+an idle card created by the opt-in toggle. Reusing the mounted engine avoids a
 second subscription graph or copying credentials into an extension. Existing
 heartbeat semantics provide working presence, not a trustworthy success signal;
 silence therefore never becomes “Done.”
@@ -106,10 +115,13 @@ No test cases or simulator runs are part of this prototype, at the owner's reque
 Build and install the signed app and extension; the owner performs runtime review:
 
 1. Leave Experimental off and confirm ordinary app use is unchanged.
-2. Enable it while Hive is foregrounded. Agent updates must start without waiting
-   for extended execution. Check Brief background window, Foreground only, and Background monitoring active
-   in Settings and start agents in different joined channels and threads. If both
-   background attempts time out, foreground monitoring must remain running.
+2. Enable it while Hive is foregrounded: Settings must say it is waiting for an
+   agent, with no Live Activity or background-runtime request. Send to an agent:
+   sending alone must not create a card. Wait for its working indicator while Hive
+   remains open; the first card must show that agent and the correct conversation.
+   Check that human typing and online presence do not trigger it. Start other agents
+   in joined channels/threads: they must join the existing card, not create new ones.
+   If both background attempts time out, foreground monitoring must remain running.
 3. Lock the phone and use another app. Compare the count and roster with actual
    agent activity, including an agent working in more than one conversation.
 4. Let agents stop. Their heartbeat presence should expire; no success is inferred.
@@ -121,16 +133,20 @@ Build and install the signed app and extension; the owner performs runtime revie
    Disabling must end monitoring and dismiss the custom card.
 8. Force-quit while agents are active. The remaining custom card should become stale
    rather than promise continued monitoring. Reopen Hive to reclaim the old card.
-9. Let a session reach thirty minutes. Start another in Settings. Repeat under Low
+9. Let a session reach thirty minutes. Use Enable next activity in Settings, then
+   wait for a fresh agent working indicator. Repeat under Low
    Power Mode and with larger accessibility text to evaluate system limits/layout.
-10. Send to an agent DM or mention an agent in a channel/thread, then lock promptly:
+10. Send to an agent DM or mention an agent in a channel/thread. Wait for the
+    working indicator and Live Activity while Hive is open, then lock:
     a live UIKit assertion permits brief updates without cancelling the pending
     continued-processing request. Without a continued-processing grant, expect
     Paused at twenty seconds or earlier on iOS expiration. Reopen Hive: updates
     resume. Retry background monitoring explicitly; only an actual launch callback
     changes the capability to Background monitoring active. Stop or toggle off
-    during either attempt; no late callback may revive the session. Human sends
-    and remote agent heartbeats must not create more background assertions.
+    during either attempt; no late callback may revive the session. Subsequent
+    heartbeats must not create more background assertions. If the phone is locked
+    before the first working heartbeat, no new Live Activity should start there;
+    return to Hive and wait for a fresh heartbeat.
 
 ## Amendment (2026-09-10): missing background launch callback
 
@@ -147,11 +163,14 @@ state; they do not bypass an iOS refusal or prove that background delivery works
 this device. Sparse runtime logs record submissions, missing callbacks, errors, and
 actual grants without agent or conversation data.
 
-The follow-up couples new attempts to the user's actual agent-send action and
-preserves an in-flight request across locking. A separate, bounded UIKit assertion
+The latest follow-up replaces the earlier toggle/send triggers with a fresh relay
+working indicator received in the foreground. It preserves an in-flight request
+across locking. A separate, bounded UIKit assertion
 provides short handoff execution while the continued-processing result is unknown
 or unavailable. It is released synchronously on expiration, is never renewed by a
 timer, and is distinct in both UI and relay ownership from a long-running grant.
+Changing the trigger does not establish that iOS will launch the longer background
+task; the observed scheduler foreground-recognition failure remains unresolved.
 
 ## References
 

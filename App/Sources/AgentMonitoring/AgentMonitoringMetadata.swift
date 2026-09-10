@@ -5,7 +5,8 @@ struct AgentMonitoringMetadata: Sendable {
     let names: EntityNames
     static let empty = AgentMonitoringMetadata(names: .empty)
 
-    /// Only during an opted-in session, off the main actor, at most every 15 s.
+    /// Only while opted in, on incoming activity or during a monitoring session.
+    /// Reads run off the main actor and callers cache them for at least 15 s.
     /// Read channel labels directly; no unread counts or timeline scans are needed.
     nonisolated static func read(store: BuzzEventStore, selfPubkey: String?) async throws -> Self {
         let directory = try store.directorySnapshot(selfPubkey: selfPubkey)

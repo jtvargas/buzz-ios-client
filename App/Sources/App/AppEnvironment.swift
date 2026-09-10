@@ -610,7 +610,7 @@ final class AppEnvironment {
     ) {
         phase = .running
         conversationEntityIndex.rebuild(store: store, selfPubkey: selfPubkey, community: community)
-        startExperimentalMonitoringIfEnabled()
+        armExperimentalMonitoringIfEnabled()
     }
 
     private func observeEngineState(of engine: SyncEngine) {

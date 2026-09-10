@@ -2,45 +2,29 @@ import BuzzKit
 import Foundation
 
 extension AppEnvironment {
-    func startExperimentalMonitoringIfEnabled(force: Bool = false, requestImmediately: Bool = false) {
+    func armExperimentalMonitoringIfEnabled(force: Bool = false) {
         guard settings.experimentalAgentMonitoring,
               force || !agentMonitor.hasAttemptedStart,
               phase == .running,
               let engine, let store, let community = communities.active,
               community.id == sessionCommunityID else { return }
-        agentMonitor.start(
-            engine: engine, store: store, community: community, selfPubkey: selfPubkeyHex,
-            requestImmediately: requestImmediately
+        agentMonitor.arm(
+            engine: engine, store: store, community: community, selfPubkey: selfPubkeyHex
         )
-    }
-
-    /// Called only for a validated composer send, before enqueue awaits or the
-    /// reader locks the screen. Heartbeats and remote messages never trigger it.
-    func prepareAgentMonitoringForSend(
-        channel: String, mentions: [String], names: EntityNames, sender: any MessageSending
-    ) {
-        guard settings.experimentalAgentMonitoring, phase == .running,
-              let engine, let sendingEngine = sender as? SyncEngine, sendingEngine === engine,
-              communities.activeID == sessionCommunityID else { return }
-        let addressesAgent = mentions.contains(where: names.isAgent)
-            || names.conversation(for: channel).kind == .agent
-        guard addressesAgent else { return }
-        if agentMonitor.isMonitoring || agentMonitor.isStarting {
-            agentMonitor.retryBackgroundAccess(immediately: true)
-        } else {
-            startExperimentalMonitoringIfEnabled(force: true, requestImmediately: true)
-        }
     }
 
     func applyExperimentalMonitoring(_ enabled: Bool) {
         if enabled {
-            startExperimentalMonitoringIfEnabled(force: true)
+            armExperimentalMonitoringIfEnabled(force: true)
         } else {
+            // Cancel the trigger synchronously so an in-flight relay read cannot
+            // start a card before the asynchronous cleanup gets to run.
+            agentMonitor.disarm()
             Task {
                 await agentMonitor.stop()
                 await agentMonitor.writer.removeOrphans()
                 // Honor a rapid off/on toggle after the old session's cleanup.
-                if settings.experimentalAgentMonitoring { startExperimentalMonitoringIfEnabled(force: true) }
+                if settings.experimentalAgentMonitoring { armExperimentalMonitoringIfEnabled(force: true) }
             }
         }
     }

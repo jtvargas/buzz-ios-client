@@ -18,6 +18,7 @@ final class AgentActivityMonitor {
     private(set) var sessionEndsAt: Date?
     private(set) var lastUpdate: Date?
     private(set) var hasAttemptedStart = false
+    var isArmed = false
 
     @ObservationIgnored let runtime = AgentMonitoringRuntime()
     @ObservationIgnored let writer = AgentLiveActivityWriter()
@@ -27,12 +28,14 @@ final class AgentActivityMonitor {
     @ObservationIgnored var lastState: AgentActivityAttributes.ContentState?
     @ObservationIgnored var isAppForeground = true
     @ObservationIgnored private var stoppingTask: Task<Void, Never>?
+    @ObservationIgnored var triggerTask: Task<Void, Never>?
+    @ObservationIgnored var triggerEligibleAfter = ContinuousClock.now
 
     func start(
         engine: SyncEngine, store: BuzzEventStore, community: Community, selfPubkey: String?,
-        requestImmediately: Bool = false
+        initialRows: [AgentActivityAttributes.AgentRow], metadata: AgentMonitoringMetadata
     ) {
-        guard !isStarting, !isMonitoring, !isStopping else { return }
+        guard !isStarting, !isMonitoring, !isStopping, !initialRows.isEmpty else { return }
         guard UIApplication.shared.applicationState == .active else {
             status = "Open Hive to start monitoring"
             return
@@ -46,13 +49,16 @@ final class AgentActivityMonitor {
         status = "Starting monitoring…"
         let end = Date.now.addingTimeInterval(AgentMonitoringRuntime.duration)
         sessionEndsAt = end
+        let count = Set(initialRows.map(\.pubkey)).count
         let initial = AgentActivityAttributes.ContentState(
-            rows: [], agentCount: 0, scopeCount: 0, status: .waiting, updatedAt: .now,
+            rows: Self.widgetRows(initialRows), agentCount: count, scopeCount: initialRows.count,
+            status: .working, updatedAt: .now,
             sessionEndsAt: end, isForegroundOnly: true
         )
         lastState = initial
-        // A Send tap submits before asynchronous card setup or a quick screen lock.
-        if requestImmediately { retryBackgroundAccess(immediately: true) }
+        applyRoster(initialRows, count: count, label: "\(count) \(count == 1 ? "agent" : "agents") working")
+        // Request execution only after actual agent activity, before card setup.
+        retryBackgroundAccess(immediately: true)
         work = Task { [weak self] in
             guard let self else { return }
             do {
@@ -64,8 +70,7 @@ final class AgentActivityMonitor {
                 guard sessionID == id, !Task.isCancelled else { return }
                 isStarting = false
                 isMonitoring = true
-                if !requestImmediately { retryBackgroundAccess() }
-                await run(id: id, engine: engine, store: store, selfPubkey: selfPubkey)
+                await run(id: id, engine: engine, store: store, selfPubkey: selfPubkey, initialMetadata: metadata)
                 await engine.retainConnectionForMonitoring(false)
             } catch is CancellationError {
                 // Stop owns cleanup and waits for this operation before ending the card.
@@ -84,6 +89,7 @@ final class AgentActivityMonitor {
     }
 
     func stop(message: String = "Monitoring stopped", immediately: Bool = true, succeeded: Bool = true) async {
+        disarm()
         if let stoppingTask {
             await stoppingTask.value
             return

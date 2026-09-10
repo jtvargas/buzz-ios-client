@@ -3,17 +3,22 @@ import BuzzKit
 import Foundation
 
 extension AgentActivityMonitor {
-    func run(id: UUID, engine: SyncEngine, store: BuzzEventStore, selfPubkey: String?) async {
+    func run(
+        id: UUID, engine: SyncEngine, store: BuzzEventStore, selfPubkey: String?,
+        initialMetadata: AgentMonitoringMetadata
+    ) async {
         let started = ContinuousClock.now
-        var metadata = AgentMonitoringMetadata.empty
-        var metadataReadAt = started.advanced(by: .seconds(-30))
+        var metadata = initialMetadata
+        var metadataReadAt = started
         var publishedAt = started.advanced(by: .seconds(-10))
         var retainedConnection = false
         while sessionID == id, !Task.isCancelled {
             let instant = ContinuousClock.now
             let elapsed = started.duration(to: instant).components.seconds
             if elapsed >= Int64(AgentMonitoringRuntime.duration) {
-                requestStop(message: "30-minute session ended. Start another in Settings.", immediately: false)
+                requestStop(
+                    message: "30-minute session ended. Enable the next activity in Settings.", immediately: false
+                )
                 return
             }
             if writer.activity?.activityState == .dismissed || writer.activity?.activityState == .ended {
@@ -78,7 +83,7 @@ extension AgentActivityMonitor {
         return true
     }
 
-    private static func rows(
+    static func rows(
         records: [PresenceStore.MonitoredActivity], metadata: AgentMonitoringMetadata, selfPubkey: String?
     ) -> [AgentActivityAttributes.AgentRow] {
         records.filter { $0.pubkey != selfPubkey && metadata.names.isAgent($0.pubkey) }.map { record in
@@ -94,7 +99,7 @@ extension AgentActivityMonitor {
         }
     }
 
-    private static func widgetRows(_ rows: [AgentActivityAttributes.AgentRow]) -> [AgentActivityAttributes.AgentRow] {
+    static func widgetRows(_ rows: [AgentActivityAttributes.AgentRow]) -> [AgentActivityAttributes.AgentRow] {
         var seen: Set<String> = []
         return Array(rows.filter { seen.insert($0.pubkey).inserted }.prefix(3))
     }

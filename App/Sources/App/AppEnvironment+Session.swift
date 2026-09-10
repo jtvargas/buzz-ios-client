@@ -121,7 +121,7 @@ extension AppEnvironment {
                 await forwardScenePhase(phase, to: engine)
                 guard self.engine === engine, sceneLifecycleGeneration == generation else { return }
                 heartbeat?.startForeground()
-                startExperimentalMonitoringIfEnabled()
+                armExperimentalMonitoringIfEnabled()
             case .background:
                 await heartbeat?.stopBackground()
                 guard self.engine === engine, sceneLifecycleGeneration == generation else { return }

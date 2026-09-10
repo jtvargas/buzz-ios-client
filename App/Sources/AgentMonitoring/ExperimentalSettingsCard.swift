@@ -7,7 +7,7 @@ struct ExperimentalSettingsCard: View {
         @Bindable var settings = environment.settings
         AccountCard(
             title: "Live agent activity",
-            subtitle: "Try live agent updates on your Lock Screen. Enabling starts a 30-minute monitoring session."
+            subtitle: "Show a Live Activity when an agent starts working while Hive is open."
         ) {
             EmptyView()
         } content: {
@@ -29,13 +29,17 @@ struct ExperimentalSettingsCard: View {
                         Spacer()
                         if environment.agentMonitor.isMonitoring || environment.agentMonitor.isStarting {
                             Button("Stop monitoring") { environment.agentMonitor.requestStop() }
-                        } else {
-                            Button("Start monitoring") { environment.startExperimentalMonitoringIfEnabled(force: true) }
+                        } else if !environment.agentMonitor.isArmed {
+                            Button("Enable next activity") {
+                                environment.armExperimentalMonitoringIfEnabled(force: true)
+                            }
                         }
                     }
                     .font(.hive(.footnote, weight: .medium))
                     .disabled(environment.agentMonitor.isStopping)
-                    Text("Sending work to an agent starts or retries monitoring while Experimental is on. "
+                    Text("Enabling waits for a fresh working indicator from an agent. "
+                         + "Sending a message alone won't show a card. "
+                         + "Once work is detected while Hive is open, a session lasts up to 30 minutes. "
                          + "Tracks joined conversations in the current community. "
                          + "iOS may interrupt monitoring or show its own progress card. "
                          + "Names and channel labels appear on the Lock Screen.")

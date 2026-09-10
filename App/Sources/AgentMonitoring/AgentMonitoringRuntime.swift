@@ -33,8 +33,8 @@ final class AgentMonitoringRuntime {
         guard !isActive, UIApplication.shared.applicationState == .active else { return }
         graceWindow.begin(onEnd: windowEnded)
         if isRequesting {
-            // The first Send tap replaces an earlier Settings request. Rapid sends
-            // share the direct request so several agents do not create a burst.
+            // Explicit retries can replace a pending request. Coalesce rapid
+            // retries so they do not create a burst of scheduler submissions.
             guard immediately else { return }
             if let lastDirectRequest, lastDirectRequest.duration(to: .now) < .seconds(5) { return }
             requestLoop?.cancel()

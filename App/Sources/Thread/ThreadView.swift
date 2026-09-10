@@ -535,13 +535,7 @@ private struct ThreadComposerView: View {
             placeholder: "Reply",
             sendAccessibilityLabel: "Send reply",
             onTextChange: model.handleTyping,
-            onSend: {
-                model.sendReply(keepingAgents: keptAgents) { mentions in
-                    appEnvironment?.prepareAgentMonitoringForSend(
-                        channel: model.channel, mentions: mentions, names: names, sender: model.sender
-                    )
-                }
-            }
+            onSend: { model.sendReply(keepingAgents: keptAgents) }
         )
         .alert(
             "Reply not sent",

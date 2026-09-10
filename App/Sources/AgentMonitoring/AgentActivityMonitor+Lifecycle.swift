@@ -15,6 +15,7 @@ extension AgentActivityMonitor {
     func handleScenePhase(_ phase: ScenePhase) {
         switch phase {
         case .active:
+            if !isAppForeground { triggerEligibleAfter = .now }
             isAppForeground = true
             runtime.graceWindow.enteredForeground()
         case .background:

@@ -96,6 +96,7 @@ public actor PresenceStore {
     var activityRecords: [TypingKey: TypingRecord] = [:]
     var activityObservers: [TypingAudience: [Int: AsyncStream<ActivitySnapshot>.Continuation]] = [:]
     var lastPublishedActivity: [TypingAudience: ActivitySnapshot] = [:]
+    var monitoringObservers: [Int: AsyncStream<Void>.Continuation] = [:]
     /// The newest message seen from each author in each scope, held only as long as a
     /// typing indicator could still be in flight behind it. This is what refuses the
     /// typing event a client published a moment *before* the message it announced —
@@ -162,6 +163,9 @@ public actor PresenceStore {
         }
         if presenceChanged { publishPresence() }
         publishTyping(touched)
+        // Only newly accepted typing heartbeats wake the experimental trigger.
+        // Sweeps, messages, presence, and subscribing do not announce new work.
+        if !touched.isEmpty { publishMonitoringHeartbeat() }
     }
 
     /// Reads a batch of newly-stored messages as the end of their authors' typing.
