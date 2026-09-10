@@ -384,11 +384,9 @@ struct ThreadView: View {
                 document: $model.mentionDraft,
                 autocomplete: model.mentionAutocomplete
             )
-            // Scoped to this thread's root, so it says who is writing *here* — and says
-            // nothing about the channel's other traffic, which a reader inside a thread
-            // cannot see and did not ask about. The channel's own strip is the wide one:
-            // it covers its threads, because from there they are not distinguishable.
-            TypingIndicatorView(model: typing, nameFor: names.name(for:))
+            // Scoped to this thread's root, so it says who is typing or working here.
+            // The channel and sibling threads each keep their own activity separate.
+            TypingIndicatorView(model: typing)
             // The same strip the channel carries, for the same reason: a thread read
             // over a dead socket looks exactly like a thread nobody has replied to.
             ConnectionStatusIndicatorView()

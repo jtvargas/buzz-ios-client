@@ -84,7 +84,10 @@ extension PresenceStore {
         for scope in scopes { evictTyping(scope) }
         var audiences: Set<TypingAudience> = []
         for scope in scopes { audiences.formUnion(TypingAudience.containing(scope)) }
-        for audience in audiences { publish(audience) }
+        for audience in audiences {
+            publish(audience)
+            publishActivity(audience)
+        }
     }
 
     /// Yields one audience's current typers to its observers, but only if the list
@@ -148,6 +151,9 @@ extension PresenceStore {
     func evictTyping(_ scope: TypingScope) {
         let cutoff = now()
         typingRecords = typingRecords.filter { key, record in
+            key.scope != scope || record.deadline > cutoff
+        }
+        activityRecords = activityRecords.filter { key, record in
             key.scope != scope || record.deadline > cutoff
         }
     }

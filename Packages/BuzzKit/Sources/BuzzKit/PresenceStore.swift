@@ -41,6 +41,9 @@ import NostrCore
 /// its author's typing in the scope it landed in, both retroactively (the record is
 /// dropped) and forwards (a typing event published no later than the message is refused
 /// — the two race on the wire and arrive in either order).
+/// Agents use the same heartbeat throughout a work turn. ``conversationActivity(in:thread:)``
+/// therefore also retains recent heartbeats independently of messages, so a progress
+/// update does not claim the agent has finished working. Both feeds expire after 8 s.
 ///
 /// Presence and typing are ephemeral by definition: relays never store them
 /// (``NostrCore/EventKind/isEphemeral``), and neither do we. ``BuzzEventStore``
@@ -89,6 +92,10 @@ public actor PresenceStore {
     var presenceRecords: [String: PresenceRecord] = [:]
     /// Per-scope typing, keyed by `(channel, thread, pubkey)` (S-5).
     var typingRecords: [TypingKey: TypingRecord] = [:]
+    /// Recent heartbeats, including participants who have since posted a message.
+    var activityRecords: [TypingKey: TypingRecord] = [:]
+    var activityObservers: [TypingAudience: [Int: AsyncStream<ActivitySnapshot>.Continuation]] = [:]
+    var lastPublishedActivity: [TypingAudience: ActivitySnapshot] = [:]
     /// The newest message seen from each author in each scope, held only as long as a
     /// typing indicator could still be in flight behind it. This is what refuses the
     /// typing event a client published a moment *before* the message it announced —
@@ -230,24 +237,29 @@ public actor PresenceStore {
         return true
     }
 
-    /// Records a typing indicator under `(channel, thread, pubkey)`. Returns whether the
-    /// scope's typer set changed.
+    /// Records a heartbeat under `(channel, thread, pubkey)`. Returns whether either
+    /// activity feed needs to be reconsidered; publication suppresses equal snapshots.
     private func applyTyping(_ event: NostrEvent, scope: TypingScope) -> Bool {
         let key = TypingKey(scope: scope, pubkey: event.pubkey)
+        // Only a newer heartbeat extends activity. Duplicate or out-of-order delivery
+        // must not keep an agent working after its last fresh signal has expired.
+        if let existing = activityRecords[key], event.createdAt <= existing.createdAt { return false }
+        let record = TypingRecord(
+            pubkey: event.pubkey,
+            createdAt: event.createdAt,
+            deadline: now().advanced(by: typingTTL)
+        )
+        activityRecords[key] = record
         // Already superseded by a message from the same author in the same scope. A
         // client publishes its typing on a timer and its message the moment the text is
         // ready, so the last indicator of a turn is routinely still in flight when the
         // message it announced arrives — without this it re-raises the strip for the
         // remainder of the TTL, under the reply it was announcing.
-        if let mark = messageMarks[key], event.createdAt <= mark.createdAt { return false }
+        if let mark = messageMarks[key], event.createdAt <= mark.createdAt { return true }
         if let existing = typingRecords[key], event.createdAt < existing.createdAt {
-            return false
+            return true
         }
-        typingRecords[key] = TypingRecord(
-            pubkey: event.pubkey,
-            createdAt: event.createdAt,
-            deadline: now().advanced(by: typingTTL)
-        )
+        typingRecords[key] = record
         return true
     }
 
@@ -272,7 +284,7 @@ public actor PresenceStore {
     /// timer itself.
     public func sweep() {
         publishPresence()
-        publishTyping(Set(typingRecords.keys.map(\.scope)))
+        publishTyping(Set(typingRecords.keys.map(\.scope)).union(activityRecords.keys.map(\.scope)))
         // The marks outlive nothing: once no typing event old enough to be refused can
         // still be in flight, the mark is only a row in a map that would otherwise grow
         // by one per author per scope for the life of the process.

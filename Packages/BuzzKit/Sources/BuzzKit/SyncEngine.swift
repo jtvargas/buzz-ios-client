@@ -536,6 +536,7 @@ public actor SyncEngine {
         // is on screen then.
         activeChannel = nil
         recentConversationDestinations.removeAll()
+        await presence.clearActivity()
         state = .stopped
     }
 
@@ -626,6 +627,7 @@ public actor SyncEngine {
             state = .starting
             cancelRecovery()
         }
+        if connectionState != .ready { await presence.clearActivity() }
     }
 
     // MARK: - Sync-state helpers
