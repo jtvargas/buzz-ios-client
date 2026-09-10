@@ -8,6 +8,7 @@ struct AgentMonitoringRosterView: View {
         List {
             Section {
                 Text(environment.agentMonitor.status)
+                AgentMonitoringAccessView()
                 if let end = environment.agentMonitor.sessionEndsAt {
                     LabeledContent("Session ends", value: end, format: .dateTime.hour().minute())
                 }

@@ -11,7 +11,8 @@ struct HiveAgentActivity: Widget {
                 .activitySystemActionForegroundColor(.white)
                 .widgetURL(AgentActivityAttributes.link(communityID: context.attributes.communityID))
         } dynamicIsland: { context in
-            DynamicIsland {
+            let paused = context.isStale || context.state.status == .paused || context.state.status == .ended
+            return DynamicIsland {
                 DynamicIslandExpandedRegion(.center) {
                     AgentActivityCard(context: context)
                 }
@@ -20,15 +21,15 @@ struct HiveAgentActivity: Widget {
                     .foregroundStyle(.yellow)
                     .accessibilityLabel("Hive agent activity")
             } compactTrailing: {
-                Text(context.isStale ? "—" : "\(context.state.agentCount)")
+                Text(paused ? "—" : "\(context.state.agentCount)")
                     .monospacedDigit()
                     .accessibilityLabel(
-                        context.isStale ? "Monitoring paused" : "\(context.state.agentCount) agents working"
+                        paused ? "Monitoring paused" : "\(context.state.agentCount) agents working"
                     )
             } minimal: {
-                Image(systemName: context.isStale ? "pause.circle" : "sparkles")
+                Image(systemName: paused ? "pause.circle" : "sparkles")
                     .foregroundStyle(.yellow)
-                    .accessibilityLabel(context.isStale ? "Monitoring paused" : "Hive agent activity")
+                    .accessibilityLabel(paused ? "Monitoring paused" : "Hive agent activity")
             }
             .widgetURL(AgentActivityAttributes.link(communityID: context.attributes.communityID))
             .keylineTint(.yellow)

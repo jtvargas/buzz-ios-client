@@ -8,6 +8,7 @@ extension AgentActivityMonitor {
         var metadata = AgentMonitoringMetadata.empty
         var metadataReadAt = started.advanced(by: .seconds(-30))
         var publishedAt = started.advanced(by: .seconds(-10))
+        var retainedConnection = false
         while sessionID == id, !Task.isCancelled {
             let instant = ContinuousClock.now
             let elapsed = started.duration(to: instant).components.seconds
@@ -19,6 +20,16 @@ extension AgentActivityMonitor {
                 requestStop(message: "Live Activity dismissed")
                 return
             }
+            if retainedConnection != runtime.isActive {
+                retainedConnection = runtime.isActive
+                await engine.retainConnectionForMonitoring(retainedConnection)
+                guard sessionID == id, !Task.isCancelled else { return }
+            }
+            if !canObserveActivity {
+                pauseIfNeeded()
+                do { try await Task.sleep(for: .seconds(2)) } catch { return }
+                continue
+            }
             if metadataReadAt.duration(to: instant) >= .seconds(15) {
                 if let updated = try? await AgentMonitoringMetadata.read(store: store, selfPubkey: selfPubkey) {
                     metadata = updated
@@ -28,28 +39,40 @@ extension AgentActivityMonitor {
             let ready = await engine.refreshMonitoringConnection()
             let records = await engine.presenceStore.monitoredActivity()
             guard sessionID == id, !Task.isCancelled else { return }
-            let rows = ready ? Self.rows(records: records, metadata: metadata, selfPubkey: selfPubkey) : []
-            let count = Set(rows.map(\.pubkey)).count
-            let activityStatus: AgentActivityAttributes.Status = !ready
-                ? .reconnecting : count > 0 ? .working : .waiting
-            let label = activityStatus == .working
-                ? "\(count) \(count == 1 ? "agent" : "agents") working" : activityStatus.label
-            applyRoster(rows, count: count, label: label)
-            runtime.report(elapsed: Double(elapsed), agentCount: count)
-            // Refresh the card's lease even with an unchanged roster. This stops a
-            // killed/suspended process from leaving an apparently live count forever.
-            if lastState?.status != activityStatus || lastState?.rows != Self.widgetRows(rows)
-                || lastState?.agentCount != count || publishedAt.duration(to: instant) >= .seconds(4) {
-                let state = AgentActivityAttributes.ContentState(
-                    rows: Self.widgetRows(rows), agentCount: count, scopeCount: rows.count,
-                    status: activityStatus, updatedAt: .now,
-                    sessionEndsAt: sessionEndsAt ?? .now
-                )
-                publish(state)
+            // A background transition can happen while the reads above await.
+            // Never overwrite its Paused card with an in-flight working snapshot.
+            guard canObserveActivity else { pauseIfNeeded(); continue }
+            if publishActivity(
+                records: records, metadata: metadata, ready: ready, selfPubkey: selfPubkey,
+                refresh: publishedAt.duration(to: instant) >= .seconds(4)
+            ) {
                 publishedAt = instant
             }
+            runtime.report(elapsed: Double(elapsed), agentCount: agentCount)
             do { try await Task.sleep(for: .seconds(2)) } catch { return }
         }
+    }
+
+    private func publishActivity(
+        records: [PresenceStore.MonitoredActivity], metadata: AgentMonitoringMetadata,
+        ready: Bool, selfPubkey: String?, refresh: Bool
+    ) -> Bool {
+        let rows = ready ? Self.rows(records: records, metadata: metadata, selfPubkey: selfPubkey) : []
+        let count = Set(rows.map(\.pubkey)).count
+        let activityStatus: AgentActivityAttributes.Status = !ready ? .reconnecting : count > 0 ? .working : .waiting
+        let label = activityStatus == .working
+            ? "\(count) \(count == 1 ? "agent" : "agents") working" : activityStatus.label
+        applyRoster(rows, count: count, label: label)
+        let widgetRows = Self.widgetRows(rows)
+        // Refresh freshness even with an unchanged roster; a frozen process must
+        // not leave an apparently live count behind indefinitely.
+        guard refresh || lastState?.status != activityStatus || lastState?.rows != widgetRows
+            || lastState?.isForegroundOnly != !runtime.isActive || lastState?.agentCount != count else { return false }
+        publish(AgentActivityAttributes.ContentState(
+            rows: widgetRows, agentCount: count, scopeCount: rows.count, status: activityStatus,
+            updatedAt: .now, sessionEndsAt: sessionEndsAt ?? .now, isForegroundOnly: !runtime.isActive
+        ))
+        return true
     }
 
     private static func rows(

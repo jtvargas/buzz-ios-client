@@ -72,6 +72,7 @@ extension AppEnvironment {
     /// grace window, so the departure goes out while the socket is still live; on
     /// foreground it forwards first, then resumes beating.
     func handleScenePhase(_ phase: ScenePhase) {
+        agentMonitor.handleScenePhase(phase)
         // Unsent text first, and outside the engine guard: leaving the foreground is the
         // last moment this process is guaranteed to still be here. Usually there is
         // nothing outstanding — the write-through has normally already landed.

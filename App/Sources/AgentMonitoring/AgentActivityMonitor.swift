@@ -25,6 +25,7 @@ final class AgentActivityMonitor {
     @ObservationIgnored var work: Task<Void, Never>?
     @ObservationIgnored var engine: SyncEngine?
     @ObservationIgnored var lastState: AgentActivityAttributes.ContentState?
+    @ObservationIgnored var isAppForeground = true
     @ObservationIgnored private var stoppingTask: Task<Void, Never>?
 
     func start(engine: SyncEngine, store: BuzzEventStore, community: Community, selfPubkey: String?) {
@@ -37,12 +38,14 @@ final class AgentActivityMonitor {
         let id = UUID()
         sessionID = id
         self.engine = engine
+        isAppForeground = true
         isStarting = true
         status = "Starting monitoring…"
         let end = Date.now.addingTimeInterval(AgentMonitoringRuntime.duration)
         sessionEndsAt = end
         let initial = AgentActivityAttributes.ContentState(
-            rows: [], agentCount: 0, scopeCount: 0, status: .waiting, updatedAt: .now, sessionEndsAt: end
+            rows: [], agentCount: 0, scopeCount: 0, status: .waiting, updatedAt: .now,
+            sessionEndsAt: end, isForegroundOnly: true
         )
         lastState = initial
         work = Task { [weak self] in
@@ -54,49 +57,20 @@ final class AgentActivityMonitor {
                     ), state: initial
                 )
                 guard sessionID == id, !Task.isCancelled else { return }
-                try runtime.request(
-                    granted: { [weak self] in
-                        self?.beginGrantedSession(id: id, engine: engine, store: store, selfPubkey: selfPubkey)
-                    },
-                    expired: { [weak self] in
-                        self?.requestStop(message: "iOS interrupted monitoring", immediately: false, succeeded: false)
-                    }
-                )
-                // With .fail, a successful request should launch promptly. Keep a
-                // bounded fallback if the system never invokes the registered handler.
-                try await Task.sleep(for: .seconds(10))
-                if sessionID == id, isStarting {
-                    requestStop(
-                        message: "Background runtime did not start. Try again in Settings.",
-                        immediately: false, succeeded: false
-                    )
-                }
+                isStarting = false
+                isMonitoring = true
+                retryBackgroundAccess()
+                await run(id: id, engine: engine, store: store, selfPubkey: selfPubkey)
+                await engine.retainConnectionForMonitoring(false)
             } catch is CancellationError {
                 // Stop owns cleanup and waits for this operation before ending the card.
             } catch {
                 guard sessionID == id else { return }
                 let message = error is AgentLiveActivityWriter.WriterError
                     ? "Allow Live Activities for Hive in iOS Settings"
-                    : "Background monitoring unavailable: \(error.localizedDescription)"
+                    : "Live Activity unavailable: \(error.localizedDescription)"
                 requestStop(message: message, immediately: false, succeeded: false)
             }
-        }
-    }
-
-    private func beginGrantedSession(id: UUID, engine: SyncEngine, store: BuzzEventStore, selfPubkey: String?) {
-        guard sessionID == id, isStarting else { return }
-        work?.cancel()
-        isStarting = false
-        isMonitoring = true
-        status = "Monitoring agent activity"
-        work = Task { [weak self] in
-            await engine.retainConnectionForMonitoring(true)
-            guard let self, sessionID == id, !Task.isCancelled else {
-                await engine.retainConnectionForMonitoring(false)
-                return
-            }
-            await run(id: id, engine: engine, store: store, selfPubkey: selfPubkey)
-            await engine.retainConnectionForMonitoring(false)
         }
     }
 

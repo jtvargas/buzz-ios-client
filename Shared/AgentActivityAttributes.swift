@@ -12,6 +12,8 @@ struct AgentActivityAttributes: ActivityAttributes, Sendable {
         var status: Status
         var updatedAt: Date
         var sessionEndsAt: Date
+        // Optional for cards created by an earlier build of this prototype.
+        var isForegroundOnly: Bool?
     }
 
     struct AgentRow: Codable, Hashable, Identifiable, Sendable {

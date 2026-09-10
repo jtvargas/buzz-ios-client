@@ -23,6 +23,7 @@ struct ExperimentalSettingsCard: View {
                 VStack(alignment: .leading, spacing: 12) {
                     Text(environment.agentMonitor.status)
                         .font(.hive(.subheadline, weight: .medium))
+                    AgentMonitoringAccessView()
                     HStack {
                         NavigationLink("View agents") { AgentMonitoringRosterView() }
                         Spacer()

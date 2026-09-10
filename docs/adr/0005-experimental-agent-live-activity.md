@@ -17,13 +17,22 @@ preference. A subsequent foreground app launch or community switch can start a n
 session while the preference remains enabled. A stopped or interrupted session is
 not automatically restarted on each foreground transition within the same session.
 
-- The app requests iOS 26 `BGContinuedProcessingTask` runtime with an immediate-fail
-  strategy. Each request has its own identifier and handler. The system progress
-  describes elapsed time in the monitoring window, never agent task completion.
+- Foreground monitoring starts independently of iOS 26 `BGContinuedProcessingTask`.
+  The app requests background runtime with an immediate-fail strategy after a
+  one-second foreground settling delay. A missing callback gets one retry after
+  two seconds, with a fresh identifier and a five-second callback deadline for each
+  attempt. Exhausting those attempts leaves foreground monitoring running. Settings
+  offers an explicit retry. The system progress describes elapsed time in the
+  monitoring window, never agent task completion.
 - Only a granted session retains the existing SyncEngine relay connection while
   backgrounded. Human presence still follows the real scene lifecycle. Releasing
   the session restores the existing background connection policy. The monitoring
   tick resumes a connection if an already-started background suspension finishes late.
+- Without a real launch callback the app and card say Foreground only. Leaving the
+  foreground cancels pending requests, clears the displayed roster, and publishes
+  Paused immediately. In-flight reads cannot overwrite that state. Foreground
+  monitoring resumes on return within the same monitoring window. A late callback
+  from a cancelled or replaced request is completed without adopting it.
 - BuzzKit exposes a fresh in-memory activity snapshot. The monitor filters verified
   agent identities, excludes self, and preserves channel/thread scopes. It uses the
   same subscriptions as Hive: joined channels plus any active conversation, within
@@ -82,8 +91,10 @@ No test cases or simulator runs are part of this prototype, at the owner's reque
 Build and install the signed app and extension; the owner performs runtime review:
 
 1. Leave Experimental off and confirm ordinary app use is unchanged.
-2. Enable it while Hive is foregrounded. Check the status, custom card, and any
-   system progress card. Start agents in different joined channels and threads.
+2. Enable it while Hive is foregrounded. Agent updates must start without waiting
+   for background access. Check Foreground only versus Background monitoring active
+   in Settings and start agents in different joined channels and threads. If both
+   background attempts time out, foreground monitoring must remain running.
 3. Lock the phone and use another app. Compare the count and roster with actual
    agent activity, including an agent working in more than one conversation.
 4. Let agents stop. Their heartbeat presence should expire; no success is inferred.
@@ -97,6 +108,25 @@ Build and install the signed app and extension; the owner performs runtime revie
    rather than promise continued monitoring. Reopen Hive to reclaim the old card.
 9. Let a session reach thirty minutes. Start another in Settings. Repeat under Low
    Power Mode and with larger accessibility text to evaluate system limits/layout.
+10. While Foreground only, lock the phone: the card must say Paused. Reopen Hive:
+    updates resume. Retry background access explicitly and check that only an actual
+    launch callback changes the capability to Background monitoring active. Stop or
+    toggle off during either attempt; no late callback may revive the session.
+
+## Amendment (2026-09-10): missing background launch callback
+
+Device logs from iPhone JT on iOS 26.6.1 showed four submissions followed by the
+scheduler message `Foregrounded apps (...) don't include expected identifier`.
+No launch callback or submission error reached Hive; the original ten-second
+watchdog then cancelled each session. This matches the platform failure described
+in [Apple DTS's background-task discussion](https://developer.apple.com/forums/thread/807370).
+
+The confirmed client defect was making all foreground monitoring depend on that
+callback. The monitor now starts independently and treats background execution as
+an optional capability. Delayed submission and one retry may help transient system
+state; they do not bypass an iOS refusal or prove that background delivery works on
+this device. Sparse runtime logs record submissions, missing callbacks, errors, and
+actual grants without agent or conversation data.
 
 ## References
 

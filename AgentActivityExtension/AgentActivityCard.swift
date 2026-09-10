@@ -55,6 +55,9 @@ struct AgentActivityCard: View {
             }
 
             HStack(spacing: 3) {
+                if !paused, context.state.isForegroundOnly == true {
+                    Text("Foreground only ·")
+                }
                 Text("Updated")
                 Text(context.state.updatedAt, style: .relative)
                 Spacer(minLength: 0)
