@@ -24,7 +24,7 @@ extension ThreadModel {
     /// The seed is assigned through ``ThreadModel/mentionDraft`` like anything typed, so the
     /// same `didSet` persists it: leave the thread mid-conversation and the agents are still
     /// addressed on the way back in.
-    func sendReply(keepingAgents isAgent: ((String) -> Bool)? = nil) {
+    func sendReply(keepingAgents isAgent: ((String) -> Bool)? = nil, willSend: (([String]) -> Void)? = nil) {
         let document = mentionDraft
         let text = document.text.trimmingCharacters(in: .whitespacesAndNewlines)
         // The same rules the channel's send states: a picture alone is a reply,
@@ -36,6 +36,7 @@ extension ThreadModel {
         let selfPubkey = self.selfPubkey
         guard let media = attachments.takeForSend() else { return }
         guard !text.isEmpty || !media.isEmpty else { return }
+        willSend?(mentionPubkeys)
         // The author's own key is filtered out for the reason it is filtered out of the tags:
         // a self-mention notifies nobody, and seeding one would park the reader's own name in
         // their composer for the rest of the thread.

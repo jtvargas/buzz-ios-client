@@ -35,7 +35,8 @@ struct ExperimentalSettingsCard: View {
                     }
                     .font(.hive(.footnote, weight: .medium))
                     .disabled(environment.agentMonitor.isStopping)
-                    Text("Tracks joined conversations in the current community. "
+                    Text("Sending work to an agent starts or retries monitoring while Experimental is on. "
+                         + "Tracks joined conversations in the current community. "
                          + "iOS may interrupt monitoring or show its own progress card. "
                          + "Names and channel labels appear on the Lock Screen.")
                         .font(.hive(.footnote))

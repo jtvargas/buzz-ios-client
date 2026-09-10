@@ -3,6 +3,8 @@ import SwiftUI
 /// Channel-specific shell around the shared mention-aware composer.
 struct ComposerView: View {
     @Bindable var model: ChannelTimelineModel
+    @Environment(AppEnvironment.self) private var appEnvironment: AppEnvironment?
+    @Environment(\.entityNames) private var names
 
     var body: some View {
         MessageComposerView(
@@ -12,7 +14,13 @@ struct ComposerView: View {
             placeholder: "Message",
             sendAccessibilityLabel: "Send",
             onTextChange: model.handleTyping,
-            onSend: model.send
+            onSend: {
+                model.send { mentions in
+                    appEnvironment?.prepareAgentMonitoringForSend(
+                        channel: model.channel, mentions: mentions, names: names, sender: model.sender
+                    )
+                }
+            }
         )
         .alert(
             "Message not sent",

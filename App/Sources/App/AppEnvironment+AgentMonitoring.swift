@@ -1,13 +1,35 @@
+import BuzzKit
 import Foundation
 
 extension AppEnvironment {
-    func startExperimentalMonitoringIfEnabled(force: Bool = false) {
+    func startExperimentalMonitoringIfEnabled(force: Bool = false, requestImmediately: Bool = false) {
         guard settings.experimentalAgentMonitoring,
               force || !agentMonitor.hasAttemptedStart,
               phase == .running,
               let engine, let store, let community = communities.active,
               community.id == sessionCommunityID else { return }
-        agentMonitor.start(engine: engine, store: store, community: community, selfPubkey: selfPubkeyHex)
+        agentMonitor.start(
+            engine: engine, store: store, community: community, selfPubkey: selfPubkeyHex,
+            requestImmediately: requestImmediately
+        )
+    }
+
+    /// Called only for a validated composer send, before enqueue awaits or the
+    /// reader locks the screen. Heartbeats and remote messages never trigger it.
+    func prepareAgentMonitoringForSend(
+        channel: String, mentions: [String], names: EntityNames, sender: any MessageSending
+    ) {
+        guard settings.experimentalAgentMonitoring, phase == .running,
+              let engine, let sendingEngine = sender as? SyncEngine, sendingEngine === engine,
+              communities.activeID == sessionCommunityID else { return }
+        let addressesAgent = mentions.contains(where: names.isAgent)
+            || names.conversation(for: channel).kind == .agent
+        guard addressesAgent else { return }
+        if agentMonitor.isMonitoring || agentMonitor.isStarting {
+            agentMonitor.retryBackgroundAccess(immediately: true)
+        } else {
+            startExperimentalMonitoringIfEnabled(force: true, requestImmediately: true)
+        }
     }
 
     func applyExperimentalMonitoring(_ enabled: Bool) {

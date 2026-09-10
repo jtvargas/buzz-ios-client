@@ -2,20 +2,21 @@ import SwiftUI
 import UIKit
 
 extension AgentActivityMonitor {
-    var canObserveActivity: Bool { isAppForeground || runtime.isActive }
+    var canObserveActivity: Bool { isAppForeground || runtime.hasExecutionTime }
 
-    func retryBackgroundAccess() {
-        guard isMonitoring, !isStopping, isAppForeground,
+    func retryBackgroundAccess(immediately: Bool = false) {
+        guard isMonitoring || isStarting, !isStopping, isAppForeground,
               UIApplication.shared.applicationState == .active else { return }
-        runtime.request { [weak self] in
+        runtime.request(immediately: immediately, expired: { [weak self] in
             self?.requestStop(message: "iOS interrupted monitoring", immediately: false, succeeded: false)
-        }
+        }, windowEnded: { [weak self] in self?.pauseIfNeeded() })
     }
 
     func handleScenePhase(_ phase: ScenePhase) {
         switch phase {
         case .active:
             isAppForeground = true
+            runtime.graceWindow.enteredForeground()
         case .background:
             isAppForeground = false
             guard isMonitoring || isStarting else { return }
@@ -37,6 +38,7 @@ extension AgentActivityMonitor {
         state.agentCount = 0
         state.scopeCount = 0
         state.isForegroundOnly = true
+        state.isTemporaryBackground = false
         state.updatedAt = .now
         publish(state)
     }

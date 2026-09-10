@@ -28,7 +28,10 @@ final class AgentActivityMonitor {
     @ObservationIgnored var isAppForeground = true
     @ObservationIgnored private var stoppingTask: Task<Void, Never>?
 
-    func start(engine: SyncEngine, store: BuzzEventStore, community: Community, selfPubkey: String?) {
+    func start(
+        engine: SyncEngine, store: BuzzEventStore, community: Community, selfPubkey: String?,
+        requestImmediately: Bool = false
+    ) {
         guard !isStarting, !isMonitoring, !isStopping else { return }
         guard UIApplication.shared.applicationState == .active else {
             status = "Open Hive to start monitoring"
@@ -48,6 +51,8 @@ final class AgentActivityMonitor {
             sessionEndsAt: end, isForegroundOnly: true
         )
         lastState = initial
+        // A Send tap submits before asynchronous card setup or a quick screen lock.
+        if requestImmediately { retryBackgroundAccess(immediately: true) }
         work = Task { [weak self] in
             guard let self else { return }
             do {
@@ -59,7 +64,7 @@ final class AgentActivityMonitor {
                 guard sessionID == id, !Task.isCancelled else { return }
                 isStarting = false
                 isMonitoring = true
-                retryBackgroundAccess()
+                if !requestImmediately { retryBackgroundAccess() }
                 await run(id: id, engine: engine, store: store, selfPubkey: selfPubkey)
                 await engine.retainConnectionForMonitoring(false)
             } catch is CancellationError {

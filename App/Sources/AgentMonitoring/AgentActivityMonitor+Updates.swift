@@ -20,8 +20,8 @@ extension AgentActivityMonitor {
                 requestStop(message: "Live Activity dismissed")
                 return
             }
-            if retainedConnection != runtime.isActive {
-                retainedConnection = runtime.isActive
+            if retainedConnection != runtime.hasExecutionTime {
+                retainedConnection = runtime.hasExecutionTime
                 await engine.retainConnectionForMonitoring(retainedConnection)
                 guard sessionID == id, !Task.isCancelled else { return }
             }
@@ -67,10 +67,13 @@ extension AgentActivityMonitor {
         // Refresh freshness even with an unchanged roster; a frozen process must
         // not leave an apparently live count behind indefinitely.
         guard refresh || lastState?.status != activityStatus || lastState?.rows != widgetRows
-            || lastState?.isForegroundOnly != !runtime.isActive || lastState?.agentCount != count else { return false }
+            || lastState?.isForegroundOnly != !runtime.hasExecutionTime
+            || lastState?.isTemporaryBackground != (runtime.graceWindow.isActive && !runtime.isActive)
+            || lastState?.agentCount != count else { return false }
         publish(AgentActivityAttributes.ContentState(
             rows: widgetRows, agentCount: count, scopeCount: rows.count, status: activityStatus,
-            updatedAt: .now, sessionEndsAt: sessionEndsAt ?? .now, isForegroundOnly: !runtime.isActive
+            updatedAt: .now, sessionEndsAt: sessionEndsAt ?? .now, isForegroundOnly: !runtime.hasExecutionTime,
+            isTemporaryBackground: runtime.graceWindow.isActive && !runtime.isActive
         ))
         return true
     }

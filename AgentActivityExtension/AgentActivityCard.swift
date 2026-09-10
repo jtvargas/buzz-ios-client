@@ -57,6 +57,8 @@ struct AgentActivityCard: View {
             HStack(spacing: 3) {
                 if !paused, context.state.isForegroundOnly == true {
                     Text("Foreground only ·")
+                } else if !paused, context.state.isTemporaryBackground == true {
+                    Text("Brief background window ·")
                 }
                 Text("Updated")
                 Text(context.state.updatedAt, style: .relative)

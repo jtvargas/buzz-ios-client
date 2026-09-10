@@ -19,20 +19,35 @@ not automatically restarted on each foreground transition within the same sessio
 
 - Foreground monitoring starts independently of iOS 26 `BGContinuedProcessingTask`.
   The app requests background runtime with an immediate-fail strategy after a
-  one-second foreground settling delay. A missing callback gets one retry after
+  one-second foreground settling delay when the session starts from Settings.
+  Sending to a verified agent DM or mentioning an agent submits immediately from
+  the composer action, before card setup or asynchronous enqueue. This also starts
+  a new session if the previous one ended and Experimental remains enabled. Empty
+  or attaching drafts do not trigger it. The sender must belong to the mounted
+  engine; ordinary human messages and received heartbeats never trigger requests.
+  A direct send replaces a pending Settings attempt; rapid sends share a direct
+  attempt for five seconds. A missing callback gets one retry after
   two seconds, with a fresh identifier and a five-second callback deadline for each
   attempt. Exhausting those attempts leaves foreground monitoring running. Settings
   offers an explicit retry. The system progress describes elapsed time in the
   monitoring window, never agent task completion.
-- Only a granted session retains the existing SyncEngine relay connection while
-  backgrounded. Human presence still follows the real scene lifecycle. Releasing
+- A real continued-processing grant or a live UIKit background assertion retains
+  the existing SyncEngine relay connection while backgrounded. Human presence still
+  follows the real scene lifecycle. Releasing
   the session restores the existing background connection policy. The monitoring
   tick resumes a connection if an already-started background suspension finishes late.
-- Without a real launch callback the app and card say Foreground only. Leaving the
-  foreground cancels pending requests, clears the displayed roster, and publishes
-  Paused immediately. In-flight reads cannot overwrite that state. Foreground
-  monitoring resumes on return within the same monitoring window. A late callback
-  from a cancelled or replaced request is completed without adopting it.
+- Each foreground request can acquire a single named `UIApplication` background
+  assertion for a brief handoff. The app and card label this Brief background
+  window, separately from a continued-processing grant. It ends at twenty seconds
+  after backgrounding or earlier on iOS expiration, foreground return, grant,
+  or session cleanup. Background events never renew it. It does not promise twenty
+  seconds of execution or extend iOS's shared background budget.
+- Locking preserves a request already submitted in the foreground, until its
+  callback deadline. A retry not yet submitted is never submitted from the
+  background. Without either execution mechanism the roster clears and the card
+  publishes Paused; in-flight reads cannot overwrite that state. Foreground
+  monitoring resumes on return within the same monitoring window. A callback from
+  a cancelled or replaced request is completed without adopting it.
 - BuzzKit exposes a fresh in-memory activity snapshot. The monitor filters verified
   agent identities, excludes self, and preserves channel/thread scopes. It uses the
   same subscriptions as Hive: joined channels plus any active conversation, within
@@ -92,7 +107,7 @@ Build and install the signed app and extension; the owner performs runtime revie
 
 1. Leave Experimental off and confirm ordinary app use is unchanged.
 2. Enable it while Hive is foregrounded. Agent updates must start without waiting
-   for background access. Check Foreground only versus Background monitoring active
+   for extended execution. Check Brief background window, Foreground only, and Background monitoring active
    in Settings and start agents in different joined channels and threads. If both
    background attempts time out, foreground monitoring must remain running.
 3. Lock the phone and use another app. Compare the count and roster with actual
@@ -108,10 +123,14 @@ Build and install the signed app and extension; the owner performs runtime revie
    rather than promise continued monitoring. Reopen Hive to reclaim the old card.
 9. Let a session reach thirty minutes. Start another in Settings. Repeat under Low
    Power Mode and with larger accessibility text to evaluate system limits/layout.
-10. While Foreground only, lock the phone: the card must say Paused. Reopen Hive:
-    updates resume. Retry background access explicitly and check that only an actual
-    launch callback changes the capability to Background monitoring active. Stop or
-    toggle off during either attempt; no late callback may revive the session.
+10. Send to an agent DM or mention an agent in a channel/thread, then lock promptly:
+    a live UIKit assertion permits brief updates without cancelling the pending
+    continued-processing request. Without a continued-processing grant, expect
+    Paused at twenty seconds or earlier on iOS expiration. Reopen Hive: updates
+    resume. Retry background monitoring explicitly; only an actual launch callback
+    changes the capability to Background monitoring active. Stop or toggle off
+    during either attempt; no late callback may revive the session. Human sends
+    and remote agent heartbeats must not create more background assertions.
 
 ## Amendment (2026-09-10): missing background launch callback
 
@@ -128,10 +147,17 @@ state; they do not bypass an iOS refusal or prove that background delivery works
 this device. Sparse runtime logs record submissions, missing callbacks, errors, and
 actual grants without agent or conversation data.
 
+The follow-up couples new attempts to the user's actual agent-send action and
+preserves an in-flight request across locking. A separate, bounded UIKit assertion
+provides short handoff execution while the continued-processing result is unknown
+or unavailable. It is released synchronously on expiration, is never renewed by a
+timer, and is distinct in both UI and relay ownership from a long-running grant.
+
 ## References
 
 - [Apple: Performing long-running tasks](https://developer.apple.com/documentation/backgroundtasks/performing-long-running-tasks-on-ios-and-ipados)
 - [Apple: BGContinuedProcessingTask](https://developer.apple.com/documentation/backgroundtasks/bgcontinuedprocessingtask)
+- [Apple: UIApplication background task lifetime](https://developer.apple.com/forums/thread/85066)
 - [Apple: Live Activity presentation and limits](https://developer.apple.com/documentation/activitykit/displaying-live-data-with-live-activities)
 - [Apple DTS: continued-processing use cases](https://developer.apple.com/forums/thread/840384)
 - [Apple DTS: networking and suspension](https://developer.apple.com/forums/thread/799259)

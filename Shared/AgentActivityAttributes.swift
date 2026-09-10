@@ -14,6 +14,7 @@ struct AgentActivityAttributes: ActivityAttributes, Sendable {
         var sessionEndsAt: Date
         // Optional for cards created by an earlier build of this prototype.
         var isForegroundOnly: Bool?
+        var isTemporaryBackground: Bool?
     }
 
     struct AgentRow: Codable, Hashable, Identifiable, Sendable {

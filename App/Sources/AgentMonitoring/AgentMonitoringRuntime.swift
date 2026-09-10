@@ -14,49 +14,79 @@ final class AgentMonitoringRuntime {
     private(set) var isActive = false
     private(set) var isRequesting = false
     private(set) var explanation = "Updates pause when Hive leaves the foreground."
+    @ObservationIgnored let graceWindow = AgentMonitoringGraceWindow()
+
+    var hasExecutionTime: Bool { isActive || graceWindow.isActive }
 
     @ObservationIgnored private var identifier: String?
     @ObservationIgnored private var task: BGContinuedProcessingTask?
     @ObservationIgnored private var requestLoop: Task<Void, Never>?
     @ObservationIgnored private var requestGeneration: UUID?
+    @ObservationIgnored private var lastDirectRequest: ContinuousClock.Instant?
     private static let log = Logger(subsystem: "Hive", category: "AgentMonitoring.runtime")
 
-    func request(expired: @escaping @MainActor () -> Void) {
-        guard !isActive, !isRequesting else { return }
+    func request(
+        immediately: Bool = false,
+        expired: @escaping @MainActor () -> Void,
+        windowEnded: @escaping @MainActor () -> Void
+    ) {
+        guard !isActive, UIApplication.shared.applicationState == .active else { return }
+        graceWindow.begin(onEnd: windowEnded)
+        if isRequesting {
+            // The first Send tap replaces an earlier Settings request. Rapid sends
+            // share the direct request so several agents do not create a burst.
+            guard immediately else { return }
+            if let lastDirectRequest, lastDirectRequest.duration(to: .now) < .seconds(5) { return }
+            requestLoop?.cancel()
+            cancelPendingRequest()
+        }
         let generation = UUID()
         requestGeneration = generation
         isRequesting = true
-        explanation = "Requesting background access. Updates already work while Hive is open."
+        explanation = "Requesting longer background monitoring. Updates already work while Hive is open."
+        if immediately {
+            lastDirectRequest = .now
+            do { try submit(expired: expired) } catch {
+                submissionFailed(error)
+                return
+            }
+        }
         requestLoop = Task { [weak self] in
             guard let self else { return }
-            // Allow foreground presentation to settle before asking the scheduler.
-            // One retry handles a transient mismatch in its foreground-app list.
-            for attempt in 1...2 {
-                do {
+            await waitForLaunch(generation: generation, immediately: immediately, expired: expired)
+        }
+    }
+
+    private func waitForLaunch(
+        generation: UUID, immediately: Bool, expired: @escaping @MainActor () -> Void
+    ) async {
+        // Allow foreground presentation to settle before asking the scheduler.
+        // One retry handles a transient mismatch in its foreground-app list.
+        for attempt in 1...2 {
+            do {
+                if !immediately || attempt > 1 {
                     try await Task.sleep(for: .seconds(attempt == 1 ? 1 : 2))
                     guard requestGeneration == generation, !Task.isCancelled else { return }
                     guard UIApplication.shared.applicationState == .active else {
-                        enteredBackground()
+                        markUnavailable("Longer background monitoring unavailable. Open Hive to retry.")
                         return
                     }
                     try submit(expired: expired)
-                    try await Task.sleep(for: .seconds(5))
-                    guard requestGeneration == generation, !Task.isCancelled, !isActive else { return }
-                    Self.log.notice("Submission received no launch callback; attempt \(attempt)")
-                    cancelPendingRequest()
-                } catch is CancellationError {
-                    return
-                } catch {
-                    guard requestGeneration == generation, !Task.isCancelled else { return }
-                    Self.log.error("Submission failed: \(error.localizedDescription, privacy: .public)")
-                    cancelPendingRequest()
-                    markUnavailable("iOS couldn't grant background access. Updates work while Hive is open.")
-                    return
                 }
+                try await Task.sleep(for: .seconds(5))
+                guard requestGeneration == generation, !Task.isCancelled, !isActive else { return }
+                Self.log.notice("Submission received no launch callback; attempt \(attempt)")
+                cancelPendingRequest()
+            } catch is CancellationError {
+                return
+            } catch {
+                guard requestGeneration == generation, !Task.isCancelled else { return }
+                submissionFailed(error)
+                return
             }
-            guard requestGeneration == generation else { return }
-            markUnavailable("iOS didn't start background monitoring. Updates work while Hive is open.")
         }
+        guard requestGeneration == generation else { return }
+        markUnavailable("iOS didn't start longer background monitoring. You can retry from Hive.")
     }
 
     private func submit(expired: @escaping @MainActor () -> Void) throws {
@@ -83,6 +113,7 @@ final class AgentMonitoringRuntime {
                     }
                 }
                 self.isActive = true
+                self.graceWindow.end()
                 self.isRequesting = false
                 self.explanation = "Background monitoring active. iOS may still interrupt it."
                 self.requestLoop?.cancel()
@@ -100,12 +131,22 @@ final class AgentMonitoringRuntime {
     }
 
     func enteredBackground() {
+        graceWindow.enteredBackground()
         guard !isActive else { return }
+        // Preserve a request already submitted in the foreground. Its callback
+        // deadline still applies, and the real UIKit assertion covers the handoff.
+        guard identifier == nil else { return }
         requestLoop?.cancel()
         requestLoop = nil
         requestGeneration = nil
         cancelPendingRequest()
-        markUnavailable("Background access wasn't granted. Open Hive to resume updates.")
+        markUnavailable("Longer background monitoring unavailable. Open Hive to retry.")
+    }
+
+    private func submissionFailed(_ error: Error) {
+        Self.log.error("Submission failed: \(error.localizedDescription, privacy: .public)")
+        cancelPendingRequest()
+        markUnavailable("iOS couldn't start longer background monitoring. You can retry from Hive.")
     }
 
     private func cancelPendingRequest() {
@@ -134,11 +175,13 @@ final class AgentMonitoringRuntime {
         requestLoop = nil
         requestGeneration = nil
         if let identifier { BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: identifier) }
+        lastDirectRequest = nil
         identifier = nil
         task?.expirationHandler = nil
         task?.setTaskCompleted(success: success)
         task = nil
         isActive = false
+        graceWindow.end()
         isRequesting = false
         explanation = "Updates pause when Hive leaves the foreground."
     }
