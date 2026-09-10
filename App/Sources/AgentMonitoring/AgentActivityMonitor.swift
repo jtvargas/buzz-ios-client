@@ -19,6 +19,7 @@ final class AgentActivityMonitor {
     private(set) var lastUpdate: Date?
     private(set) var hasAttemptedStart = false
     var isArmed = false
+    var waitsForForegroundReturn = false
 
     @ObservationIgnored let runtime = AgentMonitoringRuntime()
     @ObservationIgnored let writer = AgentLiveActivityWriter()
@@ -30,6 +31,8 @@ final class AgentActivityMonitor {
     @ObservationIgnored private var stoppingTask: Task<Void, Never>?
     @ObservationIgnored var triggerTask: Task<Void, Never>?
     @ObservationIgnored var triggerEligibleAfter = ContinuousClock.now
+    @ObservationIgnored var nextAutomaticRetryAt: ContinuousClock.Instant?
+    @ObservationIgnored var automaticRetryDelay: Duration = .seconds(30)
 
     func start(
         engine: SyncEngine, store: BuzzEventStore, community: Community, selfPubkey: String?,
@@ -44,6 +47,7 @@ final class AgentActivityMonitor {
         let id = UUID()
         sessionID = id
         self.engine = engine
+        resetAutomaticRecovery()
         isAppForeground = true
         isStarting = true
         status = "Starting monitoring…"
@@ -58,7 +62,7 @@ final class AgentActivityMonitor {
         lastState = initial
         applyRoster(initialRows, count: count, label: "\(count) \(count == 1 ? "agent" : "agents") working")
         // Request execution only after actual agent activity, before card setup.
-        retryBackgroundAccess(immediately: true)
+        requestBackgroundMonitoring()
         work = Task { [weak self] in
             guard let self else { return }
             do {
@@ -95,6 +99,7 @@ final class AgentActivityMonitor {
             return
         }
         isStopping = true
+        resetAutomaticRecovery()
         sessionID = nil
         let previous = work
         previous?.cancel()

@@ -4,18 +4,13 @@ import UIKit
 extension AgentActivityMonitor {
     var canObserveActivity: Bool { isAppForeground || runtime.hasExecutionTime }
 
-    func retryBackgroundAccess(immediately: Bool = false) {
-        guard isMonitoring || isStarting, !isStopping, isAppForeground,
-              UIApplication.shared.applicationState == .active else { return }
-        runtime.request(immediately: immediately, expired: { [weak self] in
-            self?.requestStop(message: "iOS interrupted monitoring", immediately: false, succeeded: false)
-        }, windowEnded: { [weak self] in self?.pauseIfNeeded() })
-    }
-
     func handleScenePhase(_ phase: ScenePhase) {
         switch phase {
         case .active:
-            if !isAppForeground { triggerEligibleAfter = .now }
+            if !isAppForeground {
+                triggerEligibleAfter = .now
+                resetAutomaticRecovery()
+            }
             isAppForeground = true
             runtime.graceWindow.enteredForeground()
         case .background:
@@ -33,7 +28,7 @@ extension AgentActivityMonitor {
     func pauseIfNeeded() {
         guard isMonitoring, !isStopping, !canObserveActivity,
               var state = lastState, state.status != .paused else { return }
-        applyRoster([], count: 0, label: "Paused · Open Hive to resume")
+        applyRoster([], count: 0, label: "Paused · Resumes automatically when Hive is open")
         state.status = .paused
         state.rows = []
         state.agentCount = 0

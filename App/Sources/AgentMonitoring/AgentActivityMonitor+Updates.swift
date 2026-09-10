@@ -47,6 +47,7 @@ extension AgentActivityMonitor {
             // A background transition can happen while the reads above await.
             // Never overwrite its Paused card with an in-flight working snapshot.
             guard canObserveActivity else { pauseIfNeeded(); continue }
+            recoverBackgroundIfNeeded(records: records, metadata: metadata, ready: ready, selfPubkey: selfPubkey)
             if publishActivity(
                 records: records, metadata: metadata, ready: ready, selfPubkey: selfPubkey,
                 refresh: publishedAt.duration(to: instant) >= .seconds(4)

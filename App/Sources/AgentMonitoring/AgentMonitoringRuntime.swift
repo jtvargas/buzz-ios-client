@@ -68,7 +68,7 @@ final class AgentMonitoringRuntime {
                     try await Task.sleep(for: .seconds(attempt == 1 ? 1 : 2))
                     guard requestGeneration == generation, !Task.isCancelled else { return }
                     guard UIApplication.shared.applicationState == .active else {
-                        markUnavailable("Longer background monitoring unavailable. Open Hive to retry.")
+                        markUnavailable("Background monitoring unavailable. Hive retries after reopening.")
                         return
                     }
                     try submit(expired: expired)
@@ -86,7 +86,7 @@ final class AgentMonitoringRuntime {
             }
         }
         guard requestGeneration == generation else { return }
-        markUnavailable("iOS didn't start longer background monitoring. You can retry from Hive.")
+        markUnavailable("iOS didn't start background monitoring. Hive retries automatically while agents are working.")
     }
 
     private func submit(expired: @escaping @MainActor () -> Void) throws {
@@ -140,13 +140,13 @@ final class AgentMonitoringRuntime {
         requestLoop = nil
         requestGeneration = nil
         cancelPendingRequest()
-        markUnavailable("Longer background monitoring unavailable. Open Hive to retry.")
+        markUnavailable("Background monitoring unavailable. Hive retries automatically after reopening.")
     }
 
     private func submissionFailed(_ error: Error) {
         Self.log.error("Submission failed: \(error.localizedDescription, privacy: .public)")
         cancelPendingRequest()
-        markUnavailable("iOS couldn't start longer background monitoring. You can retry from Hive.")
+        markUnavailable("iOS couldn't start background monitoring. Hive retries while agents are working.")
     }
 
     private func cancelPendingRequest() {

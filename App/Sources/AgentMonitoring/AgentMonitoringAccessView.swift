@@ -16,7 +16,7 @@ struct AgentMonitoringAccessView: View {
                 )
                 .font(.hive(.subheadline, weight: .medium))
                 if monitor.runtime.graceWindow.isActive && !monitor.runtime.isActive {
-                    Text("Updates can continue for up to 20 seconds after leaving Hive. iOS may end this sooner.")
+                    Text("Updates continue for the background time iOS allows. iOS can end this window at any time.")
                         .font(.hive(.footnote))
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -26,14 +26,12 @@ struct AgentMonitoringAccessView: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 if !monitor.runtime.isActive {
-                    Button(
-                        monitor.runtime.isRequesting
-                            ? "Requesting background monitoring…" : "Retry background monitoring"
-                    ) {
-                        monitor.retryBackgroundAccess(immediately: true)
-                    }
-                    .font(.hive(.footnote, weight: .medium))
-                    .disabled(monitor.runtime.isRequesting || monitor.isStopping)
+                    Text(monitor.waitsForForegroundReturn
+                         ? "Background execution ended. Reopen Hive to resume automatically when an agent is working."
+                         : "Hive automatically retries while open when fresh agent activity is received.")
+                        .font(.hive(.footnote))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
         }

@@ -27,12 +27,14 @@ community switch can arm a new listener while the preference remains enabled.
 - Foreground monitoring starts independently of iOS 26 `BGContinuedProcessingTask`.
   After confirming actual agent work, the app requests background runtime with an
   immediate-fail strategy before asynchronous card setup. The trigger listener then
-  detaches: subsequent heartbeats update the existing session without submitting
-  more runtime requests. Settings offers an explicit retry; rapid retries coalesce
-  for five seconds. A missing callback gets one retry after
+  detaches. The monitoring tick requests background execution automatically when
+  a fresh agent heartbeat arrives after a real background-to-foreground return.
+  Repeated foreground failures back off for 30, 60, then 120 seconds between request
+  cycles; subsequent cycles stay at 120 seconds and require current agent activity.
+  Requests never replace one already pending or active. Each missing callback gets one retry after
   two seconds, with a fresh identifier and a five-second callback deadline for each
-  attempt. Exhausting those attempts leaves foreground monitoring running. Settings
-  offers an explicit retry. The system progress describes elapsed time in the
+  attempt. Exhausting those attempts leaves foreground monitoring running. No
+  Settings retry button is required. The system progress describes elapsed time in the
   monitoring window, never agent task completion.
 - A real continued-processing grant or a live UIKit background assertion retains
   the existing SyncEngine relay connection while backgrounded. Human presence still
@@ -41,16 +43,22 @@ community switch can arm a new listener while the preference remains enabled.
   tick resumes a connection if an already-started background suspension finishes late.
 - Each foreground request can acquire a single named `UIApplication` background
   assertion for a brief handoff. The app and card label this Brief background
-  window, separately from a continued-processing grant. It ends at twenty seconds
-  after backgrounding or earlier on iOS expiration, foreground return, grant,
-  or session cleanup. Background events never renew it. It does not promise twenty
-  seconds of execution or extend iOS's shared background budget.
+  window, separately from a continued-processing grant. It lasts until iOS calls
+  its expiration handler, foreground return, a continued-processing grant, or
+  session cleanup. There is no twenty-second client cutoff and no deadline based
+  on `backgroundTimeRemaining`. Background events never renew the assertion. Its
+  lifetime remains finite and does not extend iOS's shared background budget.
 - Locking preserves a request already submitted in the foreground, until its
   callback deadline. A retry not yet submitted is never submitted from the
   background. Without either execution mechanism the roster clears and the card
   publishes Paused; in-flight reads cannot overwrite that state. Foreground
   monitoring resumes on return within the same monitoring window. A callback from
   a cancelled or replaced request is completed without adopting it.
+- Expiration of a granted continued-processing task releases that runtime but
+  preserves the custom activity and monitoring session. Because system-card
+  cancellation can use the same expiration callback, recovery waits for the next
+  real foreground visit and a fresh working heartbeat. Explicit Stop, toggle-off,
+  custom-card dismissal, and the 30-minute session limit still end the session.
 - BuzzKit exposes a fresh in-memory activity snapshot plus a bounded, unseeded
   notification stream for newly accepted typing heartbeats. Idle opt-in has no
   polling loop, card, background assertion, or additional relay subscription.
@@ -67,6 +75,10 @@ community switch can arm a new listener while the preference remains enabled.
   date twelve seconds ahead. Existing heartbeat TTL and disconnect clearing remain
   authoritative for the roster. Connection loss shows Reconnecting; stale content
   shows Paused instead of a working count.
+- The existing relay connection already probes foreground liveness with a bounded
+  ping and runs an idle watchdog with ping/pong and reconnect handling. Additional
+  pings cannot establish agent work or grant background execution. The agent's
+  own fresh kind-20002 heartbeat remains the source for its working indicator.
 - Metadata refreshes at most every fifteen seconds on the concurrent executor,
   using directory and channel metadata reads without timeline or unread queries.
   `EntityNames` resolves people, agents, channels, and DMs consistently with the app.
@@ -140,11 +152,14 @@ Build and install the signed app and extension; the owner performs runtime revie
     working indicator and Live Activity while Hive is open, then lock:
     a live UIKit assertion permits brief updates without cancelling the pending
     continued-processing request. Without a continued-processing grant, expect
-    Paused at twenty seconds or earlier on iOS expiration. Reopen Hive: updates
-    resume. Retry background monitoring explicitly; only an actual launch callback
+    Paused when iOS expires the brief assertion; there must be no client cutoff at
+    twenty seconds. Reopen Hive and wait for fresh agent work: background monitoring
+    must retry automatically without visiting Settings. Repeated foreground failures
+    must back off, with no submissions while backgrounded or when no agent is working.
+    Only an actual launch callback
     changes the capability to Background monitoring active. Stop or toggle off
     during either attempt; no late callback may revive the session. Subsequent
-    heartbeats must not create more background assertions. If the phone is locked
+    background heartbeats must not create more assertions. If the phone is locked
     before the first working heartbeat, no new Live Activity should start there;
     return to Hive and wait for a fresh heartbeat.
 
@@ -171,6 +186,13 @@ or unavailable. It is released synchronously on expiration, is never renewed by 
 timer, and is distinct in both UI and relay ownership from a long-running grant.
 Changing the trigger does not establish that iOS will launch the longer background
 task; the observed scheduler foreground-recognition failure remains unresolved.
+
+Later device feedback exposed a missing foreground retry: the roster resumed, but
+the runtime request only ran at initial startup or through the Settings button.
+Foreground recovery now waits for current relay-confirmed work and retries with
+backoff. The brief assertion also uses iOS's actual expiration instead of the
+client's twenty-second timer. Fresh logs still showed the scheduler's foreground
+recognition failure; these changes do not demonstrate sustained background runtime.
 
 ## References
 

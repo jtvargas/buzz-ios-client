@@ -9,7 +9,7 @@ import UIKit
 final class AgentMonitoringGraceWindow {
     private(set) var isActive = false
     @ObservationIgnored private var identifier = UIBackgroundTaskIdentifier.invalid
-    @ObservationIgnored private var deadline: Task<Void, Never>?
+    @ObservationIgnored private var didEnterBackground = false
     @ObservationIgnored private var onEnd: (@MainActor () -> Void)?
     private static let log = Logger(subsystem: "Hive", category: "AgentMonitoring.handoff")
 
@@ -29,23 +29,21 @@ final class AgentMonitoringGraceWindow {
     }
 
     func enteredBackground() {
-        guard isActive, deadline == nil else { return }
-        Self.log.info("Brief background window started; maximum 20 seconds")
-        deadline = Task { [weak self] in
-            do { try await Task.sleep(for: .seconds(20)) } catch { return }
-            self?.end(reason: "20-second limit")
-        }
+        guard isActive, !didEnterBackground else { return }
+        didEnterBackground = true
+        // Use the real assertion's lifetime. iOS calls the expiration handler;
+        // an arbitrary client timer must not discard execution it still permits.
+        Self.log.info("Brief background window started; waiting for iOS expiration")
     }
 
     func enteredForeground() {
-        // Returning finishes this handoff. Another explicit send/retry can request
-        // a new one; ordinary scene changes do not extend a background budget.
-        if deadline != nil { end(reason: "foreground resumed") }
+        // A fresh working heartbeat can request a new foreground handoff after
+        // return. Never renew an assertion from a background timer or heartbeat.
+        if didEnterBackground { end(reason: "foreground resumed") }
     }
 
     func end(reason: String = "handoff finished") {
-        deadline?.cancel()
-        deadline = nil
+        didEnterBackground = false
         guard identifier != .invalid else { return }
         let previous = identifier
         identifier = .invalid
