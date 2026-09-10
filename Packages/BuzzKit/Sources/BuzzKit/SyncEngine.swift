@@ -141,6 +141,7 @@ public actor SyncEngine {
     let subscriptions: SubscriptionManager
     let store: BuzzEventStore
     let presence: PresenceStore
+    var retainsConnectionForMonitoring = false
     let windowClient: WindowClient
     let directoryContext: ChannelDirectoryContext?
     let signer: any EventSigner
@@ -504,6 +505,7 @@ public actor SyncEngine {
     /// Tears the engine down: stops observing, drops subscriptions, and stops the
     /// connection. A later ``start()`` opens a fresh one against the same store.
     public func stop() async {
+        retainsConnectionForMonitoring = false
         // Before anything is torn down: a coalescing window open at teardown holds advances
         // the reader has already made, and the queue this writes to is durable, so landing
         // them costs a write and saves them from the stop.
@@ -545,7 +547,7 @@ public actor SyncEngine {
     public func enterBackground() async {
         isForeground = false
         directoryBackstopGeneration += 1
-        await connection.background()
+        if !retainsConnectionForMonitoring { await connection.background() }
     }
 
     /// Forwards a scene-phase foreground to the connection, which resumes a

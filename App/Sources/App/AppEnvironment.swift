@@ -175,6 +175,10 @@ final class AppEnvironment {
     /// itself when somebody changed community would not be an app-wide preference. See
     /// ``AppSettings``.
     let settings = AppSettings()
+    let agentMonitor = AgentActivityMonitor()
+    var showsAgentMonitor = false
+    @ObservationIgnored var opensAgentMonitorAfterSettings = false
+    var sceneLifecycleGeneration = 0
 
     /// When to ask for an App Store review, and the counters that decide it.
     ///
@@ -328,6 +332,7 @@ final class AppEnvironment {
     /// Resolves launch state: if the active community has a key, start its engine;
     /// otherwise rest on the identity gate.
     func bootstrap() async {
+        await agentMonitor.writer.removeOrphans()
         // Queued, not awaited. The delete is a Core Spotlight round trip, and every launch —
         // including a returning user's, which `init` already refuses to spend a frame on — sits
         // behind whatever comes first here. Ordering against the build is the index's own
@@ -515,6 +520,9 @@ final class AppEnvironment {
     /// running when the next one starts. Named in the type comment as the one list a new
     /// piece of community-scoped state has to be added to.
     func teardownSession() async {
+        await agentMonitor.resetForCommunityChange()
+        showsAgentMonitor = false
+        opensAgentMonitorAfterSettings = false
         engineStateTask?.cancel()
         engineStateTask = nil
         directoryStatusTask?.cancel()
@@ -602,6 +610,7 @@ final class AppEnvironment {
     ) {
         phase = .running
         conversationEntityIndex.rebuild(store: store, selfPubkey: selfPubkey, community: community)
+        armExperimentalMonitoringIfEnabled()
     }
 
     private func observeEngineState(of engine: SyncEngine) {

@@ -45,6 +45,7 @@ struct SettingsView: View {
                     themeCard
                     notificationsCard
                     agentsCard
+                    ExperimentalSettingsCard()
                     siriCard
                     #if DEBUG
                     reviewCard

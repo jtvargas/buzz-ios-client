@@ -41,6 +41,7 @@ targets:
     platform: iOS
     sources:
       - App/Sources
+      - Shared
       # The Icon Composer icon is declared separately below, so this entry must not
       # also walk into it.
       - path: App/Resources
@@ -58,6 +59,7 @@ targets:
         type: file
         buildPhase: resources
     dependencies:
+      - target: HiveAgentActivity
       - package: NostrCore
       - package: BuzzKit
       - package: GRDB
@@ -70,6 +72,11 @@ targets:
       path: App/Info.plist
       properties:
         CFBundleDisplayName: Hive
+        NSSupportsLiveActivities: true
+        UIBackgroundModes:
+          - processing
+        BGTaskSchedulerPermittedIdentifiers:
+          - $(PRODUCT_BUNDLE_IDENTIFIER).agent-monitor.*
         # Answers App Store Connect's export-compliance question once, in the binary,
         # instead of by hand at every single upload.
         #
@@ -201,6 +208,27 @@ targets:
         # The global accent — a honey amber that tints buttons, reaction chips and the
         # unread pill — lives in App/Resources/Assets.xcassets.
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+  HiveAgentActivity:
+    type: app-extension
+    platform: iOS
+    sources:
+      - AgentActivityExtension
+      - Shared
+    info:
+      path: AgentActivityExtension/Info.plist
+      properties:
+        CFBundleDisplayName: Hive Agent Activity
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(HIVE_BUNDLE_IDENTIFIER).AgentActivity
+        CURRENT_PROJECT_VERSION: 1
+        MARKETING_VERSION: 0.1.0
+        TARGETED_DEVICE_FAMILY: "1"
+        APPLICATION_EXTENSION_API_ONLY: YES
+        SKIP_INSTALL: YES
+        SWIFT_STRICT_CONCURRENCY: complete
   HiveTests:
     type: bundle.unit-test
     platform: iOS

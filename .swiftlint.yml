@@ -3,6 +3,8 @@ disabled_rules:
 included:
   - App
   - Packages
+  - Shared
+  - AgentActivityExtension
 excluded:
   - "**/.build"
 line_length:

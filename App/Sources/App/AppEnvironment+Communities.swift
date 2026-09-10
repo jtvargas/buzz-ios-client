@@ -346,6 +346,7 @@ extension AppEnvironment {
     /// open lands the same way as one tapped on the sidebar.
     @discardableResult
     func handle(incomingURL url: URL) -> Bool {
+        if handleAgentMonitoringURL(url) { return true }
         guard let link = InviteLink.parse(url.absoluteString) else { return false }
         communitySheet = .join(link)
         return true

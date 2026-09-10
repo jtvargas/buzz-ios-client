@@ -73,6 +73,11 @@ final class AppSettings {
         didSet { defaults.set(keepAgentsMentioned, forKey: Key.keepAgentsMentioned) }
     }
 
+    /// Device-only prototype opt-in. Existing installs never enable it implicitly.
+    var experimentalAgentMonitoring: Bool {
+        didSet { defaults.set(experimentalAgentMonitoring, forKey: Key.experimentalAgentMonitoring) }
+    }
+
     /// The chosen theme itself. Resolved rather than stored so ``themeID`` stays the single
     /// source of truth and the two cannot drift.
     ///
@@ -91,6 +96,7 @@ final class AppSettings {
         static let notificationsEnabled = "settings.notifications.enabled"
         static let themeID = "settings.theme.id"
         static let keepAgentsMentioned = "settings.composer.keepAgentsMentioned"
+        static let experimentalAgentMonitoring = "settings.experimental.agentMonitoring"
     }
 
     private let defaults: UserDefaults
@@ -102,6 +108,7 @@ final class AppSettings {
         notificationsEnabled = Self.flag(Key.notificationsEnabled, default: true, in: defaults)
         themeID = defaults.string(forKey: Key.themeID) ?? HiveTheme.hive.id
         keepAgentsMentioned = Self.flag(Key.keepAgentsMentioned, default: false, in: defaults)
+        experimentalAgentMonitoring = Self.flag(Key.experimentalAgentMonitoring, default: false, in: defaults)
         // `didSet` does not fire for a write inside `init`, so the launch value has to be
         // mirrored by hand — without this, an app relaunched on a chosen theme draws its ground
         // correctly (that comes through the environment) and every accent in the amber.
