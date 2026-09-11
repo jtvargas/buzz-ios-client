@@ -22,13 +22,20 @@ struct AgentWorkingIndicatorView: View {
             if let label = label ?? (isShowingAgents ? "No agents working" : nil) {
                 Button(action: showAgents) {
                     ConversationAccessoryCapsule(
-                        label: label, showsDisclosure: true, expandsToFillWidth: false
+                        label: label, showsDisclosure: true, expandsToFillWidth: false,
+                        isInteractive: true
                     ) {
                         TypingDots()
                     }
+                    // The platform minimum for the hit area, and the reason the press cannot
+                    // be drawn by a button style here: this frame is 16pt taller than the
+                    // pill, and ``PressFeedbackButtonStyle`` washes the whole label frame —
+                    // which put an 8pt oval above and below a 28pt capsule. The pill's own
+                    // interactive glass answers the finger in its own bounds instead, which
+                    // is the same call already made for the home toolbar's capsule.
                     .frame(minHeight: 44)
                 }
-                .buttonStyle(.hivePress(.control, in: Capsule()))
+                .buttonStyle(.hiveNoPress)
                 .accessibilityLabel(label)
                 .accessibilityHint("Shows the agents working in this conversation")
                 .popover(isPresented: $isShowingAgents, arrowEdge: .bottom) {

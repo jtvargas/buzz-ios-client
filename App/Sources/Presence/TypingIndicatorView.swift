@@ -70,6 +70,12 @@ struct ConversationAccessoryCapsule<Leading: View>: View {
     let label: String
     var showsDisclosure = false
     var expandsToFillWidth = true
+    /// Whether this capsule *is* the control that answers a press — true only for the work
+    /// indicator, which opens a popover. The material's own response is then the press
+    /// treatment, and it is drawn in this capsule's bounds rather than in the enclosing
+    /// button's 44pt hit frame, which is 8pt taller and washed a visible oval around the
+    /// pill. See ``AgentWorkingIndicatorView``.
+    var isInteractive = false
     /// What sits before them — the cycling dots, in both of this type's uses.
     @ViewBuilder var leading: Leading
 
@@ -92,7 +98,7 @@ struct ConversationAccessoryCapsule<Leading: View>: View {
         // intrinsic height and grows the capsule instead of being clipped inside it.
         // Same reasoning as ``NewMessagesPill``.
         .frame(minHeight: 28)
-        .glassEffect(.regular, in: .capsule)
+        .glassEffect(isInteractive ? .regular.interactive() : .regular, in: .capsule)
         // Trailing, by the owner's call. It used to sit at the leading edge on the
         // argument that it annotates text starting there; in practice it lands on top
         // of the newest message's own first words, which are the ones being read. At
