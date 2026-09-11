@@ -335,6 +335,11 @@ public actor SyncEngine {
     /// concurrent reconciles of a channel race on its watermark.
     var readyWorkInFlight = false
     private var sweepTask: Task<Void, Never>?
+    /// The presence snapshot in flight and the socket generation that asked for it, so
+    /// the foreground kick and the directory pass it triggers share one request rather
+    /// than each posting the whole roster. See
+    /// ``SyncEngine/requestPresenceSnapshot(generation:)``.
+    var presenceSnapshot: (generation: Int, task: Task<Void, Never>)?
     /// Set by ``stop()``; blocks reacting to the `.stopped` the engine itself
     /// caused, and short-circuits any in-flight on-ready work.
     var isStopped = false
@@ -521,6 +526,7 @@ public actor SyncEngine {
         directoryContext?.refreshInFlight = false
         directoryContext?.refreshPending = false
         sweepTask?.cancel(); sweepTask = nil
+        presenceSnapshot?.task.cancel(); presenceSnapshot = nil
         await subscriptions.shutdown()
         await connection.stop()
         channelStates.removeAll()
@@ -551,6 +557,12 @@ public actor SyncEngine {
     /// Forwards a scene-phase foreground to the connection, which resumes a
     /// released socket. A fresh `.ready` then re-runs discovery, reconcile, and the
     /// drain.
+    ///
+    /// The presence snapshot is kicked here as well as from the authoritative pass.
+    /// Every peer's dot is stale by the time the app comes back — presence lapses 150 s
+    /// after the last heartbeat and nothing beats while suspended — and the pass that
+    /// would refresh it sits behind a full directory fetch. Single-flighted, so when the
+    /// socket was still live and the pass follows immediately, the two share one request.
     public func enterForeground() async {
         isForeground = true
         startDirectoryBackstop()
@@ -559,6 +571,8 @@ public actor SyncEngine {
             updateThreadConnection(.ready)
             if let activeChannel { refreshVisibleChannel(activeChannel) }
         }
+        let generation = readyGeneration
+        Task { [weak self] in await self?.requestPresenceSnapshot(generation: generation) }
         requestDirectoryRefresh()
     }
 
