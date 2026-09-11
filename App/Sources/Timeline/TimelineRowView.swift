@@ -99,8 +99,9 @@ struct TimelineRowView: View {
     /// avoids. Defaults to `true` for the surfaces that draw a message on its own (the
     /// Threads screen's summaries), where there is no block to continue.
     var showsAuthorHeader = true
-    /// Whether this message's author is present in the workspace (S-5 presence).
-    var isAuthorOnline: Bool = false
+    /// This message author's presence in the workspace (S-5), or `nil` when they are
+    /// not present.
+    var authorPresence: PresenceStatus?
     /// The surviving reaction groups for this row (S-2), own reaction highlighted.
     var reactions: [ReactionGroup] = []
     /// The users this message mentions, resolved to names from its own `p` tags —
@@ -221,7 +222,7 @@ struct TimelineRowView: View {
         // into a bottom-anchored scroll view.
         .animation(.default, value: row.delivery)
         .animation(.default, value: isSlowSend)
-        .animation(.default, value: isAuthorOnline)
+        .animation(.default, value: authorPresence)
         .contentShape(.rect)
         .gesture(pressGesture)
         // Every interactive range of a message — mention, channel, link, email,

@@ -154,7 +154,7 @@ struct ConversationPeopleList: View {
             picture: names.picture(for: person.pubkey) ?? person.fallbackPicture,
             initials: names.initials(for: person.pubkey),
             detail: person.detail,
-            isOnline: presence.isOnline(person.pubkey)
+            status: presence.status(of: person.pubkey)
         )
     }
 
@@ -174,7 +174,8 @@ struct ConversationPersonRow: View {
     let picture: URL?
     let initials: String
     let detail: String?
-    let isOnline: Bool
+    /// The person's announced presence, or `nil` when they are absent.
+    let status: PresenceStatus?
 
     var body: some View {
         HStack(spacing: 10) {
@@ -189,9 +190,9 @@ struct ConversationPersonRow: View {
                 }
             }
             Spacer()
-            PresenceDot(isOnline: isOnline)
+            PresenceDot(status: status)
         }
         .accessibilityElement(children: .combine)
-        .accessibilityValue(isOnline ? "Online" : "Offline")
+        .accessibilityValue(PresenceDot.label(status) ?? "Offline")
     }
 }

@@ -8,23 +8,28 @@ import Testing
 struct MessageAccessibilityTests {
     @Test("a delivered message from an offline author has no status")
     func plainDeliveredIsEmpty() {
-        #expect(MessageAccessibility.status(isOnline: false, isEdited: false, delivery: .sent).isEmpty)
+        #expect(MessageAccessibility.status(presence: nil, isEdited: false, delivery: .sent).isEmpty)
     }
 
     @Test("an online author is announced")
     func onlineAnnounced() {
-        #expect(MessageAccessibility.status(isOnline: true, isEdited: false, delivery: .sent) == "Online")
+        #expect(MessageAccessibility.status(presence: .online, isEdited: false, delivery: .sent) == "Online")
+    }
+
+    @Test("an away author is announced as away, not as online")
+    func awayAnnounced() {
+        #expect(MessageAccessibility.status(presence: .away, isEdited: false, delivery: .sent) == "Away")
     }
 
     @Test("a pending send is announced as sending")
     func pendingAnnounced() {
-        #expect(MessageAccessibility.status(isOnline: false, isEdited: false, delivery: .pending) == "Sending")
+        #expect(MessageAccessibility.status(presence: nil, isEdited: false, delivery: .pending) == "Sending")
     }
 
     @Test("a failed send is announced as not delivered")
     func failedAnnounced() {
         #expect(
-            MessageAccessibility.status(isOnline: false, isEdited: false, delivery: .failed("nope"))
+            MessageAccessibility.status(presence: nil, isEdited: false, delivery: .failed("nope"))
                 == "Not delivered"
         )
     }
@@ -32,7 +37,7 @@ struct MessageAccessibilityTests {
     @Test("presence, edited, and delivery combine in order")
     func combined() {
         #expect(
-            MessageAccessibility.status(isOnline: true, isEdited: true, delivery: .pending)
+            MessageAccessibility.status(presence: .online, isEdited: true, delivery: .pending)
                 == "Online, Edited, Sending"
         )
     }

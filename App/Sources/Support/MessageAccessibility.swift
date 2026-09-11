@@ -15,10 +15,18 @@ enum MessageAccessibility {
     ///   draw one because it continues the block above it. `nil` — the common case — for
     ///   a message that names its author on screen, where the combined label has already
     ///   said it and saying it twice is noise.
-    static func status(author: String? = nil, isOnline: Bool, isEdited: Bool, delivery: Delivery) -> String {
+    ///
+    /// - Parameter presence: the author's announced status, or `nil` when they are not
+    ///   present — which contributes nothing, so an offline author's message stays terse.
+    static func status(
+        author: String? = nil,
+        presence: PresenceStatus?,
+        isEdited: Bool,
+        delivery: Delivery
+    ) -> String {
         var parts: [String] = []
         if let author { parts.append("From \(author)") }
-        if isOnline { parts.append("Online") }
+        if let word = PresenceDot.label(presence) { parts.append(word) }
         if isEdited { parts.append("Edited") }
         switch delivery {
         case .pending: parts.append("Sending")

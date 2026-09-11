@@ -68,7 +68,7 @@ struct ChannelRowView: View {
         .contentShape(.rect)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(accessibilityLabel)
-        .accessibilityValue(isOnline ? "Online" : "")
+        .accessibilityValue(PresenceDot.label(peerStatus) ?? "")
     }
 
     /// A channel shows its glyph; a direct message shows who it is with, and whether
@@ -117,20 +117,21 @@ struct ChannelRowView: View {
 
     @ViewBuilder
     private var presenceDot: some View {
-        if isOnline {
+        if let peerStatus {
             Circle()
-                .fill(Color.green)
+                .fill(PresenceDot.tint(peerStatus))
                 .frame(width: 9, height: 9)
                 .overlay(Circle().strokeBorder(Color.hiveGround, lineWidth: 1.5))
                 .accessibilityHidden(true)
         }
     }
 
-    /// Whether this row's peer is online. Only a direct message has one; a channel is
-    /// never "online", which is why nothing here folds in ``SidebarRow/members``.
-    private var isOnline: Bool {
-        guard let peer = row.conversation.peer else { return false }
-        return presence.isOnline(peer)
+    /// This row's peer's presence, or `nil` when they are absent — or when there is no
+    /// peer at all. Only a direct message has one; a channel is never "online", which is
+    /// why nothing here folds in ``SidebarRow/members``.
+    private var peerStatus: PresenceStatus? {
+        guard let peer = row.conversation.peer else { return nil }
+        return presence.status(of: peer)
     }
 
     /// A spoken summary that folds the indicator in, so VoiceOver announces "2 mentions"
