@@ -6,6 +6,15 @@ public protocol ChannelDirectoryFetching: Sendable {
         selfPubkey: String,
         previouslyActiveChannels: Set<String>
     ) async throws -> ChannelDirectorySnapshot
+
+    /// The relay's live presence for a named set of people, as synthesized kind-20001
+    /// events.
+    ///
+    /// On the directory protocol rather than a client of its own because it is the same
+    /// signed `POST /query` route, to the same URL, under the same identity — a second
+    /// injected collaborator would duplicate the transport, the URL and the signer to
+    /// serve one filter.
+    func fetchPresence(of pubkeys: Set<String>) async throws -> [NostrEvent]
 }
 
 /// A concrete boundary around any directory fetcher.
@@ -17,6 +26,7 @@ public protocol ChannelDirectoryFetching: Sendable {
 /// failure for the legacy no-directory overload.
 public struct AnyChannelDirectoryFetcher: ChannelDirectoryFetching, Sendable {
     private let fetchValue: @Sendable (String, Set<String>) async throws -> ChannelDirectorySnapshot
+    private let fetchPresenceValue: @Sendable (Set<String>) async throws -> [NostrEvent]
 
     public init<Fetcher: ChannelDirectoryFetching>(_ fetcher: Fetcher) {
         fetchValue = { selfPubkey, previouslyActiveChannels in
@@ -25,6 +35,9 @@ public struct AnyChannelDirectoryFetcher: ChannelDirectoryFetching, Sendable {
                 previouslyActiveChannels: previouslyActiveChannels
             )
         }
+        fetchPresenceValue = { pubkeys in
+            try await fetcher.fetchPresence(of: pubkeys)
+        }
     }
 
     public func fetch(
@@ -32,6 +45,10 @@ public struct AnyChannelDirectoryFetcher: ChannelDirectoryFetching, Sendable {
         previouslyActiveChannels: Set<String>
     ) async throws -> ChannelDirectorySnapshot {
         try await fetchValue(selfPubkey, previouslyActiveChannels)
+    }
+
+    public func fetchPresence(of pubkeys: Set<String>) async throws -> [NostrEvent] {
+        try await fetchPresenceValue(pubkeys)
     }
 }
 
@@ -295,6 +312,40 @@ public struct ChannelDirectoryClient: ChannelDirectoryFetching, Sendable {
         })
     }
 
+    /// One signed `POST /query` per batch of subjects, answered from the relay's live
+    /// presence store rather than from stored events.
+    ///
+    /// # Why the filter has to be exactly this shape
+    ///
+    /// The relay intercepts a `/query` whose filters *all* name a single presence kind
+    /// with a non-empty `authors` list and answers them from Redis, signing one
+    /// kind-20001 event per present subject (`buzz-relay/src/api/bridge.rs:1981-2046`).
+    /// Anything else — a second kind, a tag query, an empty author list — falls through
+    /// to the stored-event path, and presence is ephemeral, so that path is empty on
+    /// every relay, for ever. This is why the request is built here rather than by
+    /// widening one of the directory's own filters.
+    ///
+    /// Only *present* subjects come back: absence from the answer is the answer for
+    /// everybody else. Batched by ``pageSize`` because the whole roster rides in the
+    /// request body, and paginating a synthesized answer is meaningless — the relay
+    /// ignores `limit` on this path and returns at most one event per subject asked
+    /// about.
+    public func fetchPresence(of pubkeys: Set<String>) async throws -> [NostrEvent] {
+        guard !pubkeys.isEmpty else { return [] }
+        // Sorted so two identical rosters produce identical request bodies, and so a
+        // batch boundary is a property of the set rather than of hash order.
+        let subjects = pubkeys.sorted()
+        var events: [NostrEvent] = []
+        for start in stride(from: 0, to: subjects.count, by: Self.pageSize) {
+            try Task.checkCancellation()
+            let batch = Array(subjects[start ..< min(start + Self.pageSize, subjects.count)])
+            events += try await fetchPage(
+                DirectoryFilter(kinds: [.presence], tagQueries: [:], authors: batch)
+            )
+        }
+        return events
+    }
+
     private func fetchAll(_ base: DirectoryFilter) async throws -> [NostrEvent] {
         var cursor: DirectoryCursor?
         var priorCursor: DirectoryCursor?
@@ -483,6 +534,14 @@ struct DirectoryCursor: Encodable, Equatable {
 struct DirectoryFilter: Encodable {
     var kinds: [EventKind]
     var tagQueries: [String: [String]]
+    /// Whose events to ask for, or `nil` for anybody's.
+    ///
+    /// Load-bearing for the presence snapshot and nothing else today: the relay only
+    /// synthesizes live presence for a filter naming *one* presence kind and a non-empty
+    /// author list (`buzz-relay/src/api/bridge.rs:1988-2002`). Encoded only when present,
+    /// so every other request's body is byte-identical to before — NIP-98 signs the body,
+    /// and a stray empty key would be a signature over something new.
+    var authors: [String]?
     var limit = ChannelDirectoryClient.pageSize
     var cursor: DirectoryCursor?
 
@@ -497,6 +556,9 @@ struct DirectoryFilter: Encodable {
     func encode(to encoder: any Encoder) throws {
         var container = encoder.container(keyedBy: Key.self)
         try container.encode(kinds.map(\.rawValue), forKey: Key("kinds"))
+        if let authors {
+            try container.encode(authors, forKey: Key("authors"))
+        }
         try container.encode(limit, forKey: Key("limit"))
         for (name, values) in tagQueries {
             try container.encode(values, forKey: Key("#\(name)"))

@@ -379,6 +379,8 @@ private actor ReleasableDirectory: ChannelDirectoryFetching {
         return try await withCheckedThrowingContinuation { waiters.append($0) }
     }
 
+    func fetchPresence(of _: Set<String>) async throws -> [NostrEvent] { [] }
+
     func succeed(_ snapshot: ChannelDirectorySnapshot) {
         if waiters.isEmpty {
             answers.append(snapshot)

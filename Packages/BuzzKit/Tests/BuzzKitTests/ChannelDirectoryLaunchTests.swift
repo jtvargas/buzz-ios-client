@@ -301,6 +301,8 @@ private actor ControlledChannelDirectory: ChannelDirectoryFetching {
         }
     }
 
+    func fetchPresence(of _: Set<String>) async throws -> [NostrEvent] { [] }
+
     func succeedNext(_ snapshot: ChannelDirectorySnapshot) {
         continuations.removeFirst().resume(returning: snapshot)
     }

@@ -40,6 +40,43 @@ struct PresenceSnapshotTests {
         #expect(try await store.allMemberPubkeys().isEmpty)
     }
 
+    // MARK: - Client: the signed HTTP request
+
+    /// The relay answers presence from its live store only for a `/query` whose filters
+    /// each name a single presence kind with a non-empty author list
+    /// (`buzz-relay/src/api/bridge.rs:1988-2002`). Anything else — a second kind, a tag
+    /// query — falls through to stored events, and presence is never stored, so the
+    /// answer is empty on every relay for ever. That failure is silent and indistinguishable
+    /// from "nobody is online", which is what this pins.
+    @Test("the presence request carries only what the relay's synthesis branch accepts")
+    func presenceRequestShape() async throws {
+        let identity = try Fixture()
+        let relay = try Fixture()
+        let subject = try Fixture()
+        let transport = FakeHTTPTransport()
+        let synthesized = try relay.event(
+            .presence, "online", tags: [["p", subject.pubkey]], at: 10
+        )
+        await transport.enqueue(status: 200, body: try JSONEncoder().encode([synthesized]))
+
+        let events = try await ChannelDirectoryClient(
+            transport: transport,
+            queryURL: URL(string: "https://relay.example.com/query")!,
+            signer: InMemorySigner(identity.key)
+        ).fetchPresence(of: [subject.pubkey])
+
+        #expect(events.map(\.id) == [synthesized.id])
+
+        let body = try #require(await transport.requests.first?.body)
+        let filters = try #require(
+            try JSONSerialization.jsonObject(with: body) as? [[String: Any]]
+        )
+        #expect(filters.count == 1)
+        #expect(filters.first?["kinds"] as? [Int] == [EventKind.presence.rawValue])
+        #expect(filters.first?["authors"] as? [String] == [subject.pubkey])
+        #expect(filters.first?.keys.contains { $0.hasPrefix("#") } == false)
+    }
+
     // MARK: - Engine: end-to-end cold start
 
     @Test("on ready, requests presence for discovered members and populates the roster")

@@ -140,27 +140,64 @@ extension SyncEngine {
 
     // MARK: - Cold-start presence snapshot
 
-    /// Fetches the relay's current-presence snapshot: a one-shot REQ naming every
-    /// known member as an author. The relay answers such a REQ — one whose filters all
-    /// target `kind:20001` with a non-empty `authors` list — with synthesized
-    /// kind-20001 events read from its live presence store (`bridge.rs`
-    /// `synthesize_presence`), each relay-signed and carrying its subject in a `p` tag.
-    /// This gives an instant who's-online roster at launch instead of waiting up to a
-    /// heartbeat interval (60 s) for the first live 20001.
+    /// Fetches the relay's current-presence snapshot: one request naming every known
+    /// member as an author, answered with synthesized kind-20001 events read from the
+    /// relay's live presence store (`bridge.rs` `synthesize_presence`), each
+    /// relay-signed and carrying its subject in a `p` tag. This gives an instant
+    /// who's-online roster at launch and on every return to the foreground, instead of
+    /// waiting up to a heartbeat interval (60 s) per peer for the first live 20001.
+    ///
+    /// # Why this goes over HTTP
+    ///
+    /// The relay synthesizes presence on the `POST /query` bridge only. Its WebSocket
+    /// REQ handler has no presence branch, and presence is ephemeral so nothing is
+    /// stored — a REQ for kind 20001 therefore returns empty on every relay, for ever,
+    /// which is exactly what this used to ask for. The WebSocket path is kept for the
+    /// legacy no-directory engine (the scripted test harnesses); production always
+    /// injects the HTTP client (``SyncEngine/directoryClient``).
     ///
     /// The events flow through the store's verification choke point like any batch: they
     /// are ephemeral, so they divert into ``IngestResult/ephemeral`` and reach the
     /// presence store, which keys each by its `p`-tag subject rather than the relay
-    /// author. Best-effort throughout — no discovered members, a relay that does not
-    /// synthesize, or a superseded generation all simply leave the roster to fill from
-    /// live heartbeats, exactly as before.
+    /// author. Nothing is written to the log. Best-effort throughout — no known members,
+    /// a relay that does not synthesize, or a superseded generation all simply leave the
+    /// roster to fill from live heartbeats, exactly as before.
+    ///
+    /// Single-flight per socket generation: a foreground and the directory pass it
+    /// triggers land milliseconds apart and would otherwise each post the whole roster.
+    /// A request from a *newer* generation supersedes rather than joins — its answer is
+    /// the one that will survive the guard below.
     func requestPresenceSnapshot(generation: Int) async {
         guard isCurrent(generation) else { return }
+        if let existing = presenceSnapshot {
+            if existing.generation == generation {
+                await existing.task.value
+                return
+            }
+            existing.task.cancel()
+        }
+        let task: Task<Void, Never> = Task { [weak self] in
+            guard let self else { return }
+            await loadPresenceSnapshot(generation: generation)
+        }
+        presenceSnapshot = (generation, task)
+        await task.value
+        if presenceSnapshot?.task == task { presenceSnapshot = nil }
+    }
+
+    private func loadPresenceSnapshot(generation: Int) async {
         let authors = await (try? store.allMemberPubkeys()) ?? []
         guard isCurrent(generation), !authors.isEmpty else { return }
-        let filter = Filter(authors: Array(authors), kinds: [.presence])
-        // Presence must not hold a content-recovery permit while waiting for EOSE.
-        let events = await (try? subscriptions.query([filter])) ?? []
+
+        let events: [NostrEvent]
+        if let directoryClient {
+            events = await (try? directoryClient.fetchPresence(of: authors)) ?? []
+        } else {
+            let filter = Filter(authors: Array(authors), kinds: [.presence])
+            // Presence must not hold a content-recovery permit while waiting for EOSE.
+            events = await (try? subscriptions.query([filter])) ?? []
+        }
+
         guard isCurrent(generation) else { return }
         guard let result = try? await store.ingest(batch: events, phase: .backfill),
               !result.ephemeral.isEmpty
