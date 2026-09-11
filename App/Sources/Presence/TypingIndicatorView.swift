@@ -68,7 +68,12 @@ struct TypingIndicatorView: View {
 struct ConversationAccessoryCapsule<Leading: View>: View {
     /// The words, which are also what VoiceOver speaks for the whole capsule.
     let label: String
+    /// Whether the capsule ends in a disclosure chevron. It points *up*, at the popover
+    /// that opens above the pill — the one thing on the capsule that says where the press
+    /// goes — and turns over to point down at the pill while that popover is open.
     var showsDisclosure = false
+    /// Whether the thing the chevron discloses is open — see ``showsDisclosure``.
+    var isDisclosed = false
     var expandsToFillWidth = true
     /// Whether this capsule *is* the control that answers a press — true only for the work
     /// indicator, which opens a popover. The material's own response is then the press
@@ -76,6 +81,7 @@ struct ConversationAccessoryCapsule<Leading: View>: View {
     /// button's 44pt hit frame, which is 8pt taller and washed a visible oval around the
     /// pill. See ``AgentWorkingIndicatorView``.
     var isInteractive = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// What sits before them — the cycling dots, in both of this type's uses.
     @ViewBuilder var leading: Leading
 
@@ -87,9 +93,16 @@ struct ConversationAccessoryCapsule<Leading: View>: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
             if showsDisclosure {
-                Image(systemName: "chevron.down")
+                Image(systemName: "chevron.up")
                     .font(.hiveSymbol(.caption2, weight: .semibold))
                     .foregroundStyle(.secondary)
+                    // One glyph turning over rather than two glyphs swapped: a symbol
+                    // change is a cut, and the half-turn is the only thing on screen that
+                    // carries the popover's arrival and departure back to the control that
+                    // caused it. Same motion and the same duration as the sidebar's
+                    // section chevron — see ``SidebarSectionHeader``.
+                    .rotationEffect(.degrees(isDisclosed ? 180 : 0))
+                    .animation(reduceMotion ? nil : .snappy(duration: 0.22), value: isDisclosed)
                     .accessibilityHidden(true)
             }
         }

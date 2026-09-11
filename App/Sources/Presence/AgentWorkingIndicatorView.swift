@@ -22,8 +22,8 @@ struct AgentWorkingIndicatorView: View {
             if let label = label ?? (isShowingAgents ? "No agents working" : nil) {
                 Button(action: showAgents) {
                     ConversationAccessoryCapsule(
-                        label: label, showsDisclosure: true, expandsToFillWidth: false,
-                        isInteractive: true
+                        label: label, showsDisclosure: true, isDisclosed: isShowingAgents,
+                        expandsToFillWidth: false, isInteractive: true
                     ) {
                         TypingDots()
                     }
