@@ -492,7 +492,7 @@ private extension ChannelListView {
         } else {
             ScrollView {
                 LazyVStack(spacing: 0) {
-                    shortcuts
+                    shortcuts(names: names)
                     ForEach(sidebarContent(names: names).sections) { section in
                         sectionContent(section, resumable: resumable)
                     }
@@ -572,8 +572,9 @@ private extension ChannelListView {
     }
 
     /// The shortcut cards, in one row above the conversations.
-    var shortcuts: some View {
-        HomeShortcutCards(count: count(for:), isCalling: isCalling(_:), press: press(_:),
+    func shortcuts(names: EntityNames) -> some View {
+        HomeShortcutCards(count: count(for:), isCalling: isCalling(_:),
+                          source: { soleSource(for: $0, names: names) }, press: press(_:),
                           markAllThreadsRead: { environment.threadReads.markAllSeen(among: model.unreadThreads) })
             .padding(Self.cardsInsets)
     }
@@ -717,6 +718,27 @@ private extension ChannelListView {
         // Live from the store, de-duplicated so a keystroke does not move the card.
         case .drafts: draftsModel.count
         }
+    }
+
+    /// Where the one thing left in a card is, when exactly one is left — see
+    /// ``HomeShortcut/countLabel(_:source:)``.
+    ///
+    /// Threads only, and by the nature of the question rather than by a rule someone has to
+    /// remember: it is the one card whose contents are spread across *places*. A draft or a
+    /// reminder has no second location to distinguish it from, so naming one would add a
+    /// word and no information.
+    ///
+    /// Read off the same subtraction the count is, so the thread named is the thread counted
+    /// — deriving it from `model.unreadThreads` alone would name a thread this device has
+    /// already read, at the one count where being wrong is most visible.
+    func soleSource(for shortcut: HomeShortcut, names: EntityNames) -> String? {
+        guard shortcut == .threads else { return nil }
+        let unseen = model.unreadThreads.filter {
+            environment.threadReads.hasUnseen($0.rootID, latestReplyByOthersAt: $0.latestReplyByOthersAt)
+        }
+        guard unseen.count == 1, let thread = unseen.first else { return nil }
+        let conversation = names.conversation(for: thread.channelID)
+        return conversation.isDirect ? conversation.title : "#\(conversation.title)"
     }
 
     /// Whether a card is asking to be dealt with *now* — see ``HomeShortcutCards/isCalling``.
