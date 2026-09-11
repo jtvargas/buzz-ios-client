@@ -40,6 +40,7 @@ struct ThreadsView: View {
     /// even though the channel's shared frontier has not moved.
     @Environment(\.threadReadMarks) private var threadReads
     @Environment(\.pushRoute) private var pushRoute
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var model: ThreadsModel
     /// Whose profile is open, if anyone's — set by pressing a mention inside a summary.
     @State private var profilePeer: ProfilePeer?
@@ -91,7 +92,7 @@ struct ThreadsView: View {
 
     var body: some View {
         List {
-            ForEach(model.threads) { activity in
+            ForEach(orderedThreads) { activity in
                 ThreadActivityRow(
                     activity: activity,
                     channelTitle: channelTitle(for: activity),
@@ -116,6 +117,12 @@ struct ThreadsView: View {
             }
         }
         .listStyle(.plain)
+        // Reading a thread moves its row rather than teleporting it: the two things that
+        // reorder this list — opening a thread and **Mark as Read** — both happen to a row
+        // the reader is looking at, and a row that changes place between one frame and the
+        // next reads as the list reloading. The value is the order itself, so a reply
+        // landing without moving anything costs no animation.
+        .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: orderedThreads.map(\.id))
         .hiveScreenGround()
         // The same pull the sidebar offers, for the same reason — see
         // ``ChannelListView/sidebar(names:)``. This screen summarises every channel's
@@ -167,6 +174,24 @@ struct ThreadsView: View {
             anchor: anchor,
             focusesComposer: focusesComposer
         )))
+    }
+
+    /// The threads, the unread ones first.
+    ///
+    /// Two passes rather than a sort, and the ordering *within* each group is the read's
+    /// own — `threadActivity` hands its page back newest reply first, so a filter preserves
+    /// recency for free, while a comparator would have to restate it and could then
+    /// disagree with the read's tiebreak on two replies landing in the same second.
+    ///
+    /// It cannot be the query's job: unread here means unread *on this device*, and the
+    /// marks that decide it live in `UserDefaults` — see ``ThreadReadMarks``. Which also
+    /// bounds what this can do: the fifty threads it orders are the fifty most recently
+    /// active, so an unread thread older than all of them is still past the end of the list.
+    private var orderedThreads: [ThreadActivity] {
+        let unseen = model.threads.filter(isUnseen)
+        // Nothing to lift, or nothing to lift it above: the page is already in order.
+        guard !unseen.isEmpty, unseen.count != model.threads.count else { return model.threads }
+        return unseen + model.threads.filter { !isUnseen($0) }
     }
 
     /// Whether this thread still holds something for the reader: replies past the channel's

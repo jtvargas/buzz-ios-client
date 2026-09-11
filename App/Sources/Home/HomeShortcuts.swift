@@ -25,6 +25,10 @@ struct HomeShortcutCards: View {
     /// where having items and wanting attention are different questions — a reminder due
     /// tomorrow is waiting, not calling.
     let isCalling: (HomeShortcut) -> Bool
+    /// Where the only thing left in a card is, when there is exactly one — see
+    /// ``HomeShortcut/countLabel(_:source:)``. `nil` whenever there is nothing single to
+    /// name, which is every count but one and every card but Threads.
+    let source: (HomeShortcut) -> String?
     let press: (HomeShortcut) -> Void
     /// Clears every unread thread on this device — see ``ThreadReadMarks/markAllSeen(among:)``.
     /// Reached by holding the Threads card; see ``HomeShortcut/offersMarkAllRead``.
@@ -83,7 +87,8 @@ struct HomeShortcutCards: View {
             HomeShortcutCard(
                 shortcut: shortcut,
                 count: count(shortcut),
-                isCalling: isCalling(shortcut)
+                isCalling: isCalling(shortcut),
+                source: source(shortcut)
             )
             // The base the card's own `.primary` and `.secondary` resolve against — see above.
             .foregroundStyle(Color.primary)
@@ -104,7 +109,8 @@ struct HomeShortcutCards: View {
             HomeShortcutCard(
                 shortcut: shortcut,
                 count: count(shortcut),
-                isCalling: isCalling(shortcut)
+                isCalling: isCalling(shortcut),
+                source: source(shortcut)
             )
         }
         // The card's own border is still the whole button — any bordered *system*
@@ -138,6 +144,9 @@ struct HomeShortcutCard: View {
     /// See ``HomeShortcutCards/isCalling``. Passed in rather than derived from ``count``,
     /// because for Later the two differ.
     var isCalling: Bool = false
+    /// See ``HomeShortcutCards/source``. Read only by the count's own line, which is the
+    /// only thing on the card with room for a place name.
+    var source: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: Self.betweenLines) {
@@ -167,11 +176,18 @@ struct HomeShortcutCard: View {
                 .font(.hive(.subheadline, weight: .semibold))
                 .foregroundStyle(.primary)
                 .lineLimit(1)
-            Text(shortcut.countLabel(count))
+            Text(shortcut.countLabel(count, source: source))
                 .font(.hive(.footnote))
                 .monospacedDigit()
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
+                // A third of the row is about fourteen footnote characters, and
+                // `1 new in #homelab` is seventeen. One line either way, so the choice is
+                // between shrinking the line and truncating the channel name — and a name
+                // cut to `#homel…` answers the question the name was added to answer worse
+                // than the bare number did. The floor is a size, not a licence: past it the
+                // line truncates as before.
+                .minimumScaleFactor(Self.countScaleFloor)
         }
         .padding(Self.padding)
         // An equal share of the row, at a height that grows with the type inside it: the
@@ -195,7 +211,7 @@ struct HomeShortcutCard: View {
         }
         .contentShape(.rect)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(Self.accessibilityLabel(shortcut, count: count))
+        .accessibilityLabel(Self.accessibilityLabel(shortcut, count: count, source: source))
         .accessibilityAddTraits(.isButton)
     }
 
@@ -245,9 +261,15 @@ struct HomeShortcutCard: View {
         isCalling && !shortcut.signalsWithGlyph
     }
 
-    /// What a screen reader hears: the destination, then what is in it.
-    static func accessibilityLabel(_ shortcut: HomeShortcut, count: Int) -> String {
-        "\(shortcut.title), \(shortcut.countLabel(count))"
+    /// What a screen reader hears: the destination, then what is in it — including where
+    /// the only thing in it lives, which is exactly the part a card is too narrow to say
+    /// twice and a screen reader has no width limit on.
+    static func accessibilityLabel(
+        _ shortcut: HomeShortcut,
+        count: Int,
+        source: String? = nil
+    ) -> String {
+        "\(shortcut.title), \(shortcut.countLabel(count, source: source))"
     }
 
     /// The card's size in the reader's own type size. One ratio for both dimensions, so a
@@ -261,6 +283,8 @@ struct HomeShortcutCard: View {
     /// Between the name and the count. Small — they are one statement read together — but
     /// not nothing, which set them as tight as two lines of a wrapped sentence.
     private static let betweenLines: CGFloat = 2
+    /// How far the count's line may shrink before it truncates instead — see the call site.
+    private static let countScaleFloor: CGFloat = 0.75
     /// The least distance between the glyph and the title. The `Spacer` takes whatever is
     /// left over above it, which is what puts the glyph at the top of the card and the two
     /// lines of text at the bottom of it rather than spreading all three evenly.
@@ -394,10 +418,21 @@ enum HomeShortcut: String, CaseIterable, Hashable, Identifiable {
     /// What the count counts, singular and plural. Threads counts *new* ones — the
     /// question a shortcut answers is "is there anything for me in there", and `0 new` is
     /// that question answered rather than left to be inferred from a blank line.
-    func countLabel(_ count: Int) -> String {
+    ///
+    /// - Parameter source: where the *only* thing left is, when there is exactly one —
+    ///   `#homelab`, or a person for a thread inside a direct message. Naming it is worth
+    ///   more than counting it: a number alone cannot distinguish a count that did not move
+    ///   from one that moved and left a *different* thread behind, which is how reading one
+    ///   of two unread threads reads as a card that is stuck. Ignored at any other count,
+    ///   where there is no single place to name, and by any other card, where there is no
+    ///   list of places to name one *of*.
+    func countLabel(_ count: Int, source: String? = nil) -> String {
         switch self {
-        case .threads: count == 1 ? "1 new" : "\(count) new"
-        case .later, .drafts: count == 1 ? "1 item" : "\(count) items"
+        case .threads:
+            guard count == 1, let source else { return "\(count) new" }
+            return "1 new in \(source)"
+        case .later, .drafts:
+            return count == 1 ? "1 item" : "\(count) items"
         }
     }
 }
