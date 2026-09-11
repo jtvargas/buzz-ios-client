@@ -329,7 +329,7 @@ struct ThreadView: View {
             TimelineRowView(
                 row: row,
                 showsAuthorHeader: !continuesGroup,
-                isAuthorOnline: presence.isOnline(row.pubkey),
+                authorPresence: presence.status(of: row.pubkey),
                 reactions: model.reactions(for: row.id),
                 mentions: model.mentions(for: row.id),
                 selfPubkey: model.selfPubkey,

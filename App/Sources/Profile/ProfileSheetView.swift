@@ -125,16 +125,18 @@ struct ProfileSheetView: View {
     }
 
     private var presenceLabel: some View {
-        HStack(spacing: 5) {
+        let status = presence.status(of: pubkey)
+        let word = PresenceDot.label(status) ?? "Offline"
+        return HStack(spacing: 5) {
             Circle()
-                .fill(PresenceDot.tint(isOnline: presence.isOnline(pubkey)))
+                .fill(PresenceDot.tint(status))
                 .frame(width: 8, height: 8)
-            Text(presence.isOnline(pubkey) ? "Online" : "Offline")
+            Text(word)
                 .font(.hive(.subheadline))
                 .foregroundStyle(.secondary)
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(presence.isOnline(pubkey) ? "Online" : "Offline")
+        .accessibilityLabel(word)
     }
 
     // MARK: - Actions

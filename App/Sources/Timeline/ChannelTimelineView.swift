@@ -492,7 +492,7 @@ struct ChannelTimelineView: View {
     /// branches may legitimately have nothing to say yet; the pill then draws one line.
     private func subtitle(for conversation: ConversationIdentity) -> ConversationTitleBar.Subtitle? {
         if let peer = conversation.peer {
-            return .presence(presence.isOnline(peer))
+            return .presence(presence.status(of: peer))
         }
         let members = names.members(of: channelID)
         return ConversationTitleBar.memberCount(
@@ -529,7 +529,7 @@ private extension ChannelTimelineView {
         TimelineRowView(
             row: row,
             showsAuthorHeader: !continuesGroup,
-            isAuthorOnline: presence.isOnline(row.pubkey),
+            authorPresence: presence.status(of: row.pubkey),
             reactions: model.reactions(for: row.id),
             mentions: model.mentions(for: row.id),
             replyParticipants: model.participants(for: row.id),

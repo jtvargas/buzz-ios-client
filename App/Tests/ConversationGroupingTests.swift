@@ -181,13 +181,13 @@ struct ConversationGroupingTests {
         // The visual attribution is what grouping drops; the spoken one cannot be, because
         // a reader by ear has no message above to take it from.
         #expect(
-            MessageAccessibility.status(author: "Ada", isOnline: false, isEdited: false, delivery: .sent)
+            MessageAccessibility.status(author: "Ada", presence: nil, isEdited: false, delivery: .sent)
                 == "From Ada"
         )
         #expect(
-            MessageAccessibility.status(author: "Ada", isOnline: true, isEdited: true, delivery: .pending)
+            MessageAccessibility.status(author: "Ada", presence: .online, isEdited: true, delivery: .pending)
                 == "From Ada, Online, Edited, Sending"
         )
-        #expect(MessageAccessibility.status(isOnline: false, isEdited: false, delivery: .sent).isEmpty)
+        #expect(MessageAccessibility.status(presence: nil, isEdited: false, delivery: .sent).isEmpty)
     }
 }

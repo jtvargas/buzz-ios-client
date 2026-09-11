@@ -159,11 +159,13 @@ struct MessageSurfaceTests {
 
     @Test("a peer's second line is their presence, in the profile sheet's own words")
     func presenceSubtitle() {
-        #expect(ConversationTitleBar.Subtitle.presence(true).text == "Online")
-        #expect(ConversationTitleBar.Subtitle.presence(false).text == "Offline")
+        #expect(ConversationTitleBar.Subtitle.presence(.online).text == "Online")
+        #expect(ConversationTitleBar.Subtitle.presence(.away).text == "Away")
+        #expect(ConversationTitleBar.Subtitle.presence(nil).text == "Offline")
         // The dot is drawn from `presence`, so a line that is *about* presence must carry it
         // — a plain line must not, or every channel header would grow a dot.
-        #expect(ConversationTitleBar.Subtitle.presence(false).presence == false)
+        #expect(ConversationTitleBar.Subtitle.presence(nil).presence == .absent)
+        #expect(ConversationTitleBar.Subtitle.presence(.away).presence == .present(.away))
         #expect(ConversationTitleBar.Subtitle.text("5 members").presence == nil)
     }
 

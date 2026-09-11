@@ -36,7 +36,7 @@ extension TimelineRowView {
     var accessibilityStatus: String {
         MessageAccessibility.status(
             author: showsAuthorHeader ? nil : authorName,
-            isOnline: isAuthorOnline,
+            presence: authorPresence,
             isEdited: row.isEdited,
             delivery: row.delivery
         )
@@ -73,7 +73,7 @@ extension TimelineRowView {
             size: avatarSize
         )
         .overlay(alignment: .bottomTrailing) {
-            if isAuthorOnline { presenceBadge }
+            if let authorPresence { presenceBadge(authorPresence) }
         }
 
         if let onOpenProfile {
@@ -126,10 +126,10 @@ extension TimelineRowView {
         return URL(string: picture)
     }
 
-    private var presenceBadge: some View {
+    private func presenceBadge(_ status: PresenceStatus) -> some View {
         let badge = MessageRowMetrics.presenceBadge(for: avatarSize)
         return Circle()
-            .fill(Color.green)
+            .fill(PresenceDot.tint(status))
             .frame(width: badge.diameter, height: badge.diameter)
             .overlay(Circle().strokeBorder(Color.hiveGround, lineWidth: badge.ring))
     }

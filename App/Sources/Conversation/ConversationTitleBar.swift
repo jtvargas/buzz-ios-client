@@ -1,3 +1,4 @@
+import BuzzKit
 import Foundation
 import SwiftUI
 
@@ -72,6 +73,26 @@ struct ConversationTitleBar: ViewModifier {
         case count(Int)
     }
 
+    /// What a subtitle line about a person says: they are here in some status, or they
+    /// are not.
+    ///
+    /// Distinct from the optional ``Subtitle/presence`` wraps it in, which answers a
+    /// different question — a channel's member counts and a thread's parent are not about
+    /// a person at all and draw no dot.
+    enum SubtitlePresence: Equatable {
+        case present(PresenceStatus)
+        case absent
+
+        /// The status to draw, or `nil` for a peer who is not present — the same shape
+        /// ``PresenceDot/tint(_:)`` reads everywhere else.
+        var status: PresenceStatus? {
+            switch self {
+            case let .present(status): status
+            case .absent: nil
+            }
+        }
+    }
+
     /// The line beneath the name, and whether it carries a presence dot.
     ///
     /// A type rather than a `String` because a DM's second line is not a sentence about a
@@ -79,18 +100,21 @@ struct ConversationTitleBar: ViewModifier {
     struct Subtitle: Equatable {
         let text: String
         /// `nil` for a line that says nothing about a person's presence.
-        let presence: Bool?
+        let presence: SubtitlePresence?
 
         /// A plain line — a channel's member counts, or a thread's parent conversation.
         static func text(_ text: String) -> Subtitle {
             Subtitle(text: text, presence: nil)
         }
 
-        /// A peer's presence: a green or grey dot, and the word beside it. The same two
-        /// words the profile sheet uses, so the header and the sheet cannot disagree about
-        /// the same person.
-        static func presence(_ isOnline: Bool) -> Subtitle {
-            Subtitle(text: isOnline ? "Online" : "Offline", presence: isOnline)
+        /// A peer's presence: a coloured dot, and the word beside it. The same words the
+        /// profile sheet uses, so the header and the sheet cannot disagree about the same
+        /// person.
+        static func presence(_ status: PresenceStatus?) -> Subtitle {
+            Subtitle(
+                text: PresenceDot.label(status) ?? "Offline",
+                presence: status.map(SubtitlePresence.present) ?? .absent
+            )
         }
     }
 
@@ -320,7 +344,7 @@ struct ConversationTitleBar: ViewModifier {
         HStack(spacing: Self.dotGap) {
             if let presence = subtitle.presence {
                 Circle()
-                    .fill(PresenceDot.tint(isOnline: presence))
+                    .fill(PresenceDot.tint(presence.status))
                     .frame(width: Self.dotSize, height: Self.dotSize)
                     .accessibilityHidden(true)
             }

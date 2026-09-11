@@ -160,12 +160,13 @@ private extension ChannelDetailsView {
                         .foregroundStyle(.secondary)
                 }
                 if let peer = conversation.peer {
+                    let status = presence.status(of: peer)
                     Label(
-                        presence.isOnline(peer) ? "Online" : "Offline",
-                        systemImage: presence.isOnline(peer) ? "circle.fill" : "circle"
+                        PresenceDot.label(status) ?? "Offline",
+                        systemImage: status == nil ? "circle" : "circle.fill"
                     )
                     .font(.hive(.caption))
-                    .foregroundStyle(presence.isOnline(peer) ? .green : .secondary)
+                    .foregroundStyle(status == nil ? Color.secondary : PresenceDot.tint(status))
                 }
             }
             .frame(maxWidth: .infinity)
