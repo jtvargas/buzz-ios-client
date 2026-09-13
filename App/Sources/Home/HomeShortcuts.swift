@@ -150,27 +150,35 @@ struct HomeShortcutCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Self.betweenLines) {
-            Group {
-                switch shortcut.glyph(hasItems: Self.hasSomethingWaiting(count)) {
-                case let .symbol(name):
-                    Image(systemName: name)
-                        // Bold, in the text's own colour: at this size a glyph in the regular
-                        // weight reads as thinner than the word under it, which is what made
-                        // the card look assembled out of two different things.
-                        .font(.hiveSymbol(.title3, weight: .bold))
-                case let .asset(name):
-                    // Matched by *height*, not by a square frame: this drawing is half again
-                    // as wide as it is tall, and boxing it would shrink it to the width and
-                    // leave it visibly shorter than the symbols on the cards either side.
-                    // There is no weight to ask for — the artwork carries its own.
-                    Image(name)
-                        .resizable()
-                        .scaledToFit()
-                        .frame(height: Self.glyphHeight)
-                }
-            }
-            .foregroundStyle(.primary)
-            .accessibilityHidden(true)
+            // One glyph *box* for all three cards, and the drawing scaled to fill it.
+            //
+            // Font-driven symbols do not agree on a height: at `.title3` bold `bookmark`
+            // lays out 27pt tall and `long.text.page.and.pencil` 31pt, against the 20pt the
+            // app's own artwork is drawn at. The card's height is fixed, so those 11pt of
+            // disagreement came out of the `Spacer` below — which was already at its floor,
+            // so the stack overflowed and SwiftUI centred the overflow, pushing each card's
+            // title and count down by *half* its own glyph's excess. The three titles landed
+            // 0 / 3.7 / 5.5pt apart, measured on the owner's phone, and the offset moved
+            // again whenever a glyph swapped to its `.fill` cut. A shared box is what makes
+            // the text below start at the same place on every card in every state — and it
+            // also stops the widest symbol reading as a bigger glyph than its neighbours.
+            //
+            // Matched by *height*, not by a square frame: the app's own drawing is half again
+            // as wide as it is tall, and boxing it would shrink it to the width and leave it
+            // visibly shorter than the symbols on the cards either side. Scaled by the card's
+            // own type ratio, so the glyph grows with the words under it rather than becoming
+            // a fixed mark on a card that got taller around it.
+            glyph
+                .resizable()
+                .scaledToFit()
+                .frame(height: Self.glyphHeight * typeScale, alignment: .leading)
+                // Bold, in the text's own colour: at this size a glyph in the regular weight
+                // reads as thinner than the word under it, which is what made the card look
+                // assembled out of two different things. The font chooses a symbol's *cut*;
+                // the frame above chooses its size.
+                .font(.hiveSymbol(.title3, weight: .bold))
+                .foregroundStyle(.primary)
+                .accessibilityHidden(true)
             Spacer(minLength: Self.underGlyph)
             Text(shortcut.title)
                 .font(.hive(.subheadline, weight: .semibold))
@@ -213,6 +221,21 @@ struct HomeShortcutCard: View {
         .accessibilityElement(children: .combine)
         .accessibilityLabel(Self.accessibilityLabel(shortcut, count: count, source: source))
         .accessibilityAddTraits(.isButton)
+    }
+
+    /// The card's drawing — the app's own artwork or a system symbol, whichever this
+    /// shortcut uses.
+    ///
+    /// An `Image` and not a `some View`, for two reasons. The call site resizes it, which is
+    /// an `Image` method and not a `View` one; and written inline as a `switch` in the body
+    /// it was enough to push the whole card past the type checker's budget — *"unable to
+    /// type-check this expression in reasonable time"*, measured. A named return type is what
+    /// takes the branch out of the `ViewBuilder`.
+    private var glyph: Image {
+        switch shortcut.glyph(hasItems: Self.hasSomethingWaiting(count)) {
+        case let .symbol(name): Image(systemName: name)
+        case let .asset(name): Image(name)
+        }
     }
 
     /// The card's edge: a hairline, and the accent only where the glyph cannot speak.
@@ -288,11 +311,17 @@ struct HomeShortcutCard: View {
     /// The least distance between the glyph and the title. The `Spacer` takes whatever is
     /// left over above it, which is what puts the glyph at the top of the card and the two
     /// lines of text at the bottom of it rather than spreading all three evenly.
-    private static let underGlyph: CGFloat = 8
-    /// The height the app's own card artwork is drawn at.
     ///
-    /// Matched to what `.title3` bold gives a system symbol on the cards either side, so three
-    /// cards in a row read as one set. A height and not a square: see the call site.
+    /// Six and not eight, and the two points are load-bearing: glyph, both lines of text and
+    /// the spacings between them come to about 65 of the 66 a card leaves inside its padding,
+    /// so at eight there was nothing left for the `Spacer` to take and the stack overflowed
+    /// instead of bottom-anchoring. A `Spacer` at its floor is not a `Spacer`.
+    private static let underGlyph: CGFloat = 6
+    /// The height every card's glyph is drawn at — the app's own artwork and the system
+    /// symbols alike, which is what keeps the text below them on one line across the row.
+    /// See the call site for why a symbol's own height cannot be trusted with the job.
+    ///
+    /// A height and not a square: the app's drawing is half again as wide as it is tall.
     private static let glyphHeight: CGFloat = 20
     /// Three short bands, none of them cramped, and no taller than they need to be: the
     /// cards are a place to go from, and the conversations under them are the screen. The
