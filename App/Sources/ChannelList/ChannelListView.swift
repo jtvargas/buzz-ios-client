@@ -164,7 +164,7 @@ struct ChannelListView: View {
                 }
                 // The floating `+`, in the trailing corner directly above the search tab's
                 // own button — ``HomeComposeButton`` carries the measurements that put it
-                // there, and the reason it is a `Menu` rather than a drawn panel.
+                // there, and the reason it is drawn rather than a `Menu`.
                 //
                 // Declared inside the stack and on the *root* screen's content, so a pushed
                 // conversation covers it with no visibility flag to keep in step — the
@@ -529,8 +529,8 @@ private extension ChannelListView {
                 newMessage: { showsNewDirectMessage = true },
                 newChannel: { showsCreateChannel = true }
             )
-            .padding(.trailing, HomeComposeButton.trailingInset)
-            .padding(.bottom, HomeComposeButton.bottomGap)
+            // No insets here: the control is a layer rather than a button now — it carries
+            // its own corner insets and grows a full-screen scrim when its panel is out.
             .opacity(1 - workspacePanel.progress)
             .allowsHitTesting(workspacePanel.progress < 0.5)
             .accessibilityHidden(workspacePanel.progress >= 0.5)
