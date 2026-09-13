@@ -162,6 +162,16 @@ struct ChannelListView: View {
                         .padding(.top, 8)
                     }
                 }
+                // The floating `+`, in the trailing corner directly above the search tab's
+                // own button — ``HomeComposeButton`` carries the measurements that put it
+                // there, and the reason it is a `Menu` rather than a drawn panel.
+                //
+                // Declared inside the stack and on the *root* screen's content, so a pushed
+                // conversation covers it with no visibility flag to keep in step — the
+                // mistake ``ChannelListTabBar`` documents at length for the tab bar itself.
+                // Before the two panel overlays in this chain, so the communities panel
+                // still draws over it.
+                .overlay(alignment: .bottomTrailing) { composeButton }
                 // The heading every other screen carries, naming the community this app is
                 // signed in to (§ ``CommunityIdentity``). It opens the community list: this
                 // is the one heading that names something you can be somewhere *else* than,
@@ -500,6 +510,30 @@ private extension ChannelListView {
             }
             .scrollBounceBehavior(.always, axes: .vertical)
             .refreshable { await engine.refresh() }
+        }
+    }
+
+    /// The floating `+` over the trailing bottom corner, and the two surfaces it opens.
+    ///
+    /// Drawn only on the conversations surface. The other two are a launch that has not
+    /// heard from the relay yet and one that could not reach it — neither is a moment to
+    /// offer creating a channel, and both draw a screen that is about waiting.
+    ///
+    /// It fades with the communities panel at the panel's own rate, and stops taking touches
+    /// half way, exactly as the toolbar pair opposite it does: the panel covers the sidebar,
+    /// and this control belongs to the sidebar.
+    @ViewBuilder
+    var composeButton: some View {
+        if model.surface == .conversations {
+            HomeComposeButton(
+                newMessage: { showsNewDirectMessage = true },
+                newChannel: { showsCreateChannel = true }
+            )
+            .padding(.trailing, HomeComposeButton.trailingInset)
+            .padding(.bottom, HomeComposeButton.bottomGap)
+            .opacity(1 - workspacePanel.progress)
+            .allowsHitTesting(workspacePanel.progress < 0.5)
+            .accessibilityHidden(workspacePanel.progress >= 0.5)
         }
     }
 
