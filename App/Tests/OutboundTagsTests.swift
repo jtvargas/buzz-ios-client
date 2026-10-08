@@ -19,6 +19,44 @@ struct OutboundTagsTests {
         #expect(tags == [["h", "room-1"], ["p", first.lowercased()]])
     }
 
+    @MainActor
+    @Test("plain composer sends tag DM peers only", arguments: ["dm", "stream"], [1, 2])
+    func automaticDMRecipients(channelType: String, peerCount: Int) async throws {
+        let temp = TempStore()
+        defer { temp.remove() }
+        let store = try temp.open()
+        let author = try Fixture()
+        let peers = try (0 ..< peerCount).map { _ in try Fixture().pubkey }
+        _ = try await store.ingest(batch: [
+            author.event(.groupMetadata, "", tags: [["d", "room"], ["t", channelType]]),
+            author.channelMembers("room", [author.pubkey] + peers),
+        ], phase: .backfill)
+
+        let sender = try RecordingSender()
+        let timeline = ChannelTimelineModel(
+            channel: "room", store: store, sender: sender, selfPubkey: author.pubkey.uppercased()
+        )
+        timeline.draft = "hello"
+        timeline.send()
+        await waitUntil { await sender.sent.count == 1 }
+
+        let thread = ThreadModel(
+            root: "ROOT", channel: "room", store: store, sender: sender,
+            opener: StubThreadOpener(store: store, events: []), selfPubkey: author.pubkey.uppercased()
+        )
+        thread.draft = "hello"
+        thread.sendReply()
+        await waitUntil { await sender.sent.count == 2 }
+
+        let expected = channelType == "dm" ? Set(peers) : Set<String>()
+        for event in await sender.events {
+            #expect(event.content == "hello")
+            #expect(Set(event.tags.filter { $0.first == "p" }.map { $0[1] }) == expected)
+        }
+        let reply = try #require(await sender.events.last)
+        #expect(reply.threadReference.rootID == "ROOT")
+    }
+
     private func signed(_ kind: EventKind, tags: [[String]]) throws -> NostrEvent {
         try Fixture().event(kind, "x", tags: tags)
     }

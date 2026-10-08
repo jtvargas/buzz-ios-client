@@ -144,7 +144,8 @@ final class ThreadModel {
     /// Clears that mark after its moment. Not observable: nothing renders it.
     @ObservationIgnored var highlightTask: Task<Void, Never>?
 
-    private let store: BuzzEventStore
+    /// Internal so the adjacent send path can read the current DM roster.
+    let store: BuzzEventStore
     /// Internal rather than `private` because the send that uses it lives beside this
     /// file, in `ThreadModel+Sending.swift` — Swift's `private` is file-scoped. Same
     /// reason ``ChannelTimelineModel/sender`` is internal. Immutable, so widening it
