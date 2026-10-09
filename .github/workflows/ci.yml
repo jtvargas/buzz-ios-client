@@ -6,9 +6,9 @@ on:
     branches: [main]
   # Weekly cold canary: a scheduled run restores no cache, so a cached green
   # that a cold build would not reproduce shows up within a week. Since the app
-  # suite became request-only (see the `app` job's `if:`), this now covers the
-  # packages and the lint — the cache it was built to watch is written and read
-  # by manual runs alone.
+  # suite and the BuzzKit suite became request-only (see their `if:` and the
+  # matrix expression below), this now covers the NostrCore suite and the lint —
+  # the cache it was built to watch is written and read by manual runs alone.
   schedule:
     - cron: "0 7 * * 1"
   workflow_dispatch:
@@ -43,7 +43,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        package: [NostrCore, BuzzKit, HivePushKit]
+        # BuzzKit is request-only by the owner's decision (2026-10-08), the same
+        # way the app suite below is: it is the slow leg (296s worst against
+        # NostrCore's 125s) and nothing on a pull request waits on its verdict.
+        # Run it with `gh workflow run ci.yml --ref <branch>`, which also runs
+        # the app suite. To put it back on every push, drop the expression and
+        # restore `package: [NostrCore, BuzzKit]`.
+        # HivePushKit runs on every push (fast: 6 tests) and on dispatch.
+        package: ${{ github.event_name == 'workflow_dispatch' && fromJSON('["NostrCore", "BuzzKit", "HivePushKit"]') || fromJSON('["NostrCore", "HivePushKit"]') }}
     steps:
       - uses: actions/checkout@v4
       # Release is the blocking gate: recent Swift toolchains (observed on

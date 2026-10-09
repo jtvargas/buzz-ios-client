@@ -144,6 +144,35 @@ struct RecentMentionsTests {
             == [ada.pubkey.lowercased()])
     }
 
+    @Test("DM recipient tags do not rank, whether logged or pending")
+    func excludesDirectMessages() async throws {
+        let database = TempDatabase()
+        defer { database.remove() }
+        let store = try database.open()
+        let key = try PrivateKey()
+        let me = SignedBy(key)
+        let relay = try Fixture(), peer = try Fixture(), ada = try Fixture(), bo = try Fixture()
+
+        _ = try await store.ingest(batch: [
+            relay.event(.groupMetadata, "", tags: [["d", "dm"], ["t", "dm"]]),
+            relay.event(.groupMetadata, "", tags: [["d", "room"], ["t", "stream"]]),
+            me.message("named", in: "room", mentioning: [ada.pubkey], at: 1000),
+            me.message("hello", in: "dm", mentioning: [peer.pubkey], at: 2000),
+        ], phase: .backfill)
+        _ = try await store.enqueue(
+            content: "named while offline", in: "room",
+            tags: [["h", "room"], ["p", bo.pubkey]],
+            with: InMemorySigner(key), createdAt: Date(timeIntervalSince1970: 3000)
+        )
+        _ = try await store.enqueue(
+            content: "hello while offline", in: "dm",
+            tags: [["h", "dm"], ["p", peer.pubkey]],
+            with: InMemorySigner(key), createdAt: Date(timeIntervalSince1970: 4000)
+        )
+
+        #expect(try store.recentMentions(by: key.publicKey.hex, limit: 2).pubkeys == [bo.pubkey, ada.pubkey])
+    }
+
     @Test("no identity, or a non-positive limit, yields nothing rather than everyone's mentions")
     func requiresAnIdentity() async throws {
         let database = TempDatabase()

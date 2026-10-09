@@ -49,6 +49,9 @@ extension ThreadModel {
             guard let self else { return }
 
             do {
+                let dmRecipients = try self.store.directMessageRecipients(
+                    channel: self.channel, selfPubkey: selfPubkey
+                )
                 let entry = try await self.sender.enqueueComposerMessage(
                     text: text,
                     in: self.channel,
@@ -56,7 +59,7 @@ extension ThreadModel {
                         channel: self.channel,
                         root: self.root,
                         parent: self.root,
-                        mentioning: mentionPubkeys,
+                        mentioning: mentionPubkeys + dmRecipients,
                         sender: selfPubkey
                     ),
                     media: media.map { OutboundMediaPayload(data: $0.data, filename: $0.filename, mimeType: $0.mimeType) }

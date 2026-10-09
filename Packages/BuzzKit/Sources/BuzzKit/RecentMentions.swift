@@ -9,11 +9,10 @@ import NostrCore
 /// alphabetically.
 ///
 /// A query result, not a stored table, and deliberately not a local preference file
-/// either. The `p` tags on your own sent messages *are* the record of who you have
-/// mentioned — ``OutboundTags`` emits one only for an explicit `@` token and never for a
-/// thread parent — so deriving it from the log means a fresh install inherits the order
-/// the moment history syncs, and no second list can fall out of step with what was
-/// actually sent.
+/// either. The `p` tags on your own sent non-DM messages *are* the record of who you
+/// have mentioned. DMs automatically tag every participant, so they are excluded.
+/// Deriving this from the log means a fresh install inherits the order the moment
+/// history syncs, and no second list can fall out of step with what was actually sent.
 public struct RecentMentions: Sendable, Hashable {
     /// The mentioned pubkeys, lowercased, newest mention first, de-duplicated.
     public let pubkeys: [String]
@@ -49,7 +48,7 @@ public extension BuzzEventStore {
     /// The identities `selfPubkey` has mentioned most recently, newest first.
     ///
     /// Synchronous and `nonisolated` so it runs on the concurrent reader off the actor,
-    /// and so `ValueObservation` can track the `event`, `event_tag`, and `outbox` tables
+    /// and so `ValueObservation` can track the `event`, `event_tag`, `outbox`, and `channel` tables
     /// it reads — the same discipline behind ``mentionCandidates(channel:selfPubkey:)``,
     /// so the composer's ranking updates from the same signal its candidate list does.
     ///
@@ -145,8 +144,10 @@ extension BuzzEventStore {
                MAX(e.created_at) AS mentioned_at
         FROM event e
         CROSS JOIN event_tag et ON et.event_id = e.id AND et.name = 'p'
+        LEFT JOIN channel c ON c.id = e.h
         WHERE e.kind = :kind
           AND e.pubkey = :selfPubkey
+          AND (c.channel_type IS NULL OR c.channel_type <> 'dm')
         GROUP BY et.value
         ORDER BY mentioned_at DESC, pubkey ASC
         LIMIT :limit
@@ -172,11 +173,13 @@ extension BuzzEventStore {
         selfPubkey: String
     ) throws -> [(String, Int64)] {
         let rows = try Row.fetchAll(db, sql: """
-        SELECT tags, created_at
-        FROM outbox
-        WHERE kind = :kind
-          AND pubkey = :selfPubkey
-        ORDER BY created_at DESC, event_id DESC
+        SELECT o.tags, o.created_at
+        FROM outbox o
+        LEFT JOIN channel c ON c.id = o.channel_id
+        WHERE o.kind = :kind
+          AND o.pubkey = :selfPubkey
+          AND (c.channel_type IS NULL OR c.channel_type <> 'dm')
+        ORDER BY o.created_at DESC, o.event_id DESC
         LIMIT :scan
         """, arguments: [
             "kind": EventKind.channelMessage.rawValue,
