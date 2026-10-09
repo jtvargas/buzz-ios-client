@@ -73,6 +73,16 @@ struct EnrollmentStoreTests {
         let all = store.loadAll()
         #expect(all.count == 2)
     }
+
+    @Test("Pending handle round-trips")
+    func pendingHandleRoundTrip() {
+        let (store, _) = makeStore()
+        #expect(store.loadPendingHandle(communityID: "c1") == nil)
+        store.savePendingHandle("h-99", communityID: "c1")
+        #expect(store.loadPendingHandle(communityID: "c1") == "h-99")
+        store.removePendingHandle(communityID: "c1")
+        #expect(store.loadPendingHandle(communityID: "c1") == nil)
+    }
 }
 
 // MARK: - EnrollmentDriver tests
@@ -227,7 +237,7 @@ struct EnrollmentDriverTests {
         #expect(leaseEvent.tags.contains { $0.first == "relay" })
     }
 
-    @Test("Revoke removes enrollment and publishes deletion")
+    @Test("Revoke removes enrollment, publishes deletion, stashes handle on gateway failure")
     func revokeEnrollment() async throws {
         let store = makeStore()
         let signer = try InMemorySigner()
@@ -243,6 +253,7 @@ struct EnrollmentDriverTests {
             relayURL: "wss://relay.example"
         ))
 
+        // No scripted responses — gateway revoke will fail.
         let transport = ScriptedTransport(responses: [])
         let gateway = GatewayClient(
             baseURL: URL(string: "http://gateway.test:3005")!,
@@ -267,6 +278,9 @@ struct EnrollmentDriverTests {
         #expect(store.load(communityID: "comm-1") == nil)
         let state = await driver.state
         #expect(state == .idle)
+
+        // Gateway revoke failed, so the handle is stashed for 409 recovery.
+        #expect(store.loadPendingHandle(communityID: "comm-1") == "handle-1")
 
         // A deletion event should have been published.
         let events = await publishedEvents.value
@@ -333,6 +347,72 @@ struct EnrollmentDriverTests {
         #expect(enrollment?.installationHandle == "new-handle")
     }
 
+    @Test("409 without handle in body recovers using stored pending handle")
+    func installConflictRecoveryFromPendingHandle() async throws {
+        let store = makeStore()
+        let signer = try InMemorySigner()
+        let publishedEvents: ActorBox<[NostrEvent]> = ActorBox([])
+
+        // Simulate a prior failed revoke that stashed the handle.
+        store.savePendingHandle("stashed-handle", communityID: "comm-1")
+
+        // The 409 body does NOT include the handle — just an error string.
+        let challengeJSON = #"{"challenge_id":"ch-1","challenge":"nonce","expires_at":1700000300}"#
+        let conflictJSON = #"{"error":"installation_conflict"}"#
+        let revokeJSON = #"{}"#
+        let installJSON = #"{"installation_handle":"new-handle","endpoint_epoch":1,"expires_at":1700086400}"#
+        let challenge2JSON = #"{"challenge_id":"ch-2","challenge":"nonce2","expires_at":1700000600}"#
+        let delegationJSON = #"{"endpoint_grant":"grant-1"}"#
+        let transport = ScriptedTransport(responses: [
+            (Data(challengeJSON.utf8), 200),   // enroll challenge
+            (Data(conflictJSON.utf8), 409),     // install → 409 without handle
+            (Data(revokeJSON.utf8), 200),       // revoke using stashed handle
+            (Data(installJSON.utf8), 201),      // retry install → success
+            (Data(challenge2JSON.utf8), 200),   // delegate challenge
+            (Data(delegationJSON.utf8), 201),   // delegate
+        ])
+        let gateway = GatewayClient(
+            baseURL: URL(string: "http://gateway.test:3005")!,
+            transport: transport
+        )
+
+        let driver = EnrollmentDriver(
+            gateway: gateway,
+            attestProvider: FakeAttestProvider(supported: true),
+            enrollmentStore: store,
+            signer: signer,
+            communityID: "comm-1",
+            relayURL: "wss://relay.example",
+            relayPubkey: "aabbccdd",
+            publishEvent: { event in
+                await publishedEvents.append(event)
+            }
+        )
+
+        await driver.enroll(
+            requestPermission: { true },
+            registerForRemoteNotifications: {
+                Task { await driver.didReceiveDeviceToken("abcd1234") }
+            }
+        )
+
+        let state = await driver.state
+        #expect(state == .enrolled)
+
+        // The revoke call used the stashed handle.
+        let revokeRequest = transport.requests[2]
+        #expect(revokeRequest.url.path.hasSuffix("/v1/installations/revoke"))
+        let revokeBody = try JSONSerialization.jsonObject(with: revokeRequest.body) as? [String: Any]
+        #expect(revokeBody?["installation_handle"] as? String == "stashed-handle")
+
+        // Pending handle was cleaned up.
+        #expect(store.loadPendingHandle(communityID: "comm-1") == nil)
+
+        // Final enrollment uses the new handle.
+        let enrollment = store.load(communityID: "comm-1")
+        #expect(enrollment?.installationHandle == "new-handle")
+    }
+
     @Test("Revoke calls gateway revoke endpoint")
     func revokeCallsGateway() async throws {
         let store = makeStore()
@@ -384,6 +464,9 @@ struct EnrollmentDriverTests {
         #expect(store.load(communityID: "comm-1") == nil)
         let state = await driver.state
         #expect(state == .idle)
+
+        // Successful gateway revoke — no pending handle stashed.
+        #expect(store.loadPendingHandle(communityID: "comm-1") == nil)
     }
 
     @Test("Second enroll() while in flight is a no-op")
