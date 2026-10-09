@@ -74,14 +74,39 @@ struct EnrollmentStoreTests {
         #expect(all.count == 2)
     }
 
-    @Test("Pending handle round-trips")
-    func pendingHandleRoundTrip() {
+    @Test("Pending revocation round-trips with handle and key")
+    func pendingRevocationRoundTrip() {
         let (store, _) = makeStore()
-        #expect(store.loadPendingHandle(communityID: "c1") == nil)
-        store.savePendingHandle("h-99", communityID: "c1")
-        #expect(store.loadPendingHandle(communityID: "c1") == "h-99")
-        store.removePendingHandle(communityID: "c1")
-        #expect(store.loadPendingHandle(communityID: "c1") == nil)
+        #expect(store.loadPendingRevocation(communityID: "c1") == nil)
+        let record = PendingRevocation(communityID: "c1", installationHandle: "h-99", attestKeyID: "k-99")
+        store.savePendingRevocation(record)
+        #expect(store.loadPendingRevocation(communityID: "c1") == record)
+        store.removePendingRevocation(communityID: "c1")
+        #expect(store.loadPendingRevocation(communityID: "c1") == nil)
+    }
+
+    @Test("Demote moves an enrollment's credentials into the pending set")
+    func demoteToPendingRevocation() throws {
+        let (store, _) = makeStore()
+        let e = enrollment(communityID: "c1", installationHandle: "h-1")
+        try store.write(e)
+        store.demoteToPendingRevocation(communityID: "c1")
+        #expect(store.load(communityID: "c1") == nil)
+        #expect(store.loadPendingRevocation(communityID: "c1") == PendingRevocation(enrollment: e))
+
+        // No enrollment: nothing is written.
+        store.demoteToPendingRevocation(communityID: "c2")
+        #expect(store.loadPendingRevocation(communityID: "c2") == nil)
+    }
+
+    @Test("LoadAllPendingRevocations spans communities")
+    func loadAllPending() {
+        let (store, _) = makeStore()
+        #expect(store.loadAllPendingRevocations().isEmpty)
+        store.savePendingRevocation(PendingRevocation(communityID: "a", installationHandle: "h-a", attestKeyID: "k-a"))
+        store.savePendingRevocation(PendingRevocation(communityID: "b", installationHandle: "h-b", attestKeyID: "k-b"))
+        let handles = Set(store.loadAllPendingRevocations().map(\.installationHandle))
+        #expect(handles == ["h-a", "h-b"])
     }
 }
 
@@ -237,7 +262,7 @@ struct EnrollmentDriverTests {
         #expect(leaseEvent.tags.contains { $0.first == "relay" })
     }
 
-    @Test("Revoke removes enrollment, publishes deletion, stashes handle on gateway failure")
+    @Test("Revoke keeps handle and key as pending revocation when the gateway is unreachable")
     func revokeEnrollment() async throws {
         let store = makeStore()
         let signer = try InMemorySigner()
@@ -253,7 +278,7 @@ struct EnrollmentDriverTests {
             relayURL: "wss://relay.example"
         ))
 
-        // No scripted responses — gateway revoke will fail.
+        // No scripted responses — the revoke challenge fails.
         let transport = ScriptedTransport(responses: [])
         let gateway = GatewayClient(
             baseURL: URL(string: "http://gateway.test:3005")!,
@@ -262,7 +287,7 @@ struct EnrollmentDriverTests {
 
         let driver = EnrollmentDriver(
             gateway: gateway,
-            attestProvider: FakeAttestProvider(supported: false),
+            attestProvider: FakeAttestProvider(supported: true),
             enrollmentStore: store,
             signer: signer,
             communityID: "comm-1",
@@ -279,8 +304,9 @@ struct EnrollmentDriverTests {
         let state = await driver.state
         #expect(state == .idle)
 
-        // Gateway revoke failed, so the handle is stashed for 409 recovery.
-        #expect(store.loadPendingHandle(communityID: "comm-1") == "handle-1")
+        // Both the handle and the key survive, so a later 409 can revoke it.
+        #expect(store.loadPendingRevocation(communityID: "comm-1")
+            == PendingRevocation(communityID: "comm-1", installationHandle: "handle-1", attestKeyID: "key-1"))
 
         // A deletion event should have been published.
         let events = await publishedEvents.value
@@ -288,138 +314,12 @@ struct EnrollmentDriverTests {
         #expect(events[0].kind == .deletion)
     }
 
-    @Test("Enrollment recovers from 409 by revoking then retrying install")
-    func installConflictRecovery() async throws {
-        let store = makeStore()
-        let signer = try InMemorySigner()
-        let publishedEvents: ActorBox<[NostrEvent]> = ActorBox([])
-
-        let challengeJSON = #"{"challenge_id":"ch-1","challenge":"nonce","expires_at":1700000300}"#
-        let conflictJSON = #"{"installation_handle":"old-handle"}"#
-        let revokeJSON = #"{}"#
-        let installJSON = #"{"installation_handle":"new-handle","endpoint_epoch":1,"expires_at":1700086400}"#
-        let challenge2JSON = #"{"challenge_id":"ch-2","challenge":"nonce2","expires_at":1700000600}"#
-        let delegationJSON = #"{"endpoint_grant":"grant-1"}"#
-        let transport = ScriptedTransport(responses: [
-            (Data(challengeJSON.utf8), 200),   // enroll challenge
-            (Data(conflictJSON.utf8), 409),     // install → 409 conflict
-            (Data(revokeJSON.utf8), 200),       // revoke old installation
-            (Data(installJSON.utf8), 201),      // retry install → success
-            (Data(challenge2JSON.utf8), 200),   // delegate challenge
-            (Data(delegationJSON.utf8), 201),   // delegate
-        ])
-        let gateway = GatewayClient(
-            baseURL: URL(string: "http://gateway.test:3005")!,
-            transport: transport
-        )
-
-        let driver = EnrollmentDriver(
-            gateway: gateway,
-            attestProvider: FakeAttestProvider(supported: true),
-            enrollmentStore: store,
-            signer: signer,
-            communityID: "comm-1",
-            relayURL: "wss://relay.example",
-            relayPubkey: "aabbccdd",
-            publishEvent: { event in
-                await publishedEvents.append(event)
-            }
-        )
-
-        await driver.enroll(
-            requestPermission: { true },
-            registerForRemoteNotifications: {
-                Task { await driver.didReceiveDeviceToken("abcd1234") }
-            }
-        )
-
-        let state = await driver.state
-        #expect(state == .enrolled)
-
-        // Verify the revoke call hit the right endpoint.
-        let revokeRequest = transport.requests[2]
-        #expect(revokeRequest.url.path.hasSuffix("/v1/installations/revoke"))
-        let revokeBody = try JSONSerialization.jsonObject(with: revokeRequest.body) as? [String: Any]
-        #expect(revokeBody?["installation_handle"] as? String == "old-handle")
-
-        // Verify final enrollment uses the new handle.
-        let enrollment = store.load(communityID: "comm-1")
-        #expect(enrollment?.installationHandle == "new-handle")
-    }
-
-    @Test("409 without handle in body recovers using stored pending handle")
-    func installConflictRecoveryFromPendingHandle() async throws {
-        let store = makeStore()
-        let signer = try InMemorySigner()
-        let publishedEvents: ActorBox<[NostrEvent]> = ActorBox([])
-
-        // Simulate a prior failed revoke that stashed the handle.
-        store.savePendingHandle("stashed-handle", communityID: "comm-1")
-
-        // The 409 body does NOT include the handle — just an error string.
-        let challengeJSON = #"{"challenge_id":"ch-1","challenge":"nonce","expires_at":1700000300}"#
-        let conflictJSON = #"{"error":"installation_conflict"}"#
-        let revokeJSON = #"{}"#
-        let installJSON = #"{"installation_handle":"new-handle","endpoint_epoch":1,"expires_at":1700086400}"#
-        let challenge2JSON = #"{"challenge_id":"ch-2","challenge":"nonce2","expires_at":1700000600}"#
-        let delegationJSON = #"{"endpoint_grant":"grant-1"}"#
-        let transport = ScriptedTransport(responses: [
-            (Data(challengeJSON.utf8), 200),   // enroll challenge
-            (Data(conflictJSON.utf8), 409),     // install → 409 without handle
-            (Data(revokeJSON.utf8), 200),       // revoke using stashed handle
-            (Data(installJSON.utf8), 201),      // retry install → success
-            (Data(challenge2JSON.utf8), 200),   // delegate challenge
-            (Data(delegationJSON.utf8), 201),   // delegate
-        ])
-        let gateway = GatewayClient(
-            baseURL: URL(string: "http://gateway.test:3005")!,
-            transport: transport
-        )
-
-        let driver = EnrollmentDriver(
-            gateway: gateway,
-            attestProvider: FakeAttestProvider(supported: true),
-            enrollmentStore: store,
-            signer: signer,
-            communityID: "comm-1",
-            relayURL: "wss://relay.example",
-            relayPubkey: "aabbccdd",
-            publishEvent: { event in
-                await publishedEvents.append(event)
-            }
-        )
-
-        await driver.enroll(
-            requestPermission: { true },
-            registerForRemoteNotifications: {
-                Task { await driver.didReceiveDeviceToken("abcd1234") }
-            }
-        )
-
-        let state = await driver.state
-        #expect(state == .enrolled)
-
-        // The revoke call used the stashed handle.
-        let revokeRequest = transport.requests[2]
-        #expect(revokeRequest.url.path.hasSuffix("/v1/installations/revoke"))
-        let revokeBody = try JSONSerialization.jsonObject(with: revokeRequest.body) as? [String: Any]
-        #expect(revokeBody?["installation_handle"] as? String == "stashed-handle")
-
-        // Pending handle was cleaned up.
-        #expect(store.loadPendingHandle(communityID: "comm-1") == nil)
-
-        // Final enrollment uses the new handle.
-        let enrollment = store.load(communityID: "comm-1")
-        #expect(enrollment?.installationHandle == "new-handle")
-    }
-
-    @Test("Revoke calls gateway revoke endpoint")
+    @Test("Revoke sends a challenge-bound assertion signed by the enrollment's key")
     func revokeCallsGateway() async throws {
         let store = makeStore()
         let signer = try InMemorySigner()
-        let publishedEvents: ActorBox<[NostrEvent]> = ActorBox([])
+        let attest = FakeAttestProvider(supported: true)
 
-        // Pre-seed an enrollment.
         try store.write(Enrollment(
             communityID: "comm-1",
             installationHandle: "handle-1",
@@ -429,9 +329,10 @@ struct EnrollmentDriverTests {
             relayURL: "wss://relay.example"
         ))
 
-        let revokeJSON = #"{}"#
+        let challengeJSON = #"{"challenge_id":"ch-r","challenge":"nonce-r","expires_at":1700000300}"#
         let transport = ScriptedTransport(responses: [
-            (Data(revokeJSON.utf8), 200),  // gateway revoke
+            (Data(challengeJSON.utf8), 200),     // revoke challenge
+            (Data(#"{"status":"revoked"}"#.utf8), 200), // gateway revoke
         ])
         let gateway = GatewayClient(
             baseURL: URL(string: "http://gateway.test:3005")!,
@@ -440,33 +341,262 @@ struct EnrollmentDriverTests {
 
         let driver = EnrollmentDriver(
             gateway: gateway,
-            attestProvider: FakeAttestProvider(supported: false),
+            attestProvider: attest,
             enrollmentStore: store,
             signer: signer,
             communityID: "comm-1",
             relayURL: "wss://relay.example",
             relayPubkey: "aabbccdd",
-            publishEvent: { event in
-                await publishedEvents.append(event)
-            }
+            publishEvent: { _ in }
         )
 
         await driver.revoke()
 
-        // Gateway revoke was called with the right handle.
-        #expect(transport.requests.count >= 1)
-        let revokeRequest = transport.requests[0]
+        #expect(transport.requests.count == 2)
+        #expect(transport.requests[0].url.path.hasSuffix("/v1/installations/challenges"))
+        let revokeRequest = transport.requests[1]
         #expect(revokeRequest.url.path.hasSuffix("/v1/installations/revoke"))
-        let revokeBody = try JSONSerialization.jsonObject(with: revokeRequest.body) as? [String: Any]
-        #expect(revokeBody?["installation_handle"] as? String == "handle-1")
+        let body = try JSONSerialization.jsonObject(with: revokeRequest.body) as? [String: Any]
+        #expect(body?["v"] as? Int == 1)
+        #expect(body?["challenge_id"] as? String == "ch-r")
+        #expect(body?["challenge"] as? String == "nonce-r")
+        #expect(body?["installation_handle"] as? String == "handle-1")
+        #expect(body?["endpoint_epoch"] as? Int == 1)
+        #expect(body?["new_endpoint_epoch"] as? Int == 2)
+        #expect(body?["assertion"] as? String == Data("fake-assertion".utf8).base64EncodedString())
+        // The gateway rejects unknown fields, so the key set must be exact.
+        #expect(Set(body?.keys.map { $0 } ?? []) == [
+            "v", "challenge_id", "challenge", "installation_handle",
+            "endpoint_epoch", "new_endpoint_epoch", "assertion",
+        ])
 
-        // Local enrollment removed.
+        // The assertion came from the enrolled installation's key, not a fresh one.
+        #expect(await attest.assertedKeyIDs.value == ["key-1"])
+
         #expect(store.load(communityID: "comm-1") == nil)
+        #expect(store.loadPendingRevocation(communityID: "comm-1") == nil)
         let state = await driver.state
         #expect(state == .idle)
+    }
 
-        // Successful gateway revoke — no pending handle stashed.
-        #expect(store.loadPendingHandle(communityID: "comm-1") == nil)
+    @Test("409 is recovered by revoking a pending installation with its own key, then re-enrolling from a fresh challenge")
+    func installConflictRecoveryFromPendingRevocation() async throws {
+        let store = makeStore()
+        let signer = try InMemorySigner()
+        let attest = FakeAttestProvider(supported: true)
+
+        // A prior revoke failed (offline), so the old installation's credentials
+        // were kept — under another community, since installations are per device.
+        store.savePendingRevocation(PendingRevocation(
+            communityID: "comm-old", installationHandle: "old-handle", attestKeyID: "old-key"
+        ))
+
+        let challengeJSON = #"{"challenge_id":"ch-1","challenge":"nonce","expires_at":1700000300}"#
+        let conflictJSON = #"{"error":"installation_conflict"}"#
+        let revokeChallengeJSON = #"{"challenge_id":"ch-r","challenge":"nonce-r","expires_at":1700000300}"#
+        let challenge2JSON = #"{"challenge_id":"ch-2","challenge":"nonce2","expires_at":1700000600}"#
+        let installJSON = #"{"installation_handle":"new-handle","endpoint_epoch":1,"expires_at":1700086400}"#
+        let challenge3JSON = #"{"challenge_id":"ch-3","challenge":"nonce3","expires_at":1700000900}"#
+        let delegationJSON = #"{"endpoint_grant":"grant-1"}"#
+        let transport = ScriptedTransport(responses: [
+            (Data(challengeJSON.utf8), 200),              // enroll challenge
+            (Data(conflictJSON.utf8), 409),                // install → 409, challenge consumed
+            (Data(revokeChallengeJSON.utf8), 200),         // revoke challenge
+            (Data(#"{"status":"revoked"}"#.utf8), 200),   // revoke old installation
+            (Data(challenge2JSON.utf8), 200),             // fresh enroll challenge
+            (Data(installJSON.utf8), 201),                 // install → success
+            (Data(challenge3JSON.utf8), 200),             // delegate challenge
+            (Data(delegationJSON.utf8), 201),              // delegate
+        ])
+        let gateway = GatewayClient(
+            baseURL: URL(string: "http://gateway.test:3005")!,
+            transport: transport
+        )
+
+        let driver = EnrollmentDriver(
+            gateway: gateway,
+            attestProvider: attest,
+            enrollmentStore: store,
+            signer: signer,
+            communityID: "comm-1",
+            relayURL: "wss://relay.example",
+            relayPubkey: "aabbccdd",
+            publishEvent: { _ in }
+        )
+
+        await driver.enroll(
+            requestPermission: { true },
+            registerForRemoteNotifications: {
+                Task { await driver.didReceiveDeviceToken("abcd1234") }
+            }
+        )
+
+        let state = await driver.state
+        #expect(state == .enrolled)
+
+        let paths = transport.requests.map { $0.url.path.components(separatedBy: "/v1/").last ?? "" }
+        #expect(paths == [
+            "installations/challenges", "installations",
+            "installations/challenges", "installations/revoke",
+            "installations/challenges", "installations",
+            "installations/challenges", "delegations",
+        ])
+
+        // The revoke was signed with the pending record's key and bound to its own challenge.
+        let revokeBody = try JSONSerialization.jsonObject(with: transport.requests[3].body) as? [String: Any]
+        #expect(revokeBody?["installation_handle"] as? String == "old-handle")
+        #expect(revokeBody?["challenge_id"] as? String == "ch-r")
+        #expect(await attest.assertedKeyIDs.value.first == "old-key")
+
+        // The retried install used the fresh challenge, not the consumed one...
+        let retryBody = try JSONSerialization.jsonObject(with: transport.requests[5].body) as? [String: Any]
+        #expect(retryBody?["challenge_id"] as? String == "ch-2")
+        // ...and a freshly generated key.
+        #expect(await attest.generatedKeyCount.value == 2)
+
+        // Pending record settled; enrollment uses the new handle.
+        #expect(store.loadPendingRevocation(communityID: "comm-old") == nil)
+        #expect(store.load(communityID: "comm-1")?.installationHandle == "new-handle")
+    }
+
+    @Test("409 with no pending credentials fails with the operator message and makes no revoke call")
+    func installConflictWithoutCredentials() async throws {
+        let store = makeStore()
+        let signer = try InMemorySigner()
+
+        let challengeJSON = #"{"challenge_id":"ch-1","challenge":"nonce","expires_at":1700000300}"#
+        let conflictJSON = #"{"error":"installation_conflict"}"#
+        let transport = ScriptedTransport(responses: [
+            (Data(challengeJSON.utf8), 200),
+            (Data(conflictJSON.utf8), 409),
+        ])
+        let gateway = GatewayClient(
+            baseURL: URL(string: "http://gateway.test:3005")!,
+            transport: transport
+        )
+
+        let driver = EnrollmentDriver(
+            gateway: gateway,
+            attestProvider: FakeAttestProvider(supported: true),
+            enrollmentStore: store,
+            signer: signer,
+            communityID: "comm-1",
+            relayURL: "wss://relay.example",
+            relayPubkey: "aabbccdd",
+            publishEvent: { _ in }
+        )
+
+        await driver.enroll(
+            requestPermission: { true },
+            registerForRemoteNotifications: {
+                Task { await driver.didReceiveDeviceToken("abcd1234") }
+            }
+        )
+
+        let state = await driver.state
+        #expect(state == .failed(.install, EnrollmentDriver.unrecoverableConflictMessage))
+        #expect(transport.requests.count == 2)
+        #expect(store.load(communityID: "comm-1") == nil)
+    }
+
+    @Test("409 persisting after the pending installation is already gone fails rather than looping")
+    func installConflictPersistsAfterRevoke() async throws {
+        let store = makeStore()
+        let signer = try InMemorySigner()
+        store.savePendingRevocation(PendingRevocation(
+            communityID: "comm-1", installationHandle: "stale-handle", attestKeyID: "stale-key"
+        ))
+
+        let challengeJSON = #"{"challenge_id":"ch-1","challenge":"nonce","expires_at":1700000300}"#
+        let conflictJSON = #"{"error":"installation_conflict"}"#
+        let notAuthorizedJSON = #"{"error":"not_authorized"}"#
+        let transport = ScriptedTransport(responses: [
+            (Data(challengeJSON.utf8), 200),        // enroll challenge
+            (Data(conflictJSON.utf8), 409),          // install → 409
+            (Data(challengeJSON.utf8), 200),        // revoke challenge
+            (Data(notAuthorizedJSON.utf8), 404),    // stale record: gateway no longer has it
+            (Data(challengeJSON.utf8), 200),        // retry enroll challenge
+            (Data(conflictJSON.utf8), 409),          // still blocked by something we can't revoke
+        ])
+        let gateway = GatewayClient(
+            baseURL: URL(string: "http://gateway.test:3005")!,
+            transport: transport
+        )
+
+        let driver = EnrollmentDriver(
+            gateway: gateway,
+            attestProvider: FakeAttestProvider(supported: true),
+            enrollmentStore: store,
+            signer: signer,
+            communityID: "comm-1",
+            relayURL: "wss://relay.example",
+            relayPubkey: "aabbccdd",
+            publishEvent: { _ in }
+        )
+
+        await driver.enroll(
+            requestPermission: { true },
+            registerForRemoteNotifications: {
+                Task { await driver.didReceiveDeviceToken("abcd1234") }
+            }
+        )
+
+        let state = await driver.state
+        #expect(state == .failed(.install, EnrollmentDriver.unrecoverableConflictMessage))
+        #expect(transport.requests.count == 6)
+        // The stale record is dropped so it is not retried forever.
+        #expect(store.loadPendingRevocation(communityID: "comm-1") == nil)
+    }
+
+    @Test("409 recovery reports a revoke transport failure instead of retrying")
+    func installConflictRevokeFails() async throws {
+        let store = makeStore()
+        let signer = try InMemorySigner()
+        store.savePendingRevocation(PendingRevocation(
+            communityID: "comm-1", installationHandle: "old-handle", attestKeyID: "old-key"
+        ))
+
+        let challengeJSON = #"{"challenge_id":"ch-1","challenge":"nonce","expires_at":1700000300}"#
+        let conflictJSON = #"{"error":"installation_conflict"}"#
+        let transport = ScriptedTransport(responses: [
+            (Data(challengeJSON.utf8), 200),
+            (Data(conflictJSON.utf8), 409),
+            (Data(challengeJSON.utf8), 200),
+            (Data(#"{"error":"temporarily_unavailable"}"#.utf8), 503),
+        ])
+        let gateway = GatewayClient(
+            baseURL: URL(string: "http://gateway.test:3005")!,
+            transport: transport
+        )
+
+        let driver = EnrollmentDriver(
+            gateway: gateway,
+            attestProvider: FakeAttestProvider(supported: true),
+            enrollmentStore: store,
+            signer: signer,
+            communityID: "comm-1",
+            relayURL: "wss://relay.example",
+            relayPubkey: "aabbccdd",
+            publishEvent: { _ in }
+        )
+
+        await driver.enroll(
+            requestPermission: { true },
+            registerForRemoteNotifications: {
+                Task { await driver.didReceiveDeviceToken("abcd1234") }
+            }
+        )
+
+        let state = await driver.state
+        guard case let .failed(step, message) = state else {
+            Issue.record("Expected failed state, got \(state)")
+            return
+        }
+        #expect(step == .install)
+        #expect(message.hasPrefix("Failed to revoke existing installation"))
+        #expect(transport.requests.count == 4)
+        // Credentials are kept for the next attempt.
+        #expect(store.loadPendingRevocation(communityID: "comm-1")?.installationHandle == "old-handle")
     }
 
     @Test("Second enroll() while in flight is a no-op")
@@ -573,9 +703,12 @@ struct PushCapabilityTests {
 
 // MARK: - Test doubles
 
-/// A fake App Attest provider for testing.
+/// A fake App Attest provider for testing. Records which keys it was asked to
+/// generate and assert with, so tests can tell a stored key from a fresh one.
 struct FakeAttestProvider: AppAttestProviding {
     let supported: Bool
+    let generatedKeyCount = ActorBox(0)
+    let assertedKeyIDs = ActorBox<[String]>([])
 
     init(supported: Bool) {
         self.supported = supported
@@ -585,7 +718,8 @@ struct FakeAttestProvider: AppAttestProviding {
 
     func generateKey() async throws -> String {
         guard supported else { throw FakeAttestError.unsupported }
-        return "fake-key-id"
+        let n = await generatedKeyCount.increment()
+        return "fake-key-id-\(n)"
     }
 
     func attest(keyID _: String, clientDataHash _: Data) async throws -> Data {
@@ -593,8 +727,9 @@ struct FakeAttestProvider: AppAttestProviding {
         return Data("fake-attestation".utf8)
     }
 
-    func assert(keyID _: String, clientDataHash _: Data) async throws -> Data {
+    func assert(keyID: String, clientDataHash _: Data) async throws -> Data {
         guard supported else { throw FakeAttestError.unsupported }
+        await assertedKeyIDs.append(keyID)
         return Data("fake-assertion".utf8)
     }
 }
@@ -612,8 +747,16 @@ actor ActorBox<T> {
     }
 }
 
-extension ActorBox where T == [NostrEvent] {
-    func append(_ event: NostrEvent) {
-        value.append(event)
+extension ActorBox where T: RangeReplaceableCollection {
+    func append(_ element: T.Element) {
+        value.append(element)
+    }
+}
+
+extension ActorBox where T == Int {
+    /// Increments and returns the new value.
+    func increment() -> Int {
+        value += 1
+        return value
     }
 }

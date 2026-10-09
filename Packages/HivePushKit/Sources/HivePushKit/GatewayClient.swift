@@ -70,8 +70,7 @@ public struct GatewayClient: Sendable {
         let body = try JSONEncoder().encode(wire)
         let (data, status) = try await post(body: body, to: url, signer: signer)
         if status == 409 {
-            let handle = (try? JSONDecoder().decode(GatewayConflictResponse.self, from: data))?.installationHandle
-            throw GatewayError.installationConflict(existingHandle: handle)
+            throw GatewayError.installationConflict
         }
         guard (200 ... 299).contains(status) else {
             throw GatewayError.httpStatus(status, Self.errorMessage(from: data))
@@ -117,13 +116,25 @@ public struct GatewayClient: Sendable {
 
     // MARK: - 4. Revocation
 
-    /// Revokes an existing installation on the gateway so it can be re-created.
+    /// Revokes an installation on the gateway (`POST /v1/installations/revoke`).
+    ///
+    /// The gateway only honours a revocation signed by the installation's own App
+    /// Attest key: the body carries a fresh challenge and an assertion over
+    /// ``RevokeInstallationTranscript``. There is no handle-only revoke — the
+    /// gateway parses the body strictly and rejects anything short of this shape.
     public func revokeInstallation(
-        handle: String,
+        _ request: GatewayRevokeRequest,
         signer: some EventSigner
     ) async throws {
         let url = baseURL.appendingPathComponent("v1/installations/revoke")
-        let wire = GatewayRevokeWire(installationHandle: handle)
+        let wire = GatewayRevokeWire(
+            challengeID: request.challengeID,
+            challenge: request.challenge,
+            installationHandle: request.installationHandle,
+            endpointEpoch: request.endpointEpoch,
+            newEndpointEpoch: request.newEndpointEpoch,
+            assertion: request.assertion
+        )
         let body = try JSONEncoder().encode(wire)
         let (data, status) = try await post(body: body, to: url, signer: signer)
         guard (200 ... 299).contains(status) else {
@@ -361,9 +372,10 @@ public enum GatewayError: Error, Equatable, Sendable {
     case httpStatus(Int, String?)
     /// The gateway answered but the body could not be decoded.
     case unreadableResponse
-    /// A live installation already exists for this device/key (HTTP 409).
-    /// Carries the existing installation handle when the gateway includes it.
-    case installationConflict(existingHandle: String?)
+    /// A live installation already exists for this device's token or App Attest
+    /// key (HTTP 409). The body is a bare `{"error":"installation_conflict"}` —
+    /// the gateway never discloses the existing handle.
+    case installationConflict
 }
 
 // MARK: - Wire shapes
@@ -372,21 +384,56 @@ struct GatewayErrorEnvelope: Decodable {
     let error: String?
 }
 
-/// The gateway's 409 response body when an installation conflict occurs.
-struct GatewayConflictResponse: Decodable {
-    let installationHandle: String?
+/// The values needed to revoke an installation.
+public struct GatewayRevokeRequest: Equatable, Sendable {
+    /// A fresh challenge identifier from ``GatewayClient/challenge(signer:)``.
+    public let challengeID: String
+    /// The challenge nonce.
+    public let challenge: String
+    /// The installation being revoked.
+    public let installationHandle: String
+    /// The installation's current endpoint epoch.
+    public let endpointEpoch: Int64
+    /// Must be `endpointEpoch + 1`; the gateway records it on the tombstone.
+    public let newEndpointEpoch: Int64
+    /// App Attest assertion (base64) over ``RevokeInstallationTranscript``.
+    public let assertion: String
 
-    private enum CodingKeys: String, CodingKey {
-        case installationHandle = "installation_handle"
+    public init(
+        challengeID: String,
+        challenge: String,
+        installationHandle: String,
+        endpointEpoch: Int64,
+        newEndpointEpoch: Int64,
+        assertion: String
+    ) {
+        self.challengeID = challengeID
+        self.challenge = challenge
+        self.installationHandle = installationHandle
+        self.endpointEpoch = endpointEpoch
+        self.newEndpointEpoch = newEndpointEpoch
+        self.assertion = assertion
     }
 }
 
 /// Wire encoding for the revocation request body.
 struct GatewayRevokeWire: Encodable, Sendable {
+    let v: UInt8 = 1
+    let challengeID: String
+    let challenge: String
     let installationHandle: String
+    let endpointEpoch: Int64
+    let newEndpointEpoch: Int64
+    let assertion: String
 
     private enum CodingKeys: String, CodingKey {
+        case v
+        case challengeID = "challenge_id"
+        case challenge
         case installationHandle = "installation_handle"
+        case endpointEpoch = "endpoint_epoch"
+        case newEndpointEpoch = "new_endpoint_epoch"
+        case assertion
     }
 }
 
@@ -397,6 +444,7 @@ struct GatewayRevokeWire: Encodable, Sendable {
 public enum NIPPLAudience {
     public static let installations = "https://push.buzz.xyz/v1/installations"
     public static let delegations = "https://push.buzz.xyz/v1/delegations"
+    public static let revokeInstallation = "https://push.buzz.xyz/v1/installations/revoke"
 }
 
 /// Push enrollment constants.
@@ -464,6 +512,31 @@ struct DelegateTranscript: CanonicalTranscript {
         s += ",\"relay_pubkey\":\(jsonQuote(relayPubkey))"
         s += ",\"not_before\":\(notBefore)"
         s += ",\"expires_at\":\(expiresAt)"
+        s += "}"
+        return Data(s.utf8)
+    }
+}
+
+/// The JSON transcript the gateway hashes when verifying the assertion on
+/// installation revocation. Field order and names must match the gateway's
+/// `RevokeInstallationTranscript` exactly.
+struct RevokeInstallationTranscript: CanonicalTranscript {
+    let v: UInt8
+    let audience: String
+    let challengeID: String
+    let challenge: String
+    let installationHandle: String
+    let endpointEpoch: Int64
+    let newEndpointEpoch: Int64
+
+    func canonicalJSON() -> Data {
+        var s = "{\"v\":\(v)"
+        s += ",\"audience\":\(jsonQuote(audience))"
+        s += ",\"challenge_id\":\(jsonQuote(challengeID))"
+        s += ",\"challenge\":\(jsonQuote(challenge))"
+        s += ",\"installation_handle\":\(jsonQuote(installationHandle))"
+        s += ",\"endpoint_epoch\":\(endpointEpoch)"
+        s += ",\"new_endpoint_epoch\":\(newEndpointEpoch)"
         s += "}"
         return Data(s.utf8)
     }

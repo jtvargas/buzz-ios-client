@@ -55,27 +55,27 @@ public actor EnrollmentDriver {
         case publishLease
     }
 
-    public private(set) var state: State = .idle
+    public internal(set) var state: State = .idle
 
-    private let gateway: GatewayClient
-    private let attestProvider: any AppAttestProviding
-    private let enrollmentStore: EnrollmentStore
-    private let signer: any EventSigner
-    private let communityID: String
+    let gateway: GatewayClient
+    let attestProvider: any AppAttestProviding
+    let enrollmentStore: EnrollmentStore
+    let signer: any EventSigner
+    let communityID: String
     private let relayURL: String
     private let relayPubkey: String
     /// The app profile identifier sent to the gateway during installation.
     private let appProfile: String
     /// Callback to publish a signed event to the relay. Injected so this actor has
     /// no dependency on the relay connection.
-    private let publishEvent: @Sendable (NostrEvent) async throws -> Void
+    let publishEvent: @Sendable (NostrEvent) async throws -> Void
 
     /// Continuation for the device token, fulfilled by the app delegate.
     private var tokenContinuation: CheckedContinuation<String, any Error>?
 
     /// Lease metadata captured after successful publication, for snapshot use.
-    public private(set) var leaseExpiresAt: Date?
-    public private(set) var leaseFiltersJSON: String?
+    public internal(set) var leaseExpiresAt: Date?
+    public internal(set) var leaseFiltersJSON: String?
 
     private static let log = Logger(subsystem: "HivePushKit", category: "EnrollmentDriver")
 
@@ -199,58 +199,52 @@ public actor EnrollmentDriver {
         enrollmentStore.load(communityID: communityID) != nil
     }
 
-    /// Revokes the enrollment: revokes on the gateway, deletes the lease,
-    /// removes the stored enrollment.
-    public func revoke() async {
-        guard let enrollment = enrollmentStore.load(communityID: communityID) else { return }
-
-        // Best-effort: revoke the installation on the gateway so re-enrollment
-        // won't hit a 409. Failure is non-fatal — the gateway will eventually
-        // expire the installation, and install handles 409 with revoke+retry.
-        // When the revoke fails, stash the handle so the 409 recovery path can
-        // find it (the enrollment record itself is removed below for UX).
-        do {
-            try await gateway.revokeInstallation(
-                handle: enrollment.installationHandle,
-                signer: signer
-            )
-            enrollmentStore.removePendingHandle(communityID: communityID)
-            Self.log.info("Revoked installation on gateway")
-        } catch {
-            enrollmentStore.savePendingHandle(
-                enrollment.installationHandle,
-                communityID: communityID
-            )
-            Self.log.warning("Gateway revoke failed; handle stashed for 409 recovery: \(String(describing: error))")
-        }
-
-        // Best-effort: publish a deletion event if we can.
-        // The lease event ID is not stored, so we publish an addressable deletion.
-        let pubkey = try? await signer.publicKey().hex
-        if let pubkey {
-            let aTag = "\(EventKind.pushLease.rawValue):\(pubkey):\(enrollment.installID)"
-            let tags: [[String]] = [["a", aTag]]
-            if let deletion = try? await signer.sign(
-                kind: .deletion,
-                content: "revoke push lease",
-                tags: tags
-            ) {
-                try? await publishEvent(deletion)
-                Self.log.info("Published push lease revocation")
-            }
-        }
-        enrollmentStore.remove(communityID: communityID)
-        leaseExpiresAt = nil
-        leaseFiltersJSON = nil
-        state = .idle
-        Self.log.info("Removed enrollment for community \(self.communityID)")
-    }
-
     // MARK: - Enrollment steps
+
+    /// Endpoint epoch for every installation this client creates. The gateway
+    /// requires 1 on enrollment; this client never rotates the endpoint.
+    static let endpointEpoch: Int64 = 1
+
+    /// What one pass through challenge → attest → install → delegate produced.
+    private enum GatewayAttempt {
+        case enrolled(Enrollment)
+        /// The gateway refused the install because a live installation already
+        /// exists for this device. `state` is untouched.
+        case conflict
+        /// A step failed; `state` already records which.
+        case failed
+    }
 
     private func gatewayEnrollment(deviceToken: String) async {
         state = .enrolling
 
+        switch await attemptGatewayEnrollment(deviceToken: deviceToken) {
+        case let .enrolled(enrollment):
+            await publishLeaseStep(enrollment: enrollment)
+        case .failed:
+            return
+        case .conflict:
+            // A live installation for this device is already on the gateway.
+            // Revoke the ones we still hold credentials for, then start over:
+            // the challenge was consumed by the refused install and App Attest
+            // keys attest once, so the retry needs a fresh challenge and key.
+            Self.log.warning("Install returned 409 — revoking pending installations")
+            guard await revokePendingInstallations() else { return }
+            switch await attemptGatewayEnrollment(deviceToken: deviceToken) {
+            case let .enrolled(enrollment):
+                await publishLeaseStep(enrollment: enrollment)
+            case .failed:
+                return
+            case .conflict:
+                state = .failed(.install, Self.unrecoverableConflictMessage)
+                Self.log.error("Install still conflicts after revoking every pending installation")
+            }
+        }
+    }
+
+    /// Runs steps 3–6 once. Does not touch `state` on `.conflict` so the
+    /// caller can recover; records the failing step on `.failed`.
+    private func attemptGatewayEnrollment(deviceToken: String) async -> GatewayAttempt {
         // Step 3: Challenge for enrollment.
         Self.log.info("Requesting enrollment challenge from gateway")
         let enrollChallenge: GatewayChallengeResponse
@@ -259,14 +253,13 @@ public actor EnrollmentDriver {
         } catch {
             state = .failed(.challenge, String(describing: error))
             Self.log.error("Challenge failed: \(String(describing: error))")
-            return
+            return .failed
         }
         Self.log.info("Received enrollment challenge: \(enrollChallenge.challengeID)")
 
         // Step 4: App Attest key generation + attestation over the enroll transcript.
         let now = Int64(Date().timeIntervalSince1970)
         let installExpiresAt = now + Int64(NIPPLLease.defaultDuration)
-        let endpointEpoch: Int64 = 1
 
         let enrollTranscript = EnrollTranscript(
             v: 1,
@@ -276,41 +269,23 @@ public actor EnrollmentDriver {
             keyID: "", // placeholder — filled after key generation
             appProfile: appProfile,
             endpoint: deviceToken,
-            endpointEpoch: endpointEpoch,
+            endpointEpoch: Self.endpointEpoch,
             expiresAt: installExpiresAt
         )
 
         guard let attestResult = await performAttestation(
             challenge: enrollChallenge,
             transcriptTemplate: enrollTranscript
-        ) else { return }
-
-        // Rebuild transcript with the real key ID.
-        let finalEnrollTranscript = EnrollTranscript(
-            v: 1,
-            audience: NIPPLAudience.installations,
-            challengeID: enrollChallenge.challengeID,
-            challenge: enrollChallenge.challenge,
-            keyID: attestResult.keyID,
-            appProfile: appProfile,
-            endpoint: deviceToken,
-            endpointEpoch: endpointEpoch,
-            expiresAt: installExpiresAt
-        )
+        ) else { return .failed }
 
         // Steps 5-6: Install and delegate.
-        guard let enrollment = await installAndDelegate(
+        return await installAndDelegate(
             deviceToken: deviceToken,
             attestKeyID: attestResult.keyID,
             attestation: attestResult.attestation,
             challenge: enrollChallenge,
-            enrollTranscript: finalEnrollTranscript,
-            endpointEpoch: endpointEpoch,
             installExpiresAt: installExpiresAt
-        ) else { return }
-
-        // Step 7: Publish lease.
-        await publishLeaseStep(enrollment: enrollment)
+        )
     }
 
     private func performAttestation(
@@ -352,10 +327,9 @@ public actor EnrollmentDriver {
         attestKeyID: String,
         attestation: Data,
         challenge: GatewayChallengeResponse,
-        enrollTranscript: EnrollTranscript,
-        endpointEpoch: Int64,
         installExpiresAt: Int64
-    ) async -> Enrollment? {
+    ) async -> GatewayAttempt {
+        let endpointEpoch = Self.endpointEpoch
         // Step 5: Installation.
         let installRequest = GatewayInstallRequest(
             challengeID: challenge.challengeID,
@@ -370,17 +344,12 @@ public actor EnrollmentDriver {
         let installResponse: GatewayInstallResponse
         do {
             installResponse = try await gateway.install(installRequest, signer: signer)
-        } catch GatewayError.installationConflict(let existingHandle) {
-            Self.log.warning("Install returned 409 — revoking existing installation")
-            guard let revokedResponse = await revokeAndRetryInstall(
-                existingHandle: existingHandle,
-                request: installRequest
-            ) else { return nil }
-            installResponse = revokedResponse
+        } catch GatewayError.installationConflict {
+            return .conflict
         } catch {
             state = .failed(.install, String(describing: error))
             Self.log.error("Installation failed: \(String(describing: error))")
-            return nil
+            return .failed
         }
         Self.log.info("Installation succeeded: \(installResponse.installationHandle)")
 
@@ -392,7 +361,7 @@ public actor EnrollmentDriver {
         } catch {
             state = .failed(.delegate, String(describing: error))
             Self.log.error("Delegation challenge failed: \(String(describing: error))")
-            return nil
+            return .failed
         }
 
         // Step 5c: Build the delegation transcript and generate an assertion.
@@ -423,7 +392,7 @@ public actor EnrollmentDriver {
         } catch {
             state = .failed(.delegate, String(describing: error))
             Self.log.error("Delegation assertion failed: \(String(describing: error))")
-            return nil
+            return .failed
         }
 
         // Step 6: Delegation.
@@ -444,7 +413,7 @@ public actor EnrollmentDriver {
         } catch {
             state = .failed(.delegate, String(describing: error))
             Self.log.error("Delegation failed: \(String(describing: error))")
-            return nil
+            return .failed
         }
         Self.log.info("Delegation succeeded with endpoint grant")
 
@@ -460,49 +429,15 @@ public actor EnrollmentDriver {
         )
         do {
             try enrollmentStore.write(enrollment)
-            enrollmentStore.removePendingHandle(communityID: communityID)
+            // A fresh install went through without a conflict, so any older
+            // installation recorded for this community is no longer live.
+            enrollmentStore.removePendingRevocation(communityID: communityID)
         } catch {
             state = .failed(.install, "Failed to persist enrollment: \(error)")
             Self.log.error("Enrollment persistence failed: \(String(describing: error))")
-            return nil
+            return .failed
         }
-        return enrollment
-    }
-
-    /// Revokes an existing installation on the gateway and retries the install.
-    ///
-    /// Called when install returns 409 (installation_conflict). The gateway may
-    /// include the existing handle in the 409 body; when it doesn't, we fall back
-    /// to a handle stashed locally from a prior failed revocation.
-    private func revokeAndRetryInstall(
-        existingHandle: String?,
-        request: GatewayInstallRequest
-    ) async -> GatewayInstallResponse? {
-        let handle = existingHandle
-            ?? enrollmentStore.loadPendingHandle(communityID: communityID)
-        guard let handle else {
-            state = .failed(.install, "Installation conflict but gateway did not return the existing handle")
-            Self.log.error("Cannot resolve 409: no existing installation handle in response or store")
-            return nil
-        }
-        do {
-            try await gateway.revokeInstallation(handle: handle, signer: signer)
-            enrollmentStore.removePendingHandle(communityID: communityID)
-            Self.log.info("Revoked existing installation \(handle)")
-        } catch {
-            state = .failed(.install, "Failed to revoke existing installation: \(error)")
-            Self.log.error("Revoke failed: \(String(describing: error))")
-            return nil
-        }
-        do {
-            let response = try await gateway.install(request, signer: signer)
-            Self.log.info("Retry install succeeded: \(response.installationHandle)")
-            return response
-        } catch {
-            state = .failed(.install, "Retry install after revoke failed: \(error)")
-            Self.log.error("Retry install failed: \(String(describing: error))")
-            return nil
-        }
+        return .enrolled(enrollment)
     }
 
     private func publishLeaseStep(enrollment: Enrollment) async {

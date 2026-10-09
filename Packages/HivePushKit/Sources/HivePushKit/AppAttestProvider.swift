@@ -71,6 +71,7 @@ public struct DeviceAppAttestProvider: AppAttestProviding {
 enum AppAttestClientData {
     private static let enrollDomain = "buzz.push.enroll.v1"
     private static let delegateDomain = "buzz.push.delegate.v1"
+    private static let revokeInstallationDomain = "buzz.push.revoke-installation.v1"
 
     /// Client data hash for the enrollment attestation.
     static func enrollHash(transcript: EnrollTranscript) -> Data {
@@ -80,6 +81,11 @@ enum AppAttestClientData {
     /// Client data hash for the delegation assertion.
     static func delegateHash(transcript: DelegateTranscript) -> Data {
         transcriptHash(domain: delegateDomain, json: transcript.canonicalJSON())
+    }
+
+    /// Client data hash for the installation-revocation assertion.
+    static func revokeInstallationHash(transcript: RevokeInstallationTranscript) -> Data {
+        transcriptHash(domain: revokeInstallationDomain, json: transcript.canonicalJSON())
     }
 
     private static func transcriptHash(domain: String, json: Data) -> Data {

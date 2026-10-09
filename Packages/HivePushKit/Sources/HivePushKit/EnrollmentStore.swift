@@ -12,7 +12,7 @@ public struct EnrollmentStore: Sendable {
     private let containerURL: URL
 
     private static let directoryName = "PushEnrollments"
-    private static let pendingDirectoryName = "PushPendingHandles"
+    private static let pendingDirectoryName = "PushPendingRevocations"
     private static let fileExtension = "json"
 
     /// Creates a store writing into the given container directory.
@@ -75,35 +75,57 @@ public struct EnrollmentStore: Sendable {
         try? FileManager.default.removeItem(at: directory)
     }
 
-    // MARK: - Pending revocation handles
+    // MARK: - Pending revocations
 
-    /// Saves an installation handle that could not be revoked on the gateway.
+    /// Records an installation the gateway still considers live but this app
+    /// no longer uses, together with the App Attest key that can revoke it.
     ///
-    /// When ``EnrollmentDriver/revoke()`` fails to revoke on the gateway, it
-    /// stashes the handle here. If a subsequent install gets a 409 without a
-    /// handle in the response body, the driver can fall back to this value.
-    public func savePendingHandle(_ handle: String, communityID: String) {
+    /// Written when ``EnrollmentDriver/revoke()`` cannot reach the gateway, or
+    /// when a community is removed without a live session to revoke through.
+    /// A later install that gets a 409 revokes every record here, then retries.
+    public func savePendingRevocation(_ revocation: PendingRevocation) {
         let directory = containerURL.appendingPathComponent(Self.pendingDirectoryName)
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let url = pendingFileURL(for: communityID)
-        try? Data(handle.utf8).write(
-            to: url,
+        guard let data = try? Self.encoder.encode(revocation) else { return }
+        try? data.write(
+            to: pendingFileURL(for: revocation.communityID),
             options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication]
         )
     }
 
-    /// Loads a previously stashed pending-revocation handle, if any.
-    public func loadPendingHandle(communityID: String) -> String? {
-        let url = pendingFileURL(for: communityID)
-        guard let data = try? Data(contentsOf: url) else { return nil }
-        let handle = String(data: data, encoding: .utf8)
-        return handle?.isEmpty == true ? nil : handle
+    /// Moves a community's enrollment into the pending-revocation set. No-op
+    /// when the community has no enrollment.
+    public func demoteToPendingRevocation(communityID: String) {
+        guard let enrollment = load(communityID: communityID) else { return }
+        savePendingRevocation(PendingRevocation(enrollment: enrollment))
+        remove(communityID: communityID)
     }
 
-    /// Removes a pending-revocation handle. Idempotent.
-    public func removePendingHandle(communityID: String) {
-        let url = pendingFileURL(for: communityID)
-        try? FileManager.default.removeItem(at: url)
+    /// Loads the pending revocation for a community, if any.
+    public func loadPendingRevocation(communityID: String) -> PendingRevocation? {
+        guard let data = try? Data(contentsOf: pendingFileURL(for: communityID)) else { return nil }
+        return try? Self.decoder.decode(PendingRevocation.self, from: data)
+    }
+
+    /// Loads every pending revocation. Installations are per device, not per
+    /// community, so any of them can be the one blocking a new install.
+    public func loadAllPendingRevocations() -> [PendingRevocation] {
+        let directory = containerURL.appendingPathComponent(Self.pendingDirectoryName)
+        guard let files = try? FileManager.default.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: nil
+        ) else { return [] }
+        return files.compactMap { url in
+            guard url.pathExtension == Self.fileExtension,
+                  let data = try? Data(contentsOf: url)
+            else { return nil }
+            return try? Self.decoder.decode(PendingRevocation.self, from: data)
+        }
+    }
+
+    /// Removes a pending revocation. Idempotent.
+    public func removePendingRevocation(communityID: String) {
+        try? FileManager.default.removeItem(at: pendingFileURL(for: communityID))
     }
 
     // MARK: - Helpers
@@ -119,7 +141,7 @@ public struct EnrollmentStore: Sendable {
         containerURL
             .appendingPathComponent(Self.pendingDirectoryName)
             .appendingPathComponent(communityID)
-            .appendingPathExtension("txt")
+            .appendingPathExtension(Self.fileExtension)
     }
 
     private static let encoder: JSONEncoder = {
@@ -172,5 +194,33 @@ public struct Enrollment: Codable, Equatable, Sendable {
         self.installID = installID
         self.relayURL = relayURL
         self.enrolledAt = enrolledAt
+    }
+}
+
+// MARK: - Pending revocation record
+
+/// An installation this app has stopped using but may not have revoked on the
+/// gateway yet. Revocation needs both the handle and the App Attest key that
+/// enrolled it, so both are kept until the gateway confirms the tombstone.
+public struct PendingRevocation: Codable, Equatable, Sendable {
+    /// The community the installation belonged to; also the record's file name.
+    public let communityID: String
+    /// The gateway installation handle.
+    public let installationHandle: String
+    /// The App Attest key identifier that signs the revocation assertion.
+    public let attestKeyID: String
+
+    public init(communityID: String, installationHandle: String, attestKeyID: String) {
+        self.communityID = communityID
+        self.installationHandle = installationHandle
+        self.attestKeyID = attestKeyID
+    }
+
+    public init(enrollment: Enrollment) {
+        self.init(
+            communityID: enrollment.communityID,
+            installationHandle: enrollment.installationHandle,
+            attestKeyID: enrollment.attestKeyID
+        )
     }
 }

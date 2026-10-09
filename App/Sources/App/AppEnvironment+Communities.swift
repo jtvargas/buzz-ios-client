@@ -418,8 +418,15 @@ extension AppEnvironment {
         guard let removed = removedCommunity else { return }
         if wasActive {
             setPhase(.bootstrapping)
+            // Before teardown, while the driver (and its signer) still exist: the
+            // gateway keys installations by device, so one left live here blocks
+            // every later enrollment on this device.
+            await pushCoordinator?.revokeEnrollment(communityID: removed.id.uuidString)
             await teardownSession()
         }
+        // No session to revoke through (background community, or enrollment never
+        // started): keep the handle and key so the next enrollment can revoke it.
+        enrollmentStore?.demoteToPendingRevocation(communityID: removed.id.uuidString)
         try? IdentityKeychain.signer(account: removed.keychainAccount).delete()
         try? pushSnapshots?.remove(communityID: removed.id.uuidString)
         // After the teardown, so the file is not deleted underneath an open connection:
