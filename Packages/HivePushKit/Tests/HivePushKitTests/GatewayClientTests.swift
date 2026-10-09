@@ -30,7 +30,7 @@ struct GatewayClientTests {
 
         // Verify request was to the right path.
         let request = transport.requests[0]
-        #expect(request.url.path.hasSuffix("/v1/installations/challenge"))
+        #expect(request.url.path.hasSuffix("/v1/installations/challenges"))
         #expect(request.headers["Content-Type"] == "application/json")
         #expect(request.headers["Authorization"]?.hasPrefix("Nostr ") == true)
     }
