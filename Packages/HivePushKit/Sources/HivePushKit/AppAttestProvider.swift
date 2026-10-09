@@ -74,26 +74,22 @@ enum AppAttestClientData {
 
     /// Client data hash for the enrollment attestation.
     static func enrollHash(transcript: EnrollTranscript) -> Data {
-        transcriptHash(domain: enrollDomain, transcript: transcript)
+        transcriptHash(domain: enrollDomain, json: transcript.canonicalJSON())
     }
 
     /// Client data hash for the delegation assertion.
     static func delegateHash(transcript: DelegateTranscript) -> Data {
-        transcriptHash(domain: delegateDomain, transcript: transcript)
+        transcriptHash(domain: delegateDomain, json: transcript.canonicalJSON())
     }
 
-    private static func transcriptHash(domain: String, transcript: some Encodable) -> Data {
-        // JSONEncoder without .sortedKeys preserves CodingKeys declaration order,
-        // which matches the Rust struct field order (serde_json default).
-        let encoder = JSONEncoder()
-        let json: Data
-        do {
-            json = try encoder.encode(transcript)
-        } catch {
-            // Transcript types are fully concrete — encoding cannot fail.
-            fatalError("Failed to encode transcript: \(error)")
-        }
-        let payload = "\(domain)\n".data(using: .utf8)! + json
+    private static func transcriptHash(domain: String, json: Data) -> Data {
+        // The gateway computes SHA-256("{domain}\n{json}") and verifies that the
+        // attestation or assertion binds to the same hash. The transcript JSON
+        // must be byte-for-byte identical to Rust's serde_json output — field
+        // order matching the struct declaration and no forward-slash escaping.
+        // Foundation's JSONEncoder guarantees neither, so transcripts produce
+        // their own canonical JSON.
+        let payload = Data("\(domain)\n".utf8) + json
         let digest = SHA256.hash(data: payload)
         return Data(digest)
     }
