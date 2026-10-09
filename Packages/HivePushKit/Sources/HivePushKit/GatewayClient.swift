@@ -371,7 +371,7 @@ public enum PushConstants {
 
 /// The JSON transcript the gateway hashes when verifying the attestation on enrollment.
 /// Field order and names must match the gateway's `EnrollTranscript` exactly.
-struct EnrollTranscript: Encodable {
+struct EnrollTranscript: CanonicalTranscript {
     let v: UInt8
     let audience: String
     let challengeID: String
@@ -382,21 +382,25 @@ struct EnrollTranscript: Encodable {
     let endpointEpoch: Int64
     let expiresAt: Int64
 
-    private enum CodingKeys: String, CodingKey {
-        case v, audience
-        case challengeID = "challenge_id"
-        case challenge
-        case keyID = "key_id"
-        case appProfile = "app_profile"
-        case endpoint
-        case endpointEpoch = "endpoint_epoch"
-        case expiresAt = "expires_at"
+    func canonicalJSON() -> Data {
+        // Field order matches the Rust struct declaration (serde_json default).
+        var s = "{\"v\":\(v)"
+        s += ",\"audience\":\(jsonQuote(audience))"
+        s += ",\"challenge_id\":\(jsonQuote(challengeID))"
+        s += ",\"challenge\":\(jsonQuote(challenge))"
+        s += ",\"key_id\":\(jsonQuote(keyID))"
+        s += ",\"app_profile\":\(jsonQuote(appProfile))"
+        s += ",\"endpoint\":\(jsonQuote(endpoint))"
+        s += ",\"endpoint_epoch\":\(endpointEpoch)"
+        s += ",\"expires_at\":\(expiresAt)"
+        s += "}"
+        return Data(s.utf8)
     }
 }
 
 /// The JSON transcript the gateway hashes when verifying the assertion on delegation.
 /// Field order and names must match the gateway's `DelegateTranscript` exactly.
-struct DelegateTranscript: Encodable {
+struct DelegateTranscript: CanonicalTranscript {
     let v: UInt8
     let audience: String
     let challengeID: String
@@ -408,15 +412,52 @@ struct DelegateTranscript: Encodable {
     let notBefore: Int64
     let expiresAt: Int64
 
-    private enum CodingKeys: String, CodingKey {
-        case v, audience
-        case challengeID = "challenge_id"
-        case challenge
-        case installationHandle = "installation_handle"
-        case endpointEpoch = "endpoint_epoch"
-        case generation
-        case relayPubkey = "relay_pubkey"
-        case notBefore = "not_before"
-        case expiresAt = "expires_at"
+    func canonicalJSON() -> Data {
+        var s = "{\"v\":\(v)"
+        s += ",\"audience\":\(jsonQuote(audience))"
+        s += ",\"challenge_id\":\(jsonQuote(challengeID))"
+        s += ",\"challenge\":\(jsonQuote(challenge))"
+        s += ",\"installation_handle\":\(jsonQuote(installationHandle))"
+        s += ",\"endpoint_epoch\":\(endpointEpoch)"
+        s += ",\"generation\":\(generation)"
+        s += ",\"relay_pubkey\":\(jsonQuote(relayPubkey))"
+        s += ",\"not_before\":\(notBefore)"
+        s += ",\"expires_at\":\(expiresAt)"
+        s += "}"
+        return Data(s.utf8)
     }
+}
+
+// MARK: - Canonical JSON helpers
+
+/// Protocol for transcript types that produce byte-exact JSON matching the
+/// gateway's Rust `serde_json` output.
+protocol CanonicalTranscript {
+    func canonicalJSON() -> Data
+}
+
+/// Produces a JSON-quoted string value: wraps in `"`, escapes `\`, `"`, and
+/// control characters. Does NOT escape `/` — Rust's serde_json doesn't, and
+/// byte-for-byte parity is required for the App Attest clientDataHash.
+private func jsonQuote(_ value: String) -> String {
+    var out = "\""
+    for c in value.unicodeScalars {
+        switch c {
+        case "\"": out += "\\\""
+        case "\\": out += "\\\\"
+        case "\u{08}": out += "\\b"
+        case "\u{0C}": out += "\\f"
+        case "\n": out += "\\n"
+        case "\r": out += "\\r"
+        case "\t": out += "\\t"
+        default:
+            if c.value < 0x20 {
+                out += String(format: "\\u%04x", c.value)
+            } else {
+                out += String(c)
+            }
+        }
+    }
+    out += "\""
+    return out
 }
