@@ -567,7 +567,7 @@ final class AppEnvironment {
         else { return }
         // Preserve lease state from any existing snapshot so a rename does not
         // clear it. On first write the load returns nil and the lease fields
-        // default to nil, which is correct — no enrollment has happened yet.
+        // default to inactive, which is correct — no enrollment has happened yet.
         let existing = try? pushSnapshots.load(communityID: community.id.uuidString)
         do {
             try pushSnapshots.write(PushCommunitySnapshot(
@@ -577,7 +577,7 @@ final class AppEnvironment {
                 gatewayURL: gatewayURL,
                 keychainAccount: community.keychainAccount,
                 updatedAt: .now,
-                leaseActive: existing?.leaseActive,
+                leaseActive: existing?.leaseActive ?? false,
                 leaseExpiresAt: existing?.leaseExpiresAt,
                 subscriptionFilters: existing?.subscriptionFilters
             ))
@@ -592,11 +592,16 @@ final class AppEnvironment {
         communityID: String,
         leaseActive: Bool,
         leaseExpiresAt: Date?,
-        subscriptionFilters: String?
+        subscriptionFilters filtersJSON: String?
     ) {
         guard let pushSnapshots,
               let existing = try? pushSnapshots.load(communityID: communityID)
         else { return }
+        // The coordinator hands filters over as the lease's JSON string; the
+        // snapshot stores them decoded so the extension reads structured filters.
+        let filters = filtersJSON
+            .flatMap { $0.data(using: .utf8) }
+            .flatMap { try? JSONSerialization.jsonObject(with: $0) } as? [[String: Any]]
         do {
             try pushSnapshots.write(PushCommunitySnapshot(
                 communityID: existing.communityID,
@@ -607,7 +612,7 @@ final class AppEnvironment {
                 updatedAt: .now,
                 leaseActive: leaseActive,
                 leaseExpiresAt: leaseExpiresAt,
-                subscriptionFilters: subscriptionFilters
+                subscriptionFilters: filters
             ))
         } catch {
             Self.pushLog.error("Updating push snapshot lease failed: \(String(describing: error), privacy: .public)")
