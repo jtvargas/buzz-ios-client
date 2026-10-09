@@ -18,11 +18,11 @@ extension AppEnvironment {
         queryURL: URL,
         mediaUploader: (any MediaUploading)?,
         mediaStagingStore: MediaStagingStore
-    ) -> SyncEngine {
+    ) -> (engine: SyncEngine, connection: RelayConnection) {
         let connection = RelayConnection(url: websocketURL, signer: signer)
         let subscriptions = SubscriptionManager(connection: connection, signer: signer)
         let httpTransport = URLSessionHTTPTransport(session: URLSession(configuration: Self.queryConfiguration))
-        return SyncEngine(
+        let engine = SyncEngine(
             connection: connection,
             subscriptions: subscriptions,
             store: store,
@@ -44,6 +44,7 @@ extension AppEnvironment {
             mediaBaseURL: RelayEndpoint.httpBaseURL(for: websocketURL),
             mediaStagingStore: mediaStagingStore
         )
+        return (engine, connection)
     }
 
     /// The session the two signed query clients ride: the history windows and the channel
