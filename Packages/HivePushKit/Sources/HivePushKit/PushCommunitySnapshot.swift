@@ -29,6 +29,17 @@ public struct PushCommunitySnapshot: Codable, Equatable, Sendable {
     public let keychainAccount: String
     public let updatedAt: Date
 
+    // MARK: - Lease state (added JT-72, backward-compatible optionals)
+
+    /// Whether a push lease is actively published for this community.
+    /// `nil` decodes from pre-lease snapshots and is treated as `false`.
+    public let leaseActive: Bool?
+    /// When the current push lease expires, or `nil` when no lease is active.
+    public let leaseExpiresAt: Date?
+    /// The Nostr subscription filters in the current lease, JSON-encoded.
+    /// `nil` when no lease is active.
+    public let subscriptionFilters: String?
+
     public init(
         version: Int = currentVersion,
         communityID: String,
@@ -36,7 +47,10 @@ public struct PushCommunitySnapshot: Codable, Equatable, Sendable {
         relayURL: URL,
         gatewayURL: URL,
         keychainAccount: String,
-        updatedAt: Date
+        updatedAt: Date,
+        leaseActive: Bool? = nil,
+        leaseExpiresAt: Date? = nil,
+        subscriptionFilters: String? = nil
     ) {
         self.version = version
         self.communityID = communityID
@@ -45,5 +59,8 @@ public struct PushCommunitySnapshot: Codable, Equatable, Sendable {
         self.gatewayURL = gatewayURL
         self.keychainAccount = keychainAccount
         self.updatedAt = updatedAt
+        self.leaseActive = leaseActive
+        self.leaseExpiresAt = leaseExpiresAt
+        self.subscriptionFilters = subscriptionFilters
     }
 }

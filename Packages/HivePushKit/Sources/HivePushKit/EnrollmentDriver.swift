@@ -71,6 +71,10 @@ public actor EnrollmentDriver {
     /// Continuation for the device token, fulfilled by the app delegate.
     private var tokenContinuation: CheckedContinuation<String, any Error>?
 
+    /// Lease metadata captured after successful publication, for snapshot use.
+    public private(set) var leaseExpiresAt: Date?
+    public private(set) var leaseFiltersJSON: String?
+
     private static let log = Logger(subsystem: "HivePushKit", category: "EnrollmentDriver")
 
     public init(
@@ -137,8 +141,18 @@ public actor EnrollmentDriver {
         await registerForRemoteNotifications()
         let deviceToken: String
         do {
-            deviceToken = try await withCheckedThrowingContinuation { continuation in
-                self.tokenContinuation = continuation
+            deviceToken = try await withTaskCancellationHandler {
+                try await withCheckedThrowingContinuation { continuation in
+                    self.tokenContinuation = continuation
+                    // If the task was already cancelled before we stored the
+                    // continuation, the onCancel handler missed it. Resume now.
+                    if Task.isCancelled {
+                        self.tokenContinuation?.resume(throwing: CancellationError())
+                        self.tokenContinuation = nil
+                    }
+                }
+            } onCancel: { [self] in
+                Task { await self.cancelTokenWait() }
             }
         } catch {
             state = .failed(.deviceToken, String(describing: error))
@@ -158,6 +172,13 @@ public actor EnrollmentDriver {
     /// Called by the app delegate when registration fails.
     public func didFailToRegisterForRemoteNotifications(_ error: any Error) {
         tokenContinuation?.resume(throwing: error)
+        tokenContinuation = nil
+    }
+
+    /// Resumes the token continuation with a cancellation error so the
+    /// continuation is never leaked. Called from the `onCancel` handler.
+    private func cancelTokenWait() {
+        tokenContinuation?.resume(throwing: CancellationError())
         tokenContinuation = nil
     }
 
@@ -185,6 +206,8 @@ public actor EnrollmentDriver {
             }
         }
         enrollmentStore.remove(communityID: communityID)
+        leaseExpiresAt = nil
+        leaseFiltersJSON = nil
         state = .idle
         Self.log.info("Removed enrollment for community \(self.communityID)")
     }
@@ -315,6 +338,12 @@ public actor EnrollmentDriver {
                 signer: signer
             )
             try await publishEvent(leaseEvent)
+
+            // Capture lease metadata so the snapshot can surface it.
+            leaseExpiresAt = Date(timeIntervalSinceNow: NIPPLLease.defaultDuration)
+            let filtersData = try? JSONSerialization.data(withJSONObject: filters, options: [.sortedKeys])
+            leaseFiltersJSON = filtersData.flatMap { String(data: $0, encoding: .utf8) }
+
             state = .enrolled
             Self.log.info("Push lease published for community \(self.communityID)")
         } catch {

@@ -46,6 +46,10 @@ final class PushEnrollmentCoordinator {
 
     private var enrollmentTask: Task<Void, Never>?
 
+    /// Called when a lease is published or revoked, so the caller can update the
+    /// push snapshot. Parameters: `(leaseActive, leaseExpiresAt, leaseFiltersJSON)`.
+    var onLeaseUpdated: ((Bool, Date?, String?) -> Void)?
+
     private static let log = Logger(subsystem: "Hive", category: "PushEnrollmentCoordinator")
 
     init(enrollmentStore: EnrollmentStore, pushRegistrar: PushRegistrar) {
@@ -89,6 +93,7 @@ final class PushEnrollmentCoordinator {
         driver = nil
         pushRegistrar.enrollmentDriver = nil
         status = .idle
+        onLeaseUpdated?(false, nil, nil)
     }
 
     /// Tears down the coordinator. Called when a session ends.
@@ -140,10 +145,13 @@ final class PushEnrollmentCoordinator {
                 }
             )
             let finalState = await newDriver.state
+            let leaseExpiresAt = await newDriver.leaseExpiresAt
+            let leaseFiltersJSON = await newDriver.leaseFiltersJSON
             await MainActor.run {
                 switch finalState {
                 case .enrolled:
                     self?.status = .enrolled
+                    self?.onLeaseUpdated?(true, leaseExpiresAt, leaseFiltersJSON)
                     Self.log.info("Push enrollment complete")
                 case let .failed(step, message):
                     self?.status = .failed("\(step): \(message)")

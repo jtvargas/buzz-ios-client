@@ -487,6 +487,14 @@ final class AppEnvironment {
                 enrollmentStore: enrollmentStore,
                 pushRegistrar: pushRegistrar
             )
+            coordinator.onLeaseUpdated = { [weak self] active, expiresAt, filtersJSON in
+                guard let self else { return }
+                self.updatePushSnapshotLease(
+                    leaseActive: active,
+                    leaseExpiresAt: expiresAt,
+                    subscriptionFilters: filtersJSON
+                )
+            }
             pushCoordinator = coordinator
         }
 
@@ -556,6 +564,10 @@ final class AppEnvironment {
               let websocketURL = RelayEndpoint.websocketURL(from: community.relayURLString),
               let gatewayURL = RelayEndpoint.httpBaseURL(for: websocketURL)
         else { return }
+        // Preserve lease state from any existing snapshot so a rename does not
+        // clear it. On first write the load returns nil and the lease fields
+        // default to nil, which is correct — no enrollment has happened yet.
+        let existing = try? pushSnapshots.load(communityID: community.id.uuidString)
         do {
             try pushSnapshots.write(PushCommunitySnapshot(
                 communityID: community.id.uuidString,
@@ -563,10 +575,41 @@ final class AppEnvironment {
                 relayURL: websocketURL,
                 gatewayURL: gatewayURL,
                 keychainAccount: community.keychainAccount,
-                updatedAt: .now
+                updatedAt: .now,
+                leaseActive: existing?.leaseActive,
+                leaseExpiresAt: existing?.leaseExpiresAt,
+                subscriptionFilters: existing?.subscriptionFilters
             ))
         } catch {
             Self.pushLog.error("Writing the push snapshot failed: \(String(describing: error), privacy: .public)")
+        }
+    }
+
+    /// Updates only the lease fields of the push snapshot for the active community.
+    /// Called by the ``PushEnrollmentCoordinator`` via ``onLeaseUpdated``.
+    private func updatePushSnapshotLease(
+        leaseActive: Bool,
+        leaseExpiresAt: Date?,
+        subscriptionFilters: String?
+    ) {
+        guard let pushSnapshots,
+              let community = communities.active,
+              let existing = try? pushSnapshots.load(communityID: community.id.uuidString)
+        else { return }
+        do {
+            try pushSnapshots.write(PushCommunitySnapshot(
+                communityID: existing.communityID,
+                name: existing.name,
+                relayURL: existing.relayURL,
+                gatewayURL: existing.gatewayURL,
+                keychainAccount: existing.keychainAccount,
+                updatedAt: .now,
+                leaseActive: leaseActive,
+                leaseExpiresAt: leaseExpiresAt,
+                subscriptionFilters: subscriptionFilters
+            ))
+        } catch {
+            Self.pushLog.error("Updating push snapshot lease failed: \(String(describing: error), privacy: .public)")
         }
     }
 
@@ -581,7 +624,7 @@ final class AppEnvironment {
         guard let community = communities.active,
               let websocketURL = RelayEndpoint.websocketURL(from: community.relayURLString),
               let signer,
-              let pushCoordinator
+              pushCoordinator != nil
         else { return }
 
         Task {
@@ -607,7 +650,10 @@ final class AppEnvironment {
                 return
             }
 
-            let conn = self.relayConnection
+            // Re-check after the suspension point — teardown may have cleared these.
+            guard let pushCoordinator = self.pushCoordinator,
+                  let conn = self.relayConnection
+            else { return }
             pushCoordinator.startEnrollment(.init(
                 communityID: community.id.uuidString,
                 relayURLString: community.relayURLString,
@@ -615,7 +661,7 @@ final class AppEnvironment {
                 pushCapability: pushCap,
                 signer: signer,
                 publishEvent: { event in
-                    try await conn?.publish(event)
+                    try await conn.publish(event)
                 }
             ))
         }
