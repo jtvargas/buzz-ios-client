@@ -13,7 +13,7 @@ import Foundation
 /// understand rather than guessing at it, and an app that writes a new shape bumps
 /// ``currentVersion`` and rewrites every snapshot at its next session start.
 public struct PushCommunitySnapshot: Codable, Equatable, Sendable {
-    public static let currentVersion = 1
+    public static let currentVersion = 2
 
     public let version: Int
     /// The app's community id (`Community.ID.uuidString`), and the file's name.
@@ -28,6 +28,21 @@ public struct PushCommunitySnapshot: Codable, Equatable, Sendable {
     /// (``IdentityKeychain``).
     public let keychainAccount: String
     public let updatedAt: Date
+    public let leaseActive: Bool
+    public let leaseExpiresAt: Date?
+    /// NIP-44-decrypted subscriptions. JSON value storage keeps the snapshot
+    /// Sendable without allowing reference-typed `Any` values across tasks.
+    public var subscriptionFilters: [[String: Any]]? {
+        filters?.map { $0.mapValues(\.foundationValue) }
+    }
+
+    private let filters: [[String: PushJSONValue]]?
+
+    private enum CodingKeys: String, CodingKey {
+        case version, communityID, name, relayURL, gatewayURL, keychainAccount, updatedAt
+        case leaseActive, leaseExpiresAt
+        case filters = "subscriptionFilters"
+    }
 
     // MARK: - Lease state (added JT-72, backward-compatible optionals)
 
@@ -48,10 +63,10 @@ public struct PushCommunitySnapshot: Codable, Equatable, Sendable {
         gatewayURL: URL,
         keychainAccount: String,
         updatedAt: Date,
-        leaseActive: Bool? = nil,
+        leaseActive: Bool = false,
         leaseExpiresAt: Date? = nil,
-        subscriptionFilters: String? = nil
-    ) {
+        subscriptionFilters: [[String: Any]]? = nil
+    ) throws {
         self.version = version
         self.communityID = communityID
         self.name = name
@@ -61,6 +76,15 @@ public struct PushCommunitySnapshot: Codable, Equatable, Sendable {
         self.updatedAt = updatedAt
         self.leaseActive = leaseActive
         self.leaseExpiresAt = leaseExpiresAt
-        self.subscriptionFilters = subscriptionFilters
+        filters = try subscriptionFilters.map {
+            guard JSONSerialization.isValidJSONObject($0) else {
+                throw EncodingError.invalidValue($0, .init(
+                    codingPath: [CodingKeys.filters],
+                    debugDescription: "Subscription filters must contain only JSON values"
+                ))
+            }
+            let data = try JSONSerialization.data(withJSONObject: $0)
+            return try JSONDecoder().decode([[String: PushJSONValue]].self, from: data)
+        }
     }
 }
