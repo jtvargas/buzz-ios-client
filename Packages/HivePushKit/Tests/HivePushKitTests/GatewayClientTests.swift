@@ -103,33 +103,8 @@ struct GatewayClientTests {
         #expect(bodyJSON?["device_token"] == nil)
     }
 
-    @Test("Install throws installationConflict with handle on 409")
-    func installConflictWithHandle() async throws {
-        let conflictJSON = #"{"installation_handle":"existing-handle-789"}"#
-        let transport = ScriptedTransport(responses: [
-            (Data(conflictJSON.utf8), 409),
-        ])
-        let client = GatewayClient(baseURL: baseURL, transport: transport)
-        let request = GatewayInstallRequest(
-            challengeID: "ch-123",
-            challenge: "nonce-abc",
-            keyID: "key-1",
-            attestation: "base64attest",
-            appProfile: "buzz-ios-dogfood",
-            endpoint: "aabbccdd",
-            endpointEpoch: 1,
-            expiresAt: 1_700_086_400
-        )
-        do {
-            _ = try await client.install(request, signer: signer())
-            Issue.record("Expected installationConflict error")
-        } catch let error as GatewayError {
-            #expect(error == .installationConflict(existingHandle: "existing-handle-789"))
-        }
-    }
-
-    @Test("Install throws installationConflict with nil handle when body has no handle")
-    func installConflictWithoutHandle() async throws {
+    @Test("Install throws installationConflict on a bare 409")
+    func installConflict() async throws {
         let conflictJSON = #"{"error":"installation_conflict"}"#
         let transport = ScriptedTransport(responses: [
             (Data(conflictJSON.utf8), 409),
@@ -149,24 +124,65 @@ struct GatewayClientTests {
             _ = try await client.install(request, signer: signer())
             Issue.record("Expected installationConflict error")
         } catch let error as GatewayError {
-            #expect(error == .installationConflict(existingHandle: nil))
+            #expect(error == .installationConflict)
         }
     }
 
     // MARK: - Revocation
 
-    @Test("Revoke sends correct request shape")
+    @Test("Revoke sends the gateway's full RevokeInstallationRequest shape")
     func revokeSuccess() async throws {
         let transport = ScriptedTransport(responses: [
-            (Data("{}".utf8), 200),
+            (Data(#"{"status":"revoked"}"#.utf8), 200),
         ])
         let client = GatewayClient(baseURL: baseURL, transport: transport)
-        try await client.revokeInstallation(handle: "handle-to-revoke", signer: signer())
+        try await client.revokeInstallation(
+            GatewayRevokeRequest(
+                challengeID: "ch-9",
+                challenge: "nonce-9",
+                installationHandle: "handle-to-revoke",
+                endpointEpoch: 1,
+                newEndpointEpoch: 2,
+                assertion: "base64assert"
+            ),
+            signer: signer()
+        )
 
         let sent = transport.requests[0]
         #expect(sent.url.path.hasSuffix("/v1/installations/revoke"))
         let bodyJSON = try JSONSerialization.jsonObject(with: sent.body) as? [String: Any]
+        #expect(bodyJSON?["v"] as? Int == 1)
+        #expect(bodyJSON?["challenge_id"] as? String == "ch-9")
+        #expect(bodyJSON?["challenge"] as? String == "nonce-9")
         #expect(bodyJSON?["installation_handle"] as? String == "handle-to-revoke")
+        #expect(bodyJSON?["endpoint_epoch"] as? Int == 1)
+        #expect(bodyJSON?["new_endpoint_epoch"] as? Int == 2)
+        #expect(bodyJSON?["assertion"] as? String == "base64assert")
+        #expect(bodyJSON?.count == 7)
+    }
+
+    @Test("Revoke surfaces a 404 as httpStatus with the gateway's error code")
+    func revokeNotAuthorized() async throws {
+        let transport = ScriptedTransport(responses: [
+            (Data(#"{"error":"not_authorized"}"#.utf8), 404),
+        ])
+        let client = GatewayClient(baseURL: baseURL, transport: transport)
+        do {
+            try await client.revokeInstallation(
+                GatewayRevokeRequest(
+                    challengeID: "ch-9",
+                    challenge: "nonce-9",
+                    installationHandle: "gone",
+                    endpointEpoch: 1,
+                    newEndpointEpoch: 2,
+                    assertion: "base64assert"
+                ),
+                signer: signer()
+            )
+            Issue.record("Expected httpStatus error")
+        } catch let error as GatewayError {
+            #expect(error == .httpStatus(404, "not_authorized"))
+        }
     }
 
     // MARK: - Delegation
@@ -225,6 +241,9 @@ final class ScriptedTransport: HTTPTransport, @unchecked Sendable {
     private var responses: [(Data, Int)]
     private var index = 0
     private let shouldThrow: Bool
+    /// Runs synchronously as each request leaves, before any response, so a
+    /// test can observe state at that instant (what is on disk, for example).
+    var onRequest: ((Request) -> Void)?
 
     init(responses: [(Data, Int)], shouldThrow: Bool = false) {
         self.responses = responses
@@ -232,7 +251,9 @@ final class ScriptedTransport: HTTPTransport, @unchecked Sendable {
     }
 
     func post(body: Data, to url: URL, headers: [String: String]) async throws -> (Data, Int) {
-        requests.append(Request(url: url, body: body, headers: headers))
+        let request = Request(url: url, body: body, headers: headers)
+        requests.append(request)
+        onRequest?(request)
         if shouldThrow {
             throw TransportError.requestFailed("scripted failure")
         }

@@ -405,21 +405,50 @@ extension AppEnvironment {
     /// dropping the record would leave that community's messages on the device with nothing
     /// able to open it, list it, or ever delete it.
     ///
+    /// The push installation is secured *before* the record goes: the directory is the only
+    /// thing that ties an enrollment file to a gateway it can be revoked on, so a crash
+    /// between the two must leave the record in place, not an enrollment nothing will ever
+    /// read again. Crashing the other way round costs one re-enrollment on the next launch,
+    /// which the 409 path settles against the pending record.
+    ///
     /// Removing the community being read hands over to the next one in the list, or to
     /// onboarding when it was the last.
     func removeCommunity(_ id: Community.ID) async {
         await serialisingTransitions { [self] in await performRemoval(of: id) }
     }
 
+    private static let removalLog = Logger(subsystem: "Hive", category: "AppEnvironment.removal")
+
     private func performRemoval(of id: Community.ID) async {
+        guard let removed = communities.communities.first(where: { $0.id == id }) else { return }
         let wasActive = id == communities.activeID
-        var removedCommunity: Community?
-        updateCommunities { removedCommunity = $0.remove(id) }
-        guard let removed = removedCommunity else { return }
         if wasActive {
             setPhase(.bootstrapping)
+            // Before teardown, while the driver (and its signer) still exist: the
+            // gateway keys installations by device, so one left live here blocks
+            // every later enrollment on this device.
+            await pushCoordinator?.revokeEnrollment(communityID: removed.id.uuidString)
             await teardownSession()
         }
+        // No session to revoke through (background community, or enrollment never
+        // started): keep the handle and key so the next enrollment on that gateway
+        // can revoke it. The enrollment records its own gateway; the community's
+        // current URL only covers enrollments written before it did. On failure the
+        // enrollment stays where it is — the credentials are never dropped on the
+        // way to a record that was not written — and the removal goes ahead: a
+        // Remove that silently does nothing is worse than an installation the
+        // gateway expires in 30 days.
+        do {
+            try enrollmentStore?.demoteToPendingRevocation(
+                communityID: removed.id.uuidString,
+                gatewayURL: removed.resolvedPushGatewayURL
+            )
+        } catch {
+            Self.removalLog.error(
+                "Pending revocation not written; enrollment kept: \(String(describing: error), privacy: .public)"
+            )
+        }
+        updateCommunities { $0.remove(id) }
         try? IdentityKeychain.signer(account: removed.keychainAccount).delete()
         try? pushSnapshots?.remove(communityID: removed.id.uuidString)
         // After the teardown, so the file is not deleted underneath an open connection:

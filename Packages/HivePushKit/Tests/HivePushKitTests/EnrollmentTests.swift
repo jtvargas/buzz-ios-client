@@ -13,10 +13,15 @@ struct EnrollmentStoreTests {
         return (EnrollmentStore(containerURL: container), container)
     }
 
+    private static let gatewayA = URL(string: "http://gateway-a.test:3005")!
+    private static let gatewayB = URL(string: "http://gateway-b.test:3005")!
+    private static let enrolledAt = Date(timeIntervalSince1970: 1_760_000_000)
+
     private func enrollment(
         communityID: String = UUID().uuidString,
         installationHandle: String = "handle-1",
-        endpointGrant: String = "grant-1"
+        endpointGrant: String = "grant-1",
+        gatewayURL: URL? = EnrollmentStoreTests.gatewayA
     ) -> Enrollment {
         Enrollment(
             communityID: communityID,
@@ -25,7 +30,23 @@ struct EnrollmentStoreTests {
             attestKeyID: "key-1",
             installID: UUID().uuidString,
             relayURL: "wss://relay.example",
-            enrolledAt: Date(timeIntervalSince1970: 1_760_000_000)
+            gatewayURL: gatewayURL,
+            enrolledAt: Self.enrolledAt
+        )
+    }
+
+    private func pending(
+        communityID: String,
+        gatewayURL: URL = EnrollmentStoreTests.gatewayA,
+        handle: String = "h-1",
+        expiresAt: Date = .distantFuture
+    ) -> PendingRevocation {
+        PendingRevocation(
+            communityID: communityID,
+            gatewayURL: gatewayURL,
+            installationHandle: handle,
+            attestKeyID: "k-\(handle)",
+            installationExpiresAt: expiresAt
         )
     }
 
@@ -44,14 +65,17 @@ struct EnrollmentStoreTests {
         #expect(store.load(communityID: "nonexistent") == nil)
     }
 
-    @Test("Remove clears one enrollment")
+    @Test("Remove clears one enrollment, and only while it still has the given handle")
     func removeOne() throws {
         let (store, _) = makeStore()
-        let e1 = enrollment(communityID: "a")
+        let e1 = enrollment(communityID: "a", installationHandle: "h-1")
         let e2 = enrollment(communityID: "b")
         try store.write(e1)
         try store.write(e2)
-        store.remove(communityID: "a")
+        // A newer installation replaced the one the caller read: it is not theirs to drop.
+        store.remove(communityID: "a", installationHandle: "h-0")
+        #expect(store.load(communityID: "a") == e1)
+        store.remove(communityID: "a", installationHandle: "h-1")
         #expect(store.load(communityID: "a") == nil)
         #expect(store.load(communityID: "b") != nil)
     }
@@ -74,14 +98,124 @@ struct EnrollmentStoreTests {
         #expect(all.count == 2)
     }
 
-    @Test("Pending handle round-trips")
-    func pendingHandleRoundTrip() {
+    @Test("An enrollment written before gatewayURL existed still loads, with no gateway")
+    func legacyEnrollmentDecodes() throws {
+        let (store, container) = makeStore()
+        let directory = container.appendingPathComponent("PushEnrollments")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let legacy = """
+            {"communityID":"c1","installationHandle":"h-1","endpointGrant":"g-1","attestKeyID":"k-1",
+             "installID":"i-1","relayURL":"wss://relay.example","enrolledAt":"2025-10-09T08:53:20Z"}
+            """
+        try Data(legacy.utf8).write(to: directory.appendingPathComponent("c1.json"))
+
+        let loaded = try #require(store.load(communityID: "c1"))
+        #expect(loaded.installationHandle == "h-1")
+        #expect(loaded.gatewayURL == nil)
+        #expect(loaded.enrolledAt == Self.enrolledAt)
+    }
+
+    @Test("Pending revocation round-trips with gateway, handle, key and expiry")
+    func pendingRevocationRoundTrip() throws {
         let (store, _) = makeStore()
-        #expect(store.loadPendingHandle(communityID: "c1") == nil)
-        store.savePendingHandle("h-99", communityID: "c1")
-        #expect(store.loadPendingHandle(communityID: "c1") == "h-99")
-        store.removePendingHandle(communityID: "c1")
-        #expect(store.loadPendingHandle(communityID: "c1") == nil)
+        #expect(store.loadAllPendingRevocations().isEmpty)
+        let record = pending(communityID: "c1", handle: "h-99", expiresAt: Self.enrolledAt)
+        try store.savePendingRevocation(record)
+        #expect(store.loadAllPendingRevocations() == [record])
+        store.removePendingRevocation(record)
+        #expect(store.loadAllPendingRevocations().isEmpty)
+    }
+
+    @Test("One community keeps a pending record per installation: gateways and handles never overwrite each other")
+    func pendingRecordsAreKeyedByInstallation() throws {
+        let (store, _) = makeStore()
+        let onA = pending(communityID: "c1", gatewayURL: Self.gatewayA, handle: "h-1")
+        let onB = pending(communityID: "c1", gatewayURL: Self.gatewayB, handle: "h-1")
+        let laterOnA = pending(communityID: "c1", gatewayURL: Self.gatewayA, handle: "h-2")
+        try store.savePendingRevocation(onA)
+        try store.savePendingRevocation(onB)
+        try store.savePendingRevocation(laterOnA)
+        #expect(Set(store.loadAllPendingRevocations()) == [onA, onB, laterOnA])
+        #expect(Set(store.loadAllPendingRevocations(gatewayURL: Self.gatewayA)) == [onA, laterOnA])
+
+        // Settling one leaves the community's other installations pending.
+        store.removePendingRevocation(onA)
+        #expect(Set(store.loadAllPendingRevocations()) == [onB, laterOnA])
+        // Saving the same installation again is an overwrite, not a duplicate.
+        try store.savePendingRevocation(onB)
+        #expect(store.loadAllPendingRevocations().count == 2)
+    }
+
+    @Test("Demote moves an enrollment's credentials into the pending set with its expiry")
+    func demoteToPendingRevocation() throws {
+        let (store, _) = makeStore()
+        let e = enrollment(communityID: "c1", installationHandle: "h-1")
+        try store.write(e)
+        let demoted = try store.demoteToPendingRevocation(communityID: "c1", gatewayURL: nil)
+        let record = try #require(demoted)
+        #expect(store.load(communityID: "c1") == nil)
+        #expect(store.loadAllPendingRevocations() == [record])
+        #expect(record == PendingRevocation(enrollment: e, gatewayURL: Self.gatewayA))
+        #expect(record.gatewayURL == Self.gatewayA)
+        // Upper bound on the gateway's expires_at: install and delegation
+        // expiries are both now + defaultDuration, taken before enrolledAt.
+        #expect(record.installationExpiresAt == Self.enrolledAt.addingTimeInterval(NIPPLLease.defaultDuration))
+
+        // No enrollment: nothing is written.
+        #expect(try store.demoteToPendingRevocation(communityID: "c2", gatewayURL: Self.gatewayA) == nil)
+        #expect(store.loadAllPendingRevocations() == [record])
+    }
+
+    @Test("Demote scopes to the enrollment's own gateway, falling back to the caller's only for legacy records")
+    func demoteGatewayPrecedence() throws {
+        let (store, _) = makeStore()
+        // The enrollment knows its gateway: the caller's (stale) URL is ignored.
+        try store.write(enrollment(communityID: "c1", gatewayURL: Self.gatewayA))
+        let c1 = try store.demoteToPendingRevocation(communityID: "c1", gatewayURL: Self.gatewayB)
+        #expect(c1?.gatewayURL == Self.gatewayA)
+
+        // Legacy enrollment without a gateway: the caller's URL is used.
+        try store.write(enrollment(communityID: "c2", gatewayURL: nil))
+        let c2 = try store.demoteToPendingRevocation(communityID: "c2", gatewayURL: Self.gatewayB)
+        #expect(c2?.gatewayURL == Self.gatewayB)
+        #expect(Set(store.loadAllPendingRevocations().map(\.communityID)) == ["c1", "c2"])
+
+        // Neither knows: refuse, and keep the enrollment rather than write an unscoped record.
+        let e3 = enrollment(communityID: "c3", gatewayURL: nil)
+        try store.write(e3)
+        #expect(throws: EnrollmentStoreError.gatewayUnknown) {
+            try store.demoteToPendingRevocation(communityID: "c3", gatewayURL: nil)
+        }
+        #expect(store.load(communityID: "c3") == e3)
+        #expect(store.loadAllPendingRevocations().count == 2)
+    }
+
+    @Test("Demote keeps the enrollment when the pending record cannot be written")
+    func demoteKeepsEnrollmentOnWriteFailure() throws {
+        let (store, container) = makeStore()
+        let e = enrollment(communityID: "c1")
+        try store.write(e)
+        // A plain file where the pending directory must go makes every pending write fail.
+        try Data().write(to: container.appendingPathComponent("PushPendingRevocations"))
+
+        #expect(throws: (any Error).self) {
+            try store.demoteToPendingRevocation(communityID: "c1", gatewayURL: nil)
+        }
+        #expect(store.load(communityID: "c1") == e)
+        #expect(store.loadAllPendingRevocations().isEmpty)
+    }
+
+    @Test("LoadAllPendingRevocations spans communities but never gateways")
+    func loadAllPending() throws {
+        let (store, _) = makeStore()
+        #expect(store.loadAllPendingRevocations(gatewayURL: Self.gatewayA).isEmpty)
+        try store.savePendingRevocation(pending(communityID: "a", gatewayURL: Self.gatewayA, handle: "h-a"))
+        try store.savePendingRevocation(pending(communityID: "b", gatewayURL: Self.gatewayA, handle: "h-b"))
+        try store.savePendingRevocation(pending(communityID: "c", gatewayURL: Self.gatewayB, handle: "h-c"))
+        let forA = Set(store.loadAllPendingRevocations(gatewayURL: Self.gatewayA).map(\.installationHandle))
+        #expect(forA == ["h-a", "h-b"])
+        let forB = Set(store.loadAllPendingRevocations(gatewayURL: Self.gatewayB).map(\.installationHandle))
+        #expect(forB == ["h-c"])
     }
 }
 
@@ -237,238 +371,6 @@ struct EnrollmentDriverTests {
         #expect(leaseEvent.tags.contains { $0.first == "relay" })
     }
 
-    @Test("Revoke removes enrollment, publishes deletion, stashes handle on gateway failure")
-    func revokeEnrollment() async throws {
-        let store = makeStore()
-        let signer = try InMemorySigner()
-        let publishedEvents: ActorBox<[NostrEvent]> = ActorBox([])
-
-        // Pre-seed an enrollment.
-        try store.write(Enrollment(
-            communityID: "comm-1",
-            installationHandle: "handle-1",
-            endpointGrant: "grant-1",
-            attestKeyID: "key-1",
-            installID: "install-1",
-            relayURL: "wss://relay.example"
-        ))
-
-        // No scripted responses — gateway revoke will fail.
-        let transport = ScriptedTransport(responses: [])
-        let gateway = GatewayClient(
-            baseURL: URL(string: "http://gateway.test:3005")!,
-            transport: transport
-        )
-
-        let driver = EnrollmentDriver(
-            gateway: gateway,
-            attestProvider: FakeAttestProvider(supported: false),
-            enrollmentStore: store,
-            signer: signer,
-            communityID: "comm-1",
-            relayURL: "wss://relay.example",
-            relayPubkey: "aabbccdd",
-            publishEvent: { event in
-                await publishedEvents.append(event)
-            }
-        )
-
-        await driver.revoke()
-
-        #expect(store.load(communityID: "comm-1") == nil)
-        let state = await driver.state
-        #expect(state == .idle)
-
-        // Gateway revoke failed, so the handle is stashed for 409 recovery.
-        #expect(store.loadPendingHandle(communityID: "comm-1") == "handle-1")
-
-        // A deletion event should have been published.
-        let events = await publishedEvents.value
-        #expect(events.count == 1)
-        #expect(events[0].kind == .deletion)
-    }
-
-    @Test("Enrollment recovers from 409 by revoking then retrying install")
-    func installConflictRecovery() async throws {
-        let store = makeStore()
-        let signer = try InMemorySigner()
-        let publishedEvents: ActorBox<[NostrEvent]> = ActorBox([])
-
-        let challengeJSON = #"{"challenge_id":"ch-1","challenge":"nonce","expires_at":1700000300}"#
-        let conflictJSON = #"{"installation_handle":"old-handle"}"#
-        let revokeJSON = #"{}"#
-        let installJSON = #"{"installation_handle":"new-handle","endpoint_epoch":1,"expires_at":1700086400}"#
-        let challenge2JSON = #"{"challenge_id":"ch-2","challenge":"nonce2","expires_at":1700000600}"#
-        let delegationJSON = #"{"endpoint_grant":"grant-1"}"#
-        let transport = ScriptedTransport(responses: [
-            (Data(challengeJSON.utf8), 200),   // enroll challenge
-            (Data(conflictJSON.utf8), 409),     // install → 409 conflict
-            (Data(revokeJSON.utf8), 200),       // revoke old installation
-            (Data(installJSON.utf8), 201),      // retry install → success
-            (Data(challenge2JSON.utf8), 200),   // delegate challenge
-            (Data(delegationJSON.utf8), 201),   // delegate
-        ])
-        let gateway = GatewayClient(
-            baseURL: URL(string: "http://gateway.test:3005")!,
-            transport: transport
-        )
-
-        let driver = EnrollmentDriver(
-            gateway: gateway,
-            attestProvider: FakeAttestProvider(supported: true),
-            enrollmentStore: store,
-            signer: signer,
-            communityID: "comm-1",
-            relayURL: "wss://relay.example",
-            relayPubkey: "aabbccdd",
-            publishEvent: { event in
-                await publishedEvents.append(event)
-            }
-        )
-
-        await driver.enroll(
-            requestPermission: { true },
-            registerForRemoteNotifications: {
-                Task { await driver.didReceiveDeviceToken("abcd1234") }
-            }
-        )
-
-        let state = await driver.state
-        #expect(state == .enrolled)
-
-        // Verify the revoke call hit the right endpoint.
-        let revokeRequest = transport.requests[2]
-        #expect(revokeRequest.url.path.hasSuffix("/v1/installations/revoke"))
-        let revokeBody = try JSONSerialization.jsonObject(with: revokeRequest.body) as? [String: Any]
-        #expect(revokeBody?["installation_handle"] as? String == "old-handle")
-
-        // Verify final enrollment uses the new handle.
-        let enrollment = store.load(communityID: "comm-1")
-        #expect(enrollment?.installationHandle == "new-handle")
-    }
-
-    @Test("409 without handle in body recovers using stored pending handle")
-    func installConflictRecoveryFromPendingHandle() async throws {
-        let store = makeStore()
-        let signer = try InMemorySigner()
-        let publishedEvents: ActorBox<[NostrEvent]> = ActorBox([])
-
-        // Simulate a prior failed revoke that stashed the handle.
-        store.savePendingHandle("stashed-handle", communityID: "comm-1")
-
-        // The 409 body does NOT include the handle — just an error string.
-        let challengeJSON = #"{"challenge_id":"ch-1","challenge":"nonce","expires_at":1700000300}"#
-        let conflictJSON = #"{"error":"installation_conflict"}"#
-        let revokeJSON = #"{}"#
-        let installJSON = #"{"installation_handle":"new-handle","endpoint_epoch":1,"expires_at":1700086400}"#
-        let challenge2JSON = #"{"challenge_id":"ch-2","challenge":"nonce2","expires_at":1700000600}"#
-        let delegationJSON = #"{"endpoint_grant":"grant-1"}"#
-        let transport = ScriptedTransport(responses: [
-            (Data(challengeJSON.utf8), 200),   // enroll challenge
-            (Data(conflictJSON.utf8), 409),     // install → 409 without handle
-            (Data(revokeJSON.utf8), 200),       // revoke using stashed handle
-            (Data(installJSON.utf8), 201),      // retry install → success
-            (Data(challenge2JSON.utf8), 200),   // delegate challenge
-            (Data(delegationJSON.utf8), 201),   // delegate
-        ])
-        let gateway = GatewayClient(
-            baseURL: URL(string: "http://gateway.test:3005")!,
-            transport: transport
-        )
-
-        let driver = EnrollmentDriver(
-            gateway: gateway,
-            attestProvider: FakeAttestProvider(supported: true),
-            enrollmentStore: store,
-            signer: signer,
-            communityID: "comm-1",
-            relayURL: "wss://relay.example",
-            relayPubkey: "aabbccdd",
-            publishEvent: { event in
-                await publishedEvents.append(event)
-            }
-        )
-
-        await driver.enroll(
-            requestPermission: { true },
-            registerForRemoteNotifications: {
-                Task { await driver.didReceiveDeviceToken("abcd1234") }
-            }
-        )
-
-        let state = await driver.state
-        #expect(state == .enrolled)
-
-        // The revoke call used the stashed handle.
-        let revokeRequest = transport.requests[2]
-        #expect(revokeRequest.url.path.hasSuffix("/v1/installations/revoke"))
-        let revokeBody = try JSONSerialization.jsonObject(with: revokeRequest.body) as? [String: Any]
-        #expect(revokeBody?["installation_handle"] as? String == "stashed-handle")
-
-        // Pending handle was cleaned up.
-        #expect(store.loadPendingHandle(communityID: "comm-1") == nil)
-
-        // Final enrollment uses the new handle.
-        let enrollment = store.load(communityID: "comm-1")
-        #expect(enrollment?.installationHandle == "new-handle")
-    }
-
-    @Test("Revoke calls gateway revoke endpoint")
-    func revokeCallsGateway() async throws {
-        let store = makeStore()
-        let signer = try InMemorySigner()
-        let publishedEvents: ActorBox<[NostrEvent]> = ActorBox([])
-
-        // Pre-seed an enrollment.
-        try store.write(Enrollment(
-            communityID: "comm-1",
-            installationHandle: "handle-1",
-            endpointGrant: "grant-1",
-            attestKeyID: "key-1",
-            installID: "install-1",
-            relayURL: "wss://relay.example"
-        ))
-
-        let revokeJSON = #"{}"#
-        let transport = ScriptedTransport(responses: [
-            (Data(revokeJSON.utf8), 200),  // gateway revoke
-        ])
-        let gateway = GatewayClient(
-            baseURL: URL(string: "http://gateway.test:3005")!,
-            transport: transport
-        )
-
-        let driver = EnrollmentDriver(
-            gateway: gateway,
-            attestProvider: FakeAttestProvider(supported: false),
-            enrollmentStore: store,
-            signer: signer,
-            communityID: "comm-1",
-            relayURL: "wss://relay.example",
-            relayPubkey: "aabbccdd",
-            publishEvent: { event in
-                await publishedEvents.append(event)
-            }
-        )
-
-        await driver.revoke()
-
-        // Gateway revoke was called with the right handle.
-        #expect(transport.requests.count >= 1)
-        let revokeRequest = transport.requests[0]
-        #expect(revokeRequest.url.path.hasSuffix("/v1/installations/revoke"))
-        let revokeBody = try JSONSerialization.jsonObject(with: revokeRequest.body) as? [String: Any]
-        #expect(revokeBody?["installation_handle"] as? String == "handle-1")
-
-        // Local enrollment removed.
-        #expect(store.load(communityID: "comm-1") == nil)
-        let state = await driver.state
-        #expect(state == .idle)
-
-        // Successful gateway revoke — no pending handle stashed.
-        #expect(store.loadPendingHandle(communityID: "comm-1") == nil)
-    }
-
     @Test("Second enroll() while in flight is a no-op")
     func reentrancyGuard() async throws {
         let store = makeStore()
@@ -573,9 +475,12 @@ struct PushCapabilityTests {
 
 // MARK: - Test doubles
 
-/// A fake App Attest provider for testing.
+/// A fake App Attest provider for testing. Records which keys it was asked to
+/// generate and assert with, so tests can tell a stored key from a fresh one.
 struct FakeAttestProvider: AppAttestProviding {
     let supported: Bool
+    let generatedKeyCount = ActorBox(0)
+    let assertedKeyIDs = ActorBox<[String]>([])
 
     init(supported: Bool) {
         self.supported = supported
@@ -585,7 +490,8 @@ struct FakeAttestProvider: AppAttestProviding {
 
     func generateKey() async throws -> String {
         guard supported else { throw FakeAttestError.unsupported }
-        return "fake-key-id"
+        let n = await generatedKeyCount.increment()
+        return "fake-key-id-\(n)"
     }
 
     func attest(keyID _: String, clientDataHash _: Data) async throws -> Data {
@@ -593,8 +499,9 @@ struct FakeAttestProvider: AppAttestProviding {
         return Data("fake-attestation".utf8)
     }
 
-    func assert(keyID _: String, clientDataHash _: Data) async throws -> Data {
+    func assert(keyID: String, clientDataHash _: Data) async throws -> Data {
         guard supported else { throw FakeAttestError.unsupported }
+        await assertedKeyIDs.append(keyID)
         return Data("fake-assertion".utf8)
     }
 }
@@ -611,9 +518,16 @@ actor ActorBox<T> {
         value = initial
     }
 }
+extension ActorBox where T: RangeReplaceableCollection {
+    func append(_ element: T.Element) {
+        value.append(element)
+    }
+}
 
-extension ActorBox where T == [NostrEvent] {
-    func append(_ event: NostrEvent) {
-        value.append(event)
+extension ActorBox where T == Int {
+    /// Increments and returns the new value.
+    func increment() -> Int {
+        value += 1
+        return value
     }
 }

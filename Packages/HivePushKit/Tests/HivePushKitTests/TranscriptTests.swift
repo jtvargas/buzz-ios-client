@@ -137,4 +137,54 @@ struct TranscriptTests {
         let hashHex = hash.map { String(format: "%02x", $0) }.joined()
         #expect(hashHex == "7466177cc2dc2a4f9a075fdbb461531692fc858778a171a5862b855cccfaa059")
     }
+
+    // MARK: - Installation revocation
+
+    @Test("Revoke-installation transcript matches gateway test vector")
+    func revokeInstallationTranscript() {
+        let transcript = RevokeInstallationTranscript(
+            v: 1,
+            audience: NIPPLAudience.revokeInstallation,
+            challengeID: Self.challengeID,
+            challenge: Self.challenge,
+            installationHandle: Self.installationHandle,
+            endpointEpoch: 1,
+            newEndpointEpoch: 2
+        )
+
+        let json = transcript.canonicalJSON()
+        let fullTranscript = "buzz.push.revoke-installation.v1\n" + String(data: json, encoding: .utf8)!
+
+        let expectedTranscript = """
+            buzz.push.revoke-installation.v1
+            {"v":1,"audience":"https://push.buzz.xyz/v1/installations/revoke",\
+            "challenge_id":"11111111-1111-4111-8111-111111111111",\
+            "challenge":"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",\
+            "installation_handle":"22222222-2222-4222-8222-222222222222",\
+            "endpoint_epoch":1,"new_endpoint_epoch":2}
+            """
+
+        #expect(fullTranscript == expectedTranscript)
+
+        let hash = SHA256.hash(data: Data(fullTranscript.utf8))
+        let hashHex = hash.map { String(format: "%02x", $0) }.joined()
+        #expect(hashHex == "0ba51827af6586a5e1230e9b770b99544fb342efb55db3ab1ce499cf24a893c8")
+    }
+
+    @Test("Revoke-installation clientDataHash matches gateway SHA-256")
+    func revokeInstallationClientDataHash() {
+        let transcript = RevokeInstallationTranscript(
+            v: 1,
+            audience: NIPPLAudience.revokeInstallation,
+            challengeID: Self.challengeID,
+            challenge: Self.challenge,
+            installationHandle: Self.installationHandle,
+            endpointEpoch: 1,
+            newEndpointEpoch: 2
+        )
+
+        let hash = AppAttestClientData.revokeInstallationHash(transcript: transcript)
+        let hashHex = hash.map { String(format: "%02x", $0) }.joined()
+        #expect(hashHex == "0ba51827af6586a5e1230e9b770b99544fb342efb55db3ab1ce499cf24a893c8")
+    }
 }
