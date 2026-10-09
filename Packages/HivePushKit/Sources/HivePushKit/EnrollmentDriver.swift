@@ -207,14 +207,21 @@ public actor EnrollmentDriver {
         // Best-effort: revoke the installation on the gateway so re-enrollment
         // won't hit a 409. Failure is non-fatal — the gateway will eventually
         // expire the installation, and install handles 409 with revoke+retry.
+        // When the revoke fails, stash the handle so the 409 recovery path can
+        // find it (the enrollment record itself is removed below for UX).
         do {
             try await gateway.revokeInstallation(
                 handle: enrollment.installationHandle,
                 signer: signer
             )
+            enrollmentStore.removePendingHandle(communityID: communityID)
             Self.log.info("Revoked installation on gateway")
         } catch {
-            Self.log.warning("Gateway revoke failed (non-fatal): \(String(describing: error))")
+            enrollmentStore.savePendingHandle(
+                enrollment.installationHandle,
+                communityID: communityID
+            )
+            Self.log.warning("Gateway revoke failed; handle stashed for 409 recovery: \(String(describing: error))")
         }
 
         // Best-effort: publish a deletion event if we can.
@@ -453,6 +460,7 @@ public actor EnrollmentDriver {
         )
         do {
             try enrollmentStore.write(enrollment)
+            enrollmentStore.removePendingHandle(communityID: communityID)
         } catch {
             state = .failed(.install, "Failed to persist enrollment: \(error)")
             Self.log.error("Enrollment persistence failed: \(String(describing: error))")
@@ -463,20 +471,23 @@ public actor EnrollmentDriver {
 
     /// Revokes an existing installation on the gateway and retries the install.
     ///
-    /// Called when install returns 409 (installation_conflict). The gateway returns
-    /// the existing handle in the response body when possible; if absent, revocation
-    /// is not possible and the step fails.
+    /// Called when install returns 409 (installation_conflict). The gateway may
+    /// include the existing handle in the 409 body; when it doesn't, we fall back
+    /// to a handle stashed locally from a prior failed revocation.
     private func revokeAndRetryInstall(
         existingHandle: String?,
         request: GatewayInstallRequest
     ) async -> GatewayInstallResponse? {
-        guard let handle = existingHandle else {
+        let handle = existingHandle
+            ?? enrollmentStore.loadPendingHandle(communityID: communityID)
+        guard let handle else {
             state = .failed(.install, "Installation conflict but gateway did not return the existing handle")
-            Self.log.error("Cannot resolve 409: no existing installation handle in response")
+            Self.log.error("Cannot resolve 409: no existing installation handle in response or store")
             return nil
         }
         do {
             try await gateway.revokeInstallation(handle: handle, signer: signer)
+            enrollmentStore.removePendingHandle(communityID: communityID)
             Self.log.info("Revoked existing installation \(handle)")
         } catch {
             state = .failed(.install, "Failed to revoke existing installation: \(error)")

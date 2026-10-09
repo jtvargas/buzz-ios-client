@@ -12,6 +12,7 @@ public struct EnrollmentStore: Sendable {
     private let containerURL: URL
 
     private static let directoryName = "PushEnrollments"
+    private static let pendingDirectoryName = "PushPendingHandles"
     private static let fileExtension = "json"
 
     /// Creates a store writing into the given container directory.
@@ -74,6 +75,37 @@ public struct EnrollmentStore: Sendable {
         try? FileManager.default.removeItem(at: directory)
     }
 
+    // MARK: - Pending revocation handles
+
+    /// Saves an installation handle that could not be revoked on the gateway.
+    ///
+    /// When ``EnrollmentDriver/revoke()`` fails to revoke on the gateway, it
+    /// stashes the handle here. If a subsequent install gets a 409 without a
+    /// handle in the response body, the driver can fall back to this value.
+    public func savePendingHandle(_ handle: String, communityID: String) {
+        let directory = containerURL.appendingPathComponent(Self.pendingDirectoryName)
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let url = pendingFileURL(for: communityID)
+        try? Data(handle.utf8).write(
+            to: url,
+            options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication]
+        )
+    }
+
+    /// Loads a previously stashed pending-revocation handle, if any.
+    public func loadPendingHandle(communityID: String) -> String? {
+        let url = pendingFileURL(for: communityID)
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        let handle = String(data: data, encoding: .utf8)
+        return handle?.isEmpty == true ? nil : handle
+    }
+
+    /// Removes a pending-revocation handle. Idempotent.
+    public func removePendingHandle(communityID: String) {
+        let url = pendingFileURL(for: communityID)
+        try? FileManager.default.removeItem(at: url)
+    }
+
     // MARK: - Helpers
 
     private func fileURL(for communityID: String) -> URL {
@@ -81,6 +113,13 @@ public struct EnrollmentStore: Sendable {
             .appendingPathComponent(Self.directoryName)
             .appendingPathComponent(communityID)
             .appendingPathExtension(Self.fileExtension)
+    }
+
+    private func pendingFileURL(for communityID: String) -> URL {
+        containerURL
+            .appendingPathComponent(Self.pendingDirectoryName)
+            .appendingPathComponent(communityID)
+            .appendingPathExtension("txt")
     }
 
     private static let encoder: JSONEncoder = {
