@@ -2,6 +2,7 @@ import Foundation
 import HivePushKit
 import NostrCore
 import OSLog
+import Observation
 import UIKit
 import UserNotifications
 
@@ -16,6 +17,7 @@ import UserNotifications
 /// Deliberately separate from ``AppEnvironment`` so push logic can evolve
 /// without touching the composition root. The settings UI will call methods on
 /// this type to manage leases.
+@Observable
 @MainActor
 final class PushEnrollmentCoordinator {
     /// Whether push enrollment is running or complete for this session.
@@ -35,20 +37,21 @@ final class PushEnrollmentCoordinator {
         let relayURLString: String
         let gatewayURL: URL
         let pushCapability: PushCapability
+        let appProfile: String
         let signer: any EventSigner
         let publishEvent: @Sendable (NostrEvent) async throws -> Void
     }
 
     private(set) var status: Status = .idle
-    private(set) var driver: EnrollmentDriver?
-    private let enrollmentStore: EnrollmentStore
-    private let pushRegistrar: PushRegistrar
+    @ObservationIgnored private(set) var driver: EnrollmentDriver?
+    @ObservationIgnored private let enrollmentStore: EnrollmentStore
+    @ObservationIgnored private let pushRegistrar: PushRegistrar
 
-    private var enrollmentTask: Task<Void, Never>?
+    @ObservationIgnored private var enrollmentTask: Task<Void, Never>?
 
     /// Called when a lease is published or revoked, so the caller can update the
     /// push snapshot. Parameters: `(communityID, leaseActive, leaseExpiresAt, leaseFiltersJSON)`.
-    var onLeaseUpdated: ((String, Bool, Date?, String?) -> Void)?
+    @ObservationIgnored var onLeaseUpdated: ((String, Bool, Date?, String?) -> Void)?
 
     private static let log = Logger(subsystem: "Hive", category: "PushEnrollmentCoordinator")
 
@@ -62,7 +65,7 @@ final class PushEnrollmentCoordinator {
     /// Called from ``AppEnvironment`` after the engine has been created. Runs
     /// asynchronously — the session does not wait for enrollment.
     func startEnrollment(_ config: Configuration) {
-        guard config.pushCapability.supportsHive else {
+        guard config.pushCapability.supports(appProfile: config.appProfile) else {
             status = .unsupported
             Self.log.info("Relay does not support push for this app profile")
             return
@@ -78,7 +81,8 @@ final class PushEnrollmentCoordinator {
         // lease may not have been published (e.g. crash between store write and
         // lease publication). The driver's own fast-path detects the stored
         // enrollment and jumps straight to publishLeaseStep.
-
+        enrollmentTask?.cancel()
+        enrollmentTask = nil
         status = .enrolling
         let newDriver = makeDriver(config: config, relayPubkey: relayKey.pubkey)
         driver = newDriver
@@ -129,6 +133,7 @@ final class PushEnrollmentCoordinator {
             communityID: config.communityID,
             relayURL: config.relayURLString,
             relayPubkey: relayPubkey,
+            appProfile: config.appProfile,
             publishEvent: config.publishEvent
         )
     }

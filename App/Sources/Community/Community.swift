@@ -72,9 +72,47 @@ struct Community: Identifiable, Codable, Equatable, Sendable {
     /// `nil`, which means on. A non-optional addition would make the deliberately all-or-empty
     /// decoder treat every existing install as having no communities.
     var siriIndexingEnabled: Bool?
+    /// The HTTP URL of the push gateway for this community, or `nil` when push is
+    /// disabled.
+    ///
+    /// Optional for the same migration reason as ``siriIndexingEnabled``: existing
+    /// `communities.v1` records decode this as `nil`, which is treated as push-off.
+    /// A non-empty URL enables push enrollment when the relay also advertises
+    /// NIP-11 push capability.
+    var pushGatewayURL: String?
+    /// The app profile identifier sent to the push gateway during enrollment.
+    ///
+    /// `nil` uses the built-in default (`PushConstants.appProfile`). Only overridden
+    /// when a self-hosted community runs a forked gateway that expects a different
+    /// profile string.
+    var pushAppProfile: String?
     let addedAt: Date
 
     var isSiriIndexingEnabled: Bool { siriIndexingEnabled ?? true }
+
+    /// Whether push notifications are configured for this community.
+    /// A non-empty string that is not a valid URL is treated as disabled.
+    var isPushEnabled: Bool { resolvedPushGatewayURL != nil }
+
+    /// The resolved push gateway URL, or `nil` when push is disabled or the
+    /// stored string is not a valid HTTP(S) URL.
+    var resolvedPushGatewayURL: URL? {
+        guard let urlString = pushGatewayURL, !urlString.isEmpty,
+              let url = URL(string: urlString),
+              let scheme = url.scheme?.lowercased(),
+              scheme == "http" || scheme == "https",
+              let host = url.host(), !host.isEmpty
+        else { return nil }
+        return url
+    }
+
+    /// The app profile override for push enrollment, or `nil` to use the built-in default.
+    var resolvedPushAppProfile: String? {
+        guard let custom = pushAppProfile, !custom.isEmpty else {
+            return nil
+        }
+        return custom
+    }
 
     /// The Keychain account and database file the single-community app used. A migrated
     /// install keeps both; nothing new is ever given them.

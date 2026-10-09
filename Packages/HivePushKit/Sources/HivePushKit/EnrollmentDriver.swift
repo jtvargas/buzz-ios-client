@@ -64,6 +64,8 @@ public actor EnrollmentDriver {
     private let communityID: String
     private let relayURL: String
     private let relayPubkey: String
+    /// The app profile identifier sent to the gateway during installation.
+    private let appProfile: String
     /// Callback to publish a signed event to the relay. Injected so this actor has
     /// no dependency on the relay connection.
     private let publishEvent: @Sendable (NostrEvent) async throws -> Void
@@ -85,6 +87,7 @@ public actor EnrollmentDriver {
         communityID: String,
         relayURL: String,
         relayPubkey: String,
+        appProfile: String = PushConstants.appProfile,
         publishEvent: @escaping @Sendable (NostrEvent) async throws -> Void
     ) {
         self.gateway = gateway
@@ -94,6 +97,7 @@ public actor EnrollmentDriver {
         self.communityID = communityID
         self.relayURL = relayURL
         self.relayPubkey = relayPubkey
+        self.appProfile = appProfile
         self.publishEvent = publishEvent
     }
 
@@ -285,7 +289,7 @@ public actor EnrollmentDriver {
             attestation: attestation.base64EncodedString(),
             keyID: attestKeyID,
             challengeID: challengeID,
-            appProfile: PushConstants.appProfile
+            appProfile: appProfile
         )
         let installResponse: GatewayInstallResponse
         do {
