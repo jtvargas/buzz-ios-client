@@ -18,7 +18,7 @@ struct GatewayClientTests {
 
     @Test("Challenge decodes a well-formed response")
     func challengeSuccess() async throws {
-        let responseJSON = #"{"challenge_id":"ch-123","challenge":"nonce-abc"}"#
+        let responseJSON = #"{"challenge_id":"ch-123","challenge":"nonce-abc","expires_at":1700000000}"#
         let transport = ScriptedTransport(responses: [
             (Data(responseJSON.utf8), 200),
         ])
@@ -27,6 +27,7 @@ struct GatewayClientTests {
 
         #expect(response.challengeID == "ch-123")
         #expect(response.challenge == "nonce-abc")
+        #expect(response.expiresAt == 1_700_000_000)
 
         // Verify request was to the right path.
         let request = transport.requests[0]
@@ -65,50 +66,82 @@ struct GatewayClientTests {
 
     @Test("Install decodes a well-formed response")
     func installSuccess() async throws {
-        let responseJSON = #"{"installation_id":"inst-456"}"#
+        let responseJSON = #"{"installation_handle":"handle-456","endpoint_epoch":1,"expires_at":1700086400}"#
         let transport = ScriptedTransport(responses: [
-            (Data(responseJSON.utf8), 200),
+            (Data(responseJSON.utf8), 201),
         ])
         let client = GatewayClient(baseURL: baseURL, transport: transport)
         let request = GatewayInstallRequest(
-            deviceToken: "aabbccdd",
-            attestation: "base64attest",
-            keyID: "key-1",
             challengeID: "ch-123",
-            appProfile: "buzz-ios-dogfood"
+            challenge: "nonce-abc",
+            keyID: "key-1",
+            attestation: "base64attest",
+            appProfile: "buzz-ios-dogfood",
+            endpoint: "aabbccdd",
+            endpointEpoch: 1,
+            expiresAt: 1_700_086_400
         )
         let response = try await client.install(request, signer: signer())
 
-        #expect(response.installationID == "inst-456")
+        #expect(response.installationHandle == "handle-456")
+        #expect(response.endpointEpoch == 1)
+        #expect(response.expiresAt == 1_700_086_400)
 
         // Verify the request body was JSON-encoded correctly.
         let sent = transport.requests[0]
         #expect(sent.url.path.hasSuffix("/v1/installations"))
         let bodyJSON = try JSONSerialization.jsonObject(with: sent.body) as? [String: Any]
-        #expect(bodyJSON?["device_token"] as? String == "aabbccdd")
+        #expect(bodyJSON?["v"] as? Int == 1)
+        #expect(bodyJSON?["endpoint"] as? String == "aabbccdd")
         #expect(bodyJSON?["key_id"] as? String == "key-1")
         #expect(bodyJSON?["app_profile"] as? String == "buzz-ios-dogfood")
+        #expect(bodyJSON?["challenge_id"] as? String == "ch-123")
+        #expect(bodyJSON?["challenge"] as? String == "nonce-abc")
+        #expect(bodyJSON?["endpoint_epoch"] as? Int == 1)
+        #expect(bodyJSON?["expires_at"] as? Int == 1_700_086_400)
+        // Must not send the old "device_token" key.
+        #expect(bodyJSON?["device_token"] == nil)
     }
 
     // MARK: - Delegation
 
     @Test("Delegate decodes a well-formed response")
     func delegateSuccess() async throws {
-        let responseJSON = #"{"delegation_id":"del-789"}"#
+        let responseJSON = #"{"endpoint_grant":"grant-token-xyz"}"#
         let transport = ScriptedTransport(responses: [
-            (Data(responseJSON.utf8), 200),
+            (Data(responseJSON.utf8), 201),
         ])
         let client = GatewayClient(baseURL: baseURL, transport: transport)
         let request = GatewayDelegationRequest(
-            installationID: "inst-456",
-            relayURL: "wss://relay.example",
-            relayPubkey: "aabbccdd"
+            challengeID: "ch-456",
+            challenge: "nonce-def",
+            installationHandle: "handle-456",
+            endpointEpoch: 1,
+            generation: 1,
+            relayPubkey: "aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd",
+            notBefore: 1_700_000_000,
+            expiresAt: 1_700_086_400,
+            assertion: "base64assertion"
         )
         let response = try await client.delegate(request, signer: signer())
 
-        #expect(response.delegationID == "del-789")
+        #expect(response.endpointGrant == "grant-token-xyz")
+
         let sent = transport.requests[0]
         #expect(sent.url.path.hasSuffix("/v1/delegations"))
+        let bodyJSON = try JSONSerialization.jsonObject(with: sent.body) as? [String: Any]
+        #expect(bodyJSON?["v"] as? Int == 1)
+        #expect(bodyJSON?["installation_handle"] as? String == "handle-456")
+        #expect(bodyJSON?["challenge_id"] as? String == "ch-456")
+        #expect(bodyJSON?["challenge"] as? String == "nonce-def")
+        #expect(bodyJSON?["endpoint_epoch"] as? Int == 1)
+        #expect(bodyJSON?["generation"] as? Int == 1)
+        #expect(bodyJSON?["not_before"] as? Int == 1_700_000_000)
+        #expect(bodyJSON?["expires_at"] as? Int == 1_700_086_400)
+        #expect(bodyJSON?["assertion"] as? String == "base64assertion")
+        // Must not send the old keys.
+        #expect(bodyJSON?["installation_id"] == nil)
+        #expect(bodyJSON?["relay_url"] == nil)
     }
 }
 
