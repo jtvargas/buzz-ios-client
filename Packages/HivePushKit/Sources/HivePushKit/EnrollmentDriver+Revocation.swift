@@ -21,25 +21,44 @@ extension EnrollmentDriver {
 
     /// Revokes the enrollment: revokes on the gateway, deletes the lease,
     /// removes the stored enrollment.
+    ///
+    /// The credentials are moved into the pending-revocation set *before* the
+    /// network call, so a crash or failure anywhere in here leaves them on
+    /// disk for the 409 path to finish with. The enrollment itself is only
+    /// dropped once its credentials are either persisted as pending or no
+    /// longer needed because the gateway confirmed the revocation.
     public func revoke() async {
         guard let enrollment = enrollmentStore.load(communityID: communityID) else { return }
+
+        let pendingPersisted: Bool
+        do {
+            try enrollmentStore.demoteToPendingRevocation(communityID: communityID, gatewayURL: gateway.baseURL)
+            pendingPersisted = true
+        } catch {
+            pendingPersisted = false
+            Self.log.error("Could not persist pending revocation; keeping the enrollment: \(String(describing: error))")
+        }
 
         // Revoke the installation on the gateway so re-enrollment won't hit a
         // 409. The gateway keys installations by device token, so a live one
         // blocks every future install from this device until it is revoked or
         // expires (30 days). Revocation needs the handle *and* the App Attest
-        // key that enrolled it; when it fails, keep both as a pending
-        // revocation so the 409 recovery path can finish the job later.
+        // key that enrolled it; when it fails, the pending record keeps both.
         do {
             try await revokeOnGateway(
                 handle: enrollment.installationHandle,
                 attestKeyID: enrollment.attestKeyID
             )
             enrollmentStore.removePendingRevocation(communityID: communityID)
+            enrollmentStore.remove(communityID: communityID)
             Self.log.info("Revoked installation on gateway")
         } catch {
-            enrollmentStore.savePendingRevocation(PendingRevocation(enrollment: enrollment))
-            Self.log.warning("Gateway revoke failed; kept as pending revocation: \(String(describing: error))")
+            if pendingPersisted {
+                Self.log.warning("Gateway revoke failed; kept as pending revocation: \(String(describing: error))")
+            } else {
+                let reason = String(describing: error)
+                Self.log.error("Gateway revoke failed with no pending record; enrollment left in place: \(reason)")
+            }
         }
 
         // Best-effort: publish a deletion event if we can.
@@ -57,21 +76,26 @@ extension EnrollmentDriver {
                 Self.log.info("Published push lease revocation")
             }
         }
-        enrollmentStore.remove(communityID: communityID)
         leaseExpiresAt = nil
         leaseFiltersJSON = nil
         state = .idle
         Self.log.info("Removed enrollment for community \(self.communityID)")
     }
 
-    /// Revokes every installation this app still holds credentials for.
+    /// Revokes every installation on this driver's gateway that the app still
+    /// holds credentials for.
     ///
     /// Returns `true` when at least one record was settled — revoked, or
-    /// reported gone by the gateway — so a retry is worth making. Returns
-    /// `false`, with `state` set, when there is nothing to revoke or every
-    /// attempt failed outright.
+    /// known to be gone — so a retry is worth making. Returns `false`, with
+    /// `state` set, when there is nothing to revoke or every attempt failed.
+    ///
+    /// A record is dropped only on a gateway confirmation (2xx) or on a 404
+    /// after the installation's known expiry. The gateway answers 404
+    /// `not_authorized` for a consumed challenge and for a lost assertion
+    /// counter race too, so a 404 before expiry keeps the credentials: the
+    /// next attempt gets a fresh challenge and assertion.
     func revokePendingInstallations() async -> Bool {
-        let pending = enrollmentStore.loadAllPendingRevocations()
+        let pending = enrollmentStore.loadAllPendingRevocations(gatewayURL: gateway.baseURL)
         guard !pending.isEmpty else {
             state = .failed(.install, Self.unrecoverableConflictMessage)
             Self.log.error("Cannot resolve 409: no pending revocation holds credentials for the live installation")
@@ -79,6 +103,7 @@ extension EnrollmentDriver {
         }
         var settled = false
         var lastError: (any Error)?
+        let now = Date()
         for record in pending {
             let handle = record.installationHandle
             do {
@@ -86,15 +111,15 @@ extension EnrollmentDriver {
                 enrollmentStore.removePendingRevocation(communityID: record.communityID)
                 settled = true
                 Self.log.info("Revoked pending installation \(handle)")
-            } catch GatewayError.httpStatus(404, let code) {
-                // The gateway no longer has this installation (expired or already
-                // gone): nothing left to revoke, and it is not what blocked us.
-                enrollmentStore.removePendingRevocation(communityID: record.communityID)
-                settled = true
-                Self.log.info("Pending installation \(handle) already gone (\(code ?? "not_authorized"))")
             } catch {
+                if case GatewayError.httpStatus(404, _) = error, record.installationExpiresAt < now {
+                    enrollmentStore.removePendingRevocation(communityID: record.communityID)
+                    settled = true
+                    Self.log.info("Pending installation \(handle) expired and gone from the gateway; dropped")
+                    continue
+                }
                 lastError = error
-                Self.log.error("Revoke of \(handle) failed: \(String(describing: error))")
+                Self.log.error("Revoke of \(handle) failed; credentials kept: \(String(describing: error))")
             }
         }
         if !settled, let lastError {

@@ -82,12 +82,13 @@ public struct EnrollmentStore: Sendable {
     ///
     /// Written when ``EnrollmentDriver/revoke()`` cannot reach the gateway, or
     /// when a community is removed without a live session to revoke through.
-    /// A later install that gets a 409 revokes every record here, then retries.
-    public func savePendingRevocation(_ revocation: PendingRevocation) {
+    /// A later install against the same gateway that gets a 409 revokes every
+    /// record here, then retries.
+    public func savePendingRevocation(_ revocation: PendingRevocation) throws {
         let directory = containerURL.appendingPathComponent(Self.pendingDirectoryName)
-        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        guard let data = try? Self.encoder.encode(revocation) else { return }
-        try? data.write(
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let data = try Self.encoder.encode(revocation)
+        try data.write(
             to: pendingFileURL(for: revocation.communityID),
             options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication]
         )
@@ -95,9 +96,23 @@ public struct EnrollmentStore: Sendable {
 
     /// Moves a community's enrollment into the pending-revocation set. No-op
     /// when the community has no enrollment.
-    public func demoteToPendingRevocation(communityID: String) {
+    ///
+    /// The pending record is written durably *before* the enrollment is
+    /// removed, so a failure or crash at any point leaves the credentials on
+    /// disk in at least one of the two places. On error the enrollment is
+    /// untouched.
+    ///
+    /// - Parameter gatewayURL: the gateway the installation lives on, used
+    ///   only when the enrollment predates ``Enrollment/gatewayURL`` and does
+    ///   not record one itself. With neither, throws
+    ///   ``EnrollmentStoreError/gatewayUnknown`` rather than write a record
+    ///   that could be replayed against the wrong gateway.
+    public func demoteToPendingRevocation(communityID: String, gatewayURL: URL?) throws {
         guard let enrollment = load(communityID: communityID) else { return }
-        savePendingRevocation(PendingRevocation(enrollment: enrollment))
+        guard let gatewayURL = enrollment.gatewayURL ?? gatewayURL else {
+            throw EnrollmentStoreError.gatewayUnknown
+        }
+        try savePendingRevocation(PendingRevocation(enrollment: enrollment, gatewayURL: gatewayURL))
         remove(communityID: communityID)
     }
 
@@ -107,9 +122,12 @@ public struct EnrollmentStore: Sendable {
         return try? Self.decoder.decode(PendingRevocation.self, from: data)
     }
 
-    /// Loads every pending revocation. Installations are per device, not per
-    /// community, so any of them can be the one blocking a new install.
-    public func loadAllPendingRevocations() -> [PendingRevocation] {
+    /// Loads every pending revocation for one gateway. Installations are per
+    /// device, not per community, so any of them can be the one blocking a
+    /// new install there; records for other gateways are never returned,
+    /// because a handle and key only mean something to the gateway that
+    /// issued them.
+    public func loadAllPendingRevocations(gatewayURL: URL) -> [PendingRevocation] {
         let directory = containerURL.appendingPathComponent(Self.pendingDirectoryName)
         guard let files = try? FileManager.default.contentsOfDirectory(
             at: directory,
@@ -117,9 +135,11 @@ public struct EnrollmentStore: Sendable {
         ) else { return [] }
         return files.compactMap { url in
             guard url.pathExtension == Self.fileExtension,
-                  let data = try? Data(contentsOf: url)
+                  let data = try? Data(contentsOf: url),
+                  let record = try? Self.decoder.decode(PendingRevocation.self, from: data),
+                  record.gatewayURL == gatewayURL
             else { return nil }
-            return try? Self.decoder.decode(PendingRevocation.self, from: data)
+            return record
         }
     }
 
@@ -175,6 +195,10 @@ public struct Enrollment: Codable, Equatable, Sendable {
     public let installID: String
     /// The relay URL this enrollment targets.
     public let relayURL: String
+    /// The gateway that issued the installation. `nil` only for enrollments
+    /// written before this field existed; the app supplies the community's
+    /// gateway when it demotes those.
+    public let gatewayURL: URL?
     /// When the enrollment was completed.
     public let enrolledAt: Date
 
@@ -185,6 +209,7 @@ public struct Enrollment: Codable, Equatable, Sendable {
         attestKeyID: String,
         installID: String,
         relayURL: String,
+        gatewayURL: URL?,
         enrolledAt: Date = .now
     ) {
         self.communityID = communityID
@@ -193,6 +218,7 @@ public struct Enrollment: Codable, Equatable, Sendable {
         self.attestKeyID = attestKeyID
         self.installID = installID
         self.relayURL = relayURL
+        self.gatewayURL = gatewayURL
         self.enrolledAt = enrolledAt
     }
 }
@@ -201,26 +227,61 @@ public struct Enrollment: Codable, Equatable, Sendable {
 
 /// An installation this app has stopped using but may not have revoked on the
 /// gateway yet. Revocation needs both the handle and the App Attest key that
-/// enrolled it, so both are kept until the gateway confirms the tombstone.
+/// enrolled it, so both are kept until the gateway confirms the tombstone or
+/// the installation is known to have expired.
 public struct PendingRevocation: Codable, Equatable, Sendable {
     /// The community the installation belonged to; also the record's file name.
     public let communityID: String
+    /// The gateway that issued the installation. The record is only ever
+    /// replayed against this gateway.
+    public let gatewayURL: URL
     /// The gateway installation handle.
     public let installationHandle: String
     /// The App Attest key identifier that signs the revocation assertion.
     public let attestKeyID: String
+    /// The latest moment the gateway can still hold this installation live.
+    ///
+    /// The gateway answers `404 not_authorized` for every rejection on the
+    /// revoke path — row missing, expired, consumed challenge, assertion
+    /// counter race — so a 404 alone never proves the installation is gone.
+    /// Past this instant it does: the gateway filters `expires_at >= now`
+    /// before it checks anything else, and nothing extends an installation
+    /// once this client has stopped using it.
+    public let installationExpiresAt: Date
 
-    public init(communityID: String, installationHandle: String, attestKeyID: String) {
+    public init(
+        communityID: String,
+        gatewayURL: URL,
+        installationHandle: String,
+        attestKeyID: String,
+        installationExpiresAt: Date
+    ) {
         self.communityID = communityID
+        self.gatewayURL = gatewayURL
         self.installationHandle = installationHandle
         self.attestKeyID = attestKeyID
+        self.installationExpiresAt = installationExpiresAt
     }
 
-    public init(enrollment: Enrollment) {
+    /// Builds the record from an enrollment.
+    ///
+    /// The installation's gateway-side expiry is the later of the install and
+    /// delegation expiries, both `now + NIPPLLease.defaultDuration` taken
+    /// during enrollment, so `enrolledAt + defaultDuration` is an upper bound.
+    public init(enrollment: Enrollment, gatewayURL: URL) {
         self.init(
             communityID: enrollment.communityID,
+            gatewayURL: gatewayURL,
             installationHandle: enrollment.installationHandle,
-            attestKeyID: enrollment.attestKeyID
+            attestKeyID: enrollment.attestKeyID,
+            installationExpiresAt: enrollment.enrolledAt.addingTimeInterval(NIPPLLease.defaultDuration)
         )
     }
+}
+
+/// Failures of ``EnrollmentStore`` that are not plain file-system errors.
+public enum EnrollmentStoreError: Error, Equatable {
+    /// An enrollment cannot be demoted because neither it nor the caller
+    /// knows which gateway issued it.
+    case gatewayUnknown
 }

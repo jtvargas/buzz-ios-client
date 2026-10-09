@@ -411,6 +411,8 @@ extension AppEnvironment {
         await serialisingTransitions { [self] in await performRemoval(of: id) }
     }
 
+    private static let removalLog = Logger(subsystem: "Hive", category: "AppEnvironment.removal")
+
     private func performRemoval(of id: Community.ID) async {
         let wasActive = id == communities.activeID
         var removedCommunity: Community?
@@ -425,8 +427,21 @@ extension AppEnvironment {
             await teardownSession()
         }
         // No session to revoke through (background community, or enrollment never
-        // started): keep the handle and key so the next enrollment can revoke it.
-        enrollmentStore?.demoteToPendingRevocation(communityID: removed.id.uuidString)
+        // started): keep the handle and key so the next enrollment on that gateway
+        // can revoke it. The enrollment records its own gateway; the community's
+        // current URL only covers enrollments written before it did. On failure the
+        // enrollment stays where it is — the credentials are never dropped on the
+        // way to a record that was not written.
+        do {
+            try enrollmentStore?.demoteToPendingRevocation(
+                communityID: removed.id.uuidString,
+                gatewayURL: removed.resolvedPushGatewayURL
+            )
+        } catch {
+            Self.removalLog.error(
+                "Pending revocation not written; enrollment kept: \(String(describing: error), privacy: .public)"
+            )
+        }
         try? IdentityKeychain.signer(account: removed.keychainAccount).delete()
         try? pushSnapshots?.remove(communityID: removed.id.uuidString)
         // After the teardown, so the file is not deleted underneath an open connection:

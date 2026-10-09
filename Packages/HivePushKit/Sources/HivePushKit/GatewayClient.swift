@@ -22,7 +22,9 @@ import NostrCore
 /// `Nostr <base64-event>` header signed by the device's identity key.
 public struct GatewayClient: Sendable {
     private let transport: any HTTPTransport
-    private let baseURL: URL
+    /// The gateway's HTTP root. Credentials the gateway issues (installation
+    /// handles, App Attest keys) are only meaningful back at this URL.
+    public let baseURL: URL
 
     /// - Parameters:
     ///   - baseURL: the gateway's HTTP root (e.g. `http://100.111.202.55:3005`).

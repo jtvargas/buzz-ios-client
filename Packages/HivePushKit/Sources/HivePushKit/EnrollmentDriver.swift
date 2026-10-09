@@ -425,13 +425,11 @@ public actor EnrollmentDriver {
             endpointGrant: delegationResponse.endpointGrant,
             attestKeyID: attestKeyID,
             installID: installID,
-            relayURL: relayURL
+            relayURL: relayURL,
+            gatewayURL: gateway.baseURL
         )
         do {
             try enrollmentStore.write(enrollment)
-            // A fresh install went through without a conflict, so any older
-            // installation recorded for this community is no longer live.
-            enrollmentStore.removePendingRevocation(communityID: communityID)
         } catch {
             state = .failed(.install, "Failed to persist enrollment: \(error)")
             Self.log.error("Enrollment persistence failed: \(String(describing: error))")

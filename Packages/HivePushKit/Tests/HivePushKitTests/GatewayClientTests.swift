@@ -241,6 +241,9 @@ final class ScriptedTransport: HTTPTransport, @unchecked Sendable {
     private var responses: [(Data, Int)]
     private var index = 0
     private let shouldThrow: Bool
+    /// Runs synchronously as each request leaves, before any response, so a
+    /// test can observe state at that instant (what is on disk, for example).
+    var onRequest: ((Request) -> Void)?
 
     init(responses: [(Data, Int)], shouldThrow: Bool = false) {
         self.responses = responses
@@ -248,7 +251,9 @@ final class ScriptedTransport: HTTPTransport, @unchecked Sendable {
     }
 
     func post(body: Data, to url: URL, headers: [String: String]) async throws -> (Data, Int) {
-        requests.append(Request(url: url, body: body, headers: headers))
+        let request = Request(url: url, body: body, headers: headers)
+        requests.append(request)
+        onRequest?(request)
         if shouldThrow {
             throw TransportError.requestFailed("scripted failure")
         }
