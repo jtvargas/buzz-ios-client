@@ -26,6 +26,7 @@ pins: generate
 test:
 	swift test -c release --package-path Packages/NostrCore
 	swift test -c release --package-path Packages/BuzzKit
+	swift test -c release --package-path Packages/HivePushKit
 
 build: generate
 	xcodebuild build -project Hive.xcodeproj -scheme Hive \

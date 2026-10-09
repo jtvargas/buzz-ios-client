@@ -31,8 +31,8 @@ env:
 
 jobs:
   packages:
-    # NostrCore and BuzzKit have no build dependency on each other, so they
-    # run as two jobs rather than two steps.
+    # NostrCore, BuzzKit and HivePushKit have no build dependency on each other
+    # beyond NostrCore being a leaf, so they run as parallel jobs rather than steps.
     name: SPM tests (${{ matrix.package }})
     runs-on: macos-latest
     # Sized off BuzzKit, not NostrCore: one key covers both matrix legs, and
@@ -49,7 +49,8 @@ jobs:
         # Run it with `gh workflow run ci.yml --ref <branch>`, which also runs
         # the app suite. To put it back on every push, drop the expression and
         # restore `package: [NostrCore, BuzzKit]`.
-        package: ${{ github.event_name == 'workflow_dispatch' && fromJSON('["NostrCore", "BuzzKit"]') || fromJSON('["NostrCore"]') }}
+        # HivePushKit runs on every push (fast: 6 tests) and on dispatch.
+        package: ${{ github.event_name == 'workflow_dispatch' && fromJSON('["NostrCore", "BuzzKit", "HivePushKit"]') || fromJSON('["NostrCore", "HivePushKit"]') }}
     steps:
       - uses: actions/checkout@v4
       # Release is the blocking gate: recent Swift toolchains (observed on
@@ -111,7 +112,7 @@ jobs:
     # already does — on request, from the Actions tab or `gh workflow run ci.yml
     # --ref <branch>`, before anything that touches the send path, the outbox,
     # persistence, or the composer. What still runs on every pull request is the
-    # part that has never flaked: both package suites (release) and SwiftLint.
+    # part that has never flaked: the package suites (release) and SwiftLint.
     #
     # To put it back on every push, delete this `if:` and restore the save
     # step's condition below.

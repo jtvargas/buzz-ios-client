@@ -100,7 +100,7 @@ This section describes the app as it is on `main`, not as planned. Anything not 
 
 These exist upstream, or are on the roadmap, and are honestly absent here:
 
-- **Push notifications.** There is no APNs registration, so nothing arrives from the relay while the app is closed. Later reminders are local notifications and do fire when it is.
+- **Push notifications.** The platform scaffolding is in place — push entitlement, an App Group and shared Keychain between the app and a Notification Service Extension, and the extension itself — but there is no APNs registration or relay enrolment yet, so nothing arrives from the relay while the app is closed. Later reminders are local notifications and do fire when it is.
 - **In-app message search.** Channels can be searched by name; there is no screen that searches message text across conversations.
 - **Video, files, and camera capture.** Pictures can be attached from Photos or the pasteboard, but video is only marked, files are not attachable, and Camera currently opens a work-in-progress alert.
 - **A profile from the sidebar or the channel roster.** The sheet is reached from a message today, so someone who has not posted in the open conversation has no entry point.
@@ -132,15 +132,17 @@ Read [CONTRIBUTING.md](CONTRIBUTING.md) for setup, workflow, commit style, and v
 
 ## Architecture
 
-Hive is an app target plus two local Swift packages:
+Hive is an app target, a Notification Service Extension, and three local Swift packages:
 
 | Layer | Contents |
 |-------|----------|
 | `NostrCore` | Keys, event model/codec/kinds, signing, relay WebSocket actor, NIP-42 auth, NIP-44 encryption, NIP-98 HTTP auth, subscriptions, NIP-AB device pairing |
 | `BuzzKit` | Buzz projections for channels, threads, reactions, profiles, presence and read state; `SyncEngine`; `Outbox`; NIP-CW window client; GRDB persistence |
+| `HivePushKit` | What the app shares with its Notification Service Extension: the App Group (`AppGroup`), the per-community push snapshots in it (`PushSnapshotStore`), and the single identity-key API both processes use (`IdentityKeychain`) |
 | App | SwiftUI, iOS 26+ Liquid Glass, Observation, Swift 6 strict concurrency, MVVM with feature folders |
+| `NotificationService/` | The Notification Service Extension (`HiveNotificationService`), embedded in the app; links `HivePushKit` and `NostrCore` only |
 
-Packages keep an iOS 17 / macOS 14 floor; the app targets iOS 26. Architecture decisions live in [docs/adr/](docs/adr/), including the minimum OS decision and the shared conversation shell.
+All three packages keep an iOS 17 / macOS 14 floor, so their suites run under `swift test` on the host; the app targets iOS 26. The app's bundle id, App Group and Keychain access group are each spelled once, in `Config/Shared.xcconfig`, and reach both targets' entitlements from there. Architecture decisions live in [docs/adr/](docs/adr/), including the minimum OS decision and the shared conversation shell.
 
 The Buzz relay has no negentropy/NIP-77 sync, so reliability is client-owned: NIP-CW channel windows, reconnect reconciliation, careful cursors, a projected database as source of truth, and a durable optimistic outbox.
 

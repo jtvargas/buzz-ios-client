@@ -1,5 +1,6 @@
 import BuzzKit
 import Foundation
+import HivePushKit
 import NostrCore
 import OSLog
 
@@ -371,7 +372,7 @@ extension AppEnvironment {
             RelayEndpoint.storedURLString = community.relayURLString
             setPhase(.bootstrapping)
             await teardownSession()
-            guard Self.hasStoredKey(account: community.keychainAccount) else {
+            guard IdentityKeychain.hasStoredKey(account: community.keychainAccount) else {
                 setPhase(.needsIdentity)
                 return
             }
@@ -382,8 +383,18 @@ extension AppEnvironment {
 
     /// Renames a community. A label on this device only: no relay has a name to disagree
     /// with (§ ``CommunityIdentity``).
+    ///
+    /// The extension carries its own copy of the name (§ ``pushSnapshots``), so a community
+    /// this device holds a key for has its snapshot rewritten here too — not only the active
+    /// one: the extension acts for every community with a key, and a snapshot is only ever
+    /// written at session start, which a background community may not see again for days.
+    /// One with no key has no snapshot to refresh (§ ``signOut()``, ``removeCommunity(_:)``).
     func renameCommunity(_ id: Community.ID, to name: String) {
         updateCommunities { $0.rename(id, to: name) }
+        guard let community = communities.communities.first(where: { $0.id == id }),
+              IdentityKeychain.hasStoredKey(account: community.keychainAccount)
+        else { return }
+        recordPushSnapshot(for: community)
     }
 
     /// Leaves a community for good on this device: its key is deleted, its record is
@@ -409,13 +420,14 @@ extension AppEnvironment {
             setPhase(.bootstrapping)
             await teardownSession()
         }
-        try? KeychainSigner(account: removed.keychainAccount).delete()
+        try? IdentityKeychain.signer(account: removed.keychainAccount).delete()
+        try? pushSnapshots?.remove(communityID: removed.id.uuidString)
         // After the teardown, so the file is not deleted underneath an open connection:
         // dropping the store is what closes it.
         Self.deleteStore(filename: removed.storeFilename)
         communityStorage.removeIcon(for: removed)
         guard wasActive else { return }
-        guard let next = communities.active, Self.hasStoredKey(account: next.keychainAccount) else {
+        guard let next = communities.active, IdentityKeychain.hasStoredKey(account: next.keychainAccount) else {
             setPhase(.needsIdentity)
             if let next = communities.active {
                 RelayEndpoint.storedURLString = next.relayURLString
@@ -454,7 +466,7 @@ extension AppEnvironment {
         let existing = communities.community(forRelay: relayURLString)
         let community = existing ?? .new(relayURLString: relayURLString)
         do {
-            try KeychainSigner(account: community.keychainAccount).store(key)
+            try IdentityKeychain.signer(account: community.keychainAccount).store(key)
         } catch {
             return nil
         }
@@ -538,7 +550,7 @@ extension AppEnvironment {
         }
         updateCommunities { $0.setActive(id) }
         guard let previous = communities.active,
-              Self.hasStoredKey(account: previous.keychainAccount)
+              IdentityKeychain.hasStoredKey(account: previous.keychainAccount)
         else {
             setPhase(.needsIdentity)
             return
