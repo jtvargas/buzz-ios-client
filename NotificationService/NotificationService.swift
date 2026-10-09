@@ -1,103 +1,112 @@
 import HivePushKit
+import NostrCore
 import OSLog
 import UserNotifications
 
-/// Hive's Notification Service Extension: woken by APNs for every push carrying
-/// `mutable-content: 1`, before the notification is shown.
-///
-/// Today it is the platform scaffold and nothing more. It logs the wake payload,
-/// proves it can see what the app left for it — the per-community snapshots in
-/// the App Group and the identity keys in the shared Keychain — and hands the
-/// notification back exactly as it arrived. Resolving a wake into a real title
-/// and body (query the relay as the reader, verify, render) is the next ticket's
-/// work and slots in where ``didReceive(_:withContentHandler:)`` currently
-/// finishes.
-///
-/// Two constraints shape everything here. The system gives this process about
-/// thirty seconds and then calls ``serviceExtensionTimeWillExpire()``, after which
-/// whatever content has been handed back is what the reader sees — so the
-/// original content is retained from the first line and delivered on expiry.
-/// And the process has a 24 MB memory ceiling, which is why it links
-/// `HivePushKit` and `NostrCore` and none of the app's UI or database stack.
+/// Resolves a reconnect wake from App Group leases, never from APNs-supplied
+/// relay URLs or filters. No app database, profile lookup, or media downloads.
 final class NotificationService: UNNotificationServiceExtension {
     private static let log = Logger(subsystem: "Hive", category: "NotificationService")
+    private let currentWake = OSAllocatedUnfairLock<PushWake?>(initialState: nil)
+    private let loadCommunities: @Sendable () throws -> [PushCommunitySnapshot]
+    private let resolver: PushWakeResolver
 
-    private var contentHandler: ((UNNotificationContent) -> Void)?
-    private var bestAttemptContent: UNNotificationContent?
+    override init() {
+        loadCommunities = {
+            guard let appGroup = AppGroup(), let store = PushSnapshotStore(appGroup: appGroup) else { return [] }
+            return try store.loadAll()
+        }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForRequest = 8
+        configuration.timeoutIntervalForResource = 20
+        resolver = PushWakeResolver(client: PushQueryClient(
+            transport: URLSessionHTTPTransport(session: URLSession(configuration: configuration))
+        ))
+        super.init()
+    }
+
+    /// Uses the same didReceive/expiry path with an isolated store and transport.
+    init(
+        loadCommunities: @escaping @Sendable () throws -> [PushCommunitySnapshot],
+        resolver: PushWakeResolver
+    ) {
+        self.loadCommunities = loadCommunities
+        self.resolver = resolver
+        super.init()
+    }
 
     override func didReceive(
         _ request: UNNotificationRequest,
         withContentHandler contentHandler: @escaping (UNNotificationContent) -> Void
     ) {
-        self.contentHandler = contentHandler
-        bestAttemptContent = request.content
-
-        Self.log.info("Woken for request \(request.identifier, privacy: .public)")
-        Self.log.info("Payload: \(Self.describe(request.content.userInfo), privacy: .public)")
-        logSharedState()
-
-        finish()
+        let wake = PushWake(content: request.content, handler: contentHandler)
+        let previous = currentWake.withLock { current in
+            let previous = current
+            current = wake
+            return previous
+        }
+        previous?.finish()
+        Self.log.info("Resolving push wake")
+        let task = Task { @Sendable [loadCommunities, resolver, wake] in
+            defer { wake.finish() }
+            do {
+                let communities = try loadCommunities()
+                await resolver.resolve(communities: communities) { wake.update($0) }
+            } catch {
+                Self.log.error("Reading push snapshots failed; preserving original content")
+            }
+        }
+        wake.attach(task)
     }
 
     override func serviceExtensionTimeWillExpire() {
-        Self.log.warning("Service time expiring; delivering the content as received")
-        finish()
+        Self.log.warning("Service time expiring; delivering best available content")
+        currentWake.withLock { $0 }?.finish()
+    }
+}
+
+/// The system's expiry callback can race query completion. All mutable state is
+/// lock-protected; callbacks and cancellation run outside the lock. Each request
+/// owns its delivery, so a late result can never complete a subsequent wake.
+private final class PushWake: Sendable {
+    private struct State {
+        var content: UNNotificationContent
+        var handler: ((UNNotificationContent) -> Void)?
+        var task: Task<Void, Never>?
     }
 
-    /// Hands back the best content we have, exactly once.
-    private func finish() {
-        guard let contentHandler, let bestAttemptContent else { return }
-        self.contentHandler = nil
-        contentHandler(bestAttemptContent)
+    private let state: OSAllocatedUnfairLock<State>
+
+    init(content: UNNotificationContent, handler: @escaping (UNNotificationContent) -> Void) {
+        state = OSAllocatedUnfairLock(uncheckedState: State(content: content, handler: handler))
     }
 
-    // MARK: - Shared state
+    func attach(_ task: Task<Void, Never>) {
+        let finished = state.withLockUnchecked { state in
+            guard state.handler != nil else { return true }
+            state.task = task
+            return false
+        }
+        if finished { task.cancel() }
+    }
 
-    /// What the app has shared with us: a line per community snapshot, saying whether
-    /// the identity key it names is reachable from this process. Never the key itself.
-    private func logSharedState() {
-        guard let appGroup = AppGroup() else {
-            Self.log.error("No \(AppGroup.infoPlistKey, privacy: .public) in Info.plist")
-            return
-        }
-        guard let store = PushSnapshotStore(appGroup: appGroup) else {
-            Self.log.error("No container for App Group \(appGroup.identifier, privacy: .public)")
-            return
-        }
-        let snapshots: [PushCommunitySnapshot]
-        do {
-            snapshots = try store.loadAll()
-        } catch {
-            Self.log.error("Reading snapshots failed: \(String(describing: error), privacy: .public)")
-            return
-        }
-        Self.log.info(
-            """
-            App Group \(appGroup.identifier, privacy: .public): \
-            \(snapshots.count, privacy: .public) community snapshot(s)
-            """
-        )
-        for snapshot in snapshots {
-            let key = IdentityKeychain.hasStoredKey(account: snapshot.keychainAccount) ? "present" : "missing"
-            Self.log.info(
-                """
-                Community \(snapshot.communityID, privacy: .public) \
-                "\(snapshot.name, privacy: .public)" \
-                relay=\(snapshot.relayURL.absoluteString, privacy: .public) \
-                gateway=\(snapshot.gatewayURL.absoluteString, privacy: .public) \
-                key=\(key, privacy: .public)
-                """
-            )
+    func update(_ notification: PushNotification) {
+        state.withLockUnchecked { state in
+            guard state.handler != nil else { return }
+            state.content = notification.applying(to: state.content)
         }
     }
 
-    private static func describe(_ userInfo: [AnyHashable: Any]) -> String {
-        guard JSONSerialization.isValidJSONObject(userInfo),
-              let data = try? JSONSerialization.data(withJSONObject: userInfo, options: [.sortedKeys]),
-              let json = String(data: data, encoding: .utf8)
-        else {
-            return String(describing: userInfo)
+    func finish() {
+        let delivery = state.withLockUnchecked { state -> State? in
+            guard state.handler != nil else { return nil }
+            let delivery = state
+            state.handler = nil
+            state.task = nil
+            return delivery
         }
-        return json
+        guard let delivery else { return }
+        delivery.task?.cancel()
+        delivery.handler?(delivery.content)
     }
 }
