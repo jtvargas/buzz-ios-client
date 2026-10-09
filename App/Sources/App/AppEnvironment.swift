@@ -1,6 +1,8 @@
 import BuzzKit
 import Foundation
+import HivePushKit
 import NostrCore
+import OSLog
 import SwiftUI
 
 /// The composition root: one `@MainActor @Observable` object, created once in
@@ -219,6 +221,16 @@ final class AppEnvironment {
     /// The active community's Siri/Spotlight index and the status Settings renders.
     let conversationEntityIndex = ConversationEntityIndex()
 
+    /// The per-community snapshots the Notification Service Extension reads on a wake,
+    /// in the App Group (`HivePushKit`). `nil` only when this process has no App Group —
+    /// a build-configuration fault, not a state the app designs around; push is simply
+    /// absent then, and a session still starts.
+    ///
+    /// Written when a session starts and removed with the community (or with every
+    /// community, on sign-out), so the extension never acts for a community whose key
+    /// this device no longer holds.
+    let pushSnapshots: PushSnapshotStore? = AppGroup().flatMap(PushSnapshotStore.init(appGroup:))
+
     /// The community a pairing session has just committed a key into, held between the
     /// import and ``completePairing()``.
     ///
@@ -298,12 +310,12 @@ final class AppEnvironment {
     init(communityStorage: CommunityStorage = CommunityStorage()) {
         self.communityStorage = communityStorage
         let directory = communityStorage.loadAdoptingLegacyInstall(
-            hasLegacyIdentity: Self.hasStoredKey(account: Community.legacyKeychainAccount)
+            hasLegacyIdentity: IdentityKeychain.hasStoredKey(account: Community.legacyKeychainAccount)
         )
         communities = directory
         // Resolved synchronously so a returning user never gets one frame of onboarding
         // while the launch task is being scheduled.
-        let hasKey = directory.active.map { Self.hasStoredKey(account: $0.keychainAccount) } ?? false
+        let hasKey = directory.active.map { IdentityKeychain.hasStoredKey(account: $0.keychainAccount) } ?? false
         phase = hasKey ? .bootstrapping : .needsIdentity
         // The heading draws this before any engine exists, so it is mirrored from the
         // active community rather than left on whatever the last install wrote.
@@ -338,7 +350,7 @@ final class AppEnvironment {
         // than something to rely on; this runs once per process and the recording
         // de-duplicates, so the count is right either way.
         reviewPrompt.recordAppOpen()
-        guard let active = communities.active, Self.hasStoredKey(account: active.keychainAccount) else {
+        guard let active = communities.active, IdentityKeychain.hasStoredKey(account: active.keychainAccount) else {
             phase = .needsIdentity
             return
         }
@@ -371,12 +383,6 @@ final class AppEnvironment {
 
     // MARK: - Session lifecycle
 
-    /// Whether a key is stored under `account`. A Keychain that cannot be read at all — CI
-    /// has no usable one — answers no, which lands on the gate rather than on a crash.
-    static func hasStoredKey(account: String) -> Bool {
-        (try? KeychainSigner(account: account).loadPrivateKey()) != nil
-    }
-
     /// Opens the active community: its database, its signer, its engine.
     ///
     /// - Parameter mountsBeforeConnect: whether the workspace may appear before the engine
@@ -408,8 +414,9 @@ final class AppEnvironment {
         // Before anything else this builds: from here on there is a graph on the way up,
         // and it belongs to exactly one community.
         sessionCommunityID = community.id
-        let signer = KeychainSigner(account: community.keychainAccount)
+        let signer = IdentityKeychain.signer(account: community.keychainAccount)
         self.signer = signer
+        recordPushSnapshot(for: community, websocketURL: websocketURL)
         let store = try Self.makeStore(filename: community.storeFilename)
         self.store = store
         let mediaStagingStore = try Self.makeMediaStagingStore(filename: community.storeFilename)
@@ -507,6 +514,28 @@ final class AppEnvironment {
             }
         }
     }
+
+    /// Leaves the extension what it needs to act on a wake for `community`
+    /// (§ ``pushSnapshots``). A failure here is logged and not thrown: the session does
+    /// not depend on push, and a reader is better served by a workspace than by a
+    /// `failed` phase over a file the app never reads itself.
+    private func recordPushSnapshot(for community: Community, websocketURL: URL) {
+        guard let pushSnapshots, let gatewayURL = RelayEndpoint.httpBaseURL(for: websocketURL) else { return }
+        do {
+            try pushSnapshots.write(PushCommunitySnapshot(
+                communityID: community.id.uuidString,
+                name: community.name,
+                relayURL: websocketURL,
+                gatewayURL: gatewayURL,
+                keychainAccount: community.keychainAccount,
+                updatedAt: .now
+            ))
+        } catch {
+            Self.pushLog.error("Writing the push snapshot failed: \(String(describing: error), privacy: .public)")
+        }
+    }
+
+    private static let pushLog = Logger(subsystem: "Hive", category: "AppEnvironment.push")
 
     /// Stops and drops the active community's whole graph, leaving the app with no session.
     ///

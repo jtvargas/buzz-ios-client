@@ -12,6 +12,10 @@ packages:
     path: Packages/NostrCore
   BuzzKit:
     path: Packages/BuzzKit
+  # Shared with the Notification Service Extension: the App Group snapshot store
+  # and the single identity-key API (see Packages/HivePushKit/Package.swift).
+  HivePushKit:
+    path: Packages/HivePushKit
   # GRDB is a direct app dependency because the view models drive SwiftUI from
   # GRDB `ValueObservation` over the store's public `reader` (spec §Observation
   # pipeline). Pinned to the exact version BuzzKit resolves, so both link one copy.
@@ -61,15 +65,36 @@ targets:
       - package: NostrCore
       - package: BuzzKit
       - package: GRDB
+      - package: HivePushKit
       # The product is `Markdown`, not the package key. `import Markdown` belongs in
       # the parse layer ONLY: the module exports `Text`, `Image`, `Table` and `Link`,
       # every one of which collides with SwiftUI in a file that imports both.
       - package: SwiftMarkdown
         product: Markdown
+      # Embedded into the app bundle (`PlugIns/`) and signed with it. Its sources
+      # and plist live beside `App/`, not inside it, because it is a second
+      # binary with its own bundle id, entitlements and memory ceiling.
+      - target: HiveNotificationService
+    # Generated from this block, like Info.plist: edits made to the file itself
+    # survive until the next `make generate` and then disappear. Every value here
+    # is a `$(…)` reference into Config/Shared.xcconfig, which is the one place the
+    # shared identifiers are spelled out — see the comments there for why the
+    # Keychain group is listed first, and why push is `production` in every build.
+    entitlements:
+      path: App/Hive.entitlements
+      properties:
+        aps-environment: $(HIVE_PUSH_ENVIRONMENT)
+        com.apple.security.application-groups:
+          - $(HIVE_APP_GROUP_IDENTIFIER)
+        keychain-access-groups:
+          - $(HIVE_KEYCHAIN_ACCESS_GROUP)
     info:
       path: App/Info.plist
       properties:
         CFBundleDisplayName: Hive
+        # How `HivePushKit/AppGroup` finds the shared container at run time, in
+        # this process and in the extension's. Same `$(…)` as the entitlement.
+        HiveAppGroupIdentifier: $(HIVE_APP_GROUP_IDENTIFIER)
         # Answers App Store Connect's export-compliance question once, in the binary,
         # instead of by hand at every single upload.
         #
@@ -201,6 +226,45 @@ targets:
         # The global accent — a honey amber that tints buttons, reaction chips and the
         # unread pill — lives in App/Resources/Assets.xcassets.
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+  # The Notification Service Extension: woken by APNs for every push carrying
+  # `mutable-content: 1`, before the notification is shown. Embedded by the `Hive`
+  # target above. It links HivePushKit and NostrCore and nothing of the app's UI
+  # or database stack — the process has a 24 MB ceiling and about thirty seconds.
+  HiveNotificationService:
+    type: app-extension
+    platform: iOS
+    sources:
+      - NotificationService
+    dependencies:
+      - package: HivePushKit
+      - package: NostrCore
+    info:
+      path: NotificationService/Info.plist
+      properties:
+        CFBundleDisplayName: Hive Notification Service
+        HiveAppGroupIdentifier: $(HIVE_APP_GROUP_IDENTIFIER)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.usernotifications.service
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).NotificationService
+    # The same two shared containers as the app, in the same order — the Keychain
+    # group must stay first in both; see Config/Shared.xcconfig.
+    entitlements:
+      path: NotificationService/NotificationService.entitlements
+      properties:
+        com.apple.security.application-groups:
+          - $(HIVE_APP_GROUP_IDENTIFIER)
+        keychain-access-groups:
+          - $(HIVE_KEYCHAIN_ACCESS_GROUP)
+    settings:
+      base:
+        # Under the app's id, not beside it: an extension's bundle id must be
+        # prefixed by its host's. `HIVE_APP_BUNDLE_IDENTIFIER` rather than
+        # `PRODUCT_BUNDLE_IDENTIFIER` because the latter is what this line sets.
+        PRODUCT_BUNDLE_IDENTIFIER: $(HIVE_APP_BUNDLE_IDENTIFIER).NotificationService
+        CURRENT_PROJECT_VERSION: 1
+        MARKETING_VERSION: 0.1.0
+        SWIFT_STRICT_CONCURRENCY: complete
+        TARGETED_DEVICE_FAMILY: "1"
   HiveTests:
     type: bundle.unit-test
     platform: iOS

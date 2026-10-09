@@ -20,7 +20,9 @@ Simulator builds need no signing. For device builds, copy `Config/Local.xcconfig
 |-------|------|------|
 | `Packages/NostrCore` | Generic Nostr primitives (keys, codec, transport, NIP-42/98/44, subscriptions) | Knows **no** Buzz-specific kinds |
 | `Packages/BuzzKit` | Buzz domain: kinds/tags, models, NIP-CW client, SyncEngine, Outbox, GRDB | **Never** touches the socket or URLSession directly |
+| `Packages/HivePushKit` | What the app and its Notification Service Extension share: App Group, push snapshots, identity-key access | Links NostrCore only; **never** GRDB or BuzzKit — the extension has a 24 MB ceiling |
 | `App/` | SwiftUI app, MVVM with feature folders | UI reads the database, never the socket |
+| `NotificationService/` | The Notification Service Extension target | Reads the App Group and Keychain; never the app's database |
 
 Architecture decisions live in [`docs/adr/`](docs/adr/) — read them before proposing structural changes, and add a new ADR when you make one.
 

@@ -9,9 +9,35 @@ IPHONEOS_DEPLOYMENT_TARGET = 26.0
 // build machine has no `Local.xcconfig`: it clones the repo and nothing else, so
 // with these left blank it built `com.example.hive` for no team, which cannot be
 // signed for distribution and so cannot reach TestFlight.
-PRODUCT_BUNDLE_IDENTIFIER = com.jtvargas.hive
+//
+// `HIVE_APP_BUNDLE_IDENTIFIER` is the *app's* id, named apart from
+// `PRODUCT_BUNDLE_IDENTIFIER` because the Notification Service Extension builds
+// under `$(HIVE_APP_BUNDLE_IDENTIFIER).NotificationService` and the two shared
+// containers below must derive from the app's id in both targets alike.
+HIVE_APP_BUNDLE_IDENTIFIER = com.jtvargas.hive
+PRODUCT_BUNDLE_IDENTIFIER = $(HIVE_APP_BUNDLE_IDENTIFIER)
 DEVELOPMENT_TEAM = J7K9Z79S5F
 CODE_SIGN_STYLE = Automatic
+
+// Where the app and its Notification Service Extension meet. Defined once, here,
+// and referenced from both targets' entitlements (project.yml), so neither target
+// carries a second copy that could drift.
+//
+// The App Group holds the per-community push snapshots the extension reads
+// (`HivePushKit/PushSnapshotStore`); its identifier also reaches both Info.plists
+// as `HiveAppGroupIdentifier`, which is how `HivePushKit/AppGroup` finds it at
+// run time. The Keychain access group is the app's own application-
+// identifier group — the one its identity keys have always lived in — and it is
+// the FIRST group in both entitlements on purpose: an item saved or read without
+// an explicit `kSecAttrAccessGroup` lands in the first listed group, which is
+// what lets `HivePushKit/IdentityKeychain` stay silent about groups and still
+// resolve to the same items from either process (and from an unsigned CI build,
+// where the entitlement is absent and the default is the app's own group).
+// Push is `production` in every build: APNs picks the sandbox for
+// development-signed installs on its own, keyed off the provisioning profile.
+HIVE_APP_GROUP_IDENTIFIER = group.$(HIVE_APP_BUNDLE_IDENTIFIER)
+HIVE_KEYCHAIN_ACCESS_GROUP = $(AppIdentifierPrefix)$(HIVE_APP_BUNDLE_IDENTIFIER)
+HIVE_PUSH_ENVIRONMENT = production
 
 // Personal overrides. Anyone building this under a different Apple ID sets their
 // own team and bundle id here rather than editing the lines above. Gitignored —

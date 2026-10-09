@@ -1,5 +1,6 @@
 import BuzzKit
 import Foundation
+import HivePushKit
 import NostrCore
 import SwiftUI
 
@@ -33,11 +34,13 @@ extension AppEnvironment {
     func signOut() async -> SignOutResult {
         var result = SignOutResult.signedOut
         for community in communities.communities {
-            let custody = KeychainSigner(account: community.keychainAccount)
+            let custody = IdentityKeychain.signer(account: community.keychainAccount)
             if deleteAndVerifyKey(custody) == .keyNotCleared {
                 result = .keyNotCleared
             }
         }
+        // The keys are gone, so the extension must stop acting as them too.
+        try? pushSnapshots?.removeAll()
         await teardownSession()
         setPhase(.needsIdentity)
         if result == .keyNotCleared {

@@ -1,3 +1,4 @@
+import HivePushKit
 import SwiftUI
 import UIKit
 
@@ -116,7 +117,7 @@ struct CommunitySwitcherView: View {
             CommunitySwitcherRow(
                 community: community,
                 isActive: isActive,
-                isSignedIn: AppEnvironment.hasStoredKey(account: community.keychainAccount),
+                isSignedIn: IdentityKeychain.hasStoredKey(account: community.keychainAccount),
                 iconData: environment.communityStorage.iconData(for: community)
             )
         }
