@@ -69,6 +69,10 @@ public struct GatewayClient: Sendable {
         )
         let body = try JSONEncoder().encode(wire)
         let (data, status) = try await post(body: body, to: url, signer: signer)
+        if status == 409 {
+            let handle = (try? JSONDecoder().decode(GatewayConflictResponse.self, from: data))?.installationHandle
+            throw GatewayError.installationConflict(existingHandle: handle)
+        }
         guard (200 ... 299).contains(status) else {
             throw GatewayError.httpStatus(status, Self.errorMessage(from: data))
         }
@@ -109,6 +113,22 @@ public struct GatewayClient: Sendable {
             throw GatewayError.unreadableResponse
         }
         return response
+    }
+
+    // MARK: - 4. Revocation
+
+    /// Revokes an existing installation on the gateway so it can be re-created.
+    public func revokeInstallation(
+        handle: String,
+        signer: some EventSigner
+    ) async throws {
+        let url = baseURL.appendingPathComponent("v1/installations/revoke")
+        let wire = GatewayRevokeWire(installationHandle: handle)
+        let body = try JSONEncoder().encode(wire)
+        let (data, status) = try await post(body: body, to: url, signer: signer)
+        guard (200 ... 299).contains(status) else {
+            throw GatewayError.httpStatus(status, Self.errorMessage(from: data))
+        }
     }
 
     // MARK: - Internal
@@ -341,12 +361,33 @@ public enum GatewayError: Error, Equatable, Sendable {
     case httpStatus(Int, String?)
     /// The gateway answered but the body could not be decoded.
     case unreadableResponse
+    /// A live installation already exists for this device/key (HTTP 409).
+    /// Carries the existing installation handle when the gateway includes it.
+    case installationConflict(existingHandle: String?)
 }
 
 // MARK: - Wire shapes
 
 struct GatewayErrorEnvelope: Decodable {
     let error: String?
+}
+
+/// The gateway's 409 response body when an installation conflict occurs.
+struct GatewayConflictResponse: Decodable {
+    let installationHandle: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case installationHandle = "installation_handle"
+    }
+}
+
+/// Wire encoding for the revocation request body.
+struct GatewayRevokeWire: Encodable, Sendable {
+    let installationHandle: String
+
+    private enum CodingKeys: String, CodingKey {
+        case installationHandle = "installation_handle"
+    }
 }
 
 // MARK: - Protocol constants (NIP-PL)

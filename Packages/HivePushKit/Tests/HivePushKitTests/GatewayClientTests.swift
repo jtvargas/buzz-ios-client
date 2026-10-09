@@ -103,6 +103,72 @@ struct GatewayClientTests {
         #expect(bodyJSON?["device_token"] == nil)
     }
 
+    @Test("Install throws installationConflict with handle on 409")
+    func installConflictWithHandle() async throws {
+        let conflictJSON = #"{"installation_handle":"existing-handle-789"}"#
+        let transport = ScriptedTransport(responses: [
+            (Data(conflictJSON.utf8), 409),
+        ])
+        let client = GatewayClient(baseURL: baseURL, transport: transport)
+        let request = GatewayInstallRequest(
+            challengeID: "ch-123",
+            challenge: "nonce-abc",
+            keyID: "key-1",
+            attestation: "base64attest",
+            appProfile: "buzz-ios-dogfood",
+            endpoint: "aabbccdd",
+            endpointEpoch: 1,
+            expiresAt: 1_700_086_400
+        )
+        do {
+            _ = try await client.install(request, signer: signer())
+            Issue.record("Expected installationConflict error")
+        } catch let error as GatewayError {
+            #expect(error == .installationConflict(existingHandle: "existing-handle-789"))
+        }
+    }
+
+    @Test("Install throws installationConflict with nil handle when body has no handle")
+    func installConflictWithoutHandle() async throws {
+        let conflictJSON = #"{"error":"installation_conflict"}"#
+        let transport = ScriptedTransport(responses: [
+            (Data(conflictJSON.utf8), 409),
+        ])
+        let client = GatewayClient(baseURL: baseURL, transport: transport)
+        let request = GatewayInstallRequest(
+            challengeID: "ch-123",
+            challenge: "nonce-abc",
+            keyID: "key-1",
+            attestation: "base64attest",
+            appProfile: "buzz-ios-dogfood",
+            endpoint: "aabbccdd",
+            endpointEpoch: 1,
+            expiresAt: 1_700_086_400
+        )
+        do {
+            _ = try await client.install(request, signer: signer())
+            Issue.record("Expected installationConflict error")
+        } catch let error as GatewayError {
+            #expect(error == .installationConflict(existingHandle: nil))
+        }
+    }
+
+    // MARK: - Revocation
+
+    @Test("Revoke sends correct request shape")
+    func revokeSuccess() async throws {
+        let transport = ScriptedTransport(responses: [
+            (Data("{}".utf8), 200),
+        ])
+        let client = GatewayClient(baseURL: baseURL, transport: transport)
+        try await client.revokeInstallation(handle: "handle-to-revoke", signer: signer())
+
+        let sent = transport.requests[0]
+        #expect(sent.url.path.hasSuffix("/v1/installations/revoke"))
+        let bodyJSON = try JSONSerialization.jsonObject(with: sent.body) as? [String: Any]
+        #expect(bodyJSON?["installation_handle"] as? String == "handle-to-revoke")
+    }
+
     // MARK: - Delegation
 
     @Test("Delegate decodes a well-formed response")
