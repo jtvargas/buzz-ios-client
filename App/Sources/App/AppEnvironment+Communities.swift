@@ -383,8 +383,18 @@ extension AppEnvironment {
 
     /// Renames a community. A label on this device only: no relay has a name to disagree
     /// with (§ ``CommunityIdentity``).
+    ///
+    /// The extension carries its own copy of the name (§ ``pushSnapshots``), so a community
+    /// this device holds a key for has its snapshot rewritten here too — not only the active
+    /// one: the extension acts for every community with a key, and a snapshot is only ever
+    /// written at session start, which a background community may not see again for days.
+    /// One with no key has no snapshot to refresh (§ ``signOut()``, ``removeCommunity(_:)``).
     func renameCommunity(_ id: Community.ID, to name: String) {
         updateCommunities { $0.rename(id, to: name) }
+        guard let community = communities.communities.first(where: { $0.id == id }),
+              IdentityKeychain.hasStoredKey(account: community.keychainAccount)
+        else { return }
+        recordPushSnapshot(for: community)
     }
 
     /// Leaves a community for good on this device: its key is deleted, its record is

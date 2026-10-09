@@ -416,7 +416,7 @@ final class AppEnvironment {
         sessionCommunityID = community.id
         let signer = IdentityKeychain.signer(account: community.keychainAccount)
         self.signer = signer
-        recordPushSnapshot(for: community, websocketURL: websocketURL)
+        recordPushSnapshot(for: community)
         let store = try Self.makeStore(filename: community.storeFilename)
         self.store = store
         let mediaStagingStore = try Self.makeMediaStagingStore(filename: community.storeFilename)
@@ -516,11 +516,19 @@ final class AppEnvironment {
     }
 
     /// Leaves the extension what it needs to act on a wake for `community`
-    /// (§ ``pushSnapshots``). A failure here is logged and not thrown: the session does
-    /// not depend on push, and a reader is better served by a workspace than by a
-    /// `failed` phase over a file the app never reads itself.
-    private func recordPushSnapshot(for community: Community, websocketURL: URL) {
-        guard let pushSnapshots, let gatewayURL = RelayEndpoint.httpBaseURL(for: websocketURL) else { return }
+    /// (§ ``pushSnapshots``). Written at session start and again whenever the record
+    /// changes while a key is held (a rename — § ``renameCommunity(_:to:)``), so the
+    /// extension never presents a community under a name this device has moved on from.
+    ///
+    /// A failure here is logged and not thrown: the session does not depend on push, and
+    /// a reader is better served by a workspace than by a `failed` phase over a file the
+    /// app never reads itself. A community whose relay string does not parse writes
+    /// nothing — ``startSession(for:mountsBeforeConnect:)`` has already refused it.
+    func recordPushSnapshot(for community: Community) {
+        guard let pushSnapshots,
+              let websocketURL = RelayEndpoint.websocketURL(from: community.relayURLString),
+              let gatewayURL = RelayEndpoint.httpBaseURL(for: websocketURL)
+        else { return }
         do {
             try pushSnapshots.write(PushCommunitySnapshot(
                 communityID: community.id.uuidString,

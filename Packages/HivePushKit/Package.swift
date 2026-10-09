@@ -8,12 +8,13 @@ import PackageDescription
 ///
 /// Its own package, rather than files in `App/Sources`, because the extension is
 /// a second binary with a 24 MB ceiling: it links this and NostrCore, and nothing
-/// of the app's UI, GRDB or BuzzKit. iOS only — there is no macOS host for an
-/// extension, and the file-protection options the snapshot store uses exist only
-/// there.
+/// of the app's UI, GRDB or BuzzKit. macOS is listed beside iOS, as in the sibling
+/// packages, so `swift test` runs the suite on the host without a simulator; the
+/// file-protection option the snapshot store writes with has been in Foundation
+/// on macOS since 11, so nothing here is iOS-only.
 let package = Package(
     name: "HivePushKit",
-    platforms: [.iOS(.v17)],
+    platforms: [.iOS(.v17), .macOS(.v14)],
     products: [
         .library(name: "HivePushKit", targets: ["HivePushKit"]),
     ],
@@ -24,6 +25,10 @@ let package = Package(
         .target(
             name: "HivePushKit",
             dependencies: ["NostrCore"]
+        ),
+        .testTarget(
+            name: "HivePushKitTests",
+            dependencies: ["HivePushKit"]
         ),
     ]
 )

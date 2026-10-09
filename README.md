@@ -142,7 +142,7 @@ Hive is an app target, a Notification Service Extension, and three local Swift p
 | App | SwiftUI, iOS 26+ Liquid Glass, Observation, Swift 6 strict concurrency, MVVM with feature folders |
 | `NotificationService/` | The Notification Service Extension (`HiveNotificationService`), embedded in the app; links `HivePushKit` and `NostrCore` only |
 
-`NostrCore` and `BuzzKit` keep an iOS 17 / macOS 14 floor; `HivePushKit` is iOS-only; the app targets iOS 26. The app's bundle id, App Group and Keychain access group are each spelled once, in `Config/Shared.xcconfig`, and reach both targets' entitlements from there. Architecture decisions live in [docs/adr/](docs/adr/), including the minimum OS decision and the shared conversation shell.
+All three packages keep an iOS 17 / macOS 14 floor, so their suites run under `swift test` on the host; the app targets iOS 26. The app's bundle id, App Group and Keychain access group are each spelled once, in `Config/Shared.xcconfig`, and reach both targets' entitlements from there. Architecture decisions live in [docs/adr/](docs/adr/), including the minimum OS decision and the shared conversation shell.
 
 The Buzz relay has no negentropy/NIP-77 sync, so reliability is client-owned: NIP-CW channel windows, reconnect reconciliation, careful cursors, a projected database as source of truth, and a durable optimistic outbox.
 
