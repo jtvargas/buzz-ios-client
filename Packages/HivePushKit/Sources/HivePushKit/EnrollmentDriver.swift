@@ -199,9 +199,24 @@ public actor EnrollmentDriver {
         enrollmentStore.load(communityID: communityID) != nil
     }
 
-    /// Revokes the enrollment: deletes the lease, removes the stored enrollment.
+    /// Revokes the enrollment: revokes on the gateway, deletes the lease,
+    /// removes the stored enrollment.
     public func revoke() async {
         guard let enrollment = enrollmentStore.load(communityID: communityID) else { return }
+
+        // Best-effort: revoke the installation on the gateway so re-enrollment
+        // won't hit a 409. Failure is non-fatal — the gateway will eventually
+        // expire the installation, and install handles 409 with revoke+retry.
+        do {
+            try await gateway.revokeInstallation(
+                handle: enrollment.installationHandle,
+                signer: signer
+            )
+            Self.log.info("Revoked installation on gateway")
+        } catch {
+            Self.log.warning("Gateway revoke failed (non-fatal): \(String(describing: error))")
+        }
+
         // Best-effort: publish a deletion event if we can.
         // The lease event ID is not stored, so we publish an addressable deletion.
         let pubkey = try? await signer.publicKey().hex
@@ -348,6 +363,13 @@ public actor EnrollmentDriver {
         let installResponse: GatewayInstallResponse
         do {
             installResponse = try await gateway.install(installRequest, signer: signer)
+        } catch GatewayError.installationConflict(let existingHandle) {
+            Self.log.warning("Install returned 409 — revoking existing installation")
+            guard let revokedResponse = await revokeAndRetryInstall(
+                existingHandle: existingHandle,
+                request: installRequest
+            ) else { return nil }
+            installResponse = revokedResponse
         } catch {
             state = .failed(.install, String(describing: error))
             Self.log.error("Installation failed: \(String(describing: error))")
@@ -437,6 +459,39 @@ public actor EnrollmentDriver {
             return nil
         }
         return enrollment
+    }
+
+    /// Revokes an existing installation on the gateway and retries the install.
+    ///
+    /// Called when install returns 409 (installation_conflict). The gateway returns
+    /// the existing handle in the response body when possible; if absent, revocation
+    /// is not possible and the step fails.
+    private func revokeAndRetryInstall(
+        existingHandle: String?,
+        request: GatewayInstallRequest
+    ) async -> GatewayInstallResponse? {
+        guard let handle = existingHandle else {
+            state = .failed(.install, "Installation conflict but gateway did not return the existing handle")
+            Self.log.error("Cannot resolve 409: no existing installation handle in response")
+            return nil
+        }
+        do {
+            try await gateway.revokeInstallation(handle: handle, signer: signer)
+            Self.log.info("Revoked existing installation \(handle)")
+        } catch {
+            state = .failed(.install, "Failed to revoke existing installation: \(error)")
+            Self.log.error("Revoke failed: \(String(describing: error))")
+            return nil
+        }
+        do {
+            let response = try await gateway.install(request, signer: signer)
+            Self.log.info("Retry install succeeded: \(response.installationHandle)")
+            return response
+        } catch {
+            state = .failed(.install, "Retry install after revoke failed: \(error)")
+            Self.log.error("Retry install failed: \(String(describing: error))")
+            return nil
+        }
     }
 
     private func publishLeaseStep(enrollment: Enrollment) async {
