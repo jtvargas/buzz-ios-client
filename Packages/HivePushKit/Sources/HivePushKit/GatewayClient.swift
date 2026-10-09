@@ -136,7 +136,9 @@ public struct GatewayClient: Sendable {
 
 // MARK: - Challenge types
 
-struct GatewayChallengeRequest: Encodable, Sendable {}
+struct GatewayChallengeRequest: Encodable, Sendable {
+    let v: UInt8 = 1
+}
 
 /// The gateway's answer to a challenge request.
 public struct GatewayChallengeResponse: Codable, Equatable, Sendable {
