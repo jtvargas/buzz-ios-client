@@ -303,6 +303,22 @@ final class AppEnvironment {
     /// `"offline"` on background. Built alongside the engine.
     var heartbeat: PresenceHeartbeat?
 
+    // MARK: - Push enrollment
+
+    /// Set once by ``HiveApp/init()`` when the app starts — the UIKit bridge
+    /// that delivers device tokens. Not observed — it never changes after init.
+    @ObservationIgnored var pushRegistrar: PushRegistrar?
+    /// The push enrollment coordinator for the active community. Built beside
+    /// the engine and torn down with it.
+    @ObservationIgnored private(set) var pushCoordinator: PushEnrollmentCoordinator?
+    /// Persists enrollment state in the App Group, readable by both the app
+    /// and the Notification Service Extension.
+    @ObservationIgnored let enrollmentStore: EnrollmentStore? = AppGroup().flatMap(EnrollmentStore.init(appGroup:))
+    /// The relay connection for the active community, held separately from the
+    /// engine so the push coordinator can publish lease events. Set alongside
+    /// the engine, cleared on teardown.
+    @ObservationIgnored private(set) var relayConnection: RelayConnection?
+
     /// Reads the community list, adopting a single-community install as community #1 if
     /// that is what this device is (§ ``CommunityStorage``). No database is opened here:
     /// which one to open is a question about the active community, and a device may have
@@ -448,7 +464,7 @@ final class AppEnvironment {
 
         let mediaUploader = makeMediaUploader(signer: signer, websocketURL: websocketURL)
         self.mediaUploader = mediaUploader
-        let engine = makeEngine(
+        let (engine, connection) = makeEngine(
             store: store,
             signer: signer,
             websocketURL: websocketURL,
@@ -457,11 +473,31 @@ final class AppEnvironment {
             mediaStagingStore: mediaStagingStore
         )
         self.engine = engine
+        self.relayConnection = connection
         mediaReadAuthorizer = makeMediaReadAuthorizer(signer: signer, websocketURL: websocketURL)
         await installMediaReadAuthorizer(mediaReadAuthorizer)
         await installMediaStagingDirectory(mediaStagingStore.directory)
         await engine.resumeMediaUploads()
         heartbeat = PresenceHeartbeat(publisher: engine)
+
+        // Push enrollment coordinator: built alongside the engine, runs when
+        // the engine first connects (triggered by observeEngineState).
+        if let enrollmentStore, let pushRegistrar {
+            let coordinator = PushEnrollmentCoordinator(
+                enrollmentStore: enrollmentStore,
+                pushRegistrar: pushRegistrar
+            )
+            coordinator.onLeaseUpdated = { [weak self] communityID, active, expiresAt, filtersJSON in
+                guard let self else { return }
+                self.updatePushSnapshotLease(
+                    communityID: communityID,
+                    leaseActive: active,
+                    leaseExpiresAt: expiresAt,
+                    subscriptionFilters: filtersJSON
+                )
+            }
+            pushCoordinator = coordinator
+        }
 
         observeEngineState(of: engine)
         observeDirectoryStatus(of: engine)
@@ -529,6 +565,10 @@ final class AppEnvironment {
               let websocketURL = RelayEndpoint.websocketURL(from: community.relayURLString),
               let gatewayURL = RelayEndpoint.httpBaseURL(for: websocketURL)
         else { return }
+        // Preserve lease state from any existing snapshot so a rename does not
+        // clear it. On first write the load returns nil and the lease fields
+        // default to nil, which is correct — no enrollment has happened yet.
+        let existing = try? pushSnapshots.load(communityID: community.id.uuidString)
         do {
             try pushSnapshots.write(PushCommunitySnapshot(
                 communityID: community.id.uuidString,
@@ -536,14 +576,97 @@ final class AppEnvironment {
                 relayURL: websocketURL,
                 gatewayURL: gatewayURL,
                 keychainAccount: community.keychainAccount,
-                updatedAt: .now
+                updatedAt: .now,
+                leaseActive: existing?.leaseActive,
+                leaseExpiresAt: existing?.leaseExpiresAt,
+                subscriptionFilters: existing?.subscriptionFilters
             ))
         } catch {
             Self.pushLog.error("Writing the push snapshot failed: \(String(describing: error), privacy: .public)")
         }
     }
 
+    /// Updates only the lease fields of the push snapshot for the given community.
+    /// Called by the ``PushEnrollmentCoordinator`` via ``onLeaseUpdated``.
+    private func updatePushSnapshotLease(
+        communityID: String,
+        leaseActive: Bool,
+        leaseExpiresAt: Date?,
+        subscriptionFilters: String?
+    ) {
+        guard let pushSnapshots,
+              let existing = try? pushSnapshots.load(communityID: communityID)
+        else { return }
+        do {
+            try pushSnapshots.write(PushCommunitySnapshot(
+                communityID: existing.communityID,
+                name: existing.name,
+                relayURL: existing.relayURL,
+                gatewayURL: existing.gatewayURL,
+                keychainAccount: existing.keychainAccount,
+                updatedAt: .now,
+                leaseActive: leaseActive,
+                leaseExpiresAt: leaseExpiresAt,
+                subscriptionFilters: subscriptionFilters
+            ))
+        } catch {
+            Self.pushLog.error("Updating push snapshot lease failed: \(String(describing: error), privacy: .public)")
+        }
+    }
+
     private static let pushLog = Logger(subsystem: "Hive", category: "AppEnvironment.push")
+
+    /// Fetches the relay's NIP-11 push capability and starts enrollment if
+    /// supported. Called once when the engine first reaches `running`.
+    ///
+    /// A failure here is logged and not propagated: push is an enhancement, not
+    /// a session prerequisite. The user still gets their workspace.
+    private func beginPushEnrollment() {
+        guard let community = communities.active,
+              let websocketURL = RelayEndpoint.websocketURL(from: community.relayURLString),
+              let signer,
+              pushCoordinator != nil
+        else { return }
+
+        Task {
+            // Fetch NIP-11 to discover push capability.
+            let transport = URLSessionHTTPTransport()
+            guard let httpBase = RelayEndpoint.httpBaseURL(for: websocketURL) else { return }
+            let (body, status): (Data, Int)
+            do {
+                (body, status) = try await transport.get(
+                    from: httpBase,
+                    headers: ["Accept": "application/nostr+json"]
+                )
+            } catch {
+                Self.pushLog.error("NIP-11 fetch for push capability failed: \(String(describing: error))")
+                return
+            }
+            guard (200 ... 299).contains(status) else {
+                Self.pushLog.warning("NIP-11 returned status \(status)")
+                return
+            }
+            guard let pushCap = PushCapability.parse(fromRelayInfoData: body) else {
+                Self.pushLog.info("Relay does not advertise push capability")
+                return
+            }
+
+            // Re-check after the suspension point — teardown may have cleared these.
+            guard let pushCoordinator = self.pushCoordinator,
+                  let conn = self.relayConnection
+            else { return }
+            pushCoordinator.startEnrollment(.init(
+                communityID: community.id.uuidString,
+                relayURLString: community.relayURLString,
+                gatewayURL: PushConstants.gatewayURL,
+                pushCapability: pushCap,
+                signer: signer,
+                publishEvent: { event in
+                    try await conn.publish(event)
+                }
+            ))
+        }
+    }
 
     /// Stops and drops the active community's whole graph, leaving the app with no session.
     ///
@@ -578,7 +701,11 @@ final class AppEnvironment {
             await engine.stop()
         }
         heartbeat = nil
+        // Push enrollment is tied to this session.
+        pushCoordinator?.teardown()
+        pushCoordinator = nil
         engine = nil
+        relayConnection = nil
         // Beside the engine: it signs with a key this session no longer owns.
         mediaUploader = nil
         mediaReadAuthorizer = nil
@@ -647,7 +774,13 @@ final class AppEnvironment {
             let states = await engine.states()
             for await state in states {
                 self?.engineState = state
-                if state == .running { self?.hasConnectedBefore = true }
+                if state == .running {
+                    self?.hasConnectedBefore = true
+                    // First connection: kick off push enrollment if not already started.
+                    if self?.pushCoordinator?.status == .idle {
+                        self?.beginPushEnrollment()
+                    }
+                }
             }
         }
     }

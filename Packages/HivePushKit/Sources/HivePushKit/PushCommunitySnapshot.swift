@@ -44,6 +44,17 @@ public struct PushCommunitySnapshot: Codable, Equatable, Sendable {
         case filters = "subscriptionFilters"
     }
 
+    // MARK: - Lease state (added JT-72, backward-compatible optionals)
+
+    /// Whether a push lease is actively published for this community.
+    /// `nil` decodes from pre-lease snapshots and is treated as `false`.
+    public let leaseActive: Bool?
+    /// When the current push lease expires, or `nil` when no lease is active.
+    public let leaseExpiresAt: Date?
+    /// The Nostr subscription filters in the current lease, JSON-encoded.
+    /// `nil` when no lease is active.
+    public let subscriptionFilters: String?
+
     public init(
         version: Int = currentVersion,
         communityID: String,

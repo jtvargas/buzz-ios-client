@@ -195,6 +195,15 @@ public struct EventKind: RawRepresentable, Hashable, Sendable, ExpressibleByInte
     /// a plaintext list of one person's private choices.
     public static let dmVisibility: EventKind = 30622
 
+    // MARK: - Push notification lease (NIP-PL)
+
+    /// A push notification lease: an addressable event (kind 30350) that tells a
+    /// relay which subscriptions to forward through the push gateway. `d`-tagged
+    /// by a random install identifier so a single identity can hold one lease per
+    /// device. Content is NIP-44 encrypted filter JSON; `exec` tags name the
+    /// gateway audience URLs the relay may deliver to.
+    public static let pushLease: EventKind = 30350
+
     // MARK: - Relay-signed group state (addressable)
 
     public static let groupMetadata: EventKind = 39000

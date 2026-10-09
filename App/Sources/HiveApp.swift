@@ -7,30 +7,24 @@ struct HiveApp: App {
     /// (never `@StateObject`) is the iOS 17+ home for an `@Observable`.
     @State private var environment: AppEnvironment
 
-    @Environment(\.scenePhase) private var scenePhase
+    /// The UIKit bridge for push notification device-token delivery.
+    /// Installed before any window exists so that a token arriving on a cold
+    /// launch is not missed.
+    @UIApplicationDelegateAdaptor private var pushRegistrar: PushRegistrar
 
+    @Environment(\.scenePhase) private var scenePhase
     /// Inter reaches UIKit's own chrome from here, before the first window exists —
     /// an appearance proxy set after a bar is on screen leaves that bar on the old
     /// font. See ``HiveTypography/applyUIKitAppearance()``.
     init() {
         HiveTypography.applyUIKitAppearance()
-        // Built here rather than in the property's initialiser so the one instance can be
-        // handed to App Intents below — the intents are not part of the view tree, so this
-        // is the only place both halves are in scope at once.
         let environment = AppEnvironment()
         _environment = State(initialValue: environment)
-        // Registered before any window exists, because an intent that *launches* the app
-        // runs its `perform()` as soon as the process is up — earlier than `.task`, earlier
-        // than the first `body`. An unregistered `@Dependency` traps when the intent reads
-        // it, so this line is what stands between "Open Threads in Hive" and a crash on a
-        // cold launch. See ``AppNavigator``.
+        // Hand the push registrar to the environment so the enrollment
+        // coordinator can route device tokens through it. This is set once
+        // and never changes — the registrar lives for the process.
+        environment.pushRegistrar = pushRegistrar
         AppDependencyManager.shared.add(dependency: environment.navigator)
-        // Registering the whole environment reads like the thing review warned against —
-        // handing the dependency graph a reference that outlives what it describes. It does
-        // not here: `environment` is already `@State` on the `App` and lives for the process,
-        // and the per-community graph hangs off it and is released by `teardownSession()`. So
-        // this pins nothing that was not immortal already. `OpenConversationIntent` needs it
-        // for the one thing only live state can answer — which community is active.
         AppDependencyManager.shared.add(dependency: environment)
         AppDependencyManager.shared.add(dependency: environment.conversationEntityIndex)
     }
