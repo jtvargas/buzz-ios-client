@@ -58,11 +58,14 @@ public struct GatewayClient: Sendable {
     ) async throws -> GatewayInstallResponse {
         let url = baseURL.appendingPathComponent("v1/installations")
         let wire = GatewayInstallWire(
-            deviceToken: request.deviceToken,
-            attestation: request.attestation,
-            keyID: request.keyID,
             challengeID: request.challengeID,
-            appProfile: request.appProfile
+            challenge: request.challenge,
+            keyID: request.keyID,
+            attestation: request.attestation,
+            appProfile: request.appProfile,
+            endpoint: request.endpoint,
+            endpointEpoch: request.endpointEpoch,
+            expiresAt: request.expiresAt
         )
         let body = try JSONEncoder().encode(wire)
         let (data, status) = try await post(body: body, to: url, signer: signer)
@@ -87,9 +90,15 @@ public struct GatewayClient: Sendable {
     ) async throws -> GatewayDelegationResponse {
         let url = baseURL.appendingPathComponent("v1/delegations")
         let wire = GatewayDelegationWire(
-            installationID: request.installationID,
-            relayURL: request.relayURL,
-            relayPubkey: request.relayPubkey
+            challengeID: request.challengeID,
+            challenge: request.challenge,
+            installationHandle: request.installationHandle,
+            endpointEpoch: request.endpointEpoch,
+            generation: request.generation,
+            relayPubkey: request.relayPubkey,
+            notBefore: request.notBefore,
+            expiresAt: request.expiresAt,
+            assertion: request.assertion
         )
         let body = try JSONEncoder().encode(wire)
         let (data, status) = try await post(body: body, to: url, signer: signer)
@@ -146,10 +155,13 @@ public struct GatewayChallengeResponse: Codable, Equatable, Sendable {
     public let challengeID: String
     /// The nonce string to include in the App Attest client data hash.
     public let challenge: String
+    /// Unix timestamp when this challenge expires.
+    public let expiresAt: Int64
 
     private enum CodingKeys: String, CodingKey {
         case challengeID = "challenge_id"
         case challenge
+        case expiresAt = "expires_at"
     }
 }
 
@@ -157,56 +169,82 @@ public struct GatewayChallengeResponse: Codable, Equatable, Sendable {
 
 /// The values needed to register a device with the gateway.
 public struct GatewayInstallRequest: Equatable, Sendable {
-    /// The raw APNs device token as hex.
-    public let deviceToken: String
-    /// The App Attest attestation object (base64).
-    public let attestation: String
-    /// The App Attest key identifier.
-    public let keyID: String
     /// The challenge identifier from step 1.
     public let challengeID: String
+    /// The challenge nonce from step 1.
+    public let challenge: String
+    /// The App Attest key identifier (base64).
+    public let keyID: String
+    /// The App Attest attestation object (base64).
+    public let attestation: String
     /// The app profile string (e.g. `"buzz-ios-dogfood"`).
     public let appProfile: String
+    /// The raw APNs device token as lowercase hex.
+    public let endpoint: String
+    /// Endpoint epoch; must be 1 for initial enrollment.
+    public let endpointEpoch: Int64
+    /// Unix timestamp when this installation expires.
+    public let expiresAt: Int64
 
     public init(
-        deviceToken: String,
-        attestation: String,
-        keyID: String,
         challengeID: String,
-        appProfile: String
+        challenge: String,
+        keyID: String,
+        attestation: String,
+        appProfile: String,
+        endpoint: String,
+        endpointEpoch: Int64,
+        expiresAt: Int64
     ) {
-        self.deviceToken = deviceToken
-        self.attestation = attestation
-        self.keyID = keyID
         self.challengeID = challengeID
+        self.challenge = challenge
+        self.keyID = keyID
+        self.attestation = attestation
         self.appProfile = appProfile
+        self.endpoint = endpoint
+        self.endpointEpoch = endpointEpoch
+        self.expiresAt = expiresAt
     }
 }
 
 /// Wire encoding for the installation request body.
 struct GatewayInstallWire: Encodable, Sendable {
-    let deviceToken: String
-    let attestation: String
-    let keyID: String
+    let v: UInt8 = 1
     let challengeID: String
+    let challenge: String
+    let keyID: String
+    let attestation: String
     let appProfile: String
+    let endpoint: String
+    let endpointEpoch: Int64
+    let expiresAt: Int64
 
     private enum CodingKeys: String, CodingKey {
-        case deviceToken = "device_token"
-        case attestation
-        case keyID = "key_id"
+        case v
         case challengeID = "challenge_id"
+        case challenge
+        case keyID = "key_id"
+        case attestation
         case appProfile = "app_profile"
+        case endpoint
+        case endpointEpoch = "endpoint_epoch"
+        case expiresAt = "expires_at"
     }
 }
 
 /// The gateway's answer to an installation request.
 public struct GatewayInstallResponse: Codable, Equatable, Sendable {
     /// The installation handle this device uses for all subsequent calls.
-    public let installationID: String
+    public let installationHandle: String
+    /// The endpoint epoch the gateway recorded.
+    public let endpointEpoch: Int64
+    /// Unix timestamp when this installation expires.
+    public let expiresAt: Int64
 
     private enum CodingKeys: String, CodingKey {
-        case installationID = "installation_id"
+        case installationHandle = "installation_handle"
+        case endpointEpoch = "endpoint_epoch"
+        case expiresAt = "expires_at"
     }
 }
 
@@ -214,37 +252,82 @@ public struct GatewayInstallResponse: Codable, Equatable, Sendable {
 
 /// The values needed to delegate an installation to a relay.
 public struct GatewayDelegationRequest: Equatable, Sendable {
-    public let installationID: String
-    public let relayURL: String
+    /// The challenge identifier from a fresh challenge request.
+    public let challengeID: String
+    /// The challenge nonce.
+    public let challenge: String
+    /// The installation handle from the enroll response.
+    public let installationHandle: String
+    /// Endpoint epoch; must be ≥ 1.
+    public let endpointEpoch: Int64
+    /// Delegation generation; must be ≥ 1.
+    public let generation: Int64
+    /// The relay's 32-byte public key as 64-char lowercase hex.
     public let relayPubkey: String
+    /// Unix timestamp for delegation start; must be ≤ now + 300.
+    public let notBefore: Int64
+    /// Unix timestamp when this delegation expires.
+    public let expiresAt: Int64
+    /// The App Attest assertion over the delegation transcript (base64).
+    public let assertion: String
 
-    public init(installationID: String, relayURL: String, relayPubkey: String) {
-        self.installationID = installationID
-        self.relayURL = relayURL
+    public init(
+        challengeID: String,
+        challenge: String,
+        installationHandle: String,
+        endpointEpoch: Int64,
+        generation: Int64,
+        relayPubkey: String,
+        notBefore: Int64,
+        expiresAt: Int64,
+        assertion: String
+    ) {
+        self.challengeID = challengeID
+        self.challenge = challenge
+        self.installationHandle = installationHandle
+        self.endpointEpoch = endpointEpoch
+        self.generation = generation
         self.relayPubkey = relayPubkey
+        self.notBefore = notBefore
+        self.expiresAt = expiresAt
+        self.assertion = assertion
     }
 }
 
 /// Wire encoding for the delegation request body.
 struct GatewayDelegationWire: Encodable, Sendable {
-    let installationID: String
-    let relayURL: String
+    let v: UInt8 = 1
+    let challengeID: String
+    let challenge: String
+    let installationHandle: String
+    let endpointEpoch: Int64
+    let generation: Int64
     let relayPubkey: String
+    let notBefore: Int64
+    let expiresAt: Int64
+    let assertion: String
 
     private enum CodingKeys: String, CodingKey {
-        case installationID = "installation_id"
-        case relayURL = "relay_url"
+        case v
+        case challengeID = "challenge_id"
+        case challenge
+        case installationHandle = "installation_handle"
+        case endpointEpoch = "endpoint_epoch"
+        case generation
         case relayPubkey = "relay_pubkey"
+        case notBefore = "not_before"
+        case expiresAt = "expires_at"
+        case assertion
     }
 }
 
 /// The gateway's answer to a delegation request.
 public struct GatewayDelegationResponse: Codable, Equatable, Sendable {
-    /// The delegation grant the relay accepts as proof of push authorisation.
-    public let delegationID: String
+    /// The opaque sealed grant token the relay accepts as proof of push authorisation.
+    public let endpointGrant: String
 
     private enum CodingKeys: String, CodingKey {
-        case delegationID = "delegation_id"
+        case endpointGrant = "endpoint_grant"
     }
 }
 
@@ -282,4 +365,58 @@ public enum PushConstants {
     /// The push gateway's HTTP base URL (tailnet deployment).
     /// Will move to relay-info discovery once the gateway advertises itself.
     public static let gatewayURL = URL(string: "http://100.111.202.55:3005")!
+}
+
+// MARK: - App Attest transcripts
+
+/// The JSON transcript the gateway hashes when verifying the attestation on enrollment.
+/// Field order and names must match the gateway's `EnrollTranscript` exactly.
+struct EnrollTranscript: Encodable {
+    let v: UInt8
+    let audience: String
+    let challengeID: String
+    let challenge: String
+    let keyID: String
+    let appProfile: String
+    let endpoint: String
+    let endpointEpoch: Int64
+    let expiresAt: Int64
+
+    private enum CodingKeys: String, CodingKey {
+        case v, audience
+        case challengeID = "challenge_id"
+        case challenge
+        case keyID = "key_id"
+        case appProfile = "app_profile"
+        case endpoint
+        case endpointEpoch = "endpoint_epoch"
+        case expiresAt = "expires_at"
+    }
+}
+
+/// The JSON transcript the gateway hashes when verifying the assertion on delegation.
+/// Field order and names must match the gateway's `DelegateTranscript` exactly.
+struct DelegateTranscript: Encodable {
+    let v: UInt8
+    let audience: String
+    let challengeID: String
+    let challenge: String
+    let installationHandle: String
+    let endpointEpoch: Int64
+    let generation: Int64
+    let relayPubkey: String
+    let notBefore: Int64
+    let expiresAt: Int64
+
+    private enum CodingKeys: String, CodingKey {
+        case v, audience
+        case challengeID = "challenge_id"
+        case challenge
+        case installationHandle = "installation_handle"
+        case endpointEpoch = "endpoint_epoch"
+        case generation
+        case relayPubkey = "relay_pubkey"
+        case notBefore = "not_before"
+        case expiresAt = "expires_at"
+    }
 }

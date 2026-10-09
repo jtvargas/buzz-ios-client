@@ -65,14 +65,36 @@ public struct DeviceAppAttestProvider: AppAttestProviding {
 
 /// Builds the client data hash the gateway expects for App Attest.
 ///
-/// The challenge response from the gateway carries a nonce string; the
-/// attestation binds to the SHA-256 of that nonce — so both sides agree on what
-/// was attested.
-public enum AppAttestClientData {
-    /// SHA-256 of the challenge nonce, suitable for `attest(keyID:clientDataHash:)`.
-    public static func hash(challenge: String) -> Data {
-        let data = Data(challenge.utf8)
-        let digest = SHA256.hash(data: data)
+/// The gateway computes `SHA-256("{domain}\n{transcript_json}")` and verifies
+/// that the attestation or assertion binds to the same hash. The client must
+/// reproduce this exactly.
+enum AppAttestClientData {
+    private static let enrollDomain = "buzz.push.enroll.v1"
+    private static let delegateDomain = "buzz.push.delegate.v1"
+
+    /// Client data hash for the enrollment attestation.
+    static func enrollHash(transcript: EnrollTranscript) -> Data {
+        transcriptHash(domain: enrollDomain, transcript: transcript)
+    }
+
+    /// Client data hash for the delegation assertion.
+    static func delegateHash(transcript: DelegateTranscript) -> Data {
+        transcriptHash(domain: delegateDomain, transcript: transcript)
+    }
+
+    private static func transcriptHash(domain: String, transcript: some Encodable) -> Data {
+        // JSONEncoder without .sortedKeys preserves CodingKeys declaration order,
+        // which matches the Rust struct field order (serde_json default).
+        let encoder = JSONEncoder()
+        let json: Data
+        do {
+            json = try encoder.encode(transcript)
+        } catch {
+            // Transcript types are fully concrete — encoding cannot fail.
+            fatalError("Failed to encode transcript: \(error)")
+        }
+        let payload = "\(domain)\n".data(using: .utf8)! + json
+        let digest = SHA256.hash(data: payload)
         return Data(digest)
     }
 }

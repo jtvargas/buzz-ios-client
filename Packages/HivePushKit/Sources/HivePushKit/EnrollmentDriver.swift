@@ -229,27 +229,62 @@ public actor EnrollmentDriver {
     private func gatewayEnrollment(deviceToken: String) async {
         state = .enrolling
 
-        // Step 3: Challenge.
-        Self.log.info("Requesting challenge from gateway")
-        let challengeResponse: GatewayChallengeResponse
+        // Step 3: Challenge for enrollment.
+        Self.log.info("Requesting enrollment challenge from gateway")
+        let enrollChallenge: GatewayChallengeResponse
         do {
-            challengeResponse = try await gateway.challenge(signer: signer)
+            enrollChallenge = try await gateway.challenge(signer: signer)
         } catch {
             state = .failed(.challenge, String(describing: error))
             Self.log.error("Challenge failed: \(String(describing: error))")
             return
         }
-        Self.log.info("Received challenge: \(challengeResponse.challengeID)")
+        Self.log.info("Received enrollment challenge: \(enrollChallenge.challengeID)")
 
-        // Step 4: App Attest.
-        guard let attestResult = await performAttestation(challenge: challengeResponse) else { return }
+        // Step 4: App Attest key generation + attestation over the enroll transcript.
+        let now = Int64(Date().timeIntervalSince1970)
+        let installExpiresAt = now + Int64(NIPPLLease.defaultDuration)
+        let endpointEpoch: Int64 = 1
+
+        let enrollTranscript = EnrollTranscript(
+            v: 1,
+            audience: NIPPLAudience.installations,
+            challengeID: enrollChallenge.challengeID,
+            challenge: enrollChallenge.challenge,
+            keyID: "", // placeholder — filled after key generation
+            appProfile: appProfile,
+            endpoint: deviceToken,
+            endpointEpoch: endpointEpoch,
+            expiresAt: installExpiresAt
+        )
+
+        guard let attestResult = await performAttestation(
+            challenge: enrollChallenge,
+            transcriptTemplate: enrollTranscript
+        ) else { return }
+
+        // Rebuild transcript with the real key ID.
+        let finalEnrollTranscript = EnrollTranscript(
+            v: 1,
+            audience: NIPPLAudience.installations,
+            challengeID: enrollChallenge.challengeID,
+            challenge: enrollChallenge.challenge,
+            keyID: attestResult.keyID,
+            appProfile: appProfile,
+            endpoint: deviceToken,
+            endpointEpoch: endpointEpoch,
+            expiresAt: installExpiresAt
+        )
 
         // Steps 5-6: Install and delegate.
         guard let enrollment = await installAndDelegate(
             deviceToken: deviceToken,
             attestKeyID: attestResult.keyID,
             attestation: attestResult.attestation,
-            challengeID: challengeResponse.challengeID
+            challenge: enrollChallenge,
+            enrollTranscript: finalEnrollTranscript,
+            endpointEpoch: endpointEpoch,
+            installExpiresAt: installExpiresAt
         ) else { return }
 
         // Step 7: Publish lease.
@@ -257,7 +292,8 @@ public actor EnrollmentDriver {
     }
 
     private func performAttestation(
-        challenge: GatewayChallengeResponse
+        challenge: GatewayChallengeResponse,
+        transcriptTemplate: EnrollTranscript
     ) async -> (keyID: String, attestation: Data)? {
         guard attestProvider.isSupported else {
             state = .failed(.attest, "App Attest is not supported on this device")
@@ -266,7 +302,19 @@ public actor EnrollmentDriver {
         }
         do {
             let keyID = try await attestProvider.generateKey()
-            let clientDataHash = AppAttestClientData.hash(challenge: challenge.challenge)
+            // Rebuild transcript with the actual key ID for the hash.
+            let transcript = EnrollTranscript(
+                v: transcriptTemplate.v,
+                audience: transcriptTemplate.audience,
+                challengeID: transcriptTemplate.challengeID,
+                challenge: transcriptTemplate.challenge,
+                keyID: keyID,
+                appProfile: transcriptTemplate.appProfile,
+                endpoint: transcriptTemplate.endpoint,
+                endpointEpoch: transcriptTemplate.endpointEpoch,
+                expiresAt: transcriptTemplate.expiresAt
+            )
+            let clientDataHash = AppAttestClientData.enrollHash(transcript: transcript)
             let attestation = try await attestProvider.attest(keyID: keyID, clientDataHash: clientDataHash)
             Self.log.info("App Attest succeeded with key \(keyID)")
             return (keyID, attestation)
@@ -281,15 +329,21 @@ public actor EnrollmentDriver {
         deviceToken: String,
         attestKeyID: String,
         attestation: Data,
-        challengeID: String
+        challenge: GatewayChallengeResponse,
+        enrollTranscript: EnrollTranscript,
+        endpointEpoch: Int64,
+        installExpiresAt: Int64
     ) async -> Enrollment? {
         // Step 5: Installation.
         let installRequest = GatewayInstallRequest(
-            deviceToken: deviceToken,
-            attestation: attestation.base64EncodedString(),
+            challengeID: challenge.challengeID,
+            challenge: challenge.challenge,
             keyID: attestKeyID,
-            challengeID: challengeID,
-            appProfile: appProfile
+            attestation: attestation.base64EncodedString(),
+            appProfile: appProfile,
+            endpoint: deviceToken,
+            endpointEpoch: endpointEpoch,
+            expiresAt: installExpiresAt
         )
         let installResponse: GatewayInstallResponse
         do {
@@ -299,13 +353,61 @@ public actor EnrollmentDriver {
             Self.log.error("Installation failed: \(String(describing: error))")
             return nil
         }
-        Self.log.info("Installation succeeded: \(installResponse.installationID)")
+        Self.log.info("Installation succeeded: \(installResponse.installationHandle)")
+
+        // Step 5b: Request a fresh challenge for delegation.
+        Self.log.info("Requesting delegation challenge from gateway")
+        let delegateChallenge: GatewayChallengeResponse
+        do {
+            delegateChallenge = try await gateway.challenge(signer: signer)
+        } catch {
+            state = .failed(.delegate, String(describing: error))
+            Self.log.error("Delegation challenge failed: \(String(describing: error))")
+            return nil
+        }
+
+        // Step 5c: Build the delegation transcript and generate an assertion.
+        let delegateNow = Int64(Date().timeIntervalSince1970)
+        let generation: Int64 = 1
+        let notBefore = delegateNow
+        let delegateExpiresAt = delegateNow + Int64(NIPPLLease.defaultDuration)
+
+        let delegateTranscript = DelegateTranscript(
+            v: 1,
+            audience: NIPPLAudience.delegations,
+            challengeID: delegateChallenge.challengeID,
+            challenge: delegateChallenge.challenge,
+            installationHandle: installResponse.installationHandle,
+            endpointEpoch: endpointEpoch,
+            generation: generation,
+            relayPubkey: relayPubkey,
+            notBefore: notBefore,
+            expiresAt: delegateExpiresAt
+        )
+        let delegateClientDataHash = AppAttestClientData.delegateHash(transcript: delegateTranscript)
+        let assertionData: Data
+        do {
+            assertionData = try await attestProvider.assert(
+                keyID: attestKeyID,
+                clientDataHash: delegateClientDataHash
+            )
+        } catch {
+            state = .failed(.delegate, String(describing: error))
+            Self.log.error("Delegation assertion failed: \(String(describing: error))")
+            return nil
+        }
 
         // Step 6: Delegation.
         let delegationRequest = GatewayDelegationRequest(
-            installationID: installResponse.installationID,
-            relayURL: relayURL,
-            relayPubkey: relayPubkey
+            challengeID: delegateChallenge.challengeID,
+            challenge: delegateChallenge.challenge,
+            installationHandle: installResponse.installationHandle,
+            endpointEpoch: endpointEpoch,
+            generation: generation,
+            relayPubkey: relayPubkey,
+            notBefore: notBefore,
+            expiresAt: delegateExpiresAt,
+            assertion: assertionData.base64EncodedString()
         )
         let delegationResponse: GatewayDelegationResponse
         do {
@@ -315,14 +417,14 @@ public actor EnrollmentDriver {
             Self.log.error("Delegation failed: \(String(describing: error))")
             return nil
         }
-        Self.log.info("Delegation succeeded: \(delegationResponse.delegationID)")
+        Self.log.info("Delegation succeeded with endpoint grant")
 
         // Persist.
         let installID = UUID().uuidString
         let enrollment = Enrollment(
             communityID: communityID,
-            installationID: installResponse.installationID,
-            delegationID: delegationResponse.delegationID,
+            installationHandle: installResponse.installationHandle,
+            endpointGrant: delegationResponse.endpointGrant,
             attestKeyID: attestKeyID,
             installID: installID,
             relayURL: relayURL

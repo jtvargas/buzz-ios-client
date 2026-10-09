@@ -15,13 +15,13 @@ struct EnrollmentStoreTests {
 
     private func enrollment(
         communityID: String = UUID().uuidString,
-        installationID: String = "inst-1",
-        delegationID: String = "del-1"
+        installationHandle: String = "handle-1",
+        endpointGrant: String = "grant-1"
     ) -> Enrollment {
         Enrollment(
             communityID: communityID,
-            installationID: installationID,
-            delegationID: delegationID,
+            installationHandle: installationHandle,
+            endpointGrant: endpointGrant,
             attestKeyID: "key-1",
             installID: UUID().uuidString,
             relayURL: "wss://relay.example",
@@ -92,7 +92,7 @@ struct EnrollmentDriverTests {
         let publishedEvents: ActorBox<[NostrEvent]> = ActorBox([])
 
         // Gateway that returns a valid challenge.
-        let challengeJSON = #"{"challenge_id":"ch-1","challenge":"nonce"}"#
+        let challengeJSON = #"{"challenge_id":"ch-1","challenge":"nonce","expires_at":1700000300}"#
         let transport = ScriptedTransport(responses: [
             (Data(challengeJSON.utf8), 200),
         ])
@@ -171,13 +171,15 @@ struct EnrollmentDriverTests {
         let signer = try InMemorySigner()
         let publishedEvents: ActorBox<[NostrEvent]> = ActorBox([])
 
-        let challengeJSON = #"{"challenge_id":"ch-1","challenge":"nonce"}"#
-        let installJSON = #"{"installation_id":"inst-1"}"#
-        let delegationJSON = #"{"delegation_id":"del-1"}"#
+        let challengeJSON = #"{"challenge_id":"ch-1","challenge":"nonce","expires_at":1700000300}"#
+        let installJSON = #"{"installation_handle":"handle-1","endpoint_epoch":1,"expires_at":1700086400}"#
+        let challenge2JSON = #"{"challenge_id":"ch-2","challenge":"nonce2","expires_at":1700000600}"#
+        let delegationJSON = #"{"endpoint_grant":"grant-1"}"#
         let transport = ScriptedTransport(responses: [
-            (Data(challengeJSON.utf8), 200),
-            (Data(installJSON.utf8), 200),
-            (Data(delegationJSON.utf8), 200),
+            (Data(challengeJSON.utf8), 200),   // enroll challenge
+            (Data(installJSON.utf8), 201),      // install
+            (Data(challenge2JSON.utf8), 200),   // delegate challenge
+            (Data(delegationJSON.utf8), 201),   // delegate
         ])
         let gateway = GatewayClient(
             baseURL: URL(string: "http://gateway.test:3005")!,
@@ -210,8 +212,8 @@ struct EnrollmentDriverTests {
         // Verify the enrollment was persisted.
         let enrollment = store.load(communityID: "comm-1")
         #expect(enrollment != nil)
-        #expect(enrollment?.installationID == "inst-1")
-        #expect(enrollment?.delegationID == "del-1")
+        #expect(enrollment?.installationHandle == "handle-1")
+        #expect(enrollment?.endpointGrant == "grant-1")
 
         // Verify a lease event was published.
         let events = await publishedEvents.value
@@ -234,8 +236,8 @@ struct EnrollmentDriverTests {
         // Pre-seed an enrollment.
         try store.write(Enrollment(
             communityID: "comm-1",
-            installationID: "inst-1",
-            delegationID: "del-1",
+            installationHandle: "handle-1",
+            endpointGrant: "grant-1",
             attestKeyID: "key-1",
             installID: "install-1",
             relayURL: "wss://relay.example"
@@ -279,13 +281,15 @@ struct EnrollmentDriverTests {
 
         // A challenge response that hangs until we unblock it.
         let gate = ActorBox(false)
-        let challengeJSON = #"{"challenge_id":"ch-1","challenge":"nonce"}"#
-        let installJSON = #"{"installation_id":"inst-1"}"#
-        let delegationJSON = #"{"delegation_id":"del-1"}"#
+        let challengeJSON = #"{"challenge_id":"ch-1","challenge":"nonce","expires_at":1700000300}"#
+        let installJSON = #"{"installation_handle":"handle-1","endpoint_epoch":1,"expires_at":1700086400}"#
+        let challenge2JSON = #"{"challenge_id":"ch-2","challenge":"nonce2","expires_at":1700000600}"#
+        let delegationJSON = #"{"endpoint_grant":"grant-1"}"#
         let transport = ScriptedTransport(responses: [
-            (Data(challengeJSON.utf8), 200),
-            (Data(installJSON.utf8), 200),
-            (Data(delegationJSON.utf8), 200),
+            (Data(challengeJSON.utf8), 200),   // enroll challenge
+            (Data(installJSON.utf8), 201),      // install
+            (Data(challenge2JSON.utf8), 200),   // delegate challenge
+            (Data(delegationJSON.utf8), 201),   // delegate
         ])
         let gateway = GatewayClient(
             baseURL: URL(string: "http://gateway.test:3005")!,

@@ -104,9 +104,9 @@ public struct Enrollment: Codable, Equatable, Sendable {
     /// The community this enrollment belongs to.
     public let communityID: String
     /// The gateway installation handle.
-    public let installationID: String
-    /// The delegation grant for the relay.
-    public let delegationID: String
+    public let installationHandle: String
+    /// The opaque sealed endpoint grant token for the relay.
+    public let endpointGrant: String
     /// The App Attest key identifier, needed for assertion generation.
     public let attestKeyID: String
     /// A random UUID used as the `d` tag in the NIP-PL lease, so this device's
@@ -119,16 +119,16 @@ public struct Enrollment: Codable, Equatable, Sendable {
 
     public init(
         communityID: String,
-        installationID: String,
-        delegationID: String,
+        installationHandle: String,
+        endpointGrant: String,
         attestKeyID: String,
         installID: String,
         relayURL: String,
         enrolledAt: Date = .now
     ) {
         self.communityID = communityID
-        self.installationID = installationID
-        self.delegationID = delegationID
+        self.installationHandle = installationHandle
+        self.endpointGrant = endpointGrant
         self.attestKeyID = attestKeyID
         self.installID = installID
         self.relayURL = relayURL
