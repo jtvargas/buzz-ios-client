@@ -487,9 +487,10 @@ final class AppEnvironment {
                 enrollmentStore: enrollmentStore,
                 pushRegistrar: pushRegistrar
             )
-            coordinator.onLeaseUpdated = { [weak self] active, expiresAt, filtersJSON in
+            coordinator.onLeaseUpdated = { [weak self] communityID, active, expiresAt, filtersJSON in
                 guard let self else { return }
                 self.updatePushSnapshotLease(
+                    communityID: communityID,
                     leaseActive: active,
                     leaseExpiresAt: expiresAt,
                     subscriptionFilters: filtersJSON
@@ -585,16 +586,16 @@ final class AppEnvironment {
         }
     }
 
-    /// Updates only the lease fields of the push snapshot for the active community.
+    /// Updates only the lease fields of the push snapshot for the given community.
     /// Called by the ``PushEnrollmentCoordinator`` via ``onLeaseUpdated``.
     private func updatePushSnapshotLease(
+        communityID: String,
         leaseActive: Bool,
         leaseExpiresAt: Date?,
         subscriptionFilters: String?
     ) {
         guard let pushSnapshots,
-              let community = communities.active,
-              let existing = try? pushSnapshots.load(communityID: community.id.uuidString)
+              let existing = try? pushSnapshots.load(communityID: communityID)
         else { return }
         do {
             try pushSnapshots.write(PushCommunitySnapshot(

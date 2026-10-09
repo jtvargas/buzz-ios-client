@@ -47,8 +47,8 @@ final class PushEnrollmentCoordinator {
     private var enrollmentTask: Task<Void, Never>?
 
     /// Called when a lease is published or revoked, so the caller can update the
-    /// push snapshot. Parameters: `(leaseActive, leaseExpiresAt, leaseFiltersJSON)`.
-    var onLeaseUpdated: ((Bool, Date?, String?) -> Void)?
+    /// push snapshot. Parameters: `(communityID, leaseActive, leaseExpiresAt, leaseFiltersJSON)`.
+    var onLeaseUpdated: ((String, Bool, Date?, String?) -> Void)?
 
     private static let log = Logger(subsystem: "Hive", category: "PushEnrollmentCoordinator")
 
@@ -74,11 +74,10 @@ final class PushEnrollmentCoordinator {
             return
         }
 
-        if enrollmentStore.load(communityID: config.communityID) != nil {
-            status = .enrolled
-            Self.log.info("Already enrolled for community \(config.communityID)")
-            return
-        }
+        // Don't early-return here: even if the enrollment exists on disk, the
+        // lease may not have been published (e.g. crash between store write and
+        // lease publication). The driver's own fast-path detects the stored
+        // enrollment and jumps straight to publishLeaseStep.
 
         status = .enrolling
         let newDriver = makeDriver(config: config, relayPubkey: relayKey.pubkey)
@@ -93,7 +92,7 @@ final class PushEnrollmentCoordinator {
         driver = nil
         pushRegistrar.enrollmentDriver = nil
         status = .idle
-        onLeaseUpdated?(false, nil, nil)
+        onLeaseUpdated?(communityID, false, nil, nil)
     }
 
     /// Tears down the coordinator. Called when a session ends.
@@ -151,7 +150,7 @@ final class PushEnrollmentCoordinator {
                 switch finalState {
                 case .enrolled:
                     self?.status = .enrolled
-                    self?.onLeaseUpdated?(true, leaseExpiresAt, leaseFiltersJSON)
+                    self?.onLeaseUpdated?(communityID, true, leaseExpiresAt, leaseFiltersJSON)
                     Self.log.info("Push enrollment complete")
                 case let .failed(step, message):
                     self?.status = .failed("\(step): \(message)")
