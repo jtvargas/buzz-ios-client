@@ -9,7 +9,7 @@ import NostrCore
 ///
 /// # The three-step enrollment
 ///
-/// 1. **Challenge** (`POST /v1/installations/challenge`): the gateway returns a
+/// 1. **Challenge** (`POST /v1/installations/challenges`): the gateway returns a
 ///    nonce this device must attest.
 /// 2. **Installation** (`POST /v1/installations`): the device sends its APNs token,
 ///    the App Attest attestation over the challenge, and an app profile identifier.
@@ -36,7 +36,7 @@ public struct GatewayClient: Sendable {
 
     /// Requests a challenge nonce from the gateway.
     public func challenge(signer: some EventSigner) async throws -> GatewayChallengeResponse {
-        let url = baseURL.appendingPathComponent("v1/installations/challenge")
+        let url = baseURL.appendingPathComponent("v1/installations/challenges")
         let body = try JSONEncoder().encode(GatewayChallengeRequest())
         let (data, status) = try await post(body: body, to: url, signer: signer)
         guard (200 ... 299).contains(status) else {
