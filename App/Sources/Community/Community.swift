@@ -101,7 +101,7 @@ struct Community: Identifiable, Codable, Equatable, Sendable {
               let url = URL(string: urlString),
               let scheme = url.scheme?.lowercased(),
               scheme == "http" || scheme == "https",
-              url.host != nil
+              let host = url.host(), !host.isEmpty
         else { return nil }
         return url
     }

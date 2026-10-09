@@ -50,7 +50,10 @@ struct CommunityPushSettingsView: View {
                     .autocorrectionDisabled()
                     .keyboardType(.URL)
                     .onSubmit(commitGatewayURL)
-                    .onChange(of: gatewayURLField) { _, _ in gatewayDirty = true }
+                    .onChange(of: gatewayURLField) { old, new in
+                        guard old != new else { return }
+                        gatewayDirty = (new != environment.communities.active?.pushGatewayURL ?? "")
+                    }
 
                 HStack(spacing: 12) {
                     if gatewayDirty {
