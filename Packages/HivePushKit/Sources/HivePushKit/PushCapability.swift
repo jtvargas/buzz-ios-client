@@ -32,6 +32,11 @@ public struct PushCapability: Equatable, Sendable {
         appProfiles.contains { $0.id == PushConstants.appProfile }
     }
 
+    /// Whether this relay supports a specific app profile.
+    public func supports(appProfile: String) -> Bool {
+        appProfiles.contains { $0.id == appProfile }
+    }
+
     public struct PushKey: Equatable, Sendable {
         public let id: String
         public let pubkey: String

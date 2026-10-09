@@ -44,6 +44,9 @@ struct SettingsView: View {
                 VStack(spacing: 20) {
                     themeCard
                     notificationsCard
+                    if environment.pushCapability != nil {
+                        CommunityPushSettingsView()
+                    }
                     agentsCard
                     siriCard
                     #if DEBUG
@@ -63,6 +66,7 @@ struct SettingsView: View {
                 }
             }
             .task { await readSystemAuthorization() }
+            .task { await fetchPushCapability() }
             .onChange(of: environment.conversationEntityIndex.state, initial: true) { _, state in
                 withAnimation(.easeInOut(duration: 0.2)) {
                     siriIndexingState = state
@@ -213,6 +217,10 @@ struct SettingsView: View {
 
     private func readSystemAuthorization() async {
         systemAuthorization = await ReminderScheduler().isAuthorized()
+    }
+
+    private func fetchPushCapability() async {
+        _ = await environment.fetchPushCapability()
     }
 
     /// Brings the armed alerts in line with the switch that was just thrown.

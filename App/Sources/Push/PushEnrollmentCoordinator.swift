@@ -35,6 +35,7 @@ final class PushEnrollmentCoordinator {
         let relayURLString: String
         let gatewayURL: URL
         let pushCapability: PushCapability
+        let appProfile: String
         let signer: any EventSigner
         let publishEvent: @Sendable (NostrEvent) async throws -> Void
     }
@@ -62,7 +63,7 @@ final class PushEnrollmentCoordinator {
     /// Called from ``AppEnvironment`` after the engine has been created. Runs
     /// asynchronously — the session does not wait for enrollment.
     func startEnrollment(_ config: Configuration) {
-        guard config.pushCapability.supportsHive else {
+        guard config.pushCapability.supports(appProfile: config.appProfile) else {
             status = .unsupported
             Self.log.info("Relay does not support push for this app profile")
             return
@@ -129,6 +130,7 @@ final class PushEnrollmentCoordinator {
             communityID: config.communityID,
             relayURL: config.relayURLString,
             relayPubkey: relayPubkey,
+            appProfile: config.appProfile,
             publishEvent: config.publishEvent
         )
     }

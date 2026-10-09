@@ -562,9 +562,14 @@ final class AppEnvironment {
     /// nothing — ``startSession(for:mountsBeforeConnect:)`` has already refused it.
     func recordPushSnapshot(for community: Community) {
         guard let pushSnapshots,
-              let websocketURL = RelayEndpoint.websocketURL(from: community.relayURLString),
-              let gatewayURL = RelayEndpoint.httpBaseURL(for: websocketURL)
+              let websocketURL = RelayEndpoint.websocketURL(from: community.relayURLString)
         else { return }
+        // Use the community's configured push gateway URL, falling back to the
+        // relay's own HTTP origin for backward compatibility with communities
+        // that have not set one yet.
+        let gatewayURL = community.resolvedPushGatewayURL
+            ?? RelayEndpoint.httpBaseURL(for: websocketURL)
+        guard let gatewayURL else { return }
         // Preserve lease state from any existing snapshot so a rename does not
         // clear it. On first write the load returns nil and the lease fields
         // default to nil, which is correct — no enrollment has happened yet.
@@ -577,7 +582,7 @@ final class AppEnvironment {
                 gatewayURL: gatewayURL,
                 keychainAccount: community.keychainAccount,
                 updatedAt: .now,
-                leaseActive: existing?.leaseActive,
+                leaseActive: existing?.leaseActive ?? false,
                 leaseExpiresAt: existing?.leaseExpiresAt,
                 subscriptionFilters: existing?.subscriptionFilters
             ))
@@ -592,11 +597,18 @@ final class AppEnvironment {
         communityID: String,
         leaseActive: Bool,
         leaseExpiresAt: Date?,
-        subscriptionFilters: String?
+        subscriptionFilters filtersJSON: String?
     ) {
         guard let pushSnapshots,
               let existing = try? pushSnapshots.load(communityID: communityID)
         else { return }
+        // Decode the JSON string into the typed form the snapshot init expects.
+        let decoded: [[String: Any]]? = filtersJSON.flatMap { json in
+            guard let data = json.data(using: .utf8),
+                  let array = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]]
+            else { return nil }
+            return array
+        }
         do {
             try pushSnapshots.write(PushCommunitySnapshot(
                 communityID: existing.communityID,
@@ -607,7 +619,7 @@ final class AppEnvironment {
                 updatedAt: .now,
                 leaseActive: leaseActive,
                 leaseExpiresAt: leaseExpiresAt,
-                subscriptionFilters: subscriptionFilters
+                subscriptionFilters: decoded
             ))
         } catch {
             Self.pushLog.error("Updating push snapshot lease failed: \(String(describing: error), privacy: .public)")
@@ -616,40 +628,57 @@ final class AppEnvironment {
 
     private static let pushLog = Logger(subsystem: "Hive", category: "AppEnvironment.push")
 
-    /// Fetches the relay's NIP-11 push capability and starts enrollment if
-    /// supported. Called once when the engine first reaches `running`.
+    /// The NIP-11 push capability of the active community's relay, or `nil` when not
+    /// yet fetched or when the relay does not support push.
     ///
-    /// A failure here is logged and not propagated: push is an enhancement, not
-    /// a session prerequisite. The user still gets their workspace.
+    /// Set once per session by ``fetchPushCapability()`` and cleared on teardown.
+    /// The settings UI reads this to gate the push card.
+    private(set) var pushCapability: PushCapability?
+
+    /// Fetches the relay's NIP-11 push capability for the active community.
+    /// Stores the result in ``pushCapability`` for UI gating.
+    func fetchPushCapability() async -> PushCapability? {
+        guard let community = communities.active,
+              let websocketURL = RelayEndpoint.websocketURL(from: community.relayURLString)
+        else { return nil }
+
+        let transport = URLSessionHTTPTransport()
+        guard let httpBase = RelayEndpoint.httpBaseURL(for: websocketURL) else { return nil }
+        let (body, status): (Data, Int)
+        do {
+            (body, status) = try await transport.get(
+                from: httpBase,
+                headers: ["Accept": "application/nostr+json"]
+            )
+        } catch {
+            Self.pushLog.error("NIP-11 fetch for push capability failed: \(String(describing: error))")
+            return nil
+        }
+        guard (200 ... 299).contains(status) else {
+            Self.pushLog.warning("NIP-11 returned status \(status)")
+            return nil
+        }
+        let cap = PushCapability.parse(fromRelayInfoData: body)
+        pushCapability = cap
+        return cap
+    }
+
+    /// Fetches the relay's NIP-11 push capability and starts enrollment if
+    /// supported and the community has a gateway URL configured.
+    ///
+    /// Called once when the engine first reaches `running`. A failure here is
+    /// logged and not propagated: push is an enhancement, not a session
+    /// prerequisite.
     private func beginPushEnrollment() {
         guard let community = communities.active,
-              let websocketURL = RelayEndpoint.websocketURL(from: community.relayURLString),
+              community.isPushEnabled,
+              let gatewayURL = community.resolvedPushGatewayURL,
               let signer,
               pushCoordinator != nil
         else { return }
 
         Task {
-            // Fetch NIP-11 to discover push capability.
-            let transport = URLSessionHTTPTransport()
-            guard let httpBase = RelayEndpoint.httpBaseURL(for: websocketURL) else { return }
-            let (body, status): (Data, Int)
-            do {
-                (body, status) = try await transport.get(
-                    from: httpBase,
-                    headers: ["Accept": "application/nostr+json"]
-                )
-            } catch {
-                Self.pushLog.error("NIP-11 fetch for push capability failed: \(String(describing: error))")
-                return
-            }
-            guard (200 ... 299).contains(status) else {
-                Self.pushLog.warning("NIP-11 returned status \(status)")
-                return
-            }
-            guard let pushCap = PushCapability.parse(fromRelayInfoData: body) else {
-                Self.pushLog.info("Relay does not advertise push capability")
-                return
-            }
+            guard let pushCap = await fetchPushCapability() else { return }
 
             // Re-check after the suspension point — teardown may have cleared these.
             guard let pushCoordinator = self.pushCoordinator,
@@ -658,8 +687,9 @@ final class AppEnvironment {
             pushCoordinator.startEnrollment(.init(
                 communityID: community.id.uuidString,
                 relayURLString: community.relayURLString,
-                gatewayURL: PushConstants.gatewayURL,
+                gatewayURL: gatewayURL,
                 pushCapability: pushCap,
+                appProfile: community.resolvedPushAppProfile,
                 signer: signer,
                 publishEvent: { event in
                     try await conn.publish(event)
@@ -704,6 +734,7 @@ final class AppEnvironment {
         // Push enrollment is tied to this session.
         pushCoordinator?.teardown()
         pushCoordinator = nil
+        pushCapability = nil
         engine = nil
         relayConnection = nil
         // Beside the engine: it signs with a key this session no longer owns.
@@ -749,6 +780,46 @@ final class AppEnvironment {
         } else {
             conversationEntityIndex.teardown(nextState: .off)
         }
+    }
+
+    // MARK: - Per-community push settings
+
+    /// Sets the push gateway URL for the active community and triggers enrollment
+    /// or revocation accordingly.
+    ///
+    /// - Setting a non-empty URL saves it and starts enrollment.
+    /// - Setting an empty or nil URL saves it, revokes the existing enrollment,
+    ///   and removes the push snapshot.
+    func setPushGatewayURL(_ urlString: String?) {
+        guard var community = communities.active else { return }
+        let trimmed = urlString?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let newURL = (trimmed?.isEmpty ?? true) ? nil : trimmed
+        community.pushGatewayURL = newURL
+        updateCommunities { $0.update(community) }
+        recordPushSnapshot(for: community)
+
+        if newURL != nil {
+            // Start enrollment with the new gateway URL.
+            beginPushEnrollment()
+        } else {
+            // Revoke existing enrollment and remove the lease.
+            Task {
+                await pushCoordinator?.revokeEnrollment(communityID: community.id.uuidString)
+            }
+        }
+    }
+
+    /// Sets the push app profile for the active community.
+    ///
+    /// An empty or nil value reverts to the built-in default. If push is already
+    /// enabled for this community, the profile change takes effect on the next
+    /// enrollment cycle.
+    func setPushAppProfile(_ profile: String?) {
+        guard var community = communities.active else { return }
+        let trimmed = profile?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let newProfile = (trimmed?.isEmpty ?? true) ? nil : trimmed
+        community.pushAppProfile = newProfile
+        updateCommunities { $0.update(community) }
     }
 
     /// Declares the session running and asks for its Siri index.

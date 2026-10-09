@@ -72,9 +72,43 @@ struct Community: Identifiable, Codable, Equatable, Sendable {
     /// `nil`, which means on. A non-optional addition would make the deliberately all-or-empty
     /// decoder treat every existing install as having no communities.
     var siriIndexingEnabled: Bool?
+    /// The HTTP URL of the push gateway for this community, or `nil` when push is
+    /// disabled.
+    ///
+    /// Optional for the same migration reason as ``siriIndexingEnabled``: existing
+    /// `communities.v1` records decode this as `nil`, which is treated as push-off.
+    /// A non-empty URL enables push enrollment when the relay also advertises
+    /// NIP-11 push capability.
+    var pushGatewayURL: String?
+    /// The app profile identifier sent to the push gateway during enrollment.
+    ///
+    /// `nil` uses the built-in default (`PushConstants.appProfile`). Only overridden
+    /// when a self-hosted community runs a forked gateway that expects a different
+    /// profile string.
+    var pushAppProfile: String?
     let addedAt: Date
 
     var isSiriIndexingEnabled: Bool { siriIndexingEnabled ?? true }
+
+    /// Whether push notifications are configured for this community.
+    var isPushEnabled: Bool {
+        guard let url = pushGatewayURL, !url.isEmpty else { return false }
+        return true
+    }
+
+    /// The resolved push gateway URL, or `nil` when push is disabled.
+    var resolvedPushGatewayURL: URL? {
+        guard let urlString = pushGatewayURL, !urlString.isEmpty else { return nil }
+        return URL(string: urlString)
+    }
+
+    /// The app profile to use for push enrollment, falling back to the built-in default.
+    var resolvedPushAppProfile: String {
+        guard let custom = pushAppProfile, !custom.isEmpty else {
+            return "buzz-ios-dogfood"
+        }
+        return custom
+    }
 
     /// The Keychain account and database file the single-community app used. A migrated
     /// install keeps both; nothing new is ever given them.
