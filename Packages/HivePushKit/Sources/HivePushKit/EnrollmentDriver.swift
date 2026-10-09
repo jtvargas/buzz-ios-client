@@ -112,8 +112,16 @@ public actor EnrollmentDriver {
         requestPermission: @Sendable () async throws -> Bool,
         registerForRemoteNotifications: @Sendable @MainActor () -> Void
     ) async {
-        // If already enrolled, nothing to do.
-        if case .enrolled = state { return }
+        // Already enrolled or an enrollment is in flight — bail out.
+        switch state {
+        case .enrolled:
+            return
+        case .requestingPermission, .awaitingDeviceToken, .enrolling, .publishingLease:
+            Self.log.warning("enroll() called while already in progress (state: \(String(describing: self.state)))")
+            return
+        case .idle, .failed:
+            break
+        }
 
         // If we have a stored enrollment, jump straight to lease publication.
         if let existing = enrollmentStore.load(communityID: communityID) {

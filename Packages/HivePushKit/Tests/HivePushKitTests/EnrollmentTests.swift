@@ -271,6 +271,66 @@ struct EnrollmentDriverTests {
         #expect(events.count == 1)
         #expect(events[0].kind == .deletion)
     }
+
+    @Test("Second enroll() while in flight is a no-op")
+    func reentrancyGuard() async throws {
+        let store = makeStore()
+        let signer = try InMemorySigner()
+
+        // A challenge response that hangs until we unblock it.
+        let gate = ActorBox(false)
+        let challengeJSON = #"{"challenge_id":"ch-1","challenge":"nonce"}"#
+        let installJSON = #"{"installation_id":"inst-1"}"#
+        let delegationJSON = #"{"delegation_id":"del-1"}"#
+        let transport = ScriptedTransport(responses: [
+            (Data(challengeJSON.utf8), 200),
+            (Data(installJSON.utf8), 200),
+            (Data(delegationJSON.utf8), 200),
+        ])
+        let gateway = GatewayClient(
+            baseURL: URL(string: "http://gateway.test:3005")!,
+            transport: transport
+        )
+
+        let driver = EnrollmentDriver(
+            gateway: gateway,
+            attestProvider: FakeAttestProvider(supported: true),
+            enrollmentStore: store,
+            signer: signer,
+            communityID: "comm-1",
+            relayURL: "wss://relay.example",
+            relayPubkey: "aabbccdd",
+            publishEvent: { _ in }
+        )
+
+        // Start the first enroll; it will suspend waiting for a device token.
+        let first = Task {
+            await driver.enroll(
+                requestPermission: { true },
+                registerForRemoteNotifications: {
+                    // Do NOT deliver a token yet — keep enroll() suspended.
+                }
+            )
+        }
+
+        // Yield to let the first enroll reach awaitingDeviceToken.
+        try await Task.sleep(for: .milliseconds(50))
+        let midState = await driver.state
+        #expect(midState == .awaitingDeviceToken)
+
+        // Second call should return immediately, leaving state unchanged.
+        await driver.enroll(
+            requestPermission: { Issue.record("Permission should not be re-requested"); return false },
+            registerForRemoteNotifications: { Issue.record("Should not re-register") }
+        )
+
+        let afterState = await driver.state
+        #expect(afterState == .awaitingDeviceToken)
+
+        // Clean up: deliver a token so the first enroll can finish.
+        await driver.didReceiveDeviceToken("abcd1234")
+        await first.value
+    }
 }
 
 // MARK: - PushCapability tests
