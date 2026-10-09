@@ -100,7 +100,7 @@ This section describes the app as it is on `main`, not as planned. Anything not 
 
 These exist upstream, or are on the roadmap, and are honestly absent here:
 
-- **Push notifications.** The platform scaffolding is in place — push entitlement, an App Group and shared Keychain between the app and a Notification Service Extension, and the extension itself — but there is no APNs registration or relay enrolment yet, so nothing arrives from the relay while the app is closed. Later reminders are local notifications and do fire when it is.
+- **Push notifications.** The push entitlement, App Group, shared Keychain, and Notification Service Extension are in place. `HivePushKit` can issue NIP-98-authenticated message queries and construct verified local previews with exact-message targets, but these units are not wired into the extension yet: JT-74's `PushCommunitySnapshot` has no lease state, expiry, or subscription filters. JT-75 cannot safely select active communities until that shared contract and its writer exist. APNs registration and relay enrolment are separate work; Later reminders are local notifications and already fire while the app is closed.
 - **In-app message search.** Channels can be searched by name; there is no screen that searches message text across conversations.
 - **Video, files, and camera capture.** Pictures can be attached from Photos or the pasteboard, but video is only marked, files are not attachable, and Camera currently opens a work-in-progress alert.
 - **A profile from the sidebar or the channel roster.** The sheet is reached from a message today, so someone who has not posted in the open conversation has no entry point.
@@ -138,11 +138,13 @@ Hive is an app target, a Notification Service Extension, and three local Swift p
 |-------|----------|
 | `NostrCore` | Keys, event model/codec/kinds, signing, relay WebSocket actor, NIP-42 auth, NIP-44 encryption, NIP-98 HTTP auth, subscriptions, NIP-AB device pairing |
 | `BuzzKit` | Buzz projections for channels, threads, reactions, profiles, presence and read state; `SyncEngine`; `Outbox`; NIP-CW window client; GRDB persistence |
-| `HivePushKit` | What the app shares with its Notification Service Extension: the App Group (`AppGroup`), the per-community push snapshots in it (`PushSnapshotStore`), and the single identity-key API both processes use (`IdentityKeychain`) |
+| `HivePushKit` | Shared App Group (`AppGroup`), community snapshots (`PushSnapshotStore`), identity-key access (`IdentityKeychain`), authenticated subscription queries (`PushQueryClient`), and local preview/target construction (`PushNotification`) |
 | App | SwiftUI, iOS 26+ Liquid Glass, Observation, Swift 6 strict concurrency, MVVM with feature folders |
 | `NotificationService/` | The Notification Service Extension (`HiveNotificationService`), embedded in the app; links `HivePushKit` and `NostrCore` only |
 
 All three packages keep an iOS 17 / macOS 14 floor, so their suites run under `swift test` on the host; the app targets iOS 26. The app's bundle id, App Group and Keychain access group are each spelled once, in `Config/Shared.xcconfig`, and reach both targets' entitlements from there. Architecture decisions live in [docs/adr/](docs/adr/), including the minimum OS decision and the shared conversation shell.
+
+Push query and presentation tests run in `Packages/HivePushKit` with `swift test -c release`. Queries retain subscription scopes, intersect kinds with 9 / 40002 / 45001 / 45003, and cap each filter at 10 events. Presentation selects the newest authentic incoming message, carrying community, channel, event, timestamp, and reply-root identity; kind-40002 overlays are not standalone timeline messages. Overlapping wakes remain best-effort and can duplicate or omit messages. Simulator builds and local HTTP smoke runs do not prove an APNs extension wake; backgrounded/killed-app delivery requires device validation in JT-77.
 
 The Buzz relay has no negentropy/NIP-77 sync, so reliability is client-owned: NIP-CW channel windows, reconnect reconciliation, careful cursors, a projected database as source of truth, and a durable optimistic outbox.
 
