@@ -100,7 +100,7 @@ struct EnrollmentRevocationTests {
         let transport = ScriptedTransport(responses: [])
         let atChallenge = StoreSnapshot()
         transport.onRequest = { _ in
-            atChallenge.pending = store.loadPendingRevocation(communityID: "comm-1")
+            atChallenge.pending = store.pendingRecords(for: "comm-1")
             atChallenge.enrollment = store.load(communityID: "comm-1")
         }
 
@@ -117,8 +117,8 @@ struct EnrollmentRevocationTests {
 
         // Gateway, handle, key and expiry survive, so a later 409 on this gateway can revoke it.
         let expected = PendingRevocation(enrollment: seeded, gatewayURL: Self.gatewayURL)
-        #expect(store.loadPendingRevocation(communityID: "comm-1") == expected)
-        #expect(atChallenge.pending == expected)
+        #expect(store.pendingRecords(for: "comm-1") == [expected])
+        #expect(atChallenge.pending == [expected])
         #expect(atChallenge.enrollment == nil)
 
         // A deletion event should have been published.
@@ -166,7 +166,7 @@ struct EnrollmentRevocationTests {
         #expect(await attest.assertedKeyIDs.value == ["key-1"])
 
         #expect(store.load(communityID: "comm-1") == nil)
-        #expect(store.loadPendingRevocation(communityID: "comm-1") == nil)
+        #expect(store.pendingRecords(for: "comm-1").isEmpty)
         let state = await driver.state
         #expect(state == .idle)
     }
@@ -226,7 +226,7 @@ struct EnrollmentRevocationTests {
         #expect(await attest.generatedKeyCount.value == 2)
 
         // Pending record settled; enrollment uses the new handle.
-        #expect(store.loadPendingRevocation(communityID: "comm-old") == nil)
+        #expect(store.pendingRecords(for: "comm-old").isEmpty)
         #expect(store.load(communityID: "comm-1")?.installationHandle == "new-handle")
     }
 
@@ -280,7 +280,7 @@ struct EnrollmentRevocationTests {
         #expect(state == .failed(.install, EnrollmentDriver.unrecoverableConflictMessage))
         #expect(transport.requests.count == 6)
         // The stale record is dropped so it is not retried forever.
-        #expect(store.loadPendingRevocation(communityID: "comm-1") == nil)
+        #expect(store.pendingRecords(for: "comm-1").isEmpty)
     }
 
     @Test("A 404 before the installation's known expiry keeps the credentials and reports the failure")
@@ -319,7 +319,7 @@ struct EnrollmentRevocationTests {
         // No retry install: nothing changed on the gateway.
         #expect(transport.requests.count == 4)
         // The credentials are intact for the next attempt, which gets a fresh challenge.
-        #expect(store.loadPendingRevocation(communityID: "comm-1") == record)
+        #expect(store.pendingRecords(for: "comm-1") == [record])
     }
 
     @Test("409 recovery ignores pending records that belong to another gateway")
@@ -348,7 +348,7 @@ struct EnrollmentRevocationTests {
         #expect(state == .failed(.install, EnrollmentDriver.unrecoverableConflictMessage))
         #expect(transport.requests.count == 2)
         #expect(await attest.assertedKeyIDs.value.isEmpty)
-        #expect(store.loadPendingRevocation(communityID: "comm-old") == foreign)
+        #expect(store.pendingRecords(for: "comm-old") == [foreign])
     }
 
     @Test("Revoke keeps the enrollment when the pending record cannot be written and the gateway is unreachable")
@@ -366,7 +366,7 @@ struct EnrollmentRevocationTests {
 
         // The only copy of the credentials is the enrollment; it stays.
         #expect(store.load(communityID: "comm-1") == seeded)
-        #expect(store.loadPendingRevocation(communityID: "comm-1") == nil)
+        #expect(store.loadAllPendingRevocations().isEmpty)
         let state = await driver.state
         #expect(state == .idle)
     }
@@ -388,7 +388,7 @@ struct EnrollmentRevocationTests {
 
         #expect(transport.requests.count == 2)
         #expect(store.load(communityID: "comm-1") == nil)
-        #expect(store.loadPendingRevocation(communityID: "comm-1") == nil)
+        #expect(store.loadAllPendingRevocations().isEmpty)
     }
 
     @Test("409 recovery reports a revoke transport failure instead of retrying")
@@ -418,13 +418,19 @@ struct EnrollmentRevocationTests {
         #expect(message.hasPrefix("Failed to revoke existing installation"))
         #expect(transport.requests.count == 4)
         // Credentials are kept for the next attempt.
-        #expect(store.loadPendingRevocation(communityID: "comm-1")?.installationHandle == "old-handle")
+        #expect(store.pendingRecords(for: "comm-1").map(\.installationHandle) == ["old-handle"])
     }
 }
 
 /// What the enrollment store held at one instant, captured synchronously from
 /// a transport hook.
 final class StoreSnapshot: @unchecked Sendable {
-    var pending: PendingRevocation?
+    var pending: [PendingRevocation] = []
     var enrollment: Enrollment?
+}
+
+private extension EnrollmentStore {
+    func pendingRecords(for communityID: String) -> [PendingRevocation] {
+        loadAllPendingRevocations().filter { $0.communityID == communityID }
+    }
 }

@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 /// Persists the gateway enrollment state for a community in the App Group
@@ -8,6 +9,11 @@ import Foundation
 /// `<container>/PushEnrollments/<communityID>.json`. The same layout as
 /// ``PushSnapshotStore`` — independent files, atomic writes, file protection
 /// until first user authentication.
+///
+/// Pending revocations are keyed by installation, not community: one file per
+/// `(community, gateway, handle)` under `PushPendingRevocations/`, so a
+/// community that enrolled on two gateways, or twice on one, keeps every
+/// record until each is settled against its own gateway.
 public struct EnrollmentStore: Sendable {
     private let containerURL: URL
 
@@ -63,10 +69,15 @@ public struct EnrollmentStore: Sendable {
 
     // MARK: - Remove
 
-    /// Removes the enrollment for a community. Idempotent.
-    public func remove(communityID: String) {
-        let url = fileURL(for: communityID)
-        try? FileManager.default.removeItem(at: url)
+    /// Removes the enrollment for a community, but only while it is still the
+    /// installation with this handle. Idempotent.
+    ///
+    /// The caller holds an enrollment it read earlier; by the time it decides
+    /// to drop it, a newer enrollment may have replaced it on disk. That one
+    /// is left alone.
+    public func remove(communityID: String, installationHandle: String) {
+        guard load(communityID: communityID)?.installationHandle == installationHandle else { return }
+        try? FileManager.default.removeItem(at: fileURL(for: communityID))
     }
 
     /// Removes all enrollments.
@@ -84,18 +95,21 @@ public struct EnrollmentStore: Sendable {
     /// when a community is removed without a live session to revoke through.
     /// A later install against the same gateway that gets a 409 revokes every
     /// record here, then retries.
+    ///
+    /// Each installation has its own file: saving a record for one gateway or
+    /// handle never overwrites a community's record for another.
     public func savePendingRevocation(_ revocation: PendingRevocation) throws {
         let directory = containerURL.appendingPathComponent(Self.pendingDirectoryName)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let data = try Self.encoder.encode(revocation)
         try data.write(
-            to: pendingFileURL(for: revocation.communityID),
+            to: pendingFileURL(for: revocation),
             options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication]
         )
     }
 
-    /// Moves a community's enrollment into the pending-revocation set. No-op
-    /// when the community has no enrollment.
+    /// Moves a community's enrollment into the pending-revocation set and
+    /// returns the record written. `nil` when the community has no enrollment.
     ///
     /// The pending record is written durably *before* the enrollment is
     /// removed, so a failure or crash at any point leaves the credentials on
@@ -107,19 +121,31 @@ public struct EnrollmentStore: Sendable {
     ///   not record one itself. With neither, throws
     ///   ``EnrollmentStoreError/gatewayUnknown`` rather than write a record
     ///   that could be replayed against the wrong gateway.
-    public func demoteToPendingRevocation(communityID: String, gatewayURL: URL?) throws {
-        guard let enrollment = load(communityID: communityID) else { return }
+    @discardableResult
+    public func demoteToPendingRevocation(communityID: String, gatewayURL: URL?) throws -> PendingRevocation? {
+        guard let enrollment = load(communityID: communityID) else { return nil }
         guard let gatewayURL = enrollment.gatewayURL ?? gatewayURL else {
             throw EnrollmentStoreError.gatewayUnknown
         }
-        try savePendingRevocation(PendingRevocation(enrollment: enrollment, gatewayURL: gatewayURL))
-        remove(communityID: communityID)
+        let pending = PendingRevocation(enrollment: enrollment, gatewayURL: gatewayURL)
+        try savePendingRevocation(pending)
+        remove(communityID: communityID, installationHandle: enrollment.installationHandle)
+        return pending
     }
 
-    /// Loads the pending revocation for a community, if any.
-    public func loadPendingRevocation(communityID: String) -> PendingRevocation? {
-        guard let data = try? Data(contentsOf: pendingFileURL(for: communityID)) else { return nil }
-        return try? Self.decoder.decode(PendingRevocation.self, from: data)
+    /// Loads every pending revocation, across communities and gateways.
+    public func loadAllPendingRevocations() -> [PendingRevocation] {
+        let directory = containerURL.appendingPathComponent(Self.pendingDirectoryName)
+        guard let files = try? FileManager.default.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: nil
+        ) else { return [] }
+        return files.compactMap { url in
+            guard url.pathExtension == Self.fileExtension,
+                  let data = try? Data(contentsOf: url)
+            else { return nil }
+            return try? Self.decoder.decode(PendingRevocation.self, from: data)
+        }
     }
 
     /// Loads every pending revocation for one gateway. Installations are per
@@ -128,24 +154,13 @@ public struct EnrollmentStore: Sendable {
     /// because a handle and key only mean something to the gateway that
     /// issued them.
     public func loadAllPendingRevocations(gatewayURL: URL) -> [PendingRevocation] {
-        let directory = containerURL.appendingPathComponent(Self.pendingDirectoryName)
-        guard let files = try? FileManager.default.contentsOfDirectory(
-            at: directory,
-            includingPropertiesForKeys: nil
-        ) else { return [] }
-        return files.compactMap { url in
-            guard url.pathExtension == Self.fileExtension,
-                  let data = try? Data(contentsOf: url),
-                  let record = try? Self.decoder.decode(PendingRevocation.self, from: data),
-                  record.gatewayURL == gatewayURL
-            else { return nil }
-            return record
-        }
+        loadAllPendingRevocations().filter { $0.gatewayURL == gatewayURL }
     }
 
-    /// Removes a pending revocation. Idempotent.
-    public func removePendingRevocation(communityID: String) {
-        try? FileManager.default.removeItem(at: pendingFileURL(for: communityID))
+    /// Removes one pending revocation. Idempotent; other records for the same
+    /// community are untouched.
+    public func removePendingRevocation(_ revocation: PendingRevocation) {
+        try? FileManager.default.removeItem(at: pendingFileURL(for: revocation))
     }
 
     // MARK: - Helpers
@@ -157,10 +172,14 @@ public struct EnrollmentStore: Sendable {
             .appendingPathExtension(Self.fileExtension)
     }
 
-    private func pendingFileURL(for communityID: String) -> URL {
-        containerURL
+    /// `<communityID>-<digest>.json`, the digest covering gateway and handle:
+    /// both are opaque strings from the gateway and not safe as path components.
+    private func pendingFileURL(for revocation: PendingRevocation) -> URL {
+        let identity = Data("\(revocation.gatewayURL.absoluteString)\n\(revocation.installationHandle)".utf8)
+        let digest = SHA256.hash(data: identity).prefix(16).map { String(format: "%02x", $0) }.joined()
+        return containerURL
             .appendingPathComponent(Self.pendingDirectoryName)
-            .appendingPathComponent(communityID)
+            .appendingPathComponent("\(revocation.communityID)-\(digest)")
             .appendingPathExtension(Self.fileExtension)
     }
 
@@ -229,7 +248,7 @@ public struct Enrollment: Codable, Equatable, Sendable {
 /// gateway yet. Revocation needs both the handle and the App Attest key that
 /// enrolled it, so both are kept until the gateway confirms the tombstone or
 /// the installation is known to have expired.
-public struct PendingRevocation: Codable, Equatable, Sendable {
+public struct PendingRevocation: Codable, Hashable, Sendable {
     /// The community the installation belonged to; also the record's file name.
     public let communityID: String
     /// The gateway that issued the installation. The record is only ever

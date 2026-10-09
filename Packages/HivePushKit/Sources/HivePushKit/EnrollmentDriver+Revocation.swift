@@ -27,15 +27,24 @@ extension EnrollmentDriver {
     /// disk for the 409 path to finish with. The enrollment itself is only
     /// dropped once its credentials are either persisted as pending or no
     /// longer needed because the gateway confirmed the revocation.
+    ///
+    /// Everything here is scoped to the installation read at the top. The
+    /// revoke goes to the gateway that issued it, which is not necessarily the
+    /// one this driver was built for (the community's URL may have changed
+    /// since), and the cleanup after a slow revoke never touches an
+    /// enrollment that replaced it in the meantime.
     public func revoke() async {
         guard let enrollment = enrollmentStore.load(communityID: communityID) else { return }
+        let issuer = enrollment.gatewayURL.map(gateway.withBaseURL) ?? gateway
 
-        let pendingPersisted: Bool
+        let pending: PendingRevocation?
         do {
-            try enrollmentStore.demoteToPendingRevocation(communityID: communityID, gatewayURL: gateway.baseURL)
-            pendingPersisted = true
+            pending = try enrollmentStore.demoteToPendingRevocation(
+                communityID: communityID,
+                gatewayURL: issuer.baseURL
+            )
         } catch {
-            pendingPersisted = false
+            pending = nil
             Self.log.error("Could not persist pending revocation; keeping the enrollment: \(String(describing: error))")
         }
 
@@ -46,14 +55,17 @@ extension EnrollmentDriver {
         // key that enrolled it; when it fails, the pending record keeps both.
         do {
             try await revokeOnGateway(
+                issuer,
                 handle: enrollment.installationHandle,
                 attestKeyID: enrollment.attestKeyID
             )
-            enrollmentStore.removePendingRevocation(communityID: communityID)
-            enrollmentStore.remove(communityID: communityID)
+            if let pending {
+                enrollmentStore.removePendingRevocation(pending)
+            }
+            enrollmentStore.remove(communityID: communityID, installationHandle: enrollment.installationHandle)
             Self.log.info("Revoked installation on gateway")
         } catch {
-            if pendingPersisted {
+            if pending != nil {
                 Self.log.warning("Gateway revoke failed; kept as pending revocation: \(String(describing: error))")
             } else {
                 let reason = String(describing: error)
@@ -107,13 +119,18 @@ extension EnrollmentDriver {
         for record in pending {
             let handle = record.installationHandle
             do {
-                try await revokeOnGateway(handle: handle, attestKeyID: record.attestKeyID)
-                enrollmentStore.removePendingRevocation(communityID: record.communityID)
+                // The record's own gateway: a handle and key only mean something there.
+                try await revokeOnGateway(
+                    gateway.withBaseURL(record.gatewayURL),
+                    handle: handle,
+                    attestKeyID: record.attestKeyID
+                )
+                enrollmentStore.removePendingRevocation(record)
                 settled = true
                 Self.log.info("Revoked pending installation \(handle)")
             } catch {
                 if case GatewayError.httpStatus(404, _) = error, record.installationExpiresAt < now {
-                    enrollmentStore.removePendingRevocation(communityID: record.communityID)
+                    enrollmentStore.removePendingRevocation(record)
                     settled = true
                     Self.log.info("Pending installation \(handle) expired and gone from the gateway; dropped")
                     continue
@@ -128,9 +145,9 @@ extension EnrollmentDriver {
         return settled
     }
 
-    /// Revokes one installation on the gateway: fresh challenge, assertion with
+    /// Revokes one installation on `gateway`: fresh challenge, assertion with
     /// the installation's own App Attest key over the revoke transcript, POST.
-    func revokeOnGateway(handle: String, attestKeyID: String) async throws {
+    func revokeOnGateway(_ gateway: GatewayClient, handle: String, attestKeyID: String) async throws {
         let challenge = try await gateway.challenge(signer: signer)
         let transcript = RevokeInstallationTranscript(
             v: 1,

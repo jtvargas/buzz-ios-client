@@ -34,6 +34,13 @@ public struct GatewayClient: Sendable {
         self.transport = transport
     }
 
+    /// The same transport pointed at another gateway. Revocation uses this to
+    /// reach the gateway that issued an installation when the driver has
+    /// since been bound to a different one.
+    public func withBaseURL(_ baseURL: URL) -> GatewayClient {
+        GatewayClient(baseURL: baseURL, transport: transport)
+    }
+
     // MARK: - 1. Challenge
 
     /// Requests a challenge nonce from the gateway.

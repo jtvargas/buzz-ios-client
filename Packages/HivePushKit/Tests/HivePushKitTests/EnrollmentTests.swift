@@ -65,14 +65,17 @@ struct EnrollmentStoreTests {
         #expect(store.load(communityID: "nonexistent") == nil)
     }
 
-    @Test("Remove clears one enrollment")
+    @Test("Remove clears one enrollment, and only while it still has the given handle")
     func removeOne() throws {
         let (store, _) = makeStore()
-        let e1 = enrollment(communityID: "a")
+        let e1 = enrollment(communityID: "a", installationHandle: "h-1")
         let e2 = enrollment(communityID: "b")
         try store.write(e1)
         try store.write(e2)
-        store.remove(communityID: "a")
+        // A newer installation replaced the one the caller read: it is not theirs to drop.
+        store.remove(communityID: "a", installationHandle: "h-0")
+        #expect(store.load(communityID: "a") == e1)
+        store.remove(communityID: "a", installationHandle: "h-1")
         #expect(store.load(communityID: "a") == nil)
         #expect(store.load(communityID: "b") != nil)
     }
@@ -115,12 +118,32 @@ struct EnrollmentStoreTests {
     @Test("Pending revocation round-trips with gateway, handle, key and expiry")
     func pendingRevocationRoundTrip() throws {
         let (store, _) = makeStore()
-        #expect(store.loadPendingRevocation(communityID: "c1") == nil)
+        #expect(store.loadAllPendingRevocations().isEmpty)
         let record = pending(communityID: "c1", handle: "h-99", expiresAt: Self.enrolledAt)
         try store.savePendingRevocation(record)
-        #expect(store.loadPendingRevocation(communityID: "c1") == record)
-        store.removePendingRevocation(communityID: "c1")
-        #expect(store.loadPendingRevocation(communityID: "c1") == nil)
+        #expect(store.loadAllPendingRevocations() == [record])
+        store.removePendingRevocation(record)
+        #expect(store.loadAllPendingRevocations().isEmpty)
+    }
+
+    @Test("One community keeps a pending record per installation: gateways and handles never overwrite each other")
+    func pendingRecordsAreKeyedByInstallation() throws {
+        let (store, _) = makeStore()
+        let onA = pending(communityID: "c1", gatewayURL: Self.gatewayA, handle: "h-1")
+        let onB = pending(communityID: "c1", gatewayURL: Self.gatewayB, handle: "h-1")
+        let laterOnA = pending(communityID: "c1", gatewayURL: Self.gatewayA, handle: "h-2")
+        try store.savePendingRevocation(onA)
+        try store.savePendingRevocation(onB)
+        try store.savePendingRevocation(laterOnA)
+        #expect(Set(store.loadAllPendingRevocations()) == [onA, onB, laterOnA])
+        #expect(Set(store.loadAllPendingRevocations(gatewayURL: Self.gatewayA)) == [onA, laterOnA])
+
+        // Settling one leaves the community's other installations pending.
+        store.removePendingRevocation(onA)
+        #expect(Set(store.loadAllPendingRevocations()) == [onB, laterOnA])
+        // Saving the same installation again is an overwrite, not a duplicate.
+        try store.savePendingRevocation(onB)
+        #expect(store.loadAllPendingRevocations().count == 2)
     }
 
     @Test("Demote moves an enrollment's credentials into the pending set with its expiry")
@@ -128,9 +151,10 @@ struct EnrollmentStoreTests {
         let (store, _) = makeStore()
         let e = enrollment(communityID: "c1", installationHandle: "h-1")
         try store.write(e)
-        try store.demoteToPendingRevocation(communityID: "c1", gatewayURL: nil)
+        let demoted = try store.demoteToPendingRevocation(communityID: "c1", gatewayURL: nil)
+        let record = try #require(demoted)
         #expect(store.load(communityID: "c1") == nil)
-        let record = try #require(store.loadPendingRevocation(communityID: "c1"))
+        #expect(store.loadAllPendingRevocations() == [record])
         #expect(record == PendingRevocation(enrollment: e, gatewayURL: Self.gatewayA))
         #expect(record.gatewayURL == Self.gatewayA)
         // Upper bound on the gateway's expires_at: install and delegation
@@ -138,8 +162,8 @@ struct EnrollmentStoreTests {
         #expect(record.installationExpiresAt == Self.enrolledAt.addingTimeInterval(NIPPLLease.defaultDuration))
 
         // No enrollment: nothing is written.
-        try store.demoteToPendingRevocation(communityID: "c2", gatewayURL: Self.gatewayA)
-        #expect(store.loadPendingRevocation(communityID: "c2") == nil)
+        #expect(try store.demoteToPendingRevocation(communityID: "c2", gatewayURL: Self.gatewayA) == nil)
+        #expect(store.loadAllPendingRevocations() == [record])
     }
 
     @Test("Demote scopes to the enrollment's own gateway, falling back to the caller's only for legacy records")
@@ -147,13 +171,14 @@ struct EnrollmentStoreTests {
         let (store, _) = makeStore()
         // The enrollment knows its gateway: the caller's (stale) URL is ignored.
         try store.write(enrollment(communityID: "c1", gatewayURL: Self.gatewayA))
-        try store.demoteToPendingRevocation(communityID: "c1", gatewayURL: Self.gatewayB)
-        #expect(store.loadPendingRevocation(communityID: "c1")?.gatewayURL == Self.gatewayA)
+        let c1 = try store.demoteToPendingRevocation(communityID: "c1", gatewayURL: Self.gatewayB)
+        #expect(c1?.gatewayURL == Self.gatewayA)
 
         // Legacy enrollment without a gateway: the caller's URL is used.
         try store.write(enrollment(communityID: "c2", gatewayURL: nil))
-        try store.demoteToPendingRevocation(communityID: "c2", gatewayURL: Self.gatewayB)
-        #expect(store.loadPendingRevocation(communityID: "c2")?.gatewayURL == Self.gatewayB)
+        let c2 = try store.demoteToPendingRevocation(communityID: "c2", gatewayURL: Self.gatewayB)
+        #expect(c2?.gatewayURL == Self.gatewayB)
+        #expect(Set(store.loadAllPendingRevocations().map(\.communityID)) == ["c1", "c2"])
 
         // Neither knows: refuse, and keep the enrollment rather than write an unscoped record.
         let e3 = enrollment(communityID: "c3", gatewayURL: nil)
@@ -162,7 +187,7 @@ struct EnrollmentStoreTests {
             try store.demoteToPendingRevocation(communityID: "c3", gatewayURL: nil)
         }
         #expect(store.load(communityID: "c3") == e3)
-        #expect(store.loadPendingRevocation(communityID: "c3") == nil)
+        #expect(store.loadAllPendingRevocations().count == 2)
     }
 
     @Test("Demote keeps the enrollment when the pending record cannot be written")
@@ -177,7 +202,7 @@ struct EnrollmentStoreTests {
             try store.demoteToPendingRevocation(communityID: "c1", gatewayURL: nil)
         }
         #expect(store.load(communityID: "c1") == e)
-        #expect(store.loadPendingRevocation(communityID: "c1") == nil)
+        #expect(store.loadAllPendingRevocations().isEmpty)
     }
 
     @Test("LoadAllPendingRevocations spans communities but never gateways")
