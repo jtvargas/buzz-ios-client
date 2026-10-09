@@ -44,7 +44,6 @@ public struct PushCommunitySnapshot: Codable, Equatable, Sendable {
         case filters = "subscriptionFilters"
     }
 
-
     public init(
         version: Int = currentVersion,
         communityID: String,
