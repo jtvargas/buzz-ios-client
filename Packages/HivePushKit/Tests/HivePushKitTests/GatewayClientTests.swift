@@ -33,6 +33,10 @@ struct GatewayClientTests {
         #expect(request.url.path.hasSuffix("/v1/installations/challenges"))
         #expect(request.headers["Content-Type"] == "application/json")
         #expect(request.headers["Authorization"]?.hasPrefix("Nostr ") == true)
+
+        // Verify the request body carries the wire version.
+        let bodyJSON = try JSONSerialization.jsonObject(with: request.body) as? [String: Any]
+        #expect(bodyJSON?["v"] as? Int == 1)
     }
 
     @Test("Challenge returns httpStatus on 403")
