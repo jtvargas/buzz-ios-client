@@ -59,7 +59,7 @@ struct PushNotificationTests {
         ))
         #expect(notification.target.eventID == valid.id)
         #expect(notification.body == "Incoming")
-        #expect(PushNotification.build(events: [forged], community: pushCommunity(), selfPubkey: "reader") == nil)
+        #expect(try PushNotification.build(events: [forged], community: pushCommunity(), selfPubkey: "reader") == nil)
     }
 
     @Test("Coalesced results choose newest then lowest id, independent of order or duplicates")
@@ -90,7 +90,7 @@ struct PushNotificationTests {
         ))
         #expect(notification.target.eventID == message.id)
         #expect(notification.body == message.content)
-        #expect(PushNotification.build(events: [overlay], community: pushCommunity(), selfPubkey: "reader") == nil)
+        #expect(try PushNotification.build(events: [overlay], community: pushCommunity(), selfPubkey: "reader") == nil)
     }
 
     @Test("Grouping isolates the same channel id in different communities")
@@ -129,7 +129,7 @@ struct PushNotificationTests {
     }
 
     @Test("Empty results do not manufacture a notification")
-    func emptyResults() {
-        #expect(PushNotification.build(events: [], community: pushCommunity(), selfPubkey: "reader") == nil)
+    func emptyResults() throws {
+        #expect(try PushNotification.build(events: [], community: pushCommunity(), selfPubkey: "reader") == nil)
     }
 }

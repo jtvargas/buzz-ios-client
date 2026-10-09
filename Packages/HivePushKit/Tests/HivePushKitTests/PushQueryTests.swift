@@ -127,12 +127,19 @@ private actor QueryTransport: HTTPTransport {
     }
 }
 
-func pushCommunity(id: String = "community") -> PushCommunitySnapshot {
-    PushCommunitySnapshot(
+func pushCommunity(
+    id: String = "community",
+    leaseActive: Bool = false,
+    leaseExpiresAt: Date? = nil,
+    subscriptionFilters: [[String: Any]]? = nil
+) throws -> PushCommunitySnapshot {
+    try PushCommunitySnapshot(
         communityID: id, name: "Test community",
         relayURL: URL(string: "wss://relay.example")!,
         gatewayURL: URL(string: "https://relay.example")!,
-        keychainAccount: "hive.identity.\(id)", updatedAt: Date(timeIntervalSince1970: 100)
+        keychainAccount: "hive.identity.\(id)", updatedAt: Date(timeIntervalSince1970: 100),
+        leaseActive: leaseActive, leaseExpiresAt: leaseExpiresAt,
+        subscriptionFilters: subscriptionFilters
     )
 }
 

@@ -20,8 +20,8 @@ struct PushSnapshotStoreTests {
         communityID: String = UUID().uuidString,
         name: String = "Hive",
         version: Int = PushCommunitySnapshot.currentVersion
-    ) -> PushCommunitySnapshot {
-        PushCommunitySnapshot(
+    ) throws -> PushCommunitySnapshot {
+        try PushCommunitySnapshot(
             version: version,
             communityID: communityID,
             name: name,
@@ -38,7 +38,7 @@ struct PushSnapshotStoreTests {
     func writeThenRead() throws {
         let (store, container) = makeStore()
         defer { try? FileManager.default.removeItem(at: container) }
-        let written = snapshot()
+        let written = try snapshot()
 
         try store.write(written)
 
@@ -59,8 +59,8 @@ struct PushSnapshotStoreTests {
     func renameUpdatesInPlace() throws {
         let (store, container) = makeStore()
         defer { try? FileManager.default.removeItem(at: container) }
-        let before = snapshot(name: "Hive")
-        let after = snapshot(communityID: before.communityID, name: "Work")
+        let before = try snapshot(name: "Hive")
+        let after = try snapshot(communityID: before.communityID, name: "Work")
 
         try store.write(before)
         try store.write(after)
@@ -73,8 +73,8 @@ struct PushSnapshotStoreTests {
     func removeOne() throws {
         let (store, container) = makeStore()
         defer { try? FileManager.default.removeItem(at: container) }
-        let leaving = snapshot(name: "Leaving")
-        let staying = snapshot(name: "Staying")
+        let leaving = try snapshot(name: "Leaving")
+        let staying = try snapshot(name: "Staying")
         try store.write(leaving)
         try store.write(staying)
 
@@ -100,7 +100,7 @@ struct PushSnapshotStoreTests {
         #expect(!FileManager.default.fileExists(atPath: store.directory.path))
         // An absent store is cleared without error, and the next session can write into it.
         try store.removeAll()
-        let next = snapshot()
+        let next = try snapshot()
         try store.write(next)
         #expect(try store.load(communityID: next.communityID) == next)
     }
@@ -109,12 +109,65 @@ struct PushSnapshotStoreTests {
     func unreadableVersionIsSkipped() throws {
         let (store, container) = makeStore()
         defer { try? FileManager.default.removeItem(at: container) }
-        let foreign = snapshot(version: PushCommunitySnapshot.currentVersion + 1)
-        let current = snapshot()
+        let foreign = try snapshot(version: PushCommunitySnapshot.currentVersion + 1)
+        let current = try snapshot()
         try store.write(foreign)
         try store.write(current)
 
         #expect(try store.load(communityID: foreign.communityID) == nil)
         #expect(try store.loadAll() == [current])
+    }
+
+    @Test("Lease renewal and revocation replace all persisted lease fields")
+    func leaseLifecycle() throws {
+        let (store, container) = makeStore()
+        defer { try? FileManager.default.removeItem(at: container) }
+        let filters: [[String: Any]] = [
+            ["kinds": [9, 45003], "#h": ["channel"], "since": Int64(9_007_199_254_740_993)],
+            ["authors": ["reader"], "extension": ["enabled": true, "weight": 1.5, "empty": NSNull()]],
+        ]
+        for expiry in [200.0, 300.0] {
+            let enrolled = try pushCommunity(
+                leaseActive: true, leaseExpiresAt: Date(timeIntervalSince1970: expiry),
+                subscriptionFilters: filters
+            )
+            try store.write(enrolled)
+            let read = try #require(try store.load(communityID: enrolled.communityID))
+            #expect(read == enrolled)
+            #expect(read.leaseActive)
+            #expect(read.leaseExpiresAt == Date(timeIntervalSince1970: expiry))
+            let decoded = try #require(read.subscriptionFilters)
+            #expect(NSDictionary(dictionary: decoded[0]).isEqual(to: filters[0]))
+            #expect(NSDictionary(dictionary: decoded[1]).isEqual(to: filters[1]))
+        }
+        let revoked = try pushCommunity()
+        try store.write(revoked)
+        let read = try #require(try store.load(communityID: revoked.communityID))
+        #expect(read.leaseActive == false)
+        #expect(read.leaseExpiresAt == nil)
+        #expect(read.subscriptionFilters == nil)
+    }
+
+    @Test("Legacy or incomplete snapshots cannot imply an active lease")
+    func legacySnapshot() throws {
+        let (store, container) = makeStore()
+        defer { try? FileManager.default.removeItem(at: container) }
+        let value = try snapshot()
+        try store.write(value)
+        let url = store.directory.appendingPathComponent(value.communityID).appendingPathExtension("json")
+        var object = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        object.removeValue(forKey: "leaseActive")
+        for version in [1, PushCommunitySnapshot.currentVersion] {
+            object["version"] = version
+            try JSONSerialization.data(withJSONObject: object).write(to: url)
+            #expect(try store.load(communityID: value.communityID) == nil)
+        }
+    }
+
+    @Test("Non-JSON decrypted subscriptions fail at the writer boundary")
+    func invalidSubscriptionValue() {
+        #expect(throws: (any Error).self) {
+            try pushCommunity(subscriptionFilters: [["since": Date()]])
+        }
     }
 }
