@@ -91,21 +91,25 @@ struct Community: Identifiable, Codable, Equatable, Sendable {
     var isSiriIndexingEnabled: Bool { siriIndexingEnabled ?? true }
 
     /// Whether push notifications are configured for this community.
-    var isPushEnabled: Bool {
-        guard let url = pushGatewayURL, !url.isEmpty else { return false }
-        return true
-    }
+    /// A non-empty string that is not a valid URL is treated as disabled.
+    var isPushEnabled: Bool { resolvedPushGatewayURL != nil }
 
-    /// The resolved push gateway URL, or `nil` when push is disabled.
+    /// The resolved push gateway URL, or `nil` when push is disabled or the
+    /// stored string is not a valid HTTP(S) URL.
     var resolvedPushGatewayURL: URL? {
-        guard let urlString = pushGatewayURL, !urlString.isEmpty else { return nil }
-        return URL(string: urlString)
+        guard let urlString = pushGatewayURL, !urlString.isEmpty,
+              let url = URL(string: urlString),
+              let scheme = url.scheme?.lowercased(),
+              scheme == "http" || scheme == "https",
+              url.host != nil
+        else { return nil }
+        return url
     }
 
-    /// The app profile to use for push enrollment, falling back to the built-in default.
-    var resolvedPushAppProfile: String {
+    /// The app profile override for push enrollment, or `nil` to use the built-in default.
+    var resolvedPushAppProfile: String? {
         guard let custom = pushAppProfile, !custom.isEmpty else {
-            return "buzz-ios-dogfood"
+            return nil
         }
         return custom
     }

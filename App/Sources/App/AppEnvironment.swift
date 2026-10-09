@@ -310,7 +310,7 @@ final class AppEnvironment {
     @ObservationIgnored var pushRegistrar: PushRegistrar?
     /// The push enrollment coordinator for the active community. Built beside
     /// the engine and torn down with it.
-    @ObservationIgnored private(set) var pushCoordinator: PushEnrollmentCoordinator?
+    private(set) var pushCoordinator: PushEnrollmentCoordinator?
     /// Persists enrollment state in the App Group, readable by both the app
     /// and the Notification Service Extension.
     @ObservationIgnored let enrollmentStore: EnrollmentStore? = AppGroup().flatMap(EnrollmentStore.init(appGroup:))
@@ -689,7 +689,7 @@ final class AppEnvironment {
                 relayURLString: community.relayURLString,
                 gatewayURL: gatewayURL,
                 pushCapability: pushCap,
-                appProfile: community.resolvedPushAppProfile,
+                appProfile: community.resolvedPushAppProfile ?? PushConstants.appProfile,
                 signer: signer,
                 publishEvent: { event in
                     try await conn.publish(event)
@@ -798,11 +798,11 @@ final class AppEnvironment {
         updateCommunities { $0.update(community) }
         recordPushSnapshot(for: community)
 
-        if newURL != nil {
-            // Start enrollment with the new gateway URL.
+        if community.resolvedPushGatewayURL != nil {
+            // Valid URL — start enrollment with the new gateway.
             beginPushEnrollment()
         } else {
-            // Revoke existing enrollment and remove the lease.
+            // Cleared or invalid URL — revoke existing enrollment.
             Task {
                 await pushCoordinator?.revokeEnrollment(communityID: community.id.uuidString)
             }
