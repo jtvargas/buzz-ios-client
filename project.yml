@@ -84,6 +84,10 @@ targets:
       path: App/Hive.entitlements
       properties:
         aps-environment: $(HIVE_PUSH_ENVIRONMENT)
+        # The gateway verifies production attestations, including Xcode installs.
+        # Without this entitlement, development builds use App Attest sandbox.
+        # This environment is independent of the APNs provisioning environment.
+        com.apple.developer.devicecheck.appattest-environment: production
         com.apple.security.application-groups:
           - $(HIVE_APP_GROUP_IDENTIFIER)
         keychain-access-groups:
