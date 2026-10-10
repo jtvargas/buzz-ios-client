@@ -70,7 +70,9 @@ struct EnrollmentRevocationTests {
             signer: try InMemorySigner(),
             communityID: "comm-1",
             relayURL: "wss://relay.example",
-            relayPubkey: "aabbccdd",
+            relayPubkey: "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+            executorKeyID: "relay-v1",
+            origin: "wss://relay.example",
             publishEvent: publishEvent
         )
     }
@@ -184,7 +186,7 @@ struct EnrollmentRevocationTests {
         let conflictJSON = #"{"error":"installation_conflict"}"#
         let revokeChallengeJSON = #"{"challenge_id":"ch-r","challenge":"nonce-r","expires_at":1700000300}"#
         let challenge2JSON = #"{"challenge_id":"ch-2","challenge":"nonce2","expires_at":1700000600}"#
-        let installJSON = #"{"installation_handle":"new-handle","endpoint_epoch":1,"expires_at":1700086400}"#
+        let installJSON = #"{"installation_handle":"new-handle","endpoint_epoch":1,"expires_at":4102444800}"#
         let challenge3JSON = #"{"challenge_id":"ch-3","challenge":"nonce3","expires_at":1700000900}"#
         let delegationJSON = #"{"endpoint_grant":"grant-1"}"#
         let transport = ScriptedTransport(responses: [

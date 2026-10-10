@@ -252,7 +252,9 @@ struct EnrollmentDriverTests {
             signer: signer,
             communityID: "comm-1",
             relayURL: "wss://relay.example",
-            relayPubkey: "aabbccdd",
+            relayPubkey: "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+            executorKeyID: "relay-v1",
+            origin: "wss://relay.example",
             publishEvent: { event in
                 await publishedEvents.append(event)
             }
@@ -292,7 +294,9 @@ struct EnrollmentDriverTests {
             signer: signer,
             communityID: "comm-1",
             relayURL: "wss://relay.example",
-            relayPubkey: "aabbccdd",
+            relayPubkey: "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+            executorKeyID: "relay-v1",
+            origin: "wss://relay.example",
             publishEvent: { _ in }
         )
 
@@ -316,7 +320,7 @@ struct EnrollmentDriverTests {
         let publishedEvents: ActorBox<[NostrEvent]> = ActorBox([])
 
         let challengeJSON = #"{"challenge_id":"ch-1","challenge":"nonce","expires_at":1700000300}"#
-        let installJSON = #"{"installation_handle":"handle-1","endpoint_epoch":1,"expires_at":1700086400}"#
+        let installJSON = #"{"installation_handle":"handle-1","endpoint_epoch":1,"expires_at":4102444800}"#
         let challenge2JSON = #"{"challenge_id":"ch-2","challenge":"nonce2","expires_at":1700000600}"#
         let delegationJSON = #"{"endpoint_grant":"grant-1"}"#
         let transport = ScriptedTransport(responses: [
@@ -337,7 +341,9 @@ struct EnrollmentDriverTests {
             signer: signer,
             communityID: "comm-1",
             relayURL: "wss://relay.example",
-            relayPubkey: "aabbccdd",
+            relayPubkey: "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+            executorKeyID: "relay-v1",
+            origin: "wss://relay.example",
             publishEvent: { event in
                 await publishedEvents.append(event)
             }
@@ -364,11 +370,11 @@ struct EnrollmentDriverTests {
         #expect(events.count == 1)
         let leaseEvent = events[0]
         #expect(leaseEvent.kind == .pushLease)
-        // The lease should have a d tag, expiration, exec, and relay tags.
+        // Public lease tags must match the relay's closed envelope schema.
         #expect(leaseEvent.tags.contains { $0.first == "d" })
         #expect(leaseEvent.tags.contains { $0.first == "expiration" })
-        #expect(leaseEvent.tags.contains { $0.first == "exec" })
-        #expect(leaseEvent.tags.contains { $0.first == "relay" })
+        #expect(leaseEvent.tags.filter { $0.first == "exec" } == [["exec", "relay-v1"]])
+        #expect(!leaseEvent.tags.contains { $0.first == "relay" })
     }
 
     @Test("Second enroll() while in flight is a no-op")
@@ -379,7 +385,7 @@ struct EnrollmentDriverTests {
         // A challenge response that hangs until we unblock it.
         let gate = ActorBox(false)
         let challengeJSON = #"{"challenge_id":"ch-1","challenge":"nonce","expires_at":1700000300}"#
-        let installJSON = #"{"installation_handle":"handle-1","endpoint_epoch":1,"expires_at":1700086400}"#
+        let installJSON = #"{"installation_handle":"handle-1","endpoint_epoch":1,"expires_at":4102444800}"#
         let challenge2JSON = #"{"challenge_id":"ch-2","challenge":"nonce2","expires_at":1700000600}"#
         let delegationJSON = #"{"endpoint_grant":"grant-1"}"#
         let transport = ScriptedTransport(responses: [
@@ -400,7 +406,9 @@ struct EnrollmentDriverTests {
             signer: signer,
             communityID: "comm-1",
             relayURL: "wss://relay.example",
-            relayPubkey: "aabbccdd",
+            relayPubkey: "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+            executorKeyID: "relay-v1",
+            origin: "wss://relay.example",
             publishEvent: { _ in }
         )
 

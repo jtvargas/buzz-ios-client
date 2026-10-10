@@ -155,6 +155,11 @@ public struct KeychainSigner: EventSigner {
         )
     }
 
+    public func encrypt(_ plaintext: String, to recipient: PublicKey) async throws -> String {
+        let conversationKey = try NIP44.conversationKey(privateKey: requireKey(), peer: recipient)
+        return try NIP44.encrypt(plaintext, conversationKey: conversationKey)
+    }
+
     public func encryptToSelf(_ plaintext: String) async throws -> String {
         let key = try requireKey()
         let conversationKey = try NIP44.conversationKey(privateKey: key, peer: key.publicKey)

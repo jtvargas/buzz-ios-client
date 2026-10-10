@@ -47,7 +47,9 @@ struct EnrollmentRevocationScopeTests {
             signer: try InMemorySigner(),
             communityID: "comm-1",
             relayURL: "wss://relay.example",
-            relayPubkey: "aabbccdd",
+            relayPubkey: "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+            executorKeyID: "relay-v1",
+            origin: "wss://relay.example",
             publishEvent: { _ in }
         )
     }

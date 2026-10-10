@@ -30,6 +30,9 @@ public protocol EventSigner: Sendable {
     /// app data need not implement it.
     func encryptToSelf(_ plaintext: String) async throws -> String
 
+    /// NIP-44 encrypts a payload for a specific recipient (for example a push executor).
+    func encrypt(_ plaintext: String, to recipient: PublicKey) async throws -> String
+
     /// NIP-44 decrypts a payload this identity produced with ``encryptToSelf(_:)``
     /// (or a peer instance of the same identity did, e.g. another device's
     /// read-state blob). Default implementation throws
@@ -45,6 +48,10 @@ public extension EventSigner {
         tags: [[String]] = []
     ) async throws -> NostrEvent {
         try await sign(kind: kind, content: content, tags: tags, createdAt: Date())
+    }
+
+    func encrypt(_: String, to _: PublicKey) async throws -> String {
+        throw SigningError.peerEncryptionUnsupported
     }
 
     func encryptToSelf(_: String) async throws -> String {
@@ -87,6 +94,10 @@ public struct InMemorySigner: EventSigner {
         return try NostrEvent.signed(kind: kind, content: content, tags: tags, createdAt: createdAt, with: key)
     }
 
+    public func encrypt(_ plaintext: String, to recipient: PublicKey) async throws -> String {
+        try NIP44.encrypt(plaintext, conversationKey: NIP44.conversationKey(privateKey: key, peer: recipient))
+    }
+
     public func encryptToSelf(_ plaintext: String) async throws -> String {
         try NIP44.encrypt(plaintext, conversationKey: NIP44.conversationKey(privateKey: key, peer: key.publicKey))
     }
@@ -105,4 +116,5 @@ public enum SigningError: Error, Equatable {
     /// secret key (a signature-only or scripted signer). Real signers — in-memory
     /// and Keychain-backed — implement the NIP-44 to-self path.
     case selfEncryptionUnsupported
+    case peerEncryptionUnsupported
 }

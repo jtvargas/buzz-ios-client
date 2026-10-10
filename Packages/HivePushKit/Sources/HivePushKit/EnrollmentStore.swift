@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import NostrCore
 
 /// Persists the gateway enrollment state for a community in the App Group
 /// container, so both the main app and the Notification Service Extension can
@@ -220,6 +221,10 @@ public struct Enrollment: Codable, Equatable, Sendable {
     public let gatewayURL: URL?
     /// When the enrollment was completed.
     public let enrolledAt: Date
+    /// Persist before publication so retries reuse the same generation and event ID.
+    public var leaseEvent: NostrEvent?
+    /// Exact authority expiry for new enrollments; absent in legacy records.
+    public let grantExpiresAt: Date?
 
     public init(
         communityID: String,
@@ -229,7 +234,8 @@ public struct Enrollment: Codable, Equatable, Sendable {
         installID: String,
         relayURL: String,
         gatewayURL: URL?,
-        enrolledAt: Date = .now
+        enrolledAt: Date = .now,
+        grantExpiresAt: Date? = nil
     ) {
         self.communityID = communityID
         self.installationHandle = installationHandle
@@ -239,6 +245,7 @@ public struct Enrollment: Codable, Equatable, Sendable {
         self.relayURL = relayURL
         self.gatewayURL = gatewayURL
         self.enrolledAt = enrolledAt
+        self.grantExpiresAt = grantExpiresAt
     }
 }
 

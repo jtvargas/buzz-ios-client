@@ -1,70 +1,57 @@
 import Foundation
 import NostrCore
 
-/// Builds and manages NIP-PL push lease events (kind 30350).
-///
-/// A push lease is an addressable event the client publishes to tell a relay which
-/// subscriptions to forward through the push gateway. The relay reads the `exec`
-/// tags to find the gateway audiences it is authorised to deliver to, and the
-/// NIP-44-encrypted content to find the Nostr filter subscriptions to push for.
-///
-/// # Lease shape
-///
-/// ```
-/// kind: 30350
-/// tags:
-///   ["d", "<install-id>"]           — random per-device, makes the lease addressable
-///   ["expiration", "<unix>"]        — when the relay should stop pushing
-///   ["exec", "<audience-url>", "POST"]  — one per gateway audience
-///   ["relay", "<relay-url>"]        — the relay this lease targets
-/// content: NIP-44 encrypted JSON array of Nostr filter objects
-/// ```
+/// Builds NIP-PL leases encrypted to the relay's advertised executor key.
 public enum NIPPLLease {
-    /// The default lease duration: 30 days. Renewed before expiry by the app or
-    /// its background task.
     public static let defaultDuration: TimeInterval = 30 * 24 * 60 * 60
 
-    /// Builds and signs a push lease event.
-    ///
-    /// - Parameters:
-    ///   - installID: the random per-device identifier (used as the `d` tag).
-    ///   - relayURL: the relay this lease targets.
-    ///   - filters: the Nostr filter subscriptions to push for, as JSON-encodable
-    ///     dictionaries. Encrypted into the event content with NIP-44.
-    ///   - duration: how long the lease is valid. Defaults to 30 days.
-    ///   - signer: the identity key that signs the event and encrypts the content.
-    /// - Returns: the signed kind-30350 event ready to publish.
+    /// Discovery and gateway authority needed to address a lease.
+    public struct Destination: Sendable {
+        let origin: String
+        let keyID: String
+        let publicKey: PublicKey
+        let appProfile: String
+        let endpointGrant: String
+
+        public init(origin: String, keyID: String, publicKey: PublicKey, appProfile: String, endpointGrant: String) {
+            self.origin = origin
+            self.keyID = keyID
+            self.publicKey = publicKey
+            self.appProfile = appProfile
+            self.endpointGrant = endpointGrant
+        }
+    }
+
+    /// The endpoint is the opaque delegation grant, never the APNs device token.
     public static func create(
         installID: String,
-        relayURL: String,
+        destination: Destination,
         filters: [[String: Any]],
-        duration: TimeInterval = defaultDuration,
+        expiration: Date,
         signer: some EventSigner
     ) async throws -> NostrEvent {
-        let expiration = Int(Date().timeIntervalSince1970 + duration)
-
-        // Encode filters to JSON, then NIP-44-encrypt to self.
-        let filtersJSON = try JSONSerialization.data(
-            withJSONObject: filters,
-            options: [.sortedKeys]
-        )
-        guard let filtersString = String(data: filtersJSON, encoding: .utf8) else {
-            throw LeaseError.filterEncodingFailed
-        }
-        let encryptedContent = try await signer.encryptToSelf(filtersString)
-
-        let tags: [[String]] = [
-            ["d", installID],
-            ["expiration", String(expiration)],
-            ["exec", NIPPLAudience.installations, "POST"],
-            ["exec", NIPPLAudience.delegations, "POST"],
-            ["relay", relayURL],
+        let body: [String: Any] = [
+            "v": 1,
+            "origin": destination.origin,
+            "app_profile": destination.appProfile,
+            "transport": "apns",
+            "endpoint": destination.endpointGrant,
+            // The enrollment driver obtains a generation-1 delegation grant.
+            "generation": 1,
+            "active": true,
+            "subscriptions": filters.map { ["filter": $0, "class": "default"] as [String: Any] },
         ]
-
+        let data = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
+        guard let plaintext = String(data: data, encoding: .utf8) else { throw LeaseError.encodingFailed }
+        let content = try await signer.encrypt(plaintext, to: destination.publicKey)
         return try await signer.sign(
             kind: .pushLease,
-            content: encryptedContent,
-            tags: tags
+            content: content,
+            tags: [
+                ["d", installID],
+                ["expiration", String(Int64(expiration.timeIntervalSince1970))],
+                ["exec", destination.keyID],
+            ]
         )
     }
 
@@ -80,9 +67,9 @@ public enum NIPPLLease {
         installID: String,
         signer: some EventSigner
     ) async throws -> NostrEvent {
-        let tags: [[String]] = [
+        let tags: [[String]] = try await [
             ["e", leaseEventID],
-            ["a", "\(EventKind.pushLease.rawValue):\(try await signer.publicKey().hex):\(installID)"],
+            ["a", "\(EventKind.pushLease.rawValue):\(signer.publicKey().hex):\(installID)"],
         ]
         return try await signer.sign(
             kind: .deletion,
@@ -91,28 +78,18 @@ public enum NIPPLLease {
         )
     }
 
-    /// The default filter set for a community: all channel messages and DMs
-    /// addressed to this pubkey.
-    ///
-    /// - Parameters:
-    ///   - selfPubkey: the user's hex pubkey.
-    ///   - relayURL: the relay URL (used to scope filters).
+    /// Message mentions addressed to this identity. The relay
+    /// requires narrowed filters and does not advertise gift wraps for push.
     public static func defaultFilters(selfPubkey: String) -> [[String: Any]] {
-        [
-            // Channel messages (kind 9) — the relay decides which channels.
-            ["kinds": [EventKind.channelMessage.rawValue]],
-            // Rich messages (kind 40002).
-            ["kinds": [EventKind.richMessage.rawValue]],
-            // DM opens and messages addressed to this user.
-            ["kinds": [EventKind.giftWrap.rawValue], "#p": [selfPubkey]],
-            // Membership changes (added/removed).
-            ["kinds": [EventKind.memberAdded.rawValue, EventKind.memberRemoved.rawValue], "#p": [selfPubkey]],
-        ]
+        [[
+            "kinds": [EventKind.channelMessage.rawValue, EventKind.richMessage.rawValue],
+            "#p": [selfPubkey],
+        ]]
     }
 }
 
-/// Why a lease could not be built.
 public enum LeaseError: Error, Equatable, Sendable {
-    /// The filter array could not be serialised to JSON.
-    case filterEncodingFailed
+    case encodingFailed
+    case invalidExecutor
+    case expiredEnrollment
 }

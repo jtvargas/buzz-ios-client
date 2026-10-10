@@ -1,8 +1,8 @@
 import Foundation
 import HivePushKit
 import NostrCore
-import OSLog
 import Observation
+import OSLog
 import UIKit
 import UserNotifications
 
@@ -71,9 +71,11 @@ final class PushEnrollmentCoordinator {
             return
         }
 
-        guard let relayKey = config.pushCapability.currentKey else {
+        guard let relayKey = config.pushCapability.currentKey,
+              let origin = config.pushCapability.origin, !origin.isEmpty
+        else {
             status = .unsupported
-            Self.log.warning("Relay has no current push key")
+            Self.log.warning("Relay has no current push key or canonical origin")
             return
         }
 
@@ -84,7 +86,12 @@ final class PushEnrollmentCoordinator {
         enrollmentTask?.cancel()
         enrollmentTask = nil
         status = .enrolling
-        let newDriver = makeDriver(config: config, relayPubkey: relayKey.pubkey)
+        let newDriver = makeDriver(
+            config: config,
+            relayPubkey: relayKey.pubkey,
+            executorKeyID: relayKey.id,
+            origin: origin
+        )
         driver = newDriver
         pushRegistrar.enrollmentDriver = newDriver
         launchEnrollment(newDriver, communityID: config.communityID)
@@ -112,7 +119,9 @@ final class PushEnrollmentCoordinator {
 
     private func makeDriver(
         config: Configuration,
-        relayPubkey: String
+        relayPubkey: String,
+        executorKeyID: String,
+        origin: String
     ) -> EnrollmentDriver {
         let gateway = GatewayClient(
             baseURL: config.gatewayURL,
@@ -120,9 +129,9 @@ final class PushEnrollmentCoordinator {
         )
 
         #if canImport(DeviceCheck)
-        let attestProvider: any AppAttestProviding = DeviceAppAttestProvider()
+            let attestProvider: any AppAttestProviding = DeviceAppAttestProvider()
         #else
-        let attestProvider: any AppAttestProviding = UnsupportedAttestProvider()
+            let attestProvider: any AppAttestProviding = UnsupportedAttestProvider()
         #endif
 
         return EnrollmentDriver(
@@ -133,6 +142,8 @@ final class PushEnrollmentCoordinator {
             communityID: config.communityID,
             relayURL: config.relayURLString,
             relayPubkey: relayPubkey,
+            executorKeyID: executorKeyID,
+            origin: origin,
             appProfile: config.appProfile,
             publishEvent: config.publishEvent
         )
@@ -171,22 +182,24 @@ final class PushEnrollmentCoordinator {
 // MARK: - Fallback attest provider for non-iOS builds
 
 #if !canImport(DeviceCheck)
-/// A stub that always reports unsupported, used only on macOS for tests.
-struct UnsupportedAttestProvider: AppAttestProviding {
-    var isSupported: Bool { false }
+    /// A stub that always reports unsupported, used only on macOS for tests.
+    struct UnsupportedAttestProvider: AppAttestProviding {
+        var isSupported: Bool {
+            false
+        }
 
-    func generateKey() async throws -> String {
-        throw AppAttestUnavailableError()
+        func generateKey() async throws -> String {
+            throw AppAttestUnavailableError()
+        }
+
+        func attest(keyID _: String, clientDataHash _: Data) async throws -> Data {
+            throw AppAttestUnavailableError()
+        }
+
+        func assert(keyID _: String, clientDataHash _: Data) async throws -> Data {
+            throw AppAttestUnavailableError()
+        }
     }
 
-    func attest(keyID _: String, clientDataHash _: Data) async throws -> Data {
-        throw AppAttestUnavailableError()
-    }
-
-    func assert(keyID _: String, clientDataHash _: Data) async throws -> Data {
-        throw AppAttestUnavailableError()
-    }
-}
-
-struct AppAttestUnavailableError: Error {}
+    struct AppAttestUnavailableError: Error {}
 #endif

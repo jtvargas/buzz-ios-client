@@ -63,9 +63,12 @@ public actor EnrollmentDriver {
     let signer: any EventSigner
     let communityID: String
     private let relayURL: String
-    private let relayPubkey: String
+    let relayPubkey: String
+    let executorKeyID: String
+    let origin: String
+    let retrySleep: @Sendable (Duration) async throws -> Void
     /// The app profile identifier sent to the gateway during installation.
-    private let appProfile: String
+    let appProfile: String
     /// Callback to publish a signed event to the relay. Injected so this actor has
     /// no dependency on the relay connection.
     let publishEvent: @Sendable (NostrEvent) async throws -> Void
@@ -77,7 +80,7 @@ public actor EnrollmentDriver {
     public internal(set) var leaseExpiresAt: Date?
     public internal(set) var leaseFiltersJSON: String?
 
-    private static let log = Logger(subsystem: "HivePushKit", category: "EnrollmentDriver")
+    static let enrollmentLog = Logger(subsystem: "HivePushKit", category: "EnrollmentDriver")
 
     public init(
         gateway: GatewayClient,
@@ -87,6 +90,9 @@ public actor EnrollmentDriver {
         communityID: String,
         relayURL: String,
         relayPubkey: String,
+        executorKeyID: String,
+        origin: String,
+        retrySleep: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) },
         appProfile: String = PushConstants.appProfile,
         publishEvent: @escaping @Sendable (NostrEvent) async throws -> Void
     ) {
@@ -97,6 +103,9 @@ public actor EnrollmentDriver {
         self.communityID = communityID
         self.relayURL = relayURL
         self.relayPubkey = relayPubkey
+        self.executorKeyID = executorKeyID
+        self.origin = origin
+        self.retrySleep = retrySleep
         self.appProfile = appProfile
         self.publishEvent = publishEvent
     }
@@ -121,7 +130,7 @@ public actor EnrollmentDriver {
         case .enrolled:
             return
         case .requestingPermission, .awaitingDeviceToken, .enrolling, .publishingLease:
-            Self.log.warning("enroll() called while already in progress (state: \(String(describing: self.state)))")
+            Self.enrollmentLog.warning("enroll() called while already in progress (state: \(String(describing: self.state)))")
             return
         case .idle, .failed:
             break
@@ -144,7 +153,7 @@ public actor EnrollmentDriver {
         }
         guard granted else {
             state = .failed(.permission, "Notification permission denied")
-            Self.log.info("Notification permission denied by user")
+            Self.enrollmentLog.info("Notification permission denied by user")
             return
         }
 
@@ -228,7 +237,7 @@ public actor EnrollmentDriver {
             // Revoke the ones we still hold credentials for, then start over:
             // the challenge was consumed by the refused install and App Attest
             // keys attest once, so the retry needs a fresh challenge and key.
-            Self.log.warning("Install returned 409 — revoking pending installations")
+            Self.enrollmentLog.warning("Install returned 409 — revoking pending installations")
             guard await revokePendingInstallations() else { return }
             switch await attemptGatewayEnrollment(deviceToken: deviceToken) {
             case let .enrolled(enrollment):
@@ -237,7 +246,7 @@ public actor EnrollmentDriver {
                 return
             case .conflict:
                 state = .failed(.install, Self.unrecoverableConflictMessage)
-                Self.log.error("Install still conflicts after revoking every pending installation")
+                Self.enrollmentLog.error("Install still conflicts after revoking every pending installation")
             }
         }
     }
@@ -246,16 +255,16 @@ public actor EnrollmentDriver {
     /// caller can recover; records the failing step on `.failed`.
     private func attemptGatewayEnrollment(deviceToken: String) async -> GatewayAttempt {
         // Step 3: Challenge for enrollment.
-        Self.log.info("Requesting enrollment challenge from gateway")
+        Self.enrollmentLog.info("Requesting enrollment challenge from gateway")
         let enrollChallenge: GatewayChallengeResponse
         do {
             enrollChallenge = try await gateway.challenge(signer: signer)
         } catch {
             state = .failed(.challenge, String(describing: error))
-            Self.log.error("Challenge failed: \(String(describing: error))")
+            Self.enrollmentLog.error("Challenge failed: \(String(describing: error))")
             return .failed
         }
-        Self.log.info("Received enrollment challenge: \(enrollChallenge.challengeID)")
+        Self.enrollmentLog.info("Received enrollment challenge: \(enrollChallenge.challengeID)")
 
         // Step 4: App Attest key generation + attestation over the enroll transcript.
         let now = Int64(Date().timeIntervalSince1970)
@@ -289,12 +298,12 @@ public actor EnrollmentDriver {
     }
 
     private func performAttestation(
-        challenge: GatewayChallengeResponse,
+        challenge _: GatewayChallengeResponse,
         transcriptTemplate: EnrollTranscript
     ) async -> (keyID: String, attestation: Data)? {
         guard attestProvider.isSupported else {
             state = .failed(.attest, "App Attest is not supported on this device")
-            Self.log.warning("App Attest not supported — enrollment requires a physical device")
+            Self.enrollmentLog.warning("App Attest not supported — enrollment requires a physical device")
             return nil
         }
         do {
@@ -313,11 +322,11 @@ public actor EnrollmentDriver {
             )
             let clientDataHash = AppAttestClientData.enrollHash(transcript: transcript)
             let attestation = try await attestProvider.attest(keyID: keyID, clientDataHash: clientDataHash)
-            Self.log.info("App Attest succeeded with key \(keyID)")
+            Self.enrollmentLog.info("App Attest succeeded with key \(keyID)")
             return (keyID, attestation)
         } catch {
             state = .failed(.attest, String(describing: error))
-            Self.log.error("App Attest failed: \(String(describing: error))")
+            Self.enrollmentLog.error("App Attest failed: \(String(describing: error))")
             return nil
         }
     }
@@ -348,19 +357,19 @@ public actor EnrollmentDriver {
             return .conflict
         } catch {
             state = .failed(.install, String(describing: error))
-            Self.log.error("Installation failed: \(String(describing: error))")
+            Self.enrollmentLog.error("Installation failed: \(String(describing: error))")
             return .failed
         }
-        Self.log.info("Installation succeeded: \(installResponse.installationHandle)")
+        Self.enrollmentLog.info("Installation succeeded: \(installResponse.installationHandle)")
 
         // Step 5b: Request a fresh challenge for delegation.
-        Self.log.info("Requesting delegation challenge from gateway")
+        Self.enrollmentLog.info("Requesting delegation challenge from gateway")
         let delegateChallenge: GatewayChallengeResponse
         do {
             delegateChallenge = try await gateway.challenge(signer: signer)
         } catch {
             state = .failed(.delegate, String(describing: error))
-            Self.log.error("Delegation challenge failed: \(String(describing: error))")
+            Self.enrollmentLog.error("Delegation challenge failed: \(String(describing: error))")
             return .failed
         }
 
@@ -391,7 +400,7 @@ public actor EnrollmentDriver {
             )
         } catch {
             state = .failed(.delegate, String(describing: error))
-            Self.log.error("Delegation assertion failed: \(String(describing: error))")
+            Self.enrollmentLog.error("Delegation assertion failed: \(String(describing: error))")
             return .failed
         }
 
@@ -412,10 +421,10 @@ public actor EnrollmentDriver {
             delegationResponse = try await gateway.delegate(delegationRequest, signer: signer)
         } catch {
             state = .failed(.delegate, String(describing: error))
-            Self.log.error("Delegation failed: \(String(describing: error))")
+            Self.enrollmentLog.error("Delegation failed: \(String(describing: error))")
             return .failed
         }
-        Self.log.info("Delegation succeeded with endpoint grant")
+        Self.enrollmentLog.info("Delegation succeeded with endpoint grant")
 
         // Persist.
         let installID = UUID().uuidString
@@ -426,42 +435,17 @@ public actor EnrollmentDriver {
             attestKeyID: attestKeyID,
             installID: installID,
             relayURL: relayURL,
-            gatewayURL: gateway.baseURL
+            gatewayURL: gateway.baseURL,
+            grantExpiresAt: Date(timeIntervalSince1970: TimeInterval(min(installResponse.expiresAt, delegateExpiresAt)))
         )
         do {
             try enrollmentStore.write(enrollment)
         } catch {
             state = .failed(.install, "Failed to persist enrollment: \(error)")
-            Self.log.error("Enrollment persistence failed: \(String(describing: error))")
+            Self.enrollmentLog.error("Enrollment persistence failed: \(String(describing: error))")
             return .failed
         }
         return .enrolled(enrollment)
     }
 
-    private func publishLeaseStep(enrollment: Enrollment) async {
-        state = .publishingLease
-
-        do {
-            let selfPubkey = try await signer.publicKey().hex
-            let filters = NIPPLLease.defaultFilters(selfPubkey: selfPubkey)
-            let leaseEvent = try await NIPPLLease.create(
-                installID: enrollment.installID,
-                relayURL: enrollment.relayURL,
-                filters: filters,
-                signer: signer
-            )
-            try await publishEvent(leaseEvent)
-
-            // Capture lease metadata so the snapshot can surface it.
-            leaseExpiresAt = Date(timeIntervalSinceNow: NIPPLLease.defaultDuration)
-            let filtersData = try? JSONSerialization.data(withJSONObject: filters, options: [.sortedKeys])
-            leaseFiltersJSON = filtersData.flatMap { String(data: $0, encoding: .utf8) }
-
-            state = .enrolled
-            Self.log.info("Push lease published for community \(self.communityID)")
-        } catch {
-            state = .failed(.publishLease, String(describing: error))
-            Self.log.error("Lease publication failed: \(String(describing: error))")
-        }
-    }
 }
